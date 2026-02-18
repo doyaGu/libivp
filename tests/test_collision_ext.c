@@ -1,0 +1,281 @@
+#include "ivp_test.h"
+#include <string.h>
+#include <ivp/collision/ivp_range_manager.h>
+#include <ivp/collision/ivp_collision_filter.h>
+#include <ivp/collision/ivp_compact_ledge_solver.h>
+#include <ivp/collision/ivp_mindist.h>
+#include <ivp/dynamics/ivp_core.h>
+#include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_environment.h>
+#include <ivp/builder/ivp_build_surface.h>
+#include <ivp/geometry/ivp_compact_surface.h>
+#include <ivp/geometry/ivp_compact_ledge.h>
+#include <ivp/math/ivp_vec3.h>
+#include <ivp/math/ivp_quat.h>
+#include <ivp/base/ivp_allocator.h>
+
+#ifdef IVP_REAL_DOUBLE
+  #define TOL 1e-6
+#else
+  #define TOL 1e-3f
+#endif
+
+/* ========================================================================
+ * Range Manager Tests
+ * ======================================================================== */
+
+IVP_TEST(range_manager_init_defaults) {
+    ivp_range_manager_t rm;
+    ivp_real_t dt = IVP_REAL(1.0) / IVP_REAL(60.0);
+
+    ivp_range_manager_init(&rm, dt);
+
+    /* Verify parameters are set to reasonable defaults */
+    IVP_ASSERT_TRUE(rm.look_ahead_min_distance_intra > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(rm.look_ahead_max_distance_intra > rm.look_ahead_min_distance_intra);
+    IVP_ASSERT_TRUE(rm.look_ahead_time_intra > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(rm.look_ahead_time_world > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(rm.delta_psi_time == dt);
+}
+
+IVP_TEST(range_manager_intra_stationary) {
+    ivp_range_manager_t rm;
+    ivp_real_t dt = IVP_REAL(1.0) / IVP_REAL(60.0);
+    ivp_range_manager_init(&rm, dt);
+
+    /* Create two stationary cores */
+    ivp_core_t core0, core1;
+    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    ivp_core_init(&core0, IVP_REAL(1.0), &inertia);
+    ivp_core_init(&core1, IVP_REAL(1.0), &inertia);
+    core0.upper_limit_radius = IVP_REAL(0.5);
+    core1.upper_limit_radius = IVP_REAL(0.5);
+
+    /* Both cores are stationary (speed = 0 from init) */
+    ivp_real_t range0, range1;
+    ivp_range_manager_get_coll_range_intra(&rm, &core0, &core1, &range0, &range1);
+
+    /* For stationary objects, total range should be >= minimum distance */
+    IVP_ASSERT_TRUE(range0 > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(range1 > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(range0 + range1 >= rm.look_ahead_min_distance_intra - TOL);
+}
+
+IVP_TEST(range_manager_intra_fast) {
+    ivp_range_manager_t rm;
+    ivp_real_t dt = IVP_REAL(1.0) / IVP_REAL(60.0);
+    ivp_range_manager_init(&rm, dt);
+
+    /* Create two cores, one moving fast */
+    ivp_core_t core0, core1;
+    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    ivp_core_init(&core0, IVP_REAL(1.0), &inertia);
+    ivp_core_init(&core1, IVP_REAL(1.0), &inertia);
+    core0.upper_limit_radius = IVP_REAL(0.5);
+    core1.upper_limit_radius = IVP_REAL(0.5);
+
+    /* Get stationary ranges first */
+    ivp_real_t range0_still, range1_still;
+    ivp_range_manager_get_coll_range_intra(&rm, &core0, &core1, &range0_still, &range1_still);
+
+    /* Set core0 to move fast */
+    core0.speed.k[0] = IVP_REAL(100.0);
+    core0.current_speed = IVP_REAL(100.0);
+
+    /* Get ranges with fast-moving object */
+    ivp_real_t range0_fast, range1_fast;
+    ivp_range_manager_get_coll_range_intra(&rm, &core0, &core1, &range0_fast, &range1_fast);
+
+    /* Fast-moving object pair should have larger total range */
+    ivp_real_t total_still = range0_still + range1_still;
+    ivp_real_t total_fast  = range0_fast  + range1_fast;
+    IVP_ASSERT_TRUE(total_fast > total_still + TOL);
+    IVP_ASSERT_TRUE(range0_fast > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(range1_fast > IVP_REAL(0.0));
+}
+
+IVP_TEST(range_manager_world) {
+    ivp_range_manager_t rm;
+    ivp_real_t dt = IVP_REAL(1.0) / IVP_REAL(60.0);
+    ivp_range_manager_init(&rm, dt);
+
+    /* Create single stationary core */
+    ivp_core_t core0;
+    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    ivp_core_init(&core0, IVP_REAL(1.0), &inertia);
+    core0.upper_limit_radius = IVP_REAL(0.5);
+
+    ivp_real_t range = ivp_range_manager_get_coll_range_world(&rm, &core0);
+
+    /* World range should be positive */
+    IVP_ASSERT_TRUE(range > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(range >= rm.look_ahead_min_distance_world - TOL);
+}
+
+/* ========================================================================
+ * Collision Filter Tests
+ * ======================================================================== */
+
+IVP_TEST(collision_filter_allow_all) {
+    ivp_collision_filter_t filter = ivp_collision_filter_allow_all();
+
+    /* Should allow collision between any objects, even NULL */
+    bool result = ivp_collision_filter_check(&filter, NULL, NULL);
+    IVP_ASSERT_TRUE(result == true);
+}
+
+static bool always_true(const ivp_object_t *a, const ivp_object_t *b, void *ud) {
+    (void)a; (void)b; (void)ud;
+    return true;
+}
+
+IVP_TEST(collision_filter_callback_true) {
+    ivp_collision_filter_t filter = ivp_collision_filter_callback(always_true, NULL);
+
+    bool result = ivp_collision_filter_check(&filter, NULL, NULL);
+    IVP_ASSERT_TRUE(result == true);
+}
+
+static bool always_false(const ivp_object_t *a, const ivp_object_t *b, void *ud) {
+    (void)a; (void)b; (void)ud;
+    return false;
+}
+
+IVP_TEST(collision_filter_callback_false) {
+    ivp_collision_filter_t filter = ivp_collision_filter_callback(always_false, NULL);
+
+    bool result = ivp_collision_filter_check(&filter, NULL, NULL);
+    IVP_ASSERT_TRUE(result == false);
+}
+
+IVP_TEST(collision_filter_no_collision_group) {
+    /* Create environment */
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+
+    /* Create two objects with the same no_collision_group */
+    ivp_object_template_t t;
+    ivp_object_template_init(&t);
+    t.type = IVP_OBJECT_BALL;
+    t.mass = IVP_REAL(1.0);
+    ivp_vec3r_set(&t.rot_inertia, IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    t.speed_damp_factor = IVP_REAL(0.0);
+    ivp_vec3r_set(&t.rot_speed_damp_factor, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    t.orientation = ivp_quatr_identity();
+    t.no_collision_group = "groupA";
+
+    ivp_object_t *obj1 = ivp_environment_create_object(env, &t, NULL);
+    IVP_ASSERT_TRUE(obj1 != NULL);
+
+    /* Create second object in same group, different position */
+    ivp_vec3r_set(&t.position, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *obj2 = ivp_environment_create_object(env, &t, NULL);
+    IVP_ASSERT_TRUE(obj2 != NULL);
+
+    /* Verify objects have the same no_collision_group */
+    IVP_ASSERT_TRUE(obj1->no_collision_group != NULL);
+    IVP_ASSERT_TRUE(obj2->no_collision_group != NULL);
+    IVP_ASSERT_TRUE(strcmp(obj1->no_collision_group, obj2->no_collision_group) == 0);
+
+    /* Cleanup */
+    ivp_environment_destroy(env);
+}
+
+/* ========================================================================
+ * Compact Ledge Solver Tests
+ * ======================================================================== */
+
+IVP_TEST(compact_ledge_solver_point_to_ledge) {
+    /* Build a simple box surface */
+    ivp_compact_surface_t *surf = ivp_build_box_surface(NULL,
+                                                         IVP_REAL(1.0),
+                                                         IVP_REAL(1.0),
+                                                         IVP_REAL(1.0));
+    IVP_ASSERT_TRUE(surf != NULL);
+
+    /* Get the single convex ledge from the surface */
+    const ivp_compact_ledge_t *ledge = ivp_surface_get_single_convex(surf);
+    IVP_ASSERT_TRUE(ledge != NULL);
+
+    /* Point outside the box */
+    ivp_vec3r_t point = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    /* Compute squared distance - note: arguments are swapped (ledge first, then point) */
+    ivp_real_t qdist = ivp_cls_qdist_point_to_ledge(ledge, &point);
+
+    /* Should be positive and reasonable (point is outside) */
+    IVP_ASSERT_TRUE(qdist > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(qdist > IVP_REAL(1.0));
+
+    /* Cleanup */
+    ivp_compact_surface_free(NULL, surf);
+}
+
+IVP_TEST(compact_ledge_solver_box_box) {
+    /* Build first box */
+    ivp_compact_surface_t *surf_a = ivp_build_box_surface(NULL,
+                                                           IVP_REAL(1.0),
+                                                           IVP_REAL(1.0),
+                                                           IVP_REAL(1.0));
+    IVP_ASSERT_TRUE(surf_a != NULL);
+
+    /* Build second box */
+    ivp_compact_surface_t *surf_b = ivp_build_box_surface(NULL,
+                                                           IVP_REAL(1.0),
+                                                           IVP_REAL(1.0),
+                                                           IVP_REAL(1.0));
+    IVP_ASSERT_TRUE(surf_b != NULL);
+
+    /* Get ledges */
+    const ivp_compact_ledge_t *ledge_a = ivp_surface_get_single_convex(surf_a);
+    const ivp_compact_ledge_t *ledge_b = ivp_surface_get_single_convex(surf_b);
+    IVP_ASSERT_TRUE(ledge_a != NULL);
+    IVP_ASSERT_TRUE(ledge_b != NULL);
+
+    /* Test point-to-ledge distance for each box.
+     * Since ivp_qdist_ledge_ledge() does not exist in the API,
+     * we test a point from box B against ledge A to verify reasonable distance.
+     */
+
+    /* Point at center of second box (offset 5 units in X) */
+    ivp_vec3r_t point_b = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    /* Compute squared distance from point_b to ledge_a */
+    ivp_real_t qdist = ivp_cls_qdist_point_to_ledge(ledge_a, &point_b);
+
+    /* Distance from point at (5,0,0) to box centered at origin with half-extent 1
+     * should be approximately 4.0 (5.0 - 1.0), so qdist should be around 16.0 */
+    IVP_ASSERT_TRUE(qdist > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(qdist > IVP_REAL(9.0));
+
+    /* Cleanup */
+    ivp_compact_surface_free(NULL, surf_a);
+    ivp_compact_surface_free(NULL, surf_b);
+}
+
+/* ========================================================================
+ * Test Registration and Main
+ * ======================================================================== */
+
+int main(void) {
+    /* Range Manager Tests */
+    IVP_REGISTER(range_manager_init_defaults);
+    IVP_REGISTER(range_manager_intra_stationary);
+    IVP_REGISTER(range_manager_intra_fast);
+    IVP_REGISTER(range_manager_world);
+
+    /* Collision Filter Tests */
+    IVP_REGISTER(collision_filter_allow_all);
+    IVP_REGISTER(collision_filter_callback_true);
+    IVP_REGISTER(collision_filter_callback_false);
+    IVP_REGISTER(collision_filter_no_collision_group);
+
+    /* Compact Ledge Solver Tests */
+    IVP_REGISTER(compact_ledge_solver_point_to_ledge);
+    IVP_REGISTER(compact_ledge_solver_box_box);
+
+    IVP_RUN_ALL();
+}

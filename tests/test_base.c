@@ -1,0 +1,294 @@
+/* test_base.c — Unit tests for IVP C17 base module */
+#include "ivp_test.h"
+#include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_result.h>
+#include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_arena.h>
+#include <ivp/base/ivp_time.h>
+#include <stdint.h>
+#include <limits.h>
+
+/* ── Result tests ───────────────────────────────────────────────────────── */
+
+IVP_TEST(result_ok) {
+    IVP_ASSERT_TRUE(ivp_ok(IVP_OK));
+    IVP_ASSERT_FALSE(ivp_ok(IVP_ERR_INVALID_ARG));
+    IVP_ASSERT_FALSE(ivp_ok(IVP_ERR_OUT_OF_MEMORY));
+}
+
+IVP_TEST(result_str) {
+    IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_OK), "OK") == 0);
+    IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_ERR_INVALID_ARG), "INVALID_ARG") == 0);
+    IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_ERR_SINGULAR_MATRIX), "SINGULAR_MATRIX") == 0);
+}
+
+/* ── Default allocator tests ────────────────────────────────────────────── */
+
+IVP_TEST(default_alloc_basic) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    IVP_ASSERT_NOT_NULL(a);
+
+    void *p = ivp_alloc(a, 128);
+    IVP_ASSERT_NOT_NULL(p);
+
+    /* Write and read back to verify memory is usable */
+    memset(p, 0xAB, 128);
+    IVP_ASSERT_EQ(((unsigned char*)p)[0], 0xAB);
+    IVP_ASSERT_EQ(((unsigned char*)p)[127], 0xAB);
+
+    ivp_free(a, p, 128);
+}
+
+IVP_TEST(default_alloc_realloc) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    void *p = ivp_alloc(a, 64);
+    IVP_ASSERT_NOT_NULL(p);
+    memset(p, 0xCD, 64);
+
+    void *p2 = ivp_realloc(a, p, 64, 256);
+    IVP_ASSERT_NOT_NULL(p2);
+    /* First 64 bytes should be preserved */
+    IVP_ASSERT_EQ(((unsigned char*)p2)[0], 0xCD);
+    IVP_ASSERT_EQ(((unsigned char*)p2)[63], 0xCD);
+
+    ivp_free(a, p2, 256);
+}
+
+/* ── Aligned allocation tests ───────────────────────────────────────────── */
+
+IVP_TEST(aligned_alloc_16) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    void *p = ivp_alloc_aligned(a, 100, 16);
+    IVP_ASSERT_NOT_NULL(p);
+    IVP_ASSERT_EQ(((uintptr_t)p) % 16, (uintptr_t)0);
+    memset(p, 0x55, 100);
+    ivp_free_aligned(a, p);
+}
+
+IVP_TEST(aligned_alloc_64) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    void *p = ivp_alloc_aligned(a, 200, 64);
+    IVP_ASSERT_NOT_NULL(p);
+    IVP_ASSERT_EQ(((uintptr_t)p) % 64, (uintptr_t)0);
+    memset(p, 0xAA, 200);
+    ivp_free_aligned(a, p);
+}
+
+/* ── Counting allocator tests ───────────────────────────────────────────── */
+
+IVP_TEST(counting_alloc_stats) {
+    ivp_allocator_t ca = ivp_counting_allocator_create(NULL);
+    ivp_alloc_stats_t stats;
+
+    void *p1 = ivp_alloc(&ca, 100);
+    IVP_ASSERT_NOT_NULL(p1);
+
+    void *p2 = ivp_alloc(&ca, 200);
+    IVP_ASSERT_NOT_NULL(p2);
+
+    ivp_counting_allocator_get_stats(&ca, &stats);
+    IVP_ASSERT_EQ(stats.alloc_count, 2);
+    IVP_ASSERT_EQ(stats.free_count, 0);
+    IVP_ASSERT_EQ(stats.bytes_allocated, 300);
+    IVP_ASSERT_EQ(stats.current_bytes, 300);
+    IVP_ASSERT_EQ(stats.peak_bytes, 300);
+
+    ivp_free(&ca, p1, 100);
+    ivp_counting_allocator_get_stats(&ca, &stats);
+    IVP_ASSERT_EQ(stats.free_count, 1);
+    IVP_ASSERT_EQ(stats.current_bytes, 200);
+    IVP_ASSERT_EQ(stats.peak_bytes, 300);
+
+    ivp_free(&ca, p2, 200);
+    ivp_counting_allocator_get_stats(&ca, &stats);
+    IVP_ASSERT_EQ(stats.current_bytes, 0);
+
+    ivp_counting_allocator_destroy(&ca);
+}
+
+IVP_TEST(counting_alloc_destroy) {
+    ivp_allocator_t ca = ivp_counting_allocator_create(NULL);
+
+    void *p = ivp_alloc(&ca, 32);
+    IVP_ASSERT_NOT_NULL(p);
+    ivp_free(&ca, p, 32);
+
+    ivp_counting_allocator_destroy(&ca);
+
+    /* After destroy, allocator falls back to passthrough behavior. */
+    ivp_alloc_stats_t stats;
+    ivp_counting_allocator_get_stats(&ca, &stats);
+    IVP_ASSERT_EQ(stats.alloc_count, 0);
+    IVP_ASSERT_EQ(stats.free_count, 0);
+
+    void *q = ivp_alloc(&ca, 16);
+    IVP_ASSERT_NOT_NULL(q);
+    ivp_free(&ca, q, 16);
+}
+
+/* ── Arena tests ────────────────────────────────────────────────────────── */
+
+IVP_TEST(arena_basic) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    ivp_arena_t *arena = ivp_arena_create(a);
+    IVP_ASSERT_NOT_NULL(arena);
+
+    void *p1 = ivp_arena_alloc(arena, 64);
+    IVP_ASSERT_NOT_NULL(p1);
+    memset(p1, 0x11, 64);
+
+    void *p2 = ivp_arena_alloc(arena, 128);
+    IVP_ASSERT_NOT_NULL(p2);
+    memset(p2, 0x22, 128);
+
+    /* p1 and p2 should not overlap */
+    IVP_ASSERT_NE(p1, p2);
+
+    ivp_arena_destroy(arena);
+}
+
+IVP_TEST(arena_save_restore) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    ivp_arena_t *arena = ivp_arena_create(a);
+
+    void *p1 = ivp_arena_alloc(arena, 32);
+    IVP_ASSERT_NOT_NULL(p1);
+    memset(p1, 0xAA, 32);
+
+    ivp_arena_checkpoint_t cp = ivp_arena_save(arena);
+
+    void *p2 = ivp_arena_alloc(arena, 64);
+    IVP_ASSERT_NOT_NULL(p2);
+    memset(p2, 0xBB, 64);
+
+    /* Restore to checkpoint: p2 region is now available for reuse */
+    ivp_arena_restore(arena, cp);
+
+    /* Allocate again — should succeed (reusing space) */
+    void *p3 = ivp_arena_alloc(arena, 64);
+    IVP_ASSERT_NOT_NULL(p3);
+
+    ivp_arena_destroy(arena);
+}
+
+IVP_TEST(arena_reset) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    ivp_arena_t *arena = ivp_arena_create(a);
+
+    /* Make several allocations */
+    for (int i = 0; i < 50; i++) {
+        void *p = ivp_arena_alloc(arena, 256);
+        IVP_ASSERT_NOT_NULL(p);
+    }
+
+    /* Reset should put us back to the beginning */
+    ivp_arena_reset(arena);
+
+    void *p = ivp_arena_alloc(arena, 32);
+    IVP_ASSERT_NOT_NULL(p);
+
+    ivp_arena_destroy(arena);
+}
+
+IVP_TEST(arena_stats_smoke) {
+    const ivp_allocator_t *a = ivp_default_allocator();
+    ivp_arena_t *arena = ivp_arena_create(a);
+    IVP_ASSERT_NOT_NULL(arena);
+
+    void *p1 = ivp_arena_alloc(arena, 64);
+    void *p2 = ivp_arena_alloc(arena, 96);
+    IVP_ASSERT_NOT_NULL(p1);
+    IVP_ASSERT_NOT_NULL(p2);
+
+    ivp_arena_stats_t stats;
+    memset(&stats, 0, sizeof(stats));
+    ivp_arena_get_stats(arena, &stats);
+
+#ifdef IVP_ENABLE_STATS
+    IVP_ASSERT_TRUE(stats.alloc_count >= 2u);
+    IVP_ASSERT_TRUE(stats.total_allocated >= 160u);
+    IVP_ASSERT_TRUE(stats.high_water_mark > 0u);
+#else
+    IVP_ASSERT_EQ(stats.alloc_count, 0u);
+    IVP_ASSERT_EQ(stats.total_allocated, 0u);
+    IVP_ASSERT_EQ(stats.high_water_mark, 0u);
+#endif
+
+    ivp_arena_destroy(arena);
+}
+
+/* ── Time tests ─────────────────────────────────────────────────────────── */
+
+IVP_TEST(time_calc_steps_basic) {
+    ivp_time_t residual = 0.0;
+    int steps = ivp_time_calc_steps(0.1, IVP_DEFAULT_DELTA_TIME, &residual);
+    IVP_ASSERT_TRUE(steps >= 6);
+    IVP_ASSERT_TRUE(residual >= 0.0);
+    IVP_ASSERT_TRUE(residual < IVP_DEFAULT_DELTA_TIME);
+}
+
+IVP_TEST(time_calc_steps_zero_dt) {
+    ivp_time_t residual = 0.0;
+    int steps = ivp_time_calc_steps(0.5, 0.0, &residual);
+    IVP_ASSERT_EQ(steps, 0);
+    IVP_ASSERT_NEAR(residual, 0.5, 1e-12);
+}
+
+IVP_TEST(time_calc_steps_exact) {
+    ivp_time_t residual = 0.0;
+    int steps = ivp_time_calc_steps(1.0, 0.25, &residual);
+    IVP_ASSERT_EQ(steps, 4);
+    IVP_ASSERT_NEAR(residual, 0.0, 1e-12);
+}
+
+IVP_TEST(time_calc_steps_clamp_int_max) {
+    ivp_time_t dt = 0.25;
+    ivp_time_t residual = 0.0;
+    ivp_time_t elapsed = ((ivp_time_t)INT_MAX + 1024.0) * dt;
+
+    int steps = ivp_time_calc_steps(elapsed, dt, &residual);
+    IVP_ASSERT_EQ(steps, INT_MAX);
+    IVP_ASSERT_TRUE(residual >= 0.0);
+}
+
+/* ── Types constants tests ──────────────────────────────────────────────── */
+
+IVP_TEST(types_precision_constants) {
+    IVP_ASSERT_TRUE(IVP_REAL_EPS > 0);
+    IVP_ASSERT_TRUE(IVP_REAL_RES > 0);
+    IVP_ASSERT_TRUE(IVP_REAL_MAX > 0);
+    IVP_ASSERT_TRUE((double)IVP_PI > 3.14);
+    IVP_ASSERT_TRUE((double)IVP_PI < 3.15);
+    IVP_ASSERT_TRUE((double)IVP_PI_2 > 1.57);
+    IVP_ASSERT_TRUE((double)IVP_PI_2 < 1.58);
+}
+
+IVP_TEST(types_coord_index) {
+    IVP_ASSERT_EQ(IVP_INDEX_X, 0);
+    IVP_ASSERT_EQ(IVP_INDEX_Y, 1);
+    IVP_ASSERT_EQ(IVP_INDEX_Z, 2);
+}
+
+/* ── Main ───────────────────────────────────────────────────────────────── */
+
+int main(void) {
+    IVP_REGISTER(result_ok);
+    IVP_REGISTER(result_str);
+    IVP_REGISTER(default_alloc_basic);
+    IVP_REGISTER(default_alloc_realloc);
+    IVP_REGISTER(aligned_alloc_16);
+    IVP_REGISTER(aligned_alloc_64);
+    IVP_REGISTER(counting_alloc_stats);
+    IVP_REGISTER(counting_alloc_destroy);
+    IVP_REGISTER(arena_basic);
+    IVP_REGISTER(arena_save_restore);
+    IVP_REGISTER(arena_reset);
+    IVP_REGISTER(arena_stats_smoke);
+    IVP_REGISTER(time_calc_steps_basic);
+    IVP_REGISTER(time_calc_steps_zero_dt);
+    IVP_REGISTER(time_calc_steps_exact);
+    IVP_REGISTER(time_calc_steps_clamp_int_max);
+    IVP_REGISTER(types_precision_constants);
+    IVP_REGISTER(types_coord_index);
+    IVP_RUN_ALL();
+}

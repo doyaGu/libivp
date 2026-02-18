@@ -1,0 +1,136 @@
+# Build directories
+build/
+Build/
+out/
+cmake-build-*/
+*.build/
+
+# Generated files
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.exp
+*.pdb
+*.ilk
+*.map
+*.d
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!cmake/*.cmake.in
+!cmake/*.pc.in
+
+# IDE files
+.vscode/
+.clangd/
+.idea/
+*.swp
+*.swo
+*~
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+*.user
+*.sdf
+*.opensdf
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# Qt Creator
+*.pro.user*
+*.qbs.user*
+*.moc
+*.ui_
+*.qrc.cpp
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*~
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Log files
+*.log
+logs/
+
+# Package files
+*.tar
+*.tar.gz
+*.zip
+*.7z
+*.rar
+
+# Editor backup files
+*.~
+*.swp
+*.swo
+
+# Profiling data
+*.prof
+*.pgc
+*.pgd
+
+# Coverage reports
+*.gcda
+*.gcno
+*.gcov
+coverage/
+lcov.info
+
+# Valgrind data
+*.vgcore.*
+
+# Documentation build
+docs/_build/
+docs/build/
+docs/doxygen/
+
+# Dependency directories
+node_modules/
+vendor/
+
+# Install directories
+install/
+install_test/
+
+# Test output
+test_results/
+test_output/
+*.test
+
+# Performance test results
+perf_results/
+benchmark_results/
+
+# Custom configuration files (keep templates)
+config.local.h
+config.h
+!config.h.in
