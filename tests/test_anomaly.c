@@ -252,6 +252,10 @@ IVP_TEST(anomaly_collision_cap_per_object) {
     IVP_ASSERT_TRUE(obj_b->core.movement_state != IVP_MT_NOT_SIM);
 
     obj_a->core.movement_state = IVP_MT_MOVING;
+    /* In the real simulation, impacts_since_last_PSI is reset at the
+     * start of each sim unit PSI.  Simulate that here. */
+    obj_a->core.impacts_since_last_PSI = 0;
+    obj_b->core.impacts_since_last_PSI = 0;
     ivp_anomaly_manager_begin_psi(&mgr);
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_a));
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_b));

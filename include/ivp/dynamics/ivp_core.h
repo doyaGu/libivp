@@ -140,9 +140,13 @@ typedef struct ivp_core {
     ivp_movement_checkpoint_t checkpoint_long;
     int                       movement_check_counter;
 
-    /* Legacy-style per-core impact counters (used by anomaly collision cap). */
-    int                       collisions_this_psi;
-    int                       collision_count_epoch;
+    /* Multi-body cascade protection (reference: IVP_Core).
+     * temporarily_unmovable is set true by impact solver during cascade;
+     * for the remainder of this PSI the core is treated as immovable.
+     * impacts_since_last_PSI is reset at sim unit PSI start and
+     * incremented by impact solver; threshold activates multi-body system. */
+    bool                      temporarily_unmovable;
+    int                       impacts_since_last_PSI;
     bool                      fast_piling_allowed;
 
     /* ─── Per-core friction info (ported from IVP_Core_Friction_Info) ──── */
@@ -166,6 +170,10 @@ typedef struct ivp_core {
      * Must be reset to NULL when not in use.
      */
     struct ivp_old_sync_rot *old_sync_rot;
+
+    /* ─── Simulation unit linkage ────────────────────────────────────── */
+    struct ivp_sim_unit            *sim_unit;       /* owning dynamic island (not owned) */
+    struct ivp_sim_unit_core_entry *sim_unit_entry; /* entry node in sim_unit->core_list  */
 
     /* ─── Object list (ported from IVP_Core_Fast_Static::objects) ──────── */
     /*

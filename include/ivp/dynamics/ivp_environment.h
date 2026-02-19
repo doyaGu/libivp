@@ -22,7 +22,7 @@
 #include <ivp/solver/ivp_friction_system.h>
 #include <ivp/solver/ivp_solver_config.h>
 #include <ivp/collision/ivp_broadphase.h>
-#include <ivp/dynamics/ivp_island_manager.h>
+#include <ivp/dynamics/ivp_sim_unit.h>
 #include <ivp/events/ivp_event.h>
 #include <ivp/collision/ivp_collision_delegator.h>
 #include <ivp/events/ivp_listener_collision.h>
@@ -169,8 +169,8 @@ typedef struct ivp_environment {
     /* Sweep-and-prune broadphase (used when object count >= IVP_SAP_THRESHOLD) */
     ivp_broadphase_sap_t     broadphase_sap;
 
-    /* Simulation island manager */
-    ivp_island_manager_t     island_manager;
+    /* Dynamic simulation island manager */
+    ivp_sim_units_manager_t *sim_units_manager;
 
     /* Solver configuration (runtime-tunable) */
     ivp_solver_config_t      solver_config;
@@ -355,6 +355,13 @@ static inline void ivp_environment_set_material_manager(ivp_environment_t *env,
     env->material_manager = fn;
     env->material_manager_ctx = ctx;
 }
+
+/* ── Per-unit controller dispatch ───────────────────────────────────────
+ * Called from ivp_sim_unit_simulate_psi to dispatch global controllers
+ * filtered to only run for cores belonging to the given sim unit. */
+void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
+                                               struct ivp_sim_unit *su,
+                                               ivp_real_t dt);
 
 /* ── Collision Delegator API (reference: IVP_Collision_Delegator_Root) ── */
 

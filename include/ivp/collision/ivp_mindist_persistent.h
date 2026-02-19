@@ -19,6 +19,7 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/base/ivp_forward_decls.h>
 #include <ivp/collision/ivp_synapse.h>
+#include <ivp/geometry/ivp_compact_surface.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,21 @@ typedef struct ivp_mindist_entry {
 
     ivp_mindist_feature_t feature_a;       /* cached feature on A        */
     ivp_mindist_feature_t feature_b;       /* cached feature on B        */
+
+    /* Cached closest edges from last exact computation.
+     * Used as initial guess for incremental Voronoi walk instead of
+     * restarting from centroid.
+     * Reference: IVP_Mindist::contact_situation (ivp_mindist.hxx) */
+    const ivp_compact_edge_t *last_edge_a;
+    const ivp_compact_edge_t *last_edge_b;
+
+    /* Halfspace optimization hint.
+     * Records which side of the contact plane each object was on
+     * at the last exact computation.  Used for fast O(1) consistency
+     * check before doing a full recalc.
+     * Reference: IVP_Mindist::mindist_function_hint (ivp_mindist.hxx)
+     *   0 = unknown, 1 = normal side, -1 = opposite */
+    int halfspace_hint;
 
     int  age;                              /* PSIs since last exact calc */
     ivp_time_t event_time;                 /* predicted next event time  */

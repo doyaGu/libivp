@@ -104,11 +104,6 @@ static bool pair_passes_filters(struct ivp_environment *env,
         return false;
     }
 
-    /* Skip objects in different sim units */
-    if (obj_a->sim_unit_id != obj_b->sim_unit_id) {
-        return false;
-    }
-
     /* Skip pairs in the same no-collision group (legacy) */
     if (ivp_objects_share_no_collision_group(obj_a, obj_b)) {
         return false;

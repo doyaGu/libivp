@@ -362,11 +362,6 @@ int ivp_broadphase_detect(ivp_environment_t *env,
                 continue;
             }
 
-            /* Skip objects in different sim units */
-            if (obj_a->sim_unit_id != obj_b->sim_unit_id) {
-                continue;
-            }
-
             /* Skip pairs explicitly assigned to the same no-collision group (legacy) */
             if (ivp_objects_share_no_collision_group(obj_a, obj_b)) {
                 continue;

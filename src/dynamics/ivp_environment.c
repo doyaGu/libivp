@@ -13,11 +13,6 @@
 #include "controllers/ivp_controller_system.h"
 #include "events/ivp_event_system.h"
 
-static bool ivp_environment_core_is_active(const ivp_core_t *core)
-{
-    return !core->physical_unmoveable && core->movement_state != IVP_MT_NOT_SIM;
-}
-
 static bool ivp_environment_core_has_pending_push(const ivp_core_t *core)
 {
     const ivp_real_t lin_q = ivp_vec3r_quad_length(&core->speed_change);
@@ -120,16 +115,9 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env,
     }
 }
 
-static void ivp_environment_commit_async_pushes_for_active_cores(ivp_environment_t *env)
-{
-    ivp_object_system_t *os = ivp_environment_get_object_system(env);
-    const int n = ivp_object_system_count(os);
-    for (int i = 0; i < n; i++) {
-        ivp_core_t *core = &ivp_object_system_get_at(os, i)->core;
-        if (!ivp_environment_core_is_active(core)) continue;
-        ivp_core_commit_async_pushes(core);
-    }
-}
+/* ivp_environment_commit_async_pushes_for_active_cores removed:
+ * Async pushes are now committed per-unit inside ivp_sim_unit_simulate_psi
+ * step 2, BEFORE controllers run (reference parity). */
 
 static void ivp_environment_revive_cores_psi(ivp_environment_t *env, ivp_real_t dt)
 {
@@ -143,33 +131,16 @@ static void ivp_environment_revive_cores_psi(ivp_environment_t *env, ivp_real_t 
         }
 
         if (ivp_environment_core_has_pending_push(core)) {
-            core->movement_state = IVP_MT_MOVING;
+            /* Revive: move core from still_slot to a new active sim unit */
+            if (env->sim_units_manager) {
+                ivp_sim_unit_revive_core(env->sim_units_manager, core);
+            } else {
+                core->movement_state = IVP_MT_MOVING;
+            }
             core->movement_check_counter = 0;
             ivp_core_commit_async_pushes(core);
             ivp_environment_emit_event_internal(env, IVP_EVENT_CORE_REVIVED, dt, obj->dense_index, 0);
             ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_UNFROZEN, dt, obj->dense_index, 0);
-        }
-    }
-}
-
-static void ivp_environment_init_active_cores_for_psi(ivp_environment_t *env, ivp_real_t dt)
-{
-    ivp_object_system_t *os = ivp_environment_get_object_system(env);
-    const int n = ivp_object_system_count(os);
-    for (int i = 0; i < n; i++) {
-        ivp_core_t *core = &ivp_object_system_get_at(os, i)->core;
-        if (!ivp_environment_core_is_active(core)) continue;
-        ivp_core_init_for_psi_ex(core, dt, env->use_forward_projection);
-
-        /* Legacy: init_moving_core_for_psi calls commit_all_async_pushes
-         * only for temporarily_unmovable cores.  Normal cores get their
-         * async pushes committed inside the gravity controller at
-         * priority 1000.  Since C17 doesn't yet have the temporarily_
-         * unmovable flag, commit for any core that already has pending
-         * pushes at this point (e.g., from external API calls between
-         * PSIs). */
-        if (ivp_environment_core_has_pending_push(core)) {
-            ivp_core_commit_async_pushes(core);
         }
     }
 }
@@ -180,101 +151,22 @@ static void ivp_environment_sort_controllers(ivp_environment_t *env)
     ivp_controller_system_sort(cs);
 }
 
-/* Forward declarations of sub-phase runners (defined below). */
-static void ivp_environment_run_friction_subphase_static(ivp_environment_t *env,
-                                                          ivp_real_t dt);
-static void ivp_environment_run_friction_subphase_dynamic(ivp_environment_t *env,
-                                                          ivp_real_t dt);
-static void ivp_environment_run_friction_subphase_energy(ivp_environment_t *env,
-                                                         ivp_real_t dt);
-
-/* ── Friction sub-phase controller callbacks ────────────────────────────
- * In the reference IVP implementation, the friction solver runs at three
- * priority points within the controller pipeline (static, dynamic, energy).
- * Each callback delegates to the corresponding monolithic sub-phase. */
-
-static void ivp_friction_controller_static(const ivp_event_sim_t *event_sim,
-                                           ivp_object_t *obj, void *ctx)
-{
-    (void)obj; (void)ctx;
-    ivp_environment_run_friction_subphase_static(event_sim->environment,
-                                                 event_sim->delta_time);
-}
-
-static void ivp_friction_controller_dynamic(const ivp_event_sim_t *event_sim,
-                                            ivp_object_t *obj, void *ctx)
-{
-    (void)obj; (void)ctx;
-    ivp_environment_run_friction_subphase_dynamic(event_sim->environment,
-                                                  event_sim->delta_time);
-}
-
-static void ivp_friction_controller_energy(const ivp_event_sim_t *event_sim,
-                                           ivp_object_t *obj, void *ctx)
-{
-    (void)obj; (void)ctx;
-    ivp_environment_run_friction_subphase_energy(event_sim->environment,
-                                                 event_sim->delta_time);
-}
-
-static void ivp_environment_run_friction_subphase_static(ivp_environment_t *env,
-                                                          ivp_real_t dt)
-{
-    ivp_friction_manager_t *fm = &env->friction_manager;
-
-    if (fm->system_count == 0) return;
-
-    ivp_collision_settings_t coll_settings;
-    ivp_collision_settings_init_default(&coll_settings);
-    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
-
-    for (int s = 0; s < fm->system_count; s++) {
-        ivp_friction_system_t *fs = fm->systems[s];
-        if (fs->core_count >= 2) {
-            ivp_friction_system_phase_static_normal(fs, &coll_settings, dt);
-        }
-    }
-}
-
-static void ivp_environment_run_friction_subphase_dynamic(ivp_environment_t *env,
-                                                          ivp_real_t dt)
-{
-    ivp_friction_manager_t *fm = &env->friction_manager;
-    if (fm->system_count == 0) return;
-
-    ivp_collision_settings_t coll_settings;
-    ivp_collision_settings_init_default(&coll_settings);
-    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
-
-    for (int s = 0; s < fm->system_count; s++) {
-        ivp_friction_system_t *fs = fm->systems[s];
-        if (fs->core_count >= 2) {
-            ivp_friction_system_phase_dynamic_tangential(fs, &coll_settings, dt);
-        }
-    }
-}
-
-static void ivp_environment_run_friction_subphase_energy(ivp_environment_t *env,
-                                                         ivp_real_t dt)
-{
-    ivp_friction_manager_t *fm = &env->friction_manager;
-    if (fm->system_count == 0) return;
-
-    ivp_collision_settings_t coll_settings;
-    ivp_collision_settings_init_default(&coll_settings);
-    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
-
-    for (int s = 0; s < fm->system_count; s++) {
-        ivp_friction_system_phase_energy(fm->systems[s], &coll_settings, dt);
-    }
-}
+/* Friction sub-phases are now registered as per-system controller_cores
+ * inside each ivp_friction_system_t (static_cc, dynamic_cc, energy_cc).
+ * They are dispatched within ivp_sim_unit_simulate_psi via the per-unit
+ * controller list. The old global friction controller registration
+ * and monolithic sub-phase runners have been removed. */
 
 static int ivp_environment_island_identity_from_object(const ivp_environment_t *env,
                                                        const ivp_object_t *obj)
 {
-    if (!env || !obj) return -1;
-    if (obj->dense_index < 0) return -1;
-    return ivp_island_manager_find_island(&env->island_manager, obj->dense_index);
+    (void)env;
+    if (!obj) return -1;
+    /* In the new dynamic island architecture, return the sim unit pointer
+     * cast to int as a unique identity.  This is used only for event_sim
+     * metadata, not for correctness. */
+    if (!obj->core.sim_unit) return -1;
+    return (int)(uintptr_t)obj->core.sim_unit;
 }
 
 static void ivp_environment_invoke_controller_slot(ivp_environment_t *env,
@@ -297,211 +189,119 @@ static void ivp_environment_invoke_controller_slot(ivp_environment_t *env,
     slot->event_fn(&event_sim, obj, slot->ctx);
 }
 
-static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t dt)
+/* Old ivp_environment_run_controllers removed.
+ * Controller dispatch is now per-unit via ivp_environment_run_controllers_for_unit,
+ * called from ivp_sim_unit_simulate_psi step 3. */
+
+/* Movement state / freeze check is now handled per-sim-unit inside
+ * ivp_sim_unit_simulate_psi → ivp_sim_unit_calc_movement_state.
+ * The old global ivp_environment_update_movement_state has been removed. */
+
+/* ── Per-unit controller dispatch ─────────────────────────────────────────
+ * Dispatches global controllers (from the controller system) only for cores
+ * belonging to the given sim unit. Called from ivp_sim_unit_simulate_psi().
+ *
+ * Reference ordering (ivp_sim_unit.cxx:907-952):
+ *   async_commit happens BEFORE this function (in sim unit PSI step 2).
+ *   Controllers run in ascending priority order.
+ *   No mid-controller async commits — those were a C17 artifact.
+ */
+static bool core_is_in_unit(const ivp_core_t *core, const ivp_sim_unit_t *su) {
+    return core->sim_unit == su;
+}
+
+void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
+                                               ivp_sim_unit_t *su,
+                                               ivp_real_t dt)
 {
     ivp_controller_system_t *cs = ivp_environment_get_controller_system(env);
     ivp_object_system_t *os = ivp_environment_get_object_system(env);
 
     const int cn = ivp_controller_system_count(cs);
-    if (cn <= 0) {
-        ivp_environment_commit_async_pushes_for_active_cores(env);
-        return;
-    }
+    if (cn <= 0) return;
 
-    ivp_controller_handle_t local_controller_handles[32];
-    ivp_controller_handle_t *controller_handles = local_controller_handles;
-    bool controller_handles_allocated = false;
-    if (cn > (int)(sizeof(local_controller_handles) / sizeof(local_controller_handles[0]))) {
-        controller_handles = (ivp_controller_handle_t *)ivp_alloc(
+    /* Snapshot controller handles for iteration safety. */
+    ivp_controller_handle_t local_handles[32];
+    ivp_controller_handle_t *handles = local_handles;
+    bool handles_allocated = false;
+    if (cn > (int)(sizeof(local_handles) / sizeof(local_handles[0]))) {
+        handles = (ivp_controller_handle_t *)ivp_alloc(
             env->allocator, (size_t)cn * sizeof(ivp_controller_handle_t));
-        if (!controller_handles) {
-            return;
-        }
-        controller_handles_allocated = true;
+        if (!handles) return;
+        handles_allocated = true;
     }
 
-    int controller_handle_count = 0;
+    int handle_count = 0;
     for (int i = 0; i < cn; i++) {
         ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, i);
         if (!slot) continue;
         ivp_controller_handle_t h;
         h.slot = slot->handle.slot;
         h.generation = slot->handle.generation;
-        controller_handles[controller_handle_count++] = h;
+        handles[handle_count++] = h;
     }
 
-    /* Run controllers in descending priority order (reference parity).
-     *
-     * Reference IVP semantics:
-     *   - priority > IVP_CP_GRAVITY: async pushes
-     *   - priority < IVP_CP_GRAVITY: real/sync pushes
-     *
-     * C17 controllers commonly write to speed_change for both stages.
-     * To preserve reference-visible behavior, the dispatcher enforces an
-     * explicit async→sync divider at gravity/boundary and commits after each
-     * low-priority controller so low-stage pushes are immediately visible. */
-
-    bool saw_above_gravity_controller = false;
-    bool committed_at_gravity_boundary = false;
-
-    for (int ci = 0; ci < controller_handle_count; ci++) {
+    for (int ci = 0; ci < handle_count; ci++) {
         ivp_controller_slot_t *slot =
-            ivp_controller_system_get_by_handle(cs, controller_handles[ci]);
-        if (!slot || !slot->enabled) continue;
-        if (!slot->event_fn) continue;
-
-        if (!committed_at_gravity_boundary &&
-            saw_above_gravity_controller &&
-            slot->priority < IVP_CP_GRAVITY) {
-            ivp_environment_commit_async_pushes_for_active_cores(env);
-            committed_at_gravity_boundary = true;
-        }
+            ivp_controller_system_get_by_handle(cs, handles[ci]);
+        if (!slot || !slot->enabled || !slot->event_fn) continue;
 
         if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
+            /* Dependent: dispatch if ANY associated object is in this unit. */
             ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
             int associated_count = ivp_controller_slot_collect_associated_handles(
                 slot, env, associated_handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
             if (associated_count <= 0) continue;
 
             ivp_object_t *dispatch_obj = NULL;
+            bool any_in_unit = false;
             for (int ai = 0; ai < associated_count; ai++) {
                 ivp_object_t *obj = ivp_object_system_get_by_handle(os, associated_handles[ai]);
                 if (!obj) continue;
-                if (!ivp_environment_core_is_active(&obj->core)) continue;
-                dispatch_obj = obj;
-                break;
-            }
-            if (!dispatch_obj) continue;
-
-            /* Dependent parity: dispatch once with discovered associated set. */
-            ivp_environment_invoke_controller_slot(env,
-                                                   slot,
-                                                   dispatch_obj,
-                                                   dt,
-                                                   associated_handles,
-                                                   associated_count);
-        } else {
-            if (!slot->run_for_all_cores && slot->associated_count > 0) {
-                for (int ai = 0; ai < slot->associated_count; ai++) {
-                    ivp_object_handle_t h = slot->associated_handles[ai];
-                    if (!ivp_object_handle_is_valid(h)) continue;
-                    ivp_object_t *obj = ivp_object_system_get_by_handle(os, h);
-                    if (!obj) continue;
-                    if (!ivp_environment_core_is_active(&obj->core)) continue;
-                    ivp_environment_invoke_controller_slot(env, slot, obj, dt, &h, 1);
-                }
-            } else if (slot->run_for_all_cores) {
-                const int on = ivp_object_system_count(os);
-                ivp_object_handle_t local_object_handles[64];
-                ivp_object_handle_t *object_handles = local_object_handles;
-                bool object_handles_allocated = false;
-                if (on > (int)(sizeof(local_object_handles) / sizeof(local_object_handles[0]))) {
-                    object_handles = (ivp_object_handle_t *)ivp_alloc(
-                        env->allocator, (size_t)on * sizeof(ivp_object_handle_t));
-                    if (!object_handles) {
-                        continue;
+                if (core_is_in_unit(&obj->core, su)) {
+                    any_in_unit = true;
+                    if (!dispatch_obj && !obj->core.physical_unmoveable) {
+                        dispatch_obj = obj;
                     }
-                    object_handles_allocated = true;
                 }
+            }
+            if (!any_in_unit || !dispatch_obj) continue;
 
-                int object_handle_count = 0;
-                for (int oi = 0; oi < on; oi++) {
-                    ivp_object_t *obj = ivp_object_system_get_at(os, oi);
-                    if (!obj) continue;
-                    ivp_object_handle_t h;
-                    h.slot = obj->handle.slot;
-                    h.generation = obj->handle.generation;
-                    object_handles[object_handle_count++] = h;
+            ivp_environment_invoke_controller_slot(env, slot, dispatch_obj, dt,
+                                                   associated_handles, associated_count);
+        } else if (!slot->run_for_all_cores && slot->associated_count > 0) {
+            /* Per-object: dispatch for each associated object in this unit. */
+            for (int ai = 0; ai < slot->associated_count; ai++) {
+                ivp_object_handle_t h = slot->associated_handles[ai];
+                if (!ivp_object_handle_is_valid(h)) continue;
+                ivp_object_t *obj = ivp_object_system_get_by_handle(os, h);
+                if (!obj) continue;
+                if (!core_is_in_unit(&obj->core, su)) continue;
+                ivp_environment_invoke_controller_slot(env, slot, obj, dt, &h, 1);
+            }
+        } else if (slot->run_for_all_cores) {
+            /* All-cores: dispatch only for objects in this unit. */
+            ivp_sim_unit_core_entry_t *ce = su->core_list;
+            while (ce) {
+                ivp_core_t *core = ce->core;
+                ivp_sim_unit_core_entry_t *next_ce = ce->next;
+                if (!core->physical_unmoveable) {
+                    ivp_object_t *obj = (ivp_object_t *)core; /* core is first member */
+                    ivp_object_handle_t oh;
+                    oh.slot = obj->handle.slot;
+                    oh.generation = obj->handle.generation;
+                    ivp_environment_invoke_controller_slot(env, slot, obj, dt, &oh, 1);
                 }
-
-                for (int oi = 0; oi < object_handle_count; oi++) {
-                    ivp_object_t *obj = ivp_object_system_get_by_handle(os, object_handles[oi]);
-                    if (!obj) continue;
-                    if (!ivp_environment_core_is_active(&obj->core)) continue;
-                    ivp_environment_invoke_controller_slot(env,
-                                                           slot,
-                                                           obj,
-                                                           dt,
-                                                           &object_handles[oi],
-                                                           1);
-                }
-
-                if (object_handles_allocated) {
-                    ivp_free(env->allocator, object_handles,
-                             (size_t)on * sizeof(ivp_object_handle_t));
-                }
-            } else if (slot->is_global) {
-                /* Global controller: independent, not per-core, no
-                 * associated handles.  Dispatch once with NULL object.
-                 * Used by friction sub-phase controllers. */
-                ivp_environment_invoke_controller_slot(env, slot, NULL, dt, NULL, 0);
+                ce = next_ce;
             }
         }
-
-        if (slot->priority > IVP_CP_GRAVITY) {
-            saw_above_gravity_controller = true;
-        } else if (slot->priority == IVP_CP_GRAVITY) {
-            ivp_environment_commit_async_pushes_for_active_cores(env);
-            committed_at_gravity_boundary = true;
-        } else {
-            ivp_environment_commit_async_pushes_for_active_cores(env);
-        }
+        /* Note: is_global controllers have been removed. Friction sub-phases
+         * are now per-system controller_cores in the sim unit's controller list,
+         * dispatched in ivp_sim_unit_simulate_psi step 3 (per-unit controllers). */
     }
 
-    ivp_environment_commit_async_pushes_for_active_cores(env);
-
-    if (controller_handles_allocated) {
-        ivp_free(env->allocator, controller_handles,
-                 (size_t)cn * sizeof(ivp_controller_handle_t));
-    }
-}
-
-static void ivp_environment_integrate_active_cores(ivp_environment_t *env,
-                                                   ivp_real_t dt,
-                                                   ivp_time_t step_end_time)
-{
-    ivp_object_system_t *os = ivp_environment_get_object_system(env);
-    const int n = ivp_object_system_count(os);
-
-    for (int i = 0; i < n; i++) {
-        ivp_core_t *core = &ivp_object_system_get_at(os, i)->core;
-        if (!ivp_environment_core_is_active(core)) continue;
-        ivp_core_calc_next_psi_matrix(core, dt);
-        core->time_of_last_psi = step_end_time;
-    }
-}
-
-/* Friction sub-phases are now interleaved with controllers at the correct
- * priority boundaries in ivp_environment_run_controllers().
- * The old monolithic ivp_environment_run_friction_phase() has been removed.
- *
- * Legacy ordering:
- *   static friction  (prio 0)   — begin_psi + distance_keepers + coupled_solve
- *   dynamic friction (prio 600) — easing
- *   gravity+damping  (prio 1000) — gravity controller
- *   energy friction  (prio 2000) — energy removal
- */
-
-static void ivp_environment_update_movement_state(ivp_environment_t *env, ivp_real_t dt)
-{
-    ivp_object_system_t *os = ivp_environment_get_object_system(env);
-    const int n = ivp_object_system_count(os);
-
-    for (int i = 0; i < n; i++) {
-        ivp_object_t *obj = ivp_object_system_get_at(os, i);
-        ivp_core_t *core = &obj->core;
-        if (!ivp_environment_core_is_active(core)) continue;
-
-        core->movement_check_counter++;
-        if (core->movement_check_counter >= IVP_MOVEMENT_CHECK_COUNT) {
-            core->movement_check_counter = 0;
-            ivp_movement_type_t old_state = core->movement_state;
-            ivp_core_calc_movement_state(core, &env->freeze_params);
-            if (old_state != IVP_MT_NOT_SIM && core->movement_state == IVP_MT_NOT_SIM) {
-                ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_FROZEN, dt,
-                                                    obj->dense_index, 0);
-            }
-        }
+    if (handles_allocated) {
+        ivp_free(env->allocator, handles, (size_t)cn * sizeof(ivp_controller_handle_t));
     }
 }
 
@@ -515,23 +315,16 @@ static void ivp_environment_default_gravity_controller(const ivp_event_sim_t *ev
     ivp_core_t *core = &obj->core;
     if (core->pinned) return;
 
-    /* Legacy IVP_Standard_Gravity_Controller::do_simulation_controller():
+    /* Reference: IVP_Standard_Gravity_Controller::do_simulation_controller()
      *   1. global_damp_core(core)
-     *   2. commit_all_async_pushes(core)
-     *   3. speed += gravity * dt
+     *   2. speed += gravity * dt
      *
-     * Bundling damping + commit + gravity in a single controller at
-     * priority 1000 matches the legacy ordering where these three
-     * operations happen atomically before lower-priority controllers
-     * (springs, motors, etc.) see the results. */
+     * Note: commit_all_async_pushes is no longer called here — it happens
+     * once for all cores in sim unit PSI step 2 (before controllers run),
+     * matching the reference ordering. */
     ivp_core_damp(core, dt);
-    ivp_core_commit_async_pushes(core);
     ivp_vec3r_add_scaled(&core->speed, &env->gravity, dt);
 }
-
-/* Damping is now handled inside the gravity controller (priority 1000),
- * matching legacy IVP_Standard_Gravity_Controller::do_simulation_controller().
- * The old ivp_environment_damp_active_cores() has been removed. */
 
 void ivp_environment_config_init(ivp_environment_config_t *cfg)
 {
@@ -557,24 +350,6 @@ static ivp_controller_handle_t ivp_environment_add_controller_internal(
     ivp_controller_mode_t mode, ivp_controller_discovery_fn_t discovery_fn);
 static ivp_controller_slot_t *ivp_environment_get_controller_slot(
     ivp_environment_t *env, ivp_controller_handle_t controller_handle);
-
-/* Add a "global" controller: dispatched once per PSI with NULL object,
- * rather than per active core.  Used for friction sub-phase controllers. */
-static ivp_controller_handle_t ivp_environment_add_global_controller(
-    ivp_environment_t *env, int priority,
-    ivp_controller_event_fn_t event_fn, void *ctx)
-{
-    ivp_controller_handle_t h = ivp_environment_add_controller_internal(
-        env, priority, event_fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
-    if (ivp_controller_handle_is_valid(h)) {
-        ivp_controller_slot_t *slot = ivp_environment_get_controller_slot(env, h);
-        if (slot) {
-            slot->run_for_all_cores = false;
-            slot->is_global = true;
-        }
-    }
-    return h;
-}
 
 ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config)
 {
@@ -648,15 +423,9 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     }
     env->friction_manager.owner = env;
 
-    /* Register friction sub-phases as global controllers at their priority
-     * levels.  This replaces the old inline threshold-based dispatch and
-     * aligns with the reference IVP controller pipeline. */
-    env->friction_manager.static_fs_handle = ivp_environment_add_global_controller(
-        env, IVP_CP_STATIC_FRICTION, ivp_friction_controller_static, &env->friction_manager);
-    env->friction_manager.dynamic_fs_handle = ivp_environment_add_global_controller(
-        env, IVP_CP_DYNAMIC_FRICTION, ivp_friction_controller_dynamic, &env->friction_manager);
-    env->friction_manager.energy_fs_handle = ivp_environment_add_global_controller(
-        env, IVP_CP_ENERGY_FRICTION, ivp_friction_controller_energy, &env->friction_manager);
+    /* Friction sub-phases are now registered as per-system controller_cores
+     * inside each ivp_friction_system_t when friction contacts are created.
+     * No global friction controller registration is needed here. */
 
     ivp_mindist_manager_init(&env->mindist_manager, env->allocator);
     ivp_hull_manager_init(&env->hull_manager, env->allocator);
@@ -674,8 +443,12 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* Sweep-and-prune broadphase */
     ivp_broadphase_sap_init(&env->broadphase_sap, env->allocator);
 
-    /* Island manager */
-    ivp_island_manager_init(&env->island_manager, env->allocator);
+    /* Simulation island manager */
+    env->sim_units_manager = ivp_sim_units_manager_create(env, env->allocator);
+    if (!env->sim_units_manager) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
 
     ivp_controller_handle_t gravity_h = ivp_environment_add_controller(
         env, IVP_CP_GRAVITY, ivp_environment_default_gravity_controller, NULL);
@@ -713,7 +486,10 @@ void ivp_environment_destroy(ivp_environment_t *env)
     ivp_mindist_manager_destroy(&env->mindist_manager);
     ivp_friction_manager_destroy(&env->friction_manager);
     ivp_broadphase_sap_destroy(&env->broadphase_sap);
-    ivp_island_manager_destroy(&env->island_manager);
+    if (env->sim_units_manager) {
+        ivp_sim_units_manager_destroy(env->sim_units_manager);
+        env->sim_units_manager = NULL;
+    }
 
     if (env->event_system) {
         ivp_event_system_destroy((ivp_event_system_t *)env->event_system, alloc);
@@ -1003,6 +779,20 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env,
                                                  out_handle);
     if (!obj) return NULL;
     ivp_hull_manager_add_object(&env->hull_manager, obj);
+
+    /* Assign core to a simulation unit.
+     * Static objects go into still_slot; dynamic objects get a new active unit. */
+    if (env->sim_units_manager) {
+        if (obj->core.physical_unmoveable) {
+            ivp_sim_unit_add_core(&env->sim_units_manager->still_slot, &obj->core);
+        } else {
+            ivp_sim_unit_t *su = ivp_sim_unit_create(env->sim_units_manager);
+            if (su) {
+                ivp_sim_unit_add_core(su, &obj->core);
+            }
+        }
+    }
+
     return obj;
 }
 
@@ -1069,6 +859,11 @@ void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
     /* Notify universe manager before destruction */
     if (env->universe_manager && env->universe_manager->deleted_fn) {
         env->universe_manager->deleted_fn(env->universe_manager->ctx, obj);
+    }
+
+    /* Remove from sim unit before destroying */
+    if (env->sim_units_manager && obj->core.sim_unit) {
+        ivp_sim_unit_remove_core(env->sim_units_manager, &obj->core);
     }
 
     (void)ivp_environment_destroy_object_by_handle(env, ivp_environment_get_object_handle(obj));
@@ -1147,21 +942,22 @@ void ivp_environment_simulate_one_psi(ivp_environment_t *env)
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_MANAGER_CONSTRAINTS, unit_dt);
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_PRE_CONTROLLERS, unit_dt);
-        ivp_environment_init_active_cores_for_psi(env, unit_dt);
-        ivp_island_manager_rebuild(&env->island_manager, env);
         ivp_friction_manager_begin_psi(&env->friction_manager);
 
-        /* Legacy PSI order: friction sub-phases are interleaved with
-         * controllers at the correct priority boundaries.  Damping and
-         * commit_async are bundled inside the gravity controller at
-         * priority 1000.  The controller runner handles all ordering. */
+        /* All simulation logic is now inside ivp_sim_unit_simulate_psi:
+         *   1. init_cores + reset cascade fields
+         *   2. commit_all_async_pushes (BEFORE controllers — reference parity)
+         *   3. dispatch controllers (global + per-unit, priority order)
+         *   4. integration (calc_next_psi_matrix)
+         *   5. movement state check
+         */
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_CONTROLLERS, unit_dt);
-        ivp_environment_run_controllers(env, unit_dt);
-
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_INTEGRATE, unit_dt);
-        const ivp_time_t unit_end_time =
-            env->current_time + (ivp_time_t)((ivp_real_t)(unit + 1) * unit_dt);
-        ivp_environment_integrate_active_cores(env, unit_dt, unit_end_time);
+        {
+            const ivp_time_t unit_end_time =
+                env->current_time + (ivp_time_t)((ivp_real_t)(unit + 1) * unit_dt);
+            ivp_sim_units_manager_simulate_all_psi(env->sim_units_manager, unit_dt, unit_end_time);
+        }
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_COLLISION_BROADPHASE, unit_dt);
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_COLLISION_NARROWPHASE, unit_dt);
@@ -1170,8 +966,11 @@ void ivp_environment_simulate_one_psi(ivp_environment_t *env)
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_MANAGER_EVENTS, unit_dt);
 
+        /* Movement state / freeze check is now handled inside
+         * ivp_sim_unit_simulate_psi → ivp_sim_unit_calc_movement_state.
+         * The global ivp_environment_update_movement_state is no longer called
+         * to avoid double-counting movement_check_counter. */
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_MOVEMENT_STATE, unit_dt);
-        ivp_environment_update_movement_state(env, unit_dt);
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_SIM_UNIT_END, unit_dt);
         ivp_environment_emit_event_internal(env, IVP_EVENT_SIM_UNIT_END, unit_dt, -1, 0);

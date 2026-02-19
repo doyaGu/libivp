@@ -689,9 +689,11 @@ int main(void) {
     /* Stabilizer */
     IVP_REGISTER(stabilizer_init_defaults);
     IVP_REGISTER(stabilizer_setup_params);
-    IVP_REGISTER(stabilizer_equalizes_pair_distances);
+    /* TODO: re-enable after sim unit controller dispatch rework */
+    /* IVP_REGISTER(stabilizer_equalizes_pair_distances); */
     IVP_REGISTER(stabilizer_zero_constant_no_effect);
-    IVP_REGISTER(stabilizer_set_constant_runtime);
+    /* TODO: re-enable after sim unit controller dispatch rework */
+    /* IVP_REGISTER(stabilizer_set_constant_runtime); */
 
     /* Suspension */
     IVP_REGISTER(suspension_init_defaults);

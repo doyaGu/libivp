@@ -15,6 +15,8 @@
 #include <ivp/collision/ivp_synapse.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_environment.h>
+#include <ivp/controllers/ivp_controller.h>
 #include <ivp/events/ivp_listener_collision.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_vec3.h>
@@ -238,6 +240,87 @@ static void release_new_contact(ivp_friction_manager_t *mgr,
     }
 }
 
+/* ── Per-system friction controller callbacks ─────────────────────────── */
+
+/* These are ivp_controller_core_fn_t callbacks registered in each friction
+ * system's sim unit.  They replace the old global friction controllers.
+ * ctx is the ivp_friction_system_t*. */
+
+static void friction_cc_static(void *ctx, ivp_environment_t *env,
+                                ivp_core_t **cores, int core_count,
+                                ivp_real_t delta_time)
+{
+    (void)cores; (void)core_count;
+    ivp_friction_system_t *sys = (ivp_friction_system_t *)ctx;
+    if (sys->core_count < 2) return;
+
+    ivp_collision_settings_t coll_settings;
+    ivp_collision_settings_init_default(&coll_settings);
+    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
+
+    ivp_friction_system_phase_static_normal(sys, &coll_settings, delta_time);
+}
+
+static void friction_cc_dynamic(void *ctx, ivp_environment_t *env,
+                                 ivp_core_t **cores, int core_count,
+                                 ivp_real_t delta_time)
+{
+    (void)cores; (void)core_count;
+    ivp_friction_system_t *sys = (ivp_friction_system_t *)ctx;
+    if (sys->core_count < 2) return;
+
+    ivp_collision_settings_t coll_settings;
+    ivp_collision_settings_init_default(&coll_settings);
+    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
+
+    ivp_friction_system_phase_dynamic_tangential(sys, &coll_settings, delta_time);
+}
+
+static void friction_cc_energy(void *ctx, ivp_environment_t *env,
+                                ivp_core_t **cores, int core_count,
+                                ivp_real_t delta_time)
+{
+    (void)cores; (void)core_count;
+    ivp_friction_system_t *sys = (ivp_friction_system_t *)ctx;
+
+    ivp_collision_settings_t coll_settings;
+    ivp_collision_settings_init_default(&coll_settings);
+    coll_settings.gravity_magnitude = ivp_vec3r_length(&env->gravity);
+
+    ivp_friction_system_phase_energy(sys, &coll_settings, delta_time);
+}
+
+/* Register the three friction controller_cores in the given sim unit.
+ * The system's cc fields must already be initialized. */
+static void friction_system_register_controllers(ivp_friction_system_t *sys,
+                                                   ivp_sim_unit_t *su)
+{
+    if (!su || su == &su->manager->still_slot) return;
+    ivp_sim_unit_add_controller(su, &sys->static_cc);
+    ivp_sim_unit_add_controller(su, &sys->dynamic_cc);
+    ivp_sim_unit_add_controller(su, &sys->energy_cc);
+}
+
+/* Unregister the three friction controller_cores from their sim unit. */
+static void friction_system_unregister_controllers(ivp_friction_system_t *sys)
+{
+    ivp_sim_unit_remove_controller(&sys->static_cc);
+    ivp_sim_unit_remove_controller(&sys->dynamic_cc);
+    ivp_sim_unit_remove_controller(&sys->energy_cc);
+}
+
+/* Find the appropriate sim unit for a friction system:
+ * use the first non-static core's sim unit. */
+static ivp_sim_unit_t *friction_system_find_sim_unit(ivp_friction_system_t *sys)
+{
+    for (int i = 0; i < sys->core_count; i++) {
+        if (!sys->cores[i]->physical_unmoveable && sys->cores[i]->sim_unit) {
+            return sys->cores[i]->sim_unit;
+        }
+    }
+    return NULL;
+}
+
 /* ── New friction system allocation ────────────────────────────────────── */
 
 /* Allocate a new friction system with initial cores and pairs arrays,
@@ -290,6 +373,20 @@ static ivp_friction_system_t *friction_system_create(
     system_add_core(sys, core_a);
     system_add_core(sys, core_b);
 
+    /* Initialize the three per-system controller_cores. */
+    ivp_controller_core_init(&sys->static_cc, friction_cc_static, sys,
+                              IVP_CP_STATIC_FRICTION);
+    ivp_controller_core_init(&sys->dynamic_cc, friction_cc_dynamic, sys,
+                              IVP_CP_DYNAMIC_FRICTION);
+    ivp_controller_core_init(&sys->energy_cc, friction_cc_energy, sys,
+                              IVP_CP_ENERGY_FRICTION);
+
+    /* Register controllers in the first non-static core's sim unit. */
+    ivp_sim_unit_t *su = friction_system_find_sim_unit(sys);
+    if (su) {
+        friction_system_register_controllers(sys, su);
+    }
+
     return sys;
 }
 
@@ -331,6 +428,9 @@ void ivp_friction_manager_destroy(ivp_friction_manager_t *mgr) {
     for (int i = 0; i < mgr->system_count; i++) {
         ivp_friction_system_t *sys = mgr->systems[i];
         if (sys) {
+            /* Unregister per-unit controllers before destroying */
+            friction_system_unregister_controllers(sys);
+
             ivp_persistent_contact_t *pc = sys->first_contact;
             while (pc) {
                 ivp_synapse_detach_friction_contact(pc);
@@ -572,6 +672,8 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
     bool created_new_system = false;
 
     if (sys_a && sys_b && sys_a != sys_b) {
+        /* Merge friction systems (unregisters src controllers) */
+        friction_system_unregister_controllers(sys_b);
         ivp_friction_system_merge(sys_a, sys_b, mgr);
         target_sys = sys_a;
     } else if (sys_a) {
@@ -587,6 +689,36 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
             return NULL;
         }
         created_new_system = true;
+    }
+
+    /* Merge sim units if the two cores are in different active units.
+     * Reference: friction contact creation triggers sim unit merge
+     * (ivp_friction.cxx fusion_friction_systems + sim_unit merge). */
+    {
+        ivp_sim_unit_t *su_a = core_a->sim_unit;
+        ivp_sim_unit_t *su_b = core_b->sim_unit;
+        ivp_sim_units_manager_t *sum = mgr->owner
+            ? mgr->owner->sim_units_manager : NULL;
+
+        if (sum && su_a && su_b && su_a != su_b
+            && su_a != &sum->still_slot && su_b != &sum->still_slot)
+        {
+            /* Unregister friction controllers before sim unit merge
+             * (merge moves controllers, we'll re-register after). */
+            friction_system_unregister_controllers(target_sys);
+            ivp_sim_unit_merge(sum, su_a, su_b);
+            /* su_b is now destroyed; su_a has all cores+controllers.
+             * Re-register friction controllers in the merged unit. */
+            friction_system_register_controllers(target_sys, su_a);
+        } else if (!created_new_system) {
+            /* Ensure controllers are registered in the right unit.
+             * (They might not be if the system gained a new core.) */
+            ivp_sim_unit_t *target_su = friction_system_find_sim_unit(target_sys);
+            if (target_su && target_sys->static_cc.sim_unit != target_su) {
+                friction_system_unregister_controllers(target_sys);
+                friction_system_register_controllers(target_sys, target_su);
+            }
+        }
     }
 
     /* Add to doubly-linked list */
@@ -685,9 +817,19 @@ void ivp_friction_manager_age_and_prune(ivp_friction_manager_t *mgr) {
          * disconnected components (cores no longer linked by contacts). */
         int prev_count = mgr->system_count;
         ivp_friction_system_check_split(sys, mgr);
-        if (mgr->system_count < prev_count) {
-            /* sys was removed (or split then removed) — don't advance i */
-            continue;
+        if (mgr->system_count != prev_count) {
+            /* System was split or removed. Mark involved sim units for
+             * union_find so they can detect disconnected components and
+             * split at the next PSI.
+             * Reference: ivp_friction.cxx line 1212/1219 */
+            for (int s = i; s < mgr->system_count; s++) {
+                ivp_sim_unit_t *su = friction_system_find_sim_unit(mgr->systems[s]);
+                if (su) su->union_find_needed = true;
+            }
+            if (mgr->system_count < prev_count) {
+                /* sys was removed — don't advance i */
+                continue;
+            }
         }
 
         i++;
@@ -1743,6 +1885,9 @@ void ivp_friction_system_merge(ivp_friction_system_t *dst,
 /* Remove a system from the manager's system array and free it. */
 static void manager_remove_system(ivp_friction_manager_t *mgr,
                                     ivp_friction_system_t *sys) {
+    /* Unregister per-unit controllers before destruction */
+    friction_system_unregister_controllers(sys);
+
     for (int i = 0; i < mgr->system_count; i++) {
         if (mgr->systems[i] == sys) {
             for (int j = i; j < mgr->system_count - 1; j++) {

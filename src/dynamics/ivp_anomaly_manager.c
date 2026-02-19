@@ -121,11 +121,6 @@ void ivp_anomaly_manager_begin_psi(ivp_anomaly_manager_t *mgr)
 {
     if (mgr) {
         mgr->collisions_this_psi = 0;
-        mgr->current_psi_epoch++;
-        if (mgr->current_psi_epoch <= 0) {
-            /* Recover cleanly on signed wrap. */
-            mgr->current_psi_epoch = 1;
-        }
     }
 }
 
@@ -138,17 +133,12 @@ bool ivp_anomaly_manager_count_collision(ivp_anomaly_manager_t *mgr,
     ivp_core_t *core = &obj->core;
     if (core->physical_unmoveable) return true;
 
-    if (core->collision_count_epoch != mgr->current_psi_epoch) {
-        core->collision_count_epoch = mgr->current_psi_epoch;
-        core->collisions_this_psi = 0;
-    }
-
-    core->collisions_this_psi++;
+    core->impacts_since_last_PSI++;
     mgr->collisions_this_psi++;
 
     if (mgr->config.max_collisions_per_psi > 0 &&
-        core->collisions_this_psi > mgr->config.max_collisions_per_psi) {
-        if (core->collisions_this_psi == mgr->config.max_collisions_per_psi + 1) {
+        core->impacts_since_last_PSI > mgr->config.max_collisions_per_psi) {
+        if (core->impacts_since_last_PSI == mgr->config.max_collisions_per_psi + 1) {
             fire_callback(mgr, obj, IVP_ANOMALY_MAX_COLLISIONS,
                           "Max collisions per PSI exceeded");
         }

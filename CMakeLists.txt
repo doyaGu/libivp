@@ -138,7 +138,6 @@ set(IVP_DYNAMICS_SOURCES
         src/dynamics/ivp_object_attach.c
         src/dynamics/ivp_merge_core.c
         src/dynamics/ivp_anomaly_manager.c
-        src/dynamics/ivp_island_manager.c
         src/dynamics/ivp_universe_manager.c
         src/dynamics/ivp_cluster.c
 )

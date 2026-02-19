@@ -58,8 +58,8 @@ void ivp_core_init(ivp_core_t *core, ivp_real_t mass,
     core->current_speed = IVP_REAL(0.0);
     core->max_surface_rot_speed = IVP_REAL(0.0);
     core->movement_check_counter = 0;
-    core->collisions_this_psi = 0;
-    core->collision_count_epoch = 0;
+    core->temporarily_unmovable = false;
+    core->impacts_since_last_PSI = 0;
     core->fast_piling_allowed = false;
 
     /* Initialize freeze checkpoints */
@@ -74,6 +74,10 @@ void ivp_core_init(ivp_core_t *core, ivp_real_t mass,
     core->pinned              = false;
     core->spin_clipping_enabled = false;
     core->spin_clipping = ivp_vec3f(0.0f, 0.0f, 0.0f);
+
+    /* Simulation unit linkage */
+    core->sim_unit = NULL;
+    core->sim_unit_entry = NULL;
 
     /* Per-core friction info (Phase 3 alignment) */
     core->core_friction_info.for_unmoveables.l_friction_info_hash = NULL;

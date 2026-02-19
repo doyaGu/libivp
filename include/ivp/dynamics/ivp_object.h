@@ -89,7 +89,6 @@ typedef struct ivp_object {
     void                *client_data;   /* user data pointer            */
     struct ivp_environment *owner;      /* back-link to owning world    */
     int                  dense_index;   /* index in object system array */
-    int                  sim_unit_id;   /* simulation unit (0 = default) */
     ivp_handle_t         handle;        /* generational handle */
 
     /* Per-object collision listeners (up to IVP_MAX_COLLISION_LISTENERS_PER_OBJECT) */

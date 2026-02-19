@@ -72,7 +72,6 @@ typedef struct ivp_anomaly_manager {
     int  anomalies_detected;  /* cumulative count */
     int  anomalies_corrected; /* cumulative count */
     int  collisions_this_psi; /* total collisions counted this PSI */
-    int  current_psi_epoch;   /* increments once per PSI */
     bool active;
 } ivp_anomaly_manager_t;
 

@@ -23,6 +23,7 @@
 #include <ivp/collision/ivp_synapse.h>
 #include <ivp/base/ivp_forward_decls.h>
 #include <ivp/dynamics/ivp_handle.h>
+#include <ivp/dynamics/ivp_sim_unit.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -130,6 +131,16 @@ typedef struct ivp_friction_system {
 
     struct ivp_friction_manager *manager;
     const ivp_allocator_t *alloc;
+
+    /* Per-unit controller registrations (reference alignment).
+     * Each friction system registers as three controllers in its sim unit:
+     *   static_cc  (priority 0)   — LCP solve for normal pressure
+     *   dynamic_cc (priority 600) — tangential friction forces
+     *   energy_cc  (priority 2000) — energy conservation correction
+     * Reference: IVP_Friction_Sys_Static, IVP_Friction_System, IVP_Friction_Sys_Energy */
+    ivp_controller_core_t static_cc;
+    ivp_controller_core_t dynamic_cc;
+    ivp_controller_core_t energy_cc;
 } ivp_friction_system_t;
 
 /* ── Friction manager (environment-level) ──────────────────────────────── */
@@ -156,15 +167,8 @@ typedef struct ivp_friction_manager {
     int psi_counter;
     const ivp_allocator_t *alloc;
 
-    /* Controller handles for 3-priority friction registration (reference alignment).
-     * When registered, friction sub-phases run as controllers at the correct
-     * priority points in the sorted controller list. Handle value of {0,0}
-     * means not registered (handled via the inline threshold fallback). */
-    ivp_controller_handle_t static_fs_handle;
-    ivp_controller_handle_t dynamic_fs_handle;
-    ivp_controller_handle_t energy_fs_handle;
-
-    /* Back-pointer to owning environment (needed for controller callbacks) */
+    /* Back-pointer to owning environment (needed for controller callbacks
+     * and sim unit merge operations) */
     struct ivp_environment *owner;
 } ivp_friction_manager_t;
 

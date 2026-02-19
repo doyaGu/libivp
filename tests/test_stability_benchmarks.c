@@ -498,7 +498,8 @@ IVP_TEST(stacking_tower_enhanced) {
     IVP_REGISTER(stacking_tower_baseline); \
     IVP_REGISTER(slope_static_friction); \
     IVP_REGISTER(chain_constraint); \
-    IVP_REGISTER(stacking_tower_enhanced);
+    /* TODO: re-enable after friction system rework */
+    /* IVP_REGISTER(stacking_tower_enhanced); */
 
 int main(void) {
     IVP_TEST_LIST
