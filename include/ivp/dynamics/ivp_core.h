@@ -36,29 +36,29 @@ typedef enum ivp_movement_type {
 /* Movement type classification macros (matching reference) */
 #define IVP_MTIS_SIMULATED(mt)    ((mt) < IVP_MT_NOT_SIM)
 #define IVP_MTIS_CAN_COLLIDE(mt)  ((mt) & 0x07)
-#define IVP_MTIS_IS_MOVING(mt)    ((mt) & 0x07)
+#define IVP_MTIS_IS_MOVING(mt)    IVP_MTIS_CAN_COLLIDE(mt)  /* alias: identical check */
 #define IVP_MTIS_IS_STATIC(mt)    ((mt) & 0x10)
 
 /* ── Freeze parameters ──────────────────────────────────────────────────── */
 
 typedef struct ivp_freeze_params {
-    float trans_threshold_short;  /* default: 0.01 m                        */
-    float rot_threshold_short;    /* default: 0.005 rad (scaled by radius)  */
-    float trans_threshold_long;   /* default: 0.1 m                         */
-    float rot_threshold_long;     /* default: 0.2 rad                       */
-    float freeze_check_dtime;     /* default: 0.3 s  (short window)         */
-    float has_moved_long_time;    /* default: 4.0 s  (long window)          */
+    ivp_real_t trans_threshold_short;  /* default: 0.01 m                        */
+    ivp_real_t rot_threshold_short;    /* default: 0.005 rad (scaled by radius)  */
+    ivp_real_t trans_threshold_long;   /* default: 0.1 m                         */
+    ivp_real_t rot_threshold_long;     /* default: 0.2 rad                       */
+    ivp_real_t freeze_check_dtime;     /* default: 0.3 s  (short window)         */
+    ivp_real_t has_moved_long_time;    /* default: 4.0 s  (long window)          */
 } ivp_freeze_params_t;
 
 /* Default freeze parameters (matching original IVP) */
 static inline ivp_freeze_params_t ivp_freeze_params_default(void) {
     ivp_freeze_params_t p;
-    p.trans_threshold_short = 0.01f;
-    p.rot_threshold_short   = 0.005f;
-    p.trans_threshold_long  = 0.1f;
-    p.rot_threshold_long    = 0.2f;
-    p.freeze_check_dtime    = 0.3f;
-    p.has_moved_long_time   = 4.0f;
+    p.trans_threshold_short = IVP_REAL(0.01);
+    p.rot_threshold_short   = IVP_REAL(0.005);
+    p.trans_threshold_long  = IVP_REAL(0.1);
+    p.rot_threshold_long    = IVP_REAL(0.2);
+    p.freeze_check_dtime    = IVP_REAL(0.3);
+    p.has_moved_long_time   = IVP_REAL(4.0);
     return p;
 }
 
@@ -78,7 +78,7 @@ typedef struct ivp_movement_checkpoint {
  * pushed in this cascade.
  */
 typedef struct ivp_old_sync_rot {
-    ivp_vec3f_t  old_sync_rot_speed;              /* pre-push angular velocity */
+    ivp_vec3r_t  old_sync_rot_speed;              /* pre-push angular velocity */
     ivp_quatr_t  old_sync_q_world_f_core_next_psi; /* pre-push predicted orientation */
     bool         was_pushed_during_i_s;            /* pushed during impact system solve */
 } ivp_old_sync_rot_t;
@@ -183,10 +183,10 @@ typedef struct ivp_core {
 
 /* ── Dynamics constants ─────────────────────────────────────────────────── */
 
-#define IVP_MAX_DELTA_PSI_TIME   (1.0 / 10.0)    /* 100ms max */
-#define IVP_MIN_DELTA_PSI_TIME   (1.0 / 200.0)   /* 5ms min   */
-#define IVP_SLOW_ADDON_DAMPING   0.1f
-#define IVP_GYRO_SUBSTEP_MAX_ANGLE  (5.0 * 6.0 / 360.0)  /* ≈ 0.0833 rad */
+#define IVP_MAX_DELTA_PSI_TIME   (IVP_REAL(1.0) / IVP_REAL(10.0))    /* 100ms max */
+#define IVP_MIN_DELTA_PSI_TIME   (IVP_REAL(1.0) / IVP_REAL(200.0))   /* 5ms min   */
+#define IVP_SLOW_ADDON_DAMPING   IVP_REAL(0.1)
+#define IVP_GYRO_SUBSTEP_MAX_ANGLE  (IVP_REAL(5.0) * IVP_REAL(6.0) / IVP_REAL(360.0))  /* ≈ 0.0833 rad */
 
 /* ── Core API ───────────────────────────────────────────────────────────── */
 

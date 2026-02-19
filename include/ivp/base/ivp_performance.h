@@ -49,7 +49,7 @@ typedef struct ivp_perf_counters {
 
 /* ── API ───────────────────────────────────────────────────────────────── */
 
-/* Reset all counters to zero. */
+/* Reset all counters to zero (also serves as initialization). */
 static inline void ivp_perf_reset(ivp_perf_counters_t *p)
 {
     p->psi_count = 0;
@@ -65,11 +65,6 @@ static inline void ivp_perf_reset(ivp_perf_counters_t *p)
     p->peak_contacts = 0;
     p->total_kinetic_energy = 0.0;
     p->peak_kinetic_energy = 0.0;
-}
-
-/* Initialize counters (same as reset). */
-static inline void ivp_perf_init(ivp_perf_counters_t *p) {
-    ivp_perf_reset(p);
 }
 
 /* Begin a new PSI step: reset per-PSI counters. */

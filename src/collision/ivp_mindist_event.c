@@ -181,10 +181,8 @@ void ivp_mindist_event_to_time_event(const ivp_mindist_entry_t *entry,
         ? IVP_TIME_EVENT_MINDIST_IMPACT
         : IVP_TIME_EVENT_MINDIST_RECALC;
 
-    out_event->obj_a.slot = entry->obj_a->handle_slot;
-    out_event->obj_a.generation = entry->obj_a->handle_generation;
-    out_event->obj_b.slot = entry->obj_b->handle_slot;
-    out_event->obj_b.generation = entry->obj_b->handle_generation;
+    out_event->obj_a = entry->obj_a->handle;
+    out_event->obj_b = entry->obj_b->handle;
 
     out_event->status_a = prediction->status_a;
     out_event->status_b = prediction->status_b;

@@ -88,13 +88,9 @@ static ivp_controller_handle_t ivp_controller_system_add_internal(
         return invalid;
     }
 
-    slot->handle_slot = h.slot;
-    slot->handle_generation = h.generation;
+    slot->handle = h;
 
-    ivp_controller_handle_t out;
-    out.slot = h.slot;
-    out.generation = h.generation;
-    return out;
+    return h;
 }
 
 ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,
@@ -149,9 +145,7 @@ void ivp_controller_system_clear(ivp_controller_system_t *sys,
 
     while (ivp_registry_count(&sys->registry) > 0) {
         ivp_controller_slot_t *slot = (ivp_controller_slot_t *)ivp_registry_get_at(&sys->registry, 0);
-        ivp_controller_handle_t h;
-        h.slot = slot->handle_slot;
-        h.generation = slot->handle_generation;
+        ivp_controller_handle_t h = slot->handle;
         if (!ivp_controller_system_remove(sys, h, alloc)) {
             break;
         }
@@ -189,7 +183,7 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys)
             ivp_controller_slot_t *cur = (ivp_controller_slot_t *)data[j];
             const bool should_shift =
                 (cur->priority < key->priority) ||
-                (cur->priority == key->priority && cur->handle_slot > key->handle_slot);
+                (cur->priority == key->priority && cur->handle.slot > key->handle.slot);
             if (!should_shift) break;
             data[j + 1] = data[j];
             j--;

@@ -11,11 +11,7 @@
 /* ── Matrix solver epsilons ─────────────────────────────────────────────── */
 
 #define IVP_SOLVER_MATRIX_EPS           ((ivp_real_t)1e-9)
-#define IVP_SOLVER_EPS                  ((ivp_real_t)1e-7)
-#define IVP_SOLVER_GAUSS_EPS            ((ivp_real_t)1e-7)
 #define IVP_SOLVER_TEST_EPS             ((ivp_real_t)1e-4)
-#define IVP_SOLVER_LU_EPS              ((ivp_real_t)1e-6)
-#define IVP_SOLVER_STABLE_LU_EPS        ((ivp_real_t)1e-10)
 #define IVP_SOLVER_STATIC_FRICTION_EPS  ((ivp_real_t)1e-5)
 #define IVP_SOLVER_COMPLEX_EPS          ((ivp_real_t)1e-5)
 

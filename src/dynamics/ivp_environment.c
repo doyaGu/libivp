@@ -100,8 +100,8 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env,
         ivp_event_listener_slot_t *slot = ivp_event_system_get_at(es, i);
         if (!slot) continue;
         ivp_event_listener_handle_t h;
-        h.slot = slot->handle_slot;
-        h.generation = slot->handle_generation;
+        h.slot = slot->handle.slot;
+        h.generation = slot->handle.generation;
         handles[handle_count++] = h;
     }
 
@@ -325,8 +325,8 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
         ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, i);
         if (!slot) continue;
         ivp_controller_handle_t h;
-        h.slot = slot->handle_slot;
-        h.generation = slot->handle_generation;
+        h.slot = slot->handle.slot;
+        h.generation = slot->handle.generation;
         controller_handles[controller_handle_count++] = h;
     }
 
@@ -409,8 +409,8 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
                     ivp_object_t *obj = ivp_object_system_get_at(os, oi);
                     if (!obj) continue;
                     ivp_object_handle_t h;
-                    h.slot = obj->handle_slot;
-                    h.generation = obj->handle_generation;
+                    h.slot = obj->handle.slot;
+                    h.generation = obj->handle.generation;
                     object_handles[object_handle_count++] = h;
                 }
 
@@ -1023,8 +1023,8 @@ ivp_object_handle_t ivp_environment_get_object_handle(const ivp_object_t *obj)
 {
     if (!obj) return ivp_object_handle_invalid();
     ivp_object_handle_t h;
-    h.slot = obj->handle_slot;
-    h.generation = obj->handle_generation;
+    h.slot = obj->handle.slot;
+    h.generation = obj->handle.generation;
     return h;
 }
 

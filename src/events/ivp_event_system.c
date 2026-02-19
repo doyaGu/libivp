@@ -54,8 +54,8 @@ ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sy
         return invalid;
     }
 
-    slot->handle_slot = h.slot;
-    slot->handle_generation = h.generation;
+    slot->handle.slot = h.slot;
+    slot->handle.generation = h.generation;
 
     ivp_event_listener_handle_t out;
     out.slot = h.slot;
@@ -87,8 +87,8 @@ void ivp_event_system_clear(ivp_event_system_t *sys,
         ivp_event_listener_slot_t *slot =
             (ivp_event_listener_slot_t *)ivp_registry_get_at(&sys->registry, 0);
         ivp_event_listener_handle_t h;
-        h.slot = slot->handle_slot;
-        h.generation = slot->handle_generation;
+        h.slot = slot->handle.slot;
+        h.generation = slot->handle.generation;
         if (!ivp_event_system_remove_listener(sys, h, alloc)) {
             break;
         }

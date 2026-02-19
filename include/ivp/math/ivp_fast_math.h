@@ -29,9 +29,7 @@ double ivp_isqrt_double(double x, int resolution_steps);
 
 /* ── Deterministic math wrappers ────────────────────────────────────────── */
 
-/* These wrappers use system libm by default.
- * When IVP_USE_DETERMINISTIC_LIBM is defined, they could be redirected
- * to a deterministic implementation (SLEEF, CRlibm, etc). */
+/* These wrappers use system libm. */
 
 static inline ivp_real_t ivp_sqrt(ivp_real_t x) {
 #ifdef IVP_REAL_DOUBLE

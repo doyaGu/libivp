@@ -435,7 +435,7 @@ ivp_compact_surface_t *ivp_ledge_soup_compile(ivp_ledge_soup_t *soup) {
         if (dev_factor > 255) dev_factor = 255;
         ivp_surface_set_max_deviation(surface, dev_factor);
 
-        memset(surface->dummy, 0, sizeof(surface->dummy));
+        memset(surface->_pad, 0, sizeof(surface->_pad));
 
         return surface;
     }
@@ -555,7 +555,7 @@ ivp_compact_surface_t *ivp_ledge_soup_compile(ivp_ledge_soup_t *soup) {
 
     /* Phase 6: Surface header */
     surface->offset_ledgetree_root = (int32_t)((char *)tree_start - (char *)surface);
-    memset(surface->dummy, 0, sizeof(surface->dummy));
+    memset(surface->_pad, 0, sizeof(surface->_pad));
 
     /* Compute mass center and inertia */
     ivp_surface_set_byte_size(surface, total);

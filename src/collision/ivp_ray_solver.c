@@ -105,7 +105,7 @@ ivp_result_t ivp_ray_test_triangle(const ivp_compact_ledge_t    *ledge,
 
     /* Ray parallel to triangle plane */
     if (ivp_fabs(denom) < IVP_REAL_RES) {
-        return IVP_ERR_DEGENERATE_GEOMETRY;
+        return IVP_NOT_FOUND;
     }
 
     /* Signed distance from ray origin to triangle plane.
@@ -116,7 +116,7 @@ ivp_result_t ivp_ray_test_triangle(const ivp_compact_ledge_t    *ledge,
 
     /* Check range */
     if (t < IVP_REAL(0.0) || t > ray->max_distance) {
-        return IVP_ERR_DEGENERATE_GEOMETRY;
+        return IVP_NOT_FOUND;
     }
 
     /* Compute hit point and check if inside triangle via barycentric coords */
@@ -130,7 +130,7 @@ ivp_result_t ivp_ray_test_triangle(const ivp_compact_ledge_t    *ledge,
     ivp_calc_qr_vals(ledge, &tri->edges[0], &hit_point, &qr);
 
     if (ivp_qr_is_outside(&qr)) {
-        return IVP_ERR_DEGENERATE_GEOMETRY;
+        return IVP_NOT_FOUND;
     }
 
     *hit_dist = t;
@@ -173,7 +173,7 @@ ivp_result_t ivp_ray_cast_ledge(const ivp_compact_ledge_t *ledge,
     }
 
     if (best_tri == NULL) {
-        return IVP_ERR_DEGENERATE_GEOMETRY;
+        return IVP_NOT_FOUND;
     }
 
     /* Fill hit result */
@@ -269,5 +269,5 @@ ivp_result_t ivp_ray_cast_surface(const ivp_compact_surface_t *surface,
         }
     }
 
-    return found ? IVP_OK : IVP_ERR_DEGENERATE_GEOMETRY;
+    return found ? IVP_OK : IVP_NOT_FOUND;
 }

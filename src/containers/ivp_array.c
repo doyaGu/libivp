@@ -132,7 +132,6 @@ ivp_result_t ivp_array_insert(ivp_array_t *arr, int idx, void *elem) {
     if (idx < arr->len) {
         for (int i = arr->len; i > idx; --i) {
             arr->data[i] = arr->data[i - 1];
-            ivp_lifecycle_copy(arr->elem_type, arr->elem_ctx, arr->data[i], i - 1, i);
             ivp_lifecycle_move(arr->elem_type, arr->elem_ctx, arr->data[i], i - 1, i);
             if (arr->index_cb) {
                 arr->index_cb(arr->data[i], i, arr->index_cb_userdata);
@@ -157,7 +156,6 @@ void *ivp_array_remove_ordered(ivp_array_t *arr, int idx) {
     if (idx < arr->len - 1) {
         for (int i = idx; i < arr->len - 1; ++i) {
             arr->data[i] = arr->data[i + 1];
-            ivp_lifecycle_copy(arr->elem_type, arr->elem_ctx, arr->data[i], i + 1, i);
             ivp_lifecycle_move(arr->elem_type, arr->elem_ctx, arr->data[i], i + 1, i);
             if (arr->index_cb) {
                 arr->index_cb(arr->data[i], i, arr->index_cb_userdata);
@@ -191,7 +189,6 @@ void *ivp_array_remove_swap(ivp_array_t *arr, int idx) {
 
 void ivp_array_clear(ivp_array_t *arr) {
     for (int i = 0; i < arr->len; i++) {
-        ivp_lifecycle_reset(arr->elem_type, arr->elem_ctx, arr->data[i]);
         ivp_lifecycle_dispose(arr->elem_type, arr->elem_ctx, arr->data[i]);
     }
     arr->len = 0;

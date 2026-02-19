@@ -110,8 +110,7 @@ static bool pair_passes_filters(struct ivp_environment *env,
     }
 
     /* Skip pairs in the same no-collision group (legacy) */
-    if (obj_a->no_collision_group && obj_b->no_collision_group &&
-        obj_a->no_collision_group == obj_b->no_collision_group) {
+    if (ivp_objects_share_no_collision_group(obj_a, obj_b)) {
         return false;
     }
 

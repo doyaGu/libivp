@@ -22,6 +22,7 @@ struct ivp_arena {
 
 #ifdef IVP_ENABLE_STATS
     ivp_arena_stats_t      stats;
+    size_t                 live_used;   /* running total of all blocks' used bytes */
 #endif
 };
 
@@ -116,14 +117,12 @@ void *ivp_arena_alloc(ivp_arena_t *arena, size_t size) {
 #ifdef IVP_ENABLE_STATS
         arena->stats.total_allocated += size;
         arena->stats.alloc_count++;
+        size_t old_block_used = arena->current->used;
         arena->current->used = (size_t)(arena->cursor - block_data_start(arena->current));
+        arena->live_used += arena->current->used - old_block_used;
 
-        size_t live_used = 0;
-        for (const ivp_arena_block_t *b = arena->current; b; b = b->next) {
-            live_used += b->used;
-        }
-        if (live_used > arena->stats.high_water_mark) {
-            arena->stats.high_water_mark = live_used;
+        if (arena->live_used > arena->stats.high_water_mark) {
+            arena->stats.high_water_mark = arena->live_used;
         }
 #endif
         return p;
@@ -166,6 +165,7 @@ void ivp_arena_reset(ivp_arena_t *arena) {
 #ifdef IVP_ENABLE_STATS
     arena->first->used = 0;
     arena->stats.block_count = 1;
+    arena->live_used = 0;
 #endif
 }
 
@@ -200,6 +200,11 @@ void ivp_arena_restore(ivp_arena_t *arena, ivp_arena_checkpoint_t cp) {
 #ifdef IVP_ENABLE_STATS
     if (saved) {
         saved->used = (size_t)(arena->cursor - block_data_start(saved));
+    }
+    /* Recompute live_used from remaining blocks (restore is infrequent). */
+    arena->live_used = 0;
+    for (const ivp_arena_block_t *rb = arena->current; rb; rb = rb->next) {
+        arena->live_used += rb->used;
     }
 #endif
 }

@@ -8,10 +8,8 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_result.h>
+#include <ivp/base/ivp_forward_decls.h>
 #include <ivp/math/ivp_vec3.h>
-
-/* Forward declare mat3 */
-typedef struct ivp_mat3r ivp_mat3r_t;
 
 #ifdef __cplusplus
 extern "C" {

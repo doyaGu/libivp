@@ -22,8 +22,7 @@ typedef enum ivp_controller_mode {
 #define IVP_CONTROLLER_DISCOVERY_STACK_MAX 64
 
 typedef struct ivp_controller_slot {
-    uint32_t handle_slot;
-    uint32_t handle_generation;
+    ivp_handle_t handle;
     int dense_index;
     int priority;
     ivp_controller_event_fn_t event_fn;

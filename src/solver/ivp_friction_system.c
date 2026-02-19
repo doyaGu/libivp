@@ -65,11 +65,6 @@ ivp_friction_system_t *ivp_friction_manager_find_system_for_core(
     return NULL;
 }
 
-static ivp_friction_system_t *find_system_for_core(ivp_friction_manager_t *mgr,
-                                                     ivp_core_t *core) {
-    return ivp_friction_manager_find_system_for_core(mgr, core);
-}
-
 /* Add a core to a system if not already present */
 static void system_add_core(ivp_friction_system_t *sys, ivp_core_t *core) {
     /* Check if already present */
@@ -570,8 +565,8 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
     new_pc->psi_scratch.friction_is_broken = false;
 
     /* Find or create system for these cores */
-    ivp_friction_system_t *sys_a = find_system_for_core(mgr, core_a);
-    ivp_friction_system_t *sys_b = find_system_for_core(mgr, core_b);
+    ivp_friction_system_t *sys_a = ivp_friction_manager_find_system_for_core(mgr, core_a);
+    ivp_friction_system_t *sys_b = ivp_friction_manager_find_system_for_core(mgr, core_b);
 
     ivp_friction_system_t *target_sys = NULL;
     bool created_new_system = false;
@@ -883,7 +878,7 @@ static void friction_solve_pgs(ivp_persistent_contact_t **contacts, int n,
     /* Read config for SOR omega and adaptive iteration limits */
     const ivp_solver_config_t *cfg = ivp_solver_config_get_active();
     int base_iters = IVP_PGS_BASE_ITERATIONS;
-    int max_iters  = IVP_PGS_BASE_ITERATIONS;
+    int max_iters  = IVP_PGS_MAX_ITERATIONS;
     ivp_real_t sor_omega = IVP_REAL(1.0);
     ivp_real_t residual_eps = IVP_PGS_RESIDUAL_EPS;
     bool adaptive = false;

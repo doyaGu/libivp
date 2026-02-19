@@ -12,6 +12,7 @@
 #ifndef IVP_COMPACT_TRIANGLE_H
 #define IVP_COMPACT_TRIANGLE_H
 
+#include <ivp/base/ivp_assert.h>
 #include <ivp/geometry/ivp_compact_edge.h>
 
 #ifdef __cplusplus

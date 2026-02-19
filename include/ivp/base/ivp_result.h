@@ -11,6 +11,7 @@ typedef enum ivp_result {
     IVP_ERR_INVALID_ARG             = 1,
     IVP_ERR_OUT_OF_MEMORY           = 2,
     IVP_ERR_INVALID_STATE           = 3,
+    IVP_NOT_FOUND                   = 4,   /* query produced no result (not an error) */
 
     /* Numerical errors (100–199) */
     IVP_ERR_SINGULAR_MATRIX         = 100,
@@ -48,6 +49,7 @@ static inline const char *ivp_result_str(ivp_result_t r) {
         case IVP_ERR_INVALID_ARG:             return "INVALID_ARG";
         case IVP_ERR_OUT_OF_MEMORY:           return "OUT_OF_MEMORY";
         case IVP_ERR_INVALID_STATE:           return "INVALID_STATE";
+        case IVP_NOT_FOUND:                    return "NOT_FOUND";
         case IVP_ERR_SINGULAR_MATRIX:         return "SINGULAR_MATRIX";
         case IVP_ERR_NORMALIZATION_FAILED:    return "NORMALIZATION_FAILED";
         case IVP_ERR_NUMERICAL_OVERFLOW:      return "NUMERICAL_OVERFLOW";

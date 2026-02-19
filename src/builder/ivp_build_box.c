@@ -235,9 +235,7 @@ ivp_compact_surface_t *ivp_build_box_surface(const ivp_allocator_t *alloc,
     surface->offset_ledgetree_root =
         (int32_t)((char *)node - (char *)surface);
 
-    surface->dummy[0] = 0;
-    surface->dummy[1] = 0;
-    surface->dummy[2] = 0;
+    memset(surface->_pad, 0, sizeof(surface->_pad));
 
     return surface;
 }

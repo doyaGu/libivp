@@ -136,7 +136,7 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
         /* Check for singularity */
         if (ivp_fabs(diag) < IVP_SOLVER_MATRIX_EPS) {
             if (det_out) *det_out = IVP_REAL(0.0);
-            return IVP_ERR_DEGENERATE_GEOMETRY;
+            return IVP_ERR_SINGULAR_MATRIX;
         }
 
         /* Eliminate below */

@@ -32,7 +32,7 @@ typedef struct IVP_ALIGN16 ivp_compact_surface {
     float    upper_limit_radius;        /* 4 bytes — max distance from mass center */
     uint32_t size_and_deviation;        /* packed: max_factor(8) + byte_size(24) */
     int32_t  offset_ledgetree_root;     /* byte offset to root ledgetree node */
-    int32_t  dummy[3];                  /* padding for 16-byte alignment */
+    uint8_t  _pad[12];                  /* explicit padding for 16-byte alignment */
 } ivp_compact_surface_t;
 
 /* Size assertion */

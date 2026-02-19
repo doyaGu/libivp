@@ -12,8 +12,7 @@ typedef struct ivp_event_system {
 } ivp_event_system_t;
 
 typedef struct ivp_event_listener_slot {
-    uint32_t handle_slot;
-    uint32_t handle_generation;
+    ivp_handle_t handle;
     int dense_index;
     ivp_event_listener_fn_t fn;
     void *ctx;

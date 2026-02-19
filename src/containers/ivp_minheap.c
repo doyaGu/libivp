@@ -150,7 +150,7 @@ ivp_result_t ivp_minheap_push(ivp_minheap_t *heap, ivp_real_t key, void *value) 
 }
 
 ivp_result_t ivp_minheap_pop(ivp_minheap_t *heap, ivp_heap_entry_t *out_entry) {
-    if (heap->len == 0) return IVP_ERR_CAPACITY_EXCEEDED;
+    if (heap->len == 0) return IVP_ERR_INVALID_STATE;
 
     if (out_entry) {
         *out_entry = heap->data[0];

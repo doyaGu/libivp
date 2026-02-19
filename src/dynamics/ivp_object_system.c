@@ -91,13 +91,10 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
         return NULL;
     }
 
-    obj->handle_slot = h.slot;
-    obj->handle_generation = h.generation;
-    obj->handle_key = 0;
+    obj->handle = h;
 
     if (out_handle) {
-        out_handle->slot = h.slot;
-        out_handle->generation = h.generation;
+        *out_handle = h;
     }
 
     ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_CREATED, IVP_REAL(0.0),

@@ -249,10 +249,10 @@ int ivp_environment_resolve_collisions(ivp_environment_t *env)
                         memset(&evt, 0, sizeof(evt));
                         evt.type = IVP_TIME_EVENT_MINDIST_IMPACT;
                         evt.trigger_time = now + (ivp_time_t)hit.toi;
-                        evt.obj_a.slot = cp->obj_a->handle_slot;
-                        evt.obj_a.generation = cp->obj_a->handle_generation;
-                        evt.obj_b.slot = cp->obj_b->handle_slot;
-                        evt.obj_b.generation = cp->obj_b->handle_generation;
+                        evt.obj_a.slot = cp->obj_a->handle.slot;
+                        evt.obj_a.generation = cp->obj_a->handle.generation;
+                        evt.obj_b.slot = cp->obj_b->handle.slot;
+                        evt.obj_b.generation = cp->obj_b->handle.generation;
                         evt.status_a = cp->obj_a->type == IVP_OBJECT_BALL ? IVP_ST_BALL : IVP_ST_TRIANGLE;
                         evt.status_b = cp->obj_b->type == IVP_OBJECT_BALL ? IVP_ST_BALL : IVP_ST_TRIANGLE;
                         evt.expected_gap = coll_settings.min_coll_dist;
@@ -368,8 +368,7 @@ int ivp_broadphase_detect(ivp_environment_t *env,
             }
 
             /* Skip pairs explicitly assigned to the same no-collision group (legacy) */
-            if (obj_a->no_collision_group && obj_b->no_collision_group &&
-                obj_a->no_collision_group == obj_b->no_collision_group) {
+            if (ivp_objects_share_no_collision_group(obj_a, obj_b)) {
                 continue;
             }
 

@@ -112,6 +112,8 @@ typedef void (*ivp_material_manager_fn_t)(void *ctx,
 
 /* ── Environment ────────────────────────────────────────────────────────── */
 
+#define IVP_MAX_GLOBAL_COLLISION_LISTENERS 8
+
 typedef struct ivp_environment {
     /* Configuration */
     ivp_vec3r_t         gravity;
@@ -185,7 +187,6 @@ typedef struct ivp_environment {
     /* Global collision listeners (reference: IVP_Environment::collision_listeners).
      * Fired for ALL collision events regardless of which objects participate,
      * before per-object listeners. */
-#define IVP_MAX_GLOBAL_COLLISION_LISTENERS 8
     ivp_collision_listener_t *global_collision_listeners[IVP_MAX_GLOBAL_COLLISION_LISTENERS];
     int                       global_collision_listener_count;
 } ivp_environment_t;

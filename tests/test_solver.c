@@ -108,7 +108,7 @@ IVP_TEST(matrix_singular) {
     ivp_great_matrix_set(&m, 1, 1, IVP_REAL(4.0));
     ivp_great_matrix_set_rhs(&m, 1, IVP_REAL(6.0));
     ivp_real_t x[2];
-    IVP_ASSERT_EQ(ivp_great_matrix_solve(&m, x), IVP_ERR_DEGENERATE_GEOMETRY);
+    IVP_ASSERT_EQ(ivp_great_matrix_solve(&m, x), IVP_ERR_SINGULAR_MATRIX);
     ivp_great_matrix_destroy(&m, NULL);
 }
 

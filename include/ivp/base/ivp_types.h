@@ -48,6 +48,11 @@
     #define IVP_MAX_WORLD   3000.0f
 #endif
 
+/* Precision-correct aliases: always match ivp_real_t */
+#define IVP_REAL_PRECISION_EPS  IVP_DOUBLE_EPS
+#define IVP_REAL_PRECISION_RES  IVP_DOUBLE_RES
+#define IVP_REAL_PRECISION_MAX  IVP_DOUBLE_MAX
+
 #define IVP_MAX_OBJECT_SIZE  1000.0f
 #define IVP_MIN_EDGE_LEN     0.01f
 #define IVP_RES_EPS          (IVP_MAX_WORLD * IVP_DOUBLE_RES)
@@ -96,7 +101,7 @@ typedef enum ivp_coord_index {
 /* ── Inline hint ────────────────────────────────────────────────────────── */
 
 #if defined(_MSC_VER)
-    #define IVP_FORCEINLINE __forceinline
+    #define IVP_FORCEINLINE static __forceinline
 #elif defined(__GNUC__) || defined(__clang__)
     #define IVP_FORCEINLINE __attribute__((always_inline)) static inline
 #else

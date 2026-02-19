@@ -356,7 +356,7 @@ IVP_TEST(array_lifecycle_callbacks) {
     ivp_array_insert(&arr, 1, &dummy_vals[2]);
     IVP_ASSERT_EQ(s_lifecycle_init_count, 3);
     IVP_ASSERT_EQ(s_lifecycle_dispose_count, 0);
-    IVP_ASSERT_EQ(s_lifecycle_copy_count, 1);
+    IVP_ASSERT_EQ(s_lifecycle_copy_count, 0);
     IVP_ASSERT_EQ(s_lifecycle_move_count, 1);
 
     /* set: dispose old + init new */
@@ -369,7 +369,7 @@ IVP_TEST(array_lifecycle_callbacks) {
     ivp_array_remove_ordered(&arr, 0);
     ivp_array_remove_swap(&arr, 0);
     IVP_ASSERT_EQ(s_lifecycle_dispose_count, 1);
-    IVP_ASSERT_EQ(s_lifecycle_copy_count, 2);
+    IVP_ASSERT_EQ(s_lifecycle_copy_count, 0);
     IVP_ASSERT_EQ(s_lifecycle_move_count, 2);
 
     /* re-add and clear should call reset+dispose on each live element */
@@ -377,7 +377,7 @@ IVP_TEST(array_lifecycle_callbacks) {
     ivp_array_push(&arr, &dummy_vals[5]);
     IVP_ASSERT_EQ(s_lifecycle_init_count, 6);
     ivp_array_clear(&arr);
-    IVP_ASSERT_EQ(s_lifecycle_reset_count, 2);
+    IVP_ASSERT_EQ(s_lifecycle_reset_count, 0);
     IVP_ASSERT_EQ(s_lifecycle_dispose_count, 3);
 
     /* destroy with empty array should not change counts */
@@ -541,7 +541,7 @@ IVP_TEST(farray_lifecycle_callbacks) {
     IVP_ASSERT_EQ(s_lifecycle_move_count, 1);
 
     ivp_array_clear(&arr);
-    IVP_ASSERT_EQ(s_lifecycle_reset_count, 2);
+    IVP_ASSERT_EQ(s_lifecycle_reset_count, 0);
     IVP_ASSERT_EQ(s_lifecycle_dispose_count, 2);
 
     ivp_array_push(&arr, &dummy_vals[3]);

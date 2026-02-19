@@ -8,6 +8,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/dynamics/ivp_core.h>
+#include <ivp/dynamics/ivp_handle.h>
 #include <ivp/geometry/ivp_surman.h>
 
 #ifdef __cplusplus
@@ -55,7 +56,7 @@ typedef struct ivp_object_template {
     ivp_real_t        speed_damp_factor;           /* default: 0.01            */
     ivp_vec3r_t       rot_speed_damp_factor;       /* default: (0.01,0.01,0.01)*/
     ivp_material_t    material;
-    const char       *no_collision_group;          /* same non-null value => no collision */
+    const char       *no_collision_group;          /* DEPRECATED: use collision_group instead. same non-null value => no collision */
     const char       *name;                        /* optional debug name      */
     void             *client_data;                 /* user pointer             */
     bool              physical_unmoveable;          /* static object            */
@@ -80,8 +81,8 @@ typedef struct ivp_object {
     ivp_core_t           core;
     ivp_object_type_t    type;          /* BALL or POLYGON              */
     ivp_material_t       material;
-    const char          *no_collision_group; /* borrowed group tag (legacy) */
-    int                  collision_group;    /* 0 = no group (default) */
+    const char          *no_collision_group; /* DEPRECATED: legacy group tag (pointer equality) */
+    int                  collision_group;    /* preferred: 0 = no group (default) */
     uint32_t             layer_mask;         /* default: 0xFFFFFFFF (collide with all) */
     const ivp_surman_t  *surman;        /* geometry accessor (borrowed) */
     const char          *name;          /* debug name (borrowed)        */
@@ -89,9 +90,7 @@ typedef struct ivp_object {
     struct ivp_environment *owner;      /* back-link to owning world    */
     int                  dense_index;   /* index in object system array */
     int                  sim_unit_id;   /* simulation unit (0 = default) */
-    uint32_t             handle_slot;
-    uint32_t             handle_generation;
-    uint64_t             handle_key;
+    ivp_handle_t         handle;        /* generational handle */
 
     /* Per-object collision listeners (up to IVP_MAX_COLLISION_LISTENERS_PER_OBJECT) */
     struct ivp_collision_listener *collision_listeners[IVP_MAX_COLLISION_LISTENERS_PER_OBJECT];
@@ -167,6 +166,13 @@ static inline bool ivp_object_is_unmoveable(const ivp_object_t *obj) {
 /* Check if object is frozen */
 static inline bool ivp_object_is_frozen(const ivp_object_t *obj) {
     return obj->core.movement_state == IVP_MT_NOT_SIM;
+}
+
+/* Check if two objects share the same legacy no_collision_group (pointer equality). */
+static inline bool ivp_objects_share_no_collision_group(const ivp_object_t *a,
+                                                         const ivp_object_t *b) {
+    return a->no_collision_group && b->no_collision_group &&
+           a->no_collision_group == b->no_collision_group;
 }
 
 /* Get kinetic energy */
