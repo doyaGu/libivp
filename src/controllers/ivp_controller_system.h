@@ -31,6 +31,7 @@ typedef struct ivp_controller_slot {
     bool enabled;
     ivp_controller_mode_t mode;
     bool run_for_all_cores;
+    bool is_global;  /* Dispatch once per PSI with NULL object (friction etc.) */
     ivp_controller_discovery_fn_t discovery_fn;
 
     /* Explicit associated-core/object handles. For dependent controllers

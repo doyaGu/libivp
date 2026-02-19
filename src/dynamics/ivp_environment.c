@@ -180,6 +180,43 @@ static void ivp_environment_sort_controllers(ivp_environment_t *env)
     ivp_controller_system_sort(cs);
 }
 
+/* Forward declarations of sub-phase runners (defined below). */
+static void ivp_environment_run_friction_subphase_static(ivp_environment_t *env,
+                                                          ivp_real_t dt);
+static void ivp_environment_run_friction_subphase_dynamic(ivp_environment_t *env,
+                                                          ivp_real_t dt);
+static void ivp_environment_run_friction_subphase_energy(ivp_environment_t *env,
+                                                         ivp_real_t dt);
+
+/* ── Friction sub-phase controller callbacks ────────────────────────────
+ * In the reference IVP implementation, the friction solver runs at three
+ * priority points within the controller pipeline (static, dynamic, energy).
+ * Each callback delegates to the corresponding monolithic sub-phase. */
+
+static void ivp_friction_controller_static(const ivp_event_sim_t *event_sim,
+                                           ivp_object_t *obj, void *ctx)
+{
+    (void)obj; (void)ctx;
+    ivp_environment_run_friction_subphase_static(event_sim->environment,
+                                                 event_sim->delta_time);
+}
+
+static void ivp_friction_controller_dynamic(const ivp_event_sim_t *event_sim,
+                                            ivp_object_t *obj, void *ctx)
+{
+    (void)obj; (void)ctx;
+    ivp_environment_run_friction_subphase_dynamic(event_sim->environment,
+                                                  event_sim->delta_time);
+}
+
+static void ivp_friction_controller_energy(const ivp_event_sim_t *event_sim,
+                                           ivp_object_t *obj, void *ctx)
+{
+    (void)obj; (void)ctx;
+    ivp_environment_run_friction_subphase_energy(event_sim->environment,
+                                                 event_sim->delta_time);
+}
+
 static void ivp_environment_run_friction_subphase_static(ivp_environment_t *env,
                                                           ivp_real_t dt)
 {
@@ -269,9 +306,6 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
 
     const int cn = ivp_controller_system_count(cs);
     if (cn <= 0) {
-        ivp_environment_run_friction_subphase_static(env, dt);
-        ivp_environment_run_friction_subphase_dynamic(env, dt);
-        ivp_environment_run_friction_subphase_energy(env, dt);
         ivp_environment_commit_async_pushes_for_active_cores(env);
         return;
     }
@@ -298,32 +332,22 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
         controller_handles[controller_handle_count++] = h;
     }
 
-    /* Run controllers in ascending priority order. */
-    bool did_static  = false;
-    bool did_dynamic = false;
-    bool did_energy  = false;
+    /* Run controllers in ascending priority order.
+     *
+     * NOTE: The reference IVP dispatches in descending order (highest first)
+     * because controllers above IVP_CP_GRAVITY do async pushes and controllers
+     * below do sync/real pushes.  C17 uses speed_change uniformly for all
+     * controllers and commits via an explicit loop-level check at the gravity
+     * boundary.  Ascending order preserves this commit model:
+     *   static_friction(0) → constraints(400) → motion(500)
+     *   → dynamic_friction(600) → GRAVITY(1000, commits async pushes)
+     *   → springs(1400) → forcefields(1600) → energy_friction(2000) */
 
     for (int ci = 0; ci < controller_handle_count; ci++) {
         ivp_controller_slot_t *slot =
             ivp_controller_system_get_by_handle(cs, controller_handles[ci]);
         if (!slot || !slot->enabled) continue;
         if (!slot->event_fn) continue;
-
-        const int slot_priority = slot->priority;
-
-        /* Emit friction sub-phases when ascending past their threshold */
-        if (!did_static && slot_priority >= IVP_CP_STATIC_FRICTION) {
-            ivp_environment_run_friction_subphase_static(env, dt);
-            did_static = true;
-        }
-        if (!did_dynamic && slot_priority >= IVP_CP_DYNAMIC_FRICTION) {
-            ivp_environment_run_friction_subphase_dynamic(env, dt);
-            did_dynamic = true;
-        }
-        if (!did_energy && slot_priority >= IVP_CP_ENERGY_FRICTION) {
-            ivp_environment_run_friction_subphase_energy(env, dt);
-            did_energy = true;
-        }
 
         if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
             ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
@@ -398,18 +422,18 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
                     ivp_free(env->allocator, object_handles,
                              (size_t)on * sizeof(ivp_object_handle_t));
                 }
+            } else if (slot->is_global) {
+                /* Global controller: independent, not per-core, no
+                 * associated handles.  Dispatch once with NULL object.
+                 * Used by friction sub-phase controllers. */
+                ivp_environment_invoke_controller_slot(env, slot, NULL, dt, NULL, 0);
             }
         }
 
-        if (slot_priority < IVP_CP_GRAVITY) {
+        if (slot->priority < IVP_CP_GRAVITY) {
             ivp_environment_commit_async_pushes_for_active_cores(env);
         }
     }
-
-    /* Emit any sub-phases whose thresholds were never reached. */
-    if (!did_static)  ivp_environment_run_friction_subphase_static(env, dt);
-    if (!did_dynamic) ivp_environment_run_friction_subphase_dynamic(env, dt);
-    if (!did_energy)  ivp_environment_run_friction_subphase_energy(env, dt);
 
     ivp_environment_commit_async_pushes_for_active_cores(env);
 
@@ -513,6 +537,32 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     ivp_solver_config_init_default(&cfg->solver_config);
 }
 
+/* Forward declarations for controller registration within create(). */
+static ivp_controller_handle_t ivp_environment_add_controller_internal(
+    ivp_environment_t *env, int priority,
+    ivp_controller_event_fn_t event_fn, void *ctx,
+    ivp_controller_mode_t mode, ivp_controller_discovery_fn_t discovery_fn);
+static ivp_controller_slot_t *ivp_environment_get_controller_slot(
+    ivp_environment_t *env, ivp_controller_handle_t controller_handle);
+
+/* Add a "global" controller: dispatched once per PSI with NULL object,
+ * rather than per active core.  Used for friction sub-phase controllers. */
+static ivp_controller_handle_t ivp_environment_add_global_controller(
+    ivp_environment_t *env, int priority,
+    ivp_controller_event_fn_t event_fn, void *ctx)
+{
+    ivp_controller_handle_t h = ivp_environment_add_controller_internal(
+        env, priority, event_fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
+    if (ivp_controller_handle_is_valid(h)) {
+        ivp_controller_slot_t *slot = ivp_environment_get_controller_slot(env, h);
+        if (slot) {
+            slot->run_for_all_cores = false;
+            slot->is_global = true;
+        }
+    }
+    return h;
+}
+
 ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config)
 {
     ivp_environment_config_t cfg;
@@ -583,6 +633,18 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         ivp_environment_destroy(env);
         return NULL;
     }
+    env->friction_manager.owner = env;
+
+    /* Register friction sub-phases as global controllers at their priority
+     * levels.  This replaces the old inline threshold-based dispatch and
+     * aligns with the reference IVP controller pipeline. */
+    env->friction_manager.static_fs_handle = ivp_environment_add_global_controller(
+        env, IVP_CP_STATIC_FRICTION, ivp_friction_controller_static, &env->friction_manager);
+    env->friction_manager.dynamic_fs_handle = ivp_environment_add_global_controller(
+        env, IVP_CP_DYNAMIC_FRICTION, ivp_friction_controller_dynamic, &env->friction_manager);
+    env->friction_manager.energy_fs_handle = ivp_environment_add_global_controller(
+        env, IVP_CP_ENERGY_FRICTION, ivp_friction_controller_energy, &env->friction_manager);
+
     ivp_mindist_manager_init(&env->mindist_manager, env->allocator);
     ivp_hull_manager_init(&env->hull_manager, env->allocator);
     ivp_time_event_queue_init(&env->time_event_queue, env->allocator);
@@ -975,12 +1037,44 @@ void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
     if (!env || !obj) return;
     if (obj->owner != env) return;
 
+    /* Fire object-deleted notification to collision listeners (reference parity) */
+    ivp_collision_listeners_fire_object_deleted(obj);
+
+    /* Notify collision delegator roots */
+    for (int i = 0; i < env->collision_delegator_root_count; i++) {
+        ivp_collision_delegator_root_t *root = env->collision_delegator_roots[i];
+        if (root && root->object_removed) {
+            root->object_removed(root, obj);
+        }
+    }
+
+    /* Detach from parent cluster if any */
+    if (obj->parent_cluster) {
+        ivp_cluster_remove_child(obj->parent_cluster, obj);
+    }
+
     /* Notify universe manager before destruction */
     if (env->universe_manager && env->universe_manager->deleted_fn) {
         env->universe_manager->deleted_fn(env->universe_manager->ctx, obj);
     }
 
     (void)ivp_environment_destroy_object_by_handle(env, ivp_environment_get_object_handle(obj));
+}
+
+/* ── Cluster API ───────────────────────────────────────────────────────── */
+
+ivp_cluster_t *ivp_environment_create_cluster(ivp_environment_t *env,
+                                              ivp_cluster_t *parent,
+                                              const ivp_cluster_template_t *tmpl)
+{
+    if (!env) return NULL;
+    return ivp_cluster_create(env, parent, tmpl);
+}
+
+void ivp_environment_destroy_cluster(ivp_environment_t *env, ivp_cluster_t *cluster)
+{
+    if (!env || !cluster) return;
+    ivp_cluster_destroy(cluster);
 }
 
 int ivp_environment_get_object_count(const ivp_environment_t *env)
@@ -1099,4 +1193,58 @@ void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_t
         env->residual_time -= (ivp_time_t)env->delta_psi_time;
         steps++;
     }
+}
+
+/* ── Collision Delegator API ───────────────────────────────────────────── */
+
+bool ivp_environment_add_collision_delegator(ivp_environment_t *env,
+                                             ivp_collision_delegator_root_t *root)
+{
+    if (!env || !root) return false;
+    if (env->collision_delegator_root_count >= IVP_MAX_COLLISION_DELEGATOR_ROOTS) return false;
+    env->collision_delegator_roots[env->collision_delegator_root_count++] = root;
+    return true;
+}
+
+bool ivp_environment_remove_collision_delegator(ivp_environment_t *env,
+                                                ivp_collision_delegator_root_t *root)
+{
+    if (!env || !root) return false;
+    for (int i = 0; i < env->collision_delegator_root_count; i++) {
+        if (env->collision_delegator_roots[i] == root) {
+            for (int j = i; j < env->collision_delegator_root_count - 1; j++) {
+                env->collision_delegator_roots[j] = env->collision_delegator_roots[j + 1];
+            }
+            env->collision_delegator_root_count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ── Global Collision Listener API ─────────────────────────────────────── */
+
+int ivp_environment_add_collision_listener_global(ivp_environment_t *env,
+                                                  ivp_collision_listener_t *listener)
+{
+    if (!env || !listener) return -1;
+    if (env->global_collision_listener_count >= IVP_MAX_GLOBAL_COLLISION_LISTENERS) return -1;
+    env->global_collision_listeners[env->global_collision_listener_count++] = listener;
+    return 0;
+}
+
+int ivp_environment_remove_collision_listener_global(ivp_environment_t *env,
+                                                     ivp_collision_listener_t *listener)
+{
+    if (!env || !listener) return -1;
+    for (int i = 0; i < env->global_collision_listener_count; i++) {
+        if (env->global_collision_listeners[i] == listener) {
+            for (int j = i; j < env->global_collision_listener_count - 1; j++) {
+                env->global_collision_listeners[j] = env->global_collision_listeners[j + 1];
+            }
+            env->global_collision_listener_count--;
+            return 0;
+        }
+    }
+    return -1;
 }

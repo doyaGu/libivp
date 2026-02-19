@@ -137,3 +137,16 @@ void ivp_collision_listeners_fire_friction_deleted(ivp_object_t *obj_a,
     fire_friction_deleted_for_object(obj_a, event);
     fire_friction_deleted_for_object(obj_b, event);
 }
+
+void ivp_collision_listeners_fire_object_deleted(ivp_object_t *obj)
+{
+    if (!obj) return;
+    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
+        ivp_collision_listener_t *l = obj->collision_listeners[i];
+        if (!l || !l->active) continue;
+        if (!(l->enabled_callbacks & IVP_COLLISION_CB_OBJECT_DELETED)) continue;
+        if (l->object_deleted_fn) {
+            l->object_deleted_fn(l->ctx, obj);
+        }
+    }
+}

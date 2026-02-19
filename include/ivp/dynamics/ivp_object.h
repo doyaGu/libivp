@@ -17,8 +17,11 @@ extern "C" {
 /* ── Object type ────────────────────────────────────────────────────────── */
 
 typedef enum ivp_object_type {
-    IVP_OBJECT_BALL    = 0,   /* sphere: uses upper_limit_radius          */
-    IVP_OBJECT_POLYGON = 1    /* convex polyhedron: uses surman for ledge  */
+    IVP_OBJECT_NONE    = 0,   /* sentinel / uninitialized                 */
+    IVP_OBJECT_CLUSTER = 1,   /* container for other objects (hierarchy)   */
+    IVP_OBJECT_POLYGON = 2,   /* convex polyhedron: uses surman for ledge  */
+    IVP_OBJECT_BALL    = 3,   /* sphere: uses upper_limit_radius           */
+    IVP_OBJECT_MAX     = 4    /* enum count sentinel                       */
 } ivp_object_type_t;
 
 /* ── Material ───────────────────────────────────────────────────────────── */
@@ -69,6 +72,7 @@ void ivp_object_template_init(ivp_object_template_t *tmpl);
 struct ivp_environment;
 struct ivp_collision_listener;
 struct ivp_synapse_link;
+struct ivp_cluster;
 
 #define IVP_MAX_COLLISION_LISTENERS_PER_OBJECT 4
 
@@ -99,6 +103,18 @@ typedef struct ivp_object {
     /* Continuous collision detection */
     bool              ccd_enabled;           /* per-object CCD flag (default: false) */
     ivp_real_t        ccd_speed_threshold;   /* 0 = auto (50% of radius / dt) */
+
+    /* Core-to-object offset (ported from IVP_Real_Object) */
+    ivp_vec3r_t         shift_core_f_object;         /* translation from core CoM to object origin (core frame) */
+    bool                shift_core_f_object_is_zero;  /* optimization flag — true when shift is identity */
+    ivp_quatr_t        *q_core_f_object;             /* rotation from core to object frame (NULL = identity) */
+
+    /* Cluster hierarchy (ported from IVP_Object) */
+    struct ivp_object  *next_in_cluster;    /* next sibling in parent cluster  */
+    struct ivp_cluster *parent_cluster;     /* parent cluster (NULL if none)   */
+
+    /* Multi-object core list (ported from IVP_Core::objects) */
+    struct ivp_object  *next_in_core_list;  /* next object sharing same core   */
 } ivp_object_t;
 
 /* Get the core from an object */

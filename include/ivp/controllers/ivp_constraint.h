@@ -33,6 +33,14 @@ typedef enum ivp_constraint_type {
     IVP_CONSTRAINT_FIXED      = 2   /* position + orientation (6 DOF removed) */
 } ivp_constraint_type_t;
 
+/* ── Force-exceed behaviors (reference: IVP_CONSTRAINT_FORCE_EXCEED) ──── */
+
+typedef enum ivp_constraint_force_exceed {
+    IVP_CFE_NONE  = 0,  /* no force limit */
+    IVP_CFE_CLIP  = 1,  /* clamp impulse to threshold */
+    IVP_CFE_BREAK = 2   /* deactivate constraint + fire event */
+} ivp_constraint_force_exceed_t;
+
 /* ── Constraint limits ──────────────────────────────────────────────────── */
 
 typedef struct ivp_constraint_limits {
@@ -69,6 +77,12 @@ typedef struct ivp_constraint_state {
     /* Runtime state */
     bool          active;
     ivp_real_t    accumulated_impulse; /* debug: total impulse this step */
+
+    /* Break detection (reference: IVP_Constraint_Local_MaxImpulse) */
+    ivp_real_t                    break_force_threshold;   /* linear impulse limit (0 = no limit) */
+    ivp_real_t                    break_torque_threshold;  /* angular impulse limit (0 = no limit) */
+    ivp_constraint_force_exceed_t force_exceed_action;     /* what to do when exceeded */
+    bool                          is_broken;               /* runtime: has this constraint broken? */
 } ivp_constraint_state_t;
 
 /* ── Initialization ─────────────────────────────────────────────────────── */

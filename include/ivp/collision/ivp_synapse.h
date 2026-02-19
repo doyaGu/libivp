@@ -16,11 +16,12 @@ typedef struct ivp_mindist_entry ivp_mindist_entry_t;
 typedef struct ivp_persistent_contact ivp_persistent_contact_t;
 
 typedef enum ivp_synapse_status {
-    IVP_ST_POINT = 0,
-    IVP_ST_EDGE,
-    IVP_ST_TRIANGLE,
-    IVP_ST_BALL,
-    IVP_ST_MAX_LEGAL
+    IVP_ST_POINT     = 0,
+    IVP_ST_EDGE      = 1,
+    IVP_ST_TRIANGLE  = 2,
+    IVP_ST_BALL      = 3,
+    IVP_ST_MAX_LEGAL = 4,  /* max legal status, should be 2^n */
+    IVP_ST_BACKSIDE  = 5   /* unknown, intrusion — triggers INVALID mindist */
 } ivp_synapse_status_t;
 
 typedef enum ivp_synapse_owner_kind {

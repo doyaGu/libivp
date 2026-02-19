@@ -30,11 +30,12 @@ typedef void (*ivp_radar_hit_fn_t)(void *ctx,
 /* ── Radar configuration ───────────────────────────────────────────────── */
 
 typedef struct ivp_radar_config {
-    ivp_real_t        max_range;      /* maximum detection distance, default: 100 */
-    bool              use_filter;     /* apply collision filter, default: true */
-    bool              skip_unmoveable; /* skip static objects, default: false */
-    ivp_radar_hit_fn_t hit_fn;        /* callback for each match (required) */
-    void              *ctx;           /* user context for callback */
+    ivp_real_t        max_range;          /* maximum detection distance, default: 100 */
+    ivp_real_t        max_relative_error; /* reference parity: allowed error fraction (unused, reserved) */
+    bool              use_filter;         /* apply collision filter, default: true */
+    bool              skip_unmoveable;    /* skip static objects, default: false */
+    ivp_radar_hit_fn_t hit_fn;            /* callback for each match (required) */
+    void              *ctx;               /* user context for callback */
 } ivp_radar_config_t;
 
 /* Fill with defaults. */

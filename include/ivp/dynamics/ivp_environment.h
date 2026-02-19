@@ -14,6 +14,7 @@
 #include <ivp/dynamics/ivp_handle.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_anomaly_manager.h>
+#include <ivp/dynamics/ivp_cluster.h>
 #include <ivp/collision/ivp_collision_filter.h>
 #include <ivp/collision/ivp_hull_manager.h>
 #include <ivp/collision/ivp_mindist_persistent.h>
@@ -23,6 +24,8 @@
 #include <ivp/collision/ivp_broadphase.h>
 #include <ivp/dynamics/ivp_island_manager.h>
 #include <ivp/events/ivp_event.h>
+#include <ivp/collision/ivp_collision_delegator.h>
+#include <ivp/events/ivp_listener_collision.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -172,6 +175,19 @@ typedef struct ivp_environment {
 
     /* Universe manager (optional LOD/streaming callbacks) */
     struct ivp_universe_manager *universe_manager;
+
+    /* Collision delegator roots (reference: IVP_Environment::collision_delegator_roots).
+     * During broadphase overlap, each root is queried to create a collision
+     * checker for the pair.  Fixed-size array avoids dynamic allocation. */
+    ivp_collision_delegator_root_t *collision_delegator_roots[IVP_MAX_COLLISION_DELEGATOR_ROOTS];
+    int                             collision_delegator_root_count;
+
+    /* Global collision listeners (reference: IVP_Environment::collision_listeners).
+     * Fired for ALL collision events regardless of which objects participate,
+     * before per-object listeners. */
+#define IVP_MAX_GLOBAL_COLLISION_LISTENERS 8
+    ivp_collision_listener_t *global_collision_listeners[IVP_MAX_GLOBAL_COLLISION_LISTENERS];
+    int                       global_collision_listener_count;
 } ivp_environment_t;
 
 /* ── Environment lifecycle ──────────────────────────────────────────────── */
@@ -196,6 +212,15 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env,
                                                 const ivp_object_template_t *tmpl,
                                                 const ivp_surman_t *surman,
                                                 ivp_object_handle_t *out_handle);
+
+/* Create a cluster (object container hierarchy). parent may be NULL.
+ * tmpl may be NULL for defaults. */
+ivp_cluster_t *ivp_environment_create_cluster(ivp_environment_t *env,
+                                              ivp_cluster_t *parent,
+                                              const ivp_cluster_template_t *tmpl);
+
+/* Destroy a cluster. Children are detached but NOT destroyed. */
+void ivp_environment_destroy_cluster(ivp_environment_t *env, ivp_cluster_t *cluster);
 
 /* Destroy an object and remove it from the environment. */
 void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj);
@@ -329,6 +354,30 @@ static inline void ivp_environment_set_material_manager(ivp_environment_t *env,
     env->material_manager = fn;
     env->material_manager_ctx = ctx;
 }
+
+/* ── Collision Delegator API (reference: IVP_Collision_Delegator_Root) ── */
+
+/* Register a collision delegator root on the environment.
+ * During broadphase, each root's delegate_collisions() is called for
+ * overlapping pairs. Returns true on success, false if list full. */
+bool ivp_environment_add_collision_delegator(ivp_environment_t *env,
+                                             ivp_collision_delegator_root_t *root);
+
+/* Remove a collision delegator root. Returns true if found & removed. */
+bool ivp_environment_remove_collision_delegator(ivp_environment_t *env,
+                                                ivp_collision_delegator_root_t *root);
+
+/* ── Global Collision Listener API (reference: IVP_Environment::collision_listeners) ── */
+
+/* Register a global collision listener that fires for ALL collisions.
+ * Global listeners run before per-object listeners.
+ * Returns 0 on success, -1 if max listeners reached. */
+int ivp_environment_add_collision_listener_global(ivp_environment_t *env,
+                                                  ivp_collision_listener_t *listener);
+
+/* Remove a global collision listener. Returns 0 on success, -1 if not found. */
+int ivp_environment_remove_collision_listener_global(ivp_environment_t *env,
+                                                     ivp_collision_listener_t *listener);
 
 #ifdef __cplusplus
 }

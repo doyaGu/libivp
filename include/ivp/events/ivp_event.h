@@ -29,7 +29,8 @@ typedef enum ivp_event_type {
     IVP_EVENT_OBJECT_DESTROYED,
     IVP_EVENT_OBJECT_FROZEN,
     IVP_EVENT_OBJECT_UNFROZEN,
-    IVP_EVENT_COLLISION_DETECTED
+    IVP_EVENT_COLLISION_DETECTED,
+    IVP_EVENT_CONSTRAINT_BROKEN          /* reference: IVP_Listener_Constraint::event_constraint_broken */
 } ivp_event_type_t;
 
 /* Per-controller simulation payload parity with legacy IVP_Event_Sim.

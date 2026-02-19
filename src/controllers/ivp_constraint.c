@@ -7,6 +7,7 @@
 
 #include <ivp/controllers/ivp_constraint.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/events/ivp_event.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_mat3.h>
@@ -580,6 +581,38 @@ void ivp_controller_constraint(const ivp_event_sim_t *event_sim,
         case IVP_CONSTRAINT_BALL_SOCKET:
         default:
             break; /* no angular constraint for ball socket */
+        }
+    }
+
+    /* Break detection (reference: IVP_Constraint_Local_MaxImpulse + IVP_CFE_BREAK).
+     * After solving, compare accumulated impulse against threshold.
+     * When force_exceed_action is IVP_CFE_BREAK, deactivate and fire event.
+     * When IVP_CFE_CLIP, the impulse was already applied — we just mark
+     * the threshold was exceeded (a future iteration could clamp). */
+    if (state->force_exceed_action != IVP_CFE_NONE) {
+        const ivp_real_t threshold = state->break_force_threshold;
+        if (threshold > IVP_REAL(0.0) &&
+            state->accumulated_impulse > threshold) {
+            if (state->force_exceed_action == IVP_CFE_BREAK) {
+                state->active = false;
+                state->is_broken = true;
+                /* Fire event through the sim event system if environment is available. */
+                if (event_sim->environment) {
+                    extern void ivp_environment_emit_event_internal(
+                        struct ivp_environment *env,
+                        ivp_event_type_t type,
+                        ivp_real_t dt,
+                        int object_index,
+                        int controller_id);
+                    int obj_idx = exec_obj ? exec_obj->dense_index : -1;
+                    ivp_environment_emit_event_internal(
+                        event_sim->environment,
+                        IVP_EVENT_CONSTRAINT_BROKEN,
+                        dt,
+                        obj_idx,
+                        0);
+                }
+            }
         }
     }
 }

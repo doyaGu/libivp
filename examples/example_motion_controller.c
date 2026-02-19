@@ -31,7 +31,7 @@ static void cue_motion_controller(const ivp_event_sim_t *event_sim,
     const ivp_real_t dt = event_sim->delta_time;
     cue_motion_t *cm = ctx;
     if (obj == cm->target)
-        ivp_controller_motion(env, obj, dt, &cm->state);
+        ivp_controller_motion(event_sim, obj, &cm->state);
 }
 
 #define N_TABLE_OBJ 8

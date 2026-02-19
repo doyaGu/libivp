@@ -74,6 +74,16 @@ void ivp_core_init(ivp_core_t *core, ivp_real_t mass,
     core->pinned              = false;
     core->spin_clipping_enabled = false;
     core->spin_clipping = ivp_vec3f(0.0f, 0.0f, 0.0f);
+
+    /* Per-core friction info (Phase 3 alignment) */
+    core->core_friction_info.for_unmoveables.l_friction_info_hash = NULL;
+
+    /* Old sync rot — NULL means "not pushed in current cascade" */
+    core->old_sync_rot = NULL;
+
+    /* Multi-object core list — initialized one-to-one in object creation */
+    core->object_list = NULL;
+    core->object_count = 0;
 }
 
 /* ── Set pose ───────────────────────────────────────────────────────────── */

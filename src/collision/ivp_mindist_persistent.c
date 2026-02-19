@@ -173,7 +173,19 @@ void ivp_mindist_entry_recompute(ivp_mindist_entry_t *entry)
         entry->last_normal = cp.normal;
         entry->closest_point_a = cp.point_a;
         entry->closest_point_b = cp.point_b;
-        entry->state = IVP_MDIST_EXACT;
+
+        /* Detect backside intrusion: if the gap is severely negative,
+         * the geometry is penetrating from the back face. Transition
+         * the synapses to ST_BACKSIDE and the entry to INVALID,
+         * triggering a full re-initialization next time.
+         * (Reference alignment: IVP_ST_BACKSIDE triggers INVALID mindist) */
+        if (cp.gap_length < -cp.obj_a->core.upper_limit_radius * IVP_REAL(0.5)) {
+            entry->synapse[0].status = IVP_ST_BACKSIDE;
+            entry->synapse[1].status = IVP_ST_BACKSIDE;
+            entry->state = IVP_MDIST_INVALID;
+        } else {
+            entry->state = IVP_MDIST_EXACT;
+        }
         entry->age = 0;
     } else {
         /* No contact found — objects are far apart */

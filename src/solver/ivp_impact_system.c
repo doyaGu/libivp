@@ -19,7 +19,11 @@
 
 /* Returns false if the element could not be added (OOM). */
 static inline bool add_unique_core(ivp_array_t *arr, ivp_core_t *c) {
-    if (ivp_array_find(arr, c) >= 0) return true;
+    /* Use old_sync_rot as O(1) "already tracked" flag (reference-aligned). */
+    if (c->old_sync_rot != NULL) return true; /* already in the system */
+    /* Mark with a non-NULL sentinel (actual state stored if needed later). */
+    static ivp_old_sync_rot_t s_sentinel = {0};
+    c->old_sync_rot = &s_sentinel;
     return ivp_ok(ivp_array_push(arr, c));
 }
 
@@ -207,5 +211,15 @@ oom:
         if (met) {
             met->impact_system_pushes += sys->sum_of_pushes;
         }
+    }
+
+    /* Clean up: reset old_sync_rot sentinel on all tracked cores */
+    for (int i = 0; i < ivp_array_len(&sys->pushed_cores); i++) {
+        ivp_core_t *c = (ivp_core_t *)ivp_array_get(&sys->pushed_cores, i);
+        c->old_sync_rot = NULL;
+    }
+    for (int i = 0; i < ivp_array_len(&sys->known_cores); i++) {
+        ivp_core_t *c = (ivp_core_t *)ivp_array_get(&sys->known_cores, i);
+        c->old_sync_rot = NULL;
     }
 }

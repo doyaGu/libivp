@@ -22,6 +22,7 @@
 #include <ivp/collision/ivp_collision_tolerance.h>
 #include <ivp/collision/ivp_synapse.h>
 #include <ivp/base/ivp_forward_decls.h>
+#include <ivp/dynamics/ivp_handle.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -154,6 +155,17 @@ typedef struct ivp_friction_manager {
 
     int psi_counter;
     const ivp_allocator_t *alloc;
+
+    /* Controller handles for 3-priority friction registration (reference alignment).
+     * When registered, friction sub-phases run as controllers at the correct
+     * priority points in the sorted controller list. Handle value of {0,0}
+     * means not registered (handled via the inline threshold fallback). */
+    ivp_controller_handle_t static_fs_handle;
+    ivp_controller_handle_t dynamic_fs_handle;
+    ivp_controller_handle_t energy_fs_handle;
+
+    /* Back-pointer to owning environment (needed for controller callbacks) */
+    struct ivp_environment *owner;
 } ivp_friction_manager_t;
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */

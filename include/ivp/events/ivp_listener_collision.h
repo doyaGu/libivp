@@ -28,7 +28,8 @@ typedef enum ivp_collision_callback_flags {
     IVP_COLLISION_CB_POST_COLLISION   = 0x02,
     IVP_COLLISION_CB_FRICTION_CREATED = 0x04,
     IVP_COLLISION_CB_FRICTION_DELETED = 0x08,
-    IVP_COLLISION_CB_ALL             = 0x0F
+    IVP_COLLISION_CB_OBJECT_DELETED   = 0x10,   /* reference: IVP_LISTENER_COLLISION_CALLBACK_OBJECT_DELETED */
+    IVP_COLLISION_CB_ALL             = 0x1F
 } ivp_collision_callback_flags_t;
 
 /* ── Collision event data ──────────────────────────────────────────────── */
@@ -61,16 +62,22 @@ typedef void (*ivp_collision_listener_fn_t)(void *ctx,
 typedef void (*ivp_friction_listener_fn_t)(void *ctx,
                                           const ivp_friction_event_t *event);
 
+/* Called when an object with attached collision listeners is destroyed.
+ * ctx = user context, obj = the object being deleted. */
+typedef void (*ivp_collision_object_deleted_fn_t)(void *ctx,
+                                                  ivp_object_t *obj);
+
 /* ── Collision listener ────────────────────────────────────────────────── */
 
 typedef struct ivp_collision_listener {
-    ivp_collision_listener_fn_t  pre_collision_fn;
-    ivp_collision_listener_fn_t  post_collision_fn;
-    ivp_friction_listener_fn_t   friction_created_fn;
-    ivp_friction_listener_fn_t   friction_deleted_fn;
-    void                        *ctx;
-    int                          enabled_callbacks;  /* bitmask of ivp_collision_callback_flags_t */
-    bool                         active;
+    ivp_collision_listener_fn_t           pre_collision_fn;
+    ivp_collision_listener_fn_t           post_collision_fn;
+    ivp_friction_listener_fn_t            friction_created_fn;
+    ivp_friction_listener_fn_t            friction_deleted_fn;
+    ivp_collision_object_deleted_fn_t     object_deleted_fn;
+    void                                 *ctx;
+    int                                   enabled_callbacks;  /* bitmask of ivp_collision_callback_flags_t */
+    bool                                  active;
 } ivp_collision_listener_t;
 
 /* ── API ───────────────────────────────────────────────────────────────── */
@@ -112,6 +119,10 @@ void ivp_collision_listeners_fire_friction_created(ivp_object_t *obj_a,
 void ivp_collision_listeners_fire_friction_deleted(ivp_object_t *obj_a,
                                                     ivp_object_t *obj_b,
                                                     const ivp_friction_event_t *event);
+
+/* Fire object-deleted callbacks for all listeners attached to this object.
+ * Called from ivp_environment_destroy_object() before teardown. */
+void ivp_collision_listeners_fire_object_deleted(ivp_object_t *obj);
 
 #ifdef __cplusplus
 }

@@ -23,12 +23,21 @@ extern "C" {
 /* ── Movement state machine ─────────────────────────────────────────────── */
 
 typedef enum ivp_movement_type {
-    IVP_MT_MOVING  = 0x01,   /* fast movement */
-    IVP_MT_SLOW    = 0x02,   /* below threshold for short time */
-    IVP_MT_CALM    = 0x03,   /* slow for > freeze_check_dtime */
-    IVP_MT_NOT_SIM = 0x08,   /* frozen (can be revived) */
-    IVP_MT_STATIC  = 0x10    /* static/world object (never moves) */
+    IVP_MT_UNDEFINED       = 0x00, /* sentinel / uninitialized              */
+    IVP_MT_MOVING          = 0x01, /* fast movement                         */
+    IVP_MT_SLOW            = 0x02, /* below threshold for short time        */
+    IVP_MT_CALM            = 0x03, /* slow for > freeze_check_dtime         */
+    IVP_MT_NOT_SIM         = 0x08, /* frozen (can be revived)               */
+    IVP_MT_STATIC_PHANTOM  = 0x09, /* like static but externally positioned */
+    IVP_MT_STATIC          = 0x10, /* static/world object (never moves)     */
+    IVP_MT_GET_MINDIST     = 0x21  /* query-only: used to fetch all mindists*/
 } ivp_movement_type_t;
+
+/* Movement type classification macros (matching reference) */
+#define IVP_MTIS_SIMULATED(mt)    ((mt) < IVP_MT_NOT_SIM)
+#define IVP_MTIS_CAN_COLLIDE(mt)  ((mt) & 0x07)
+#define IVP_MTIS_IS_MOVING(mt)    ((mt) & 0x07)
+#define IVP_MTIS_IS_STATIC(mt)    ((mt) & 0x10)
 
 /* ── Freeze parameters ──────────────────────────────────────────────────── */
 
@@ -60,6 +69,19 @@ typedef struct ivp_movement_checkpoint {
     ivp_quatr_t  quat;        /* orientation at checkpoint */
     ivp_time_t   time;        /* timestamp of checkpoint */
 } ivp_movement_checkpoint_t;
+
+/* ── Old sync rot state (ported from IVP_Old_Sync_Rot_Z) ───────────────── */
+/*
+ * Stores pre-push angular velocity and orientation so the impact system
+ * can detect double-pushes during a cascade. Also serves as a flag:
+ * when non-NULL on ivp_core_t::old_sync_rot, the core has already been
+ * pushed in this cascade.
+ */
+typedef struct ivp_old_sync_rot {
+    ivp_vec3f_t  old_sync_rot_speed;              /* pre-push angular velocity */
+    ivp_quatr_t  old_sync_q_world_f_core_next_psi; /* pre-push predicted orientation */
+    bool         was_pushed_during_i_s;            /* pushed during impact system solve */
+} ivp_old_sync_rot_t;
 
 /* ── Core — Rigid Body State ────────────────────────────────────────────── */
 
@@ -122,6 +144,37 @@ typedef struct ivp_core {
     int                       collisions_this_psi;
     int                       collision_count_epoch;
     bool                      fast_piling_allowed;
+
+    /* ─── Per-core friction info (ported from IVP_Core_Friction_Info) ──── */
+    /*
+     * For unmoveable cores: l_friction_info_hash is a vhash mapping each
+     * moveable partner core to friction data (O(1) lookup).
+     * For moveable cores: moveable_core_friction_info points to the
+     * friction info struct owned by the friction system.
+     */
+    union {
+        struct { void *l_friction_info_hash; } for_unmoveables;
+        struct { void *moveable_core_friction_info; } for_moveables;
+    } core_friction_info;
+
+    /* ─── Old sync rot (ported from IVP_Core::tmp_null) ────────────────── */
+    /*
+     * During an impact cascade, this pointer is used as a flag:
+     *   - NULL: core has not been pushed yet in this cascade
+     *   - non-NULL: core was already pushed (stores pre-push state)
+     * This replaces the linear scan of pushed_cores in the impact system.
+     * Must be reset to NULL when not in use.
+     */
+    struct ivp_old_sync_rot *old_sync_rot;
+
+    /* ─── Object list (ported from IVP_Core_Fast_Static::objects) ──────── */
+    /*
+     * For merged cores, multiple objects share one core. This linked list
+     * tracks all objects associated with this core. For single-object cores,
+     * object_list points to the owning object's next_in_core_list (count=1).
+     */
+    struct ivp_object *object_list;
+    int                object_count;
 } ivp_core_t;
 
 /* ── Movement check interval ───────────────────────────────────────────── */

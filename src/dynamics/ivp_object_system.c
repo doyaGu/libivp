@@ -80,6 +80,11 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
     obj->ccd_enabled  = tmpl->ccd_enabled;
     obj->ccd_speed_threshold = tmpl->ccd_speed_threshold;
 
+    /* Core-to-object offset: identity by default */
+    obj->shift_core_f_object = (ivp_vec3r_t){{IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0)}};
+    obj->shift_core_f_object_is_zero = true;
+    obj->q_core_f_object = NULL;
+
     ivp_handle_t h;
     if (ivp_registry_insert(&sys->registry, obj, &h) != IVP_OK) {
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
