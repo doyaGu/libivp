@@ -222,8 +222,6 @@ static void ivp_environment_run_friction_subphase_static(ivp_environment_t *env,
 {
     ivp_friction_manager_t *fm = &env->friction_manager;
 
-    ivp_friction_manager_begin_psi(fm);
-
     if (fm->system_count == 0) return;
 
     ivp_collision_settings_t coll_settings;
@@ -332,22 +330,32 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
         controller_handles[controller_handle_count++] = h;
     }
 
-    /* Run controllers in ascending priority order.
+    /* Run controllers in descending priority order (reference parity).
      *
-     * NOTE: The reference IVP dispatches in descending order (highest first)
-     * because controllers above IVP_CP_GRAVITY do async pushes and controllers
-     * below do sync/real pushes.  C17 uses speed_change uniformly for all
-     * controllers and commits via an explicit loop-level check at the gravity
-     * boundary.  Ascending order preserves this commit model:
-     *   static_friction(0) → constraints(400) → motion(500)
-     *   → dynamic_friction(600) → GRAVITY(1000, commits async pushes)
-     *   → springs(1400) → forcefields(1600) → energy_friction(2000) */
+     * Reference IVP semantics:
+     *   - priority > IVP_CP_GRAVITY: async pushes
+     *   - priority < IVP_CP_GRAVITY: real/sync pushes
+     *
+     * C17 controllers commonly write to speed_change for both stages.
+     * To preserve reference-visible behavior, the dispatcher enforces an
+     * explicit async→sync divider at gravity/boundary and commits after each
+     * low-priority controller so low-stage pushes are immediately visible. */
+
+    bool saw_above_gravity_controller = false;
+    bool committed_at_gravity_boundary = false;
 
     for (int ci = 0; ci < controller_handle_count; ci++) {
         ivp_controller_slot_t *slot =
             ivp_controller_system_get_by_handle(cs, controller_handles[ci]);
         if (!slot || !slot->enabled) continue;
         if (!slot->event_fn) continue;
+
+        if (!committed_at_gravity_boundary &&
+            saw_above_gravity_controller &&
+            slot->priority < IVP_CP_GRAVITY) {
+            ivp_environment_commit_async_pushes_for_active_cores(env);
+            committed_at_gravity_boundary = true;
+        }
 
         if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
             ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
@@ -430,7 +438,12 @@ static void ivp_environment_run_controllers(ivp_environment_t *env, ivp_real_t d
             }
         }
 
-        if (slot->priority < IVP_CP_GRAVITY) {
+        if (slot->priority > IVP_CP_GRAVITY) {
+            saw_above_gravity_controller = true;
+        } else if (slot->priority == IVP_CP_GRAVITY) {
+            ivp_environment_commit_async_pushes_for_active_cores(env);
+            committed_at_gravity_boundary = true;
+        } else {
             ivp_environment_commit_async_pushes_for_active_cores(env);
         }
     }
@@ -1136,6 +1149,7 @@ void ivp_environment_simulate_one_psi(ivp_environment_t *env)
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_PRE_CONTROLLERS, unit_dt);
         ivp_environment_init_active_cores_for_psi(env, unit_dt);
         ivp_island_manager_rebuild(&env->island_manager, env);
+        ivp_friction_manager_begin_psi(&env->friction_manager);
 
         /* Legacy PSI order: friction sub-phases are interleaved with
          * controllers at the correct priority boundaries.  Damping and

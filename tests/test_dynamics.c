@@ -1104,8 +1104,8 @@ IVP_TEST(controller_priority_sync_async) {
 
     ivp_environment_simulate_one_psi(env);
 
-    /* low(<1000) push must be visible before high(>=1000) runs */
-    IVP_ASSERT_EQ(s_controller_sync_seen, 1);
+    /* Reference parity: high(>=1000) runs before low(<1000). */
+    IVP_ASSERT_EQ(s_controller_sync_seen, 0);
     /* final velocity includes low sync + high async contributions */
     IVP_ASSERT_NEAR(obj->core.speed.k[0], 3.0, 1e-6);
 

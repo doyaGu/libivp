@@ -188,7 +188,7 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys)
         while (j >= 0) {
             ivp_controller_slot_t *cur = (ivp_controller_slot_t *)data[j];
             const bool should_shift =
-                (cur->priority > key->priority) ||
+                (cur->priority < key->priority) ||
                 (cur->priority == key->priority && cur->handle_slot > key->handle_slot);
             if (!should_shift) break;
             data[j + 1] = data[j];
