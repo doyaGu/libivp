@@ -244,6 +244,17 @@ static ivp_quatr_t quat_from_axis_angle(ivp_real_t ax, ivp_real_t ay,
     return ivp_quatr_make(ax * s, ay * s, az * s, c);
 }
 
+static bool scenario_init_box_surman(float hx, float hy, float hz,
+                                     ivp_compact_surface_t **out_surface,
+                                     ivp_surman_polygon_t *out_surman)
+{
+    ivp_compact_surface_t *surface = ivp_build_box_surface(NULL, hx, hy, hz);
+    if (!surface) return false;
+    ivp_surman_polygon_init(out_surman, surface);
+    *out_surface = surface;
+    return true;
+}
+
 /* Helper for world-space anchor setup using current object transforms. */
 static void ivp_constraint_init_ball_socket_ws(
     ivp_constraint_state_t *state,
@@ -601,10 +612,12 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     if (!env) return 1;
 
     /* --- Ground: static box 15×0.5×15 --- */
-    ivp_compact_surface_t *ground_surf = ivp_build_box_surface(NULL, 15.0f, 0.5f, 15.0f);
-    if (!ground_surf) { ivp_environment_destroy(env); return 1; }
+    ivp_compact_surface_t *ground_surf = NULL;
     ivp_surman_polygon_t ground_sm;
-    ivp_surman_polygon_init(&ground_sm, ground_surf);
+    if (!scenario_init_box_surman(15.0f, 0.5f, 15.0f, &ground_surf, &ground_sm)) {
+        ivp_environment_destroy(env);
+        return 1;
+    }
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -625,14 +638,13 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     }
 
     /* --- Pillar L: static box 0.5×2×0.5 at (-6,-7,0) --- */
-    ivp_compact_surface_t *pillar_surf = ivp_build_box_surface(NULL, 0.5f, 2.0f, 0.5f);
-    if (!pillar_surf) {
+    ivp_compact_surface_t *pillar_surf = NULL;
+    ivp_surman_polygon_t pillar_sm;
+    if (!scenario_init_box_surman(0.5f, 2.0f, 0.5f, &pillar_surf, &pillar_sm)) {
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t pillar_sm;
-    ivp_surman_polygon_init(&pillar_sm, pillar_surf);
 
     ivp_vec3r_set(&tmpl.position, IVP_REAL(-6.0), IVP_REAL(-7.0), IVP_REAL(0.0));
     ivp_object_t *pillar_l = ivp_environment_create_object(env, &tmpl, &pillar_sm.base);
@@ -656,15 +668,14 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     /* --- Bridge nodes: 4 dynamic boxes 0.5×0.5×0.5 --- */
     #define N_BRIDGE 4
     ivp_real_t node_spacing = IVP_REAL(12.0) / ((ivp_real_t)N_BRIDGE + IVP_REAL(1.0));
-    ivp_compact_surface_t *node_surf = ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
-    if (!node_surf) {
+    ivp_compact_surface_t *node_surf = NULL;
+    ivp_surman_polygon_t node_sm;
+    if (!scenario_init_box_surman(0.5f, 0.5f, 0.5f, &node_surf, &node_sm)) {
         ivp_compact_surface_free(NULL, pillar_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t node_sm;
-    ivp_surman_polygon_init(&node_sm, node_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -718,16 +729,15 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     ball->core.upper_limit_radius = IVP_REAL(0.8);
 
     /* --- Bungee: dynamic box 0.6×0.6×0.6 at (10,-6,0) --- */
-    ivp_compact_surface_t *bungee_surf = ivp_build_box_surface(NULL, 0.6f, 0.6f, 0.6f);
-    if (!bungee_surf) {
+    ivp_compact_surface_t *bungee_surf = NULL;
+    ivp_surman_polygon_t bungee_sm;
+    if (!scenario_init_box_surman(0.6f, 0.6f, 0.6f, &bungee_surf, &bungee_sm)) {
         ivp_compact_surface_free(NULL, node_surf);
         ivp_compact_surface_free(NULL, pillar_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t bungee_sm;
-    ivp_surman_polygon_init(&bungee_sm, bungee_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -752,8 +762,9 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     }
 
     /* --- Anchor: static box 0.3×0.3×0.3 at (10,-14,0) --- */
-    ivp_compact_surface_t *anchor_surf = ivp_build_box_surface(NULL, 0.3f, 0.3f, 0.3f);
-    if (!anchor_surf) {
+    ivp_compact_surface_t *anchor_surf = NULL;
+    ivp_surman_polygon_t anchor_sm;
+    if (!scenario_init_box_surman(0.3f, 0.3f, 0.3f, &anchor_surf, &anchor_sm)) {
         ivp_compact_surface_free(NULL, bungee_surf);
         ivp_compact_surface_free(NULL, node_surf);
         ivp_compact_surface_free(NULL, pillar_surf);
@@ -761,8 +772,6 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t anchor_sm;
-    ivp_surman_polygon_init(&anchor_sm, anchor_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -894,10 +903,12 @@ static int run_rope(FILE *out, int steps, double dt, invariant_result_t *inv)
     if (!env) return 1;
 
     /* --- Ground: static box 12×0.5×12 at (0,2,0) --- */
-    ivp_compact_surface_t *ground_surf = ivp_build_box_surface(NULL, 12.0f, 0.5f, 12.0f);
-    if (!ground_surf) { ivp_environment_destroy(env); return 1; }
+    ivp_compact_surface_t *ground_surf = NULL;
     ivp_surman_polygon_t ground_sm;
-    ivp_surman_polygon_init(&ground_sm, ground_surf);
+    if (!scenario_init_box_surman(12.0f, 0.5f, 12.0f, &ground_surf, &ground_sm)) {
+        ivp_environment_destroy(env);
+        return 1;
+    }
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -918,14 +929,13 @@ static int run_rope(FILE *out, int steps, double dt, invariant_result_t *inv)
     }
 
     /* --- Ceiling: static box 1.5×0.3×0.3 at (0,-15,0) --- */
-    ivp_compact_surface_t *ceiling_surf = ivp_build_box_surface(NULL, 1.5f, 0.3f, 0.3f);
-    if (!ceiling_surf) {
+    ivp_compact_surface_t *ceiling_surf = NULL;
+    ivp_surman_polygon_t ceiling_sm;
+    if (!scenario_init_box_surman(1.5f, 0.3f, 0.3f, &ceiling_surf, &ceiling_sm)) {
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t ceiling_sm;
-    ivp_surman_polygon_init(&ceiling_sm, ceiling_surf);
 
     ivp_vec3r_set(&tmpl.position, IVP_REAL(0.0), IVP_REAL(-15.0), IVP_REAL(0.0));
     ivp_object_t *ceiling = ivp_environment_create_object(env, &tmpl, &ceiling_sm.base);
@@ -939,15 +949,14 @@ static int run_rope(FILE *out, int steps, double dt, invariant_result_t *inv)
     /* --- Chain links: 8 dynamic boxes 0.2×0.55×0.2 --- */
     #define CHAIN_LEN 8
     ivp_real_t step_y = IVP_REAL(2.0) * IVP_REAL(0.55) + IVP_REAL(0.05); /* 1.15 */
-    ivp_compact_surface_t *link_surf = ivp_build_box_surface(NULL, 0.2f, 0.55f, 0.2f);
-    if (!link_surf) {
+    ivp_compact_surface_t *link_surf = NULL;
+    ivp_surman_polygon_t link_sm;
+    if (!scenario_init_box_surman(0.2f, 0.55f, 0.2f, &link_surf, &link_sm)) {
         ivp_compact_surface_free(NULL, ceiling_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t link_sm;
-    ivp_surman_polygon_init(&link_sm, link_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -981,16 +990,15 @@ static int run_rope(FILE *out, int steps, double dt, invariant_result_t *inv)
     }
 
     /* --- Weight: dynamic box 0.6×0.6×0.6 at chain end --- */
-    ivp_compact_surface_t *weight_surf = ivp_build_box_surface(NULL, 0.6f, 0.6f, 0.6f);
-    if (!weight_surf) {
+    ivp_compact_surface_t *weight_surf = NULL;
+    ivp_surman_polygon_t weight_sm;
+    if (!scenario_init_box_surman(0.6f, 0.6f, 0.6f, &weight_surf, &weight_sm)) {
         ivp_compact_surface_free(NULL, link_surf);
         ivp_compact_surface_free(NULL, ceiling_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t weight_sm;
-    ivp_surman_polygon_init(&weight_sm, weight_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -1096,10 +1104,12 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     if (!env) return 1;
 
     /* --- Ground: static box 15×0.5×15 --- */
-    ivp_compact_surface_t *ground_surf = ivp_build_box_surface(NULL, 15.0f, 0.5f, 15.0f);
-    if (!ground_surf) { ivp_environment_destroy(env); return 1; }
+    ivp_compact_surface_t *ground_surf = NULL;
     ivp_surman_polygon_t ground_sm;
-    ivp_surman_polygon_init(&ground_sm, ground_surf);
+    if (!scenario_init_box_surman(15.0f, 0.5f, 15.0f, &ground_surf, &ground_sm)) {
+        ivp_environment_destroy(env);
+        return 1;
+    }
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -1120,14 +1130,13 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     }
 
     /* --- Pedestal: static box 0.15×0.8×0.15 at (0,-5.6,0) --- */
-    ivp_compact_surface_t *pedestal_surf = ivp_build_box_surface(NULL, 0.15f, 0.8f, 0.15f);
-    if (!pedestal_surf) {
+    ivp_compact_surface_t *pedestal_surf = NULL;
+    ivp_surman_polygon_t pedestal_sm;
+    if (!scenario_init_box_surman(0.15f, 0.8f, 0.15f, &pedestal_surf, &pedestal_sm)) {
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t pedestal_sm;
-    ivp_surman_polygon_init(&pedestal_sm, pedestal_surf);
 
     ivp_vec3r_set(&tmpl.position, IVP_REAL(0.0), IVP_REAL(-5.6), IVP_REAL(0.0));
     tmpl.no_collision_group = motor_internal;
@@ -1141,15 +1150,14 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     tmpl.no_collision_group = NULL;
 
     /* --- Blade: dynamic box 4.0×0.25×0.4 at (0,-6.8,0) --- */
-    ivp_compact_surface_t *blade_surf = ivp_build_box_surface(NULL, 4.0f, 0.25f, 0.4f);
-    if (!blade_surf) {
+    ivp_compact_surface_t *blade_surf = NULL;
+    ivp_surman_polygon_t blade_sm;
+    if (!scenario_init_box_surman(4.0f, 0.25f, 0.4f, &blade_surf, &blade_sm)) {
         ivp_compact_surface_free(NULL, pedestal_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t blade_sm;
-    ivp_surman_polygon_init(&blade_sm, blade_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
@@ -1184,16 +1192,15 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     #define N_TARGETS 8
     ivp_real_t radius = IVP_REAL(3.5);
     ivp_real_t target_y = IVP_REAL(-6.4);
-    ivp_compact_surface_t *target_surf = ivp_build_box_surface(NULL, 0.4f, 0.4f, 0.4f);
-    if (!target_surf) {
+    ivp_compact_surface_t *target_surf = NULL;
+    ivp_surman_polygon_t target_sm;
+    if (!scenario_init_box_surman(0.4f, 0.4f, 0.4f, &target_surf, &target_sm)) {
         ivp_compact_surface_free(NULL, blade_surf);
         ivp_compact_surface_free(NULL, pedestal_surf);
         ivp_compact_surface_free(NULL, ground_surf);
         ivp_environment_destroy(env);
         return 1;
     }
-    ivp_surman_polygon_t target_sm;
-    ivp_surman_polygon_init(&target_sm, target_surf);
 
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_POLYGON;
