@@ -7,7 +7,270 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/base/ivp_assert.h>
+#include <ivp/utility/ivp_union_find.h>
+#include "controllers/ivp_controller_system.h"
 #include <string.h>
+
+static int core_index_in_array(ivp_core_t **cores, int count, const ivp_core_t *core)
+{
+    for (int i = 0; i < count; i++) {
+        if (cores[i] == core) return i;
+    }
+    return -1;
+}
+
+static void unlink_core_entry_from_unit(ivp_sim_unit_t *su,
+                                        ivp_sim_unit_core_entry_t *entry)
+{
+    if (entry->prev) {
+        entry->prev->next = entry->next;
+    } else {
+        su->core_list = entry->next;
+    }
+    if (entry->next) {
+        entry->next->prev = entry->prev;
+    }
+    su->core_count--;
+}
+
+static void link_core_entry_to_unit(ivp_sim_unit_t *su,
+                                    ivp_sim_unit_core_entry_t *entry)
+{
+    entry->prev = NULL;
+    entry->next = su->core_list;
+    if (su->core_list) {
+        su->core_list->prev = entry;
+    }
+    su->core_list = entry;
+    su->core_count++;
+}
+
+static void move_core_entry_between_units(ivp_sim_unit_t *from,
+                                          ivp_sim_unit_t *to,
+                                          ivp_sim_unit_core_entry_t *entry)
+{
+    unlink_core_entry_from_unit(from, entry);
+    link_core_entry_to_unit(to, entry);
+
+    entry->core->sim_unit = to;
+    entry->core->sim_unit_entry = entry;
+}
+
+static ivp_controller_system_t *controller_system_from_env(ivp_environment_t *env)
+{
+    return (ivp_controller_system_t *)env->controller_system;
+}
+
+static bool has_sync_all_cores_controller_below_gravity(ivp_environment_t *env)
+{
+    ivp_controller_system_t *cs = controller_system_from_env(env);
+    int sc = ivp_controller_system_count(cs);
+    for (int si = 0; si < sc; si++) {
+        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
+        if (!slot || !slot->enabled) continue;
+        if (slot->mode != IVP_CONTROLLER_INDEPENDENT) continue;
+        if (!slot->run_for_all_cores) continue;
+        if (slot->priority < IVP_CP_GRAVITY) return true;
+    }
+    return false;
+}
+
+static void union_friction_connectivity(ivp_friction_manager_t *fm,
+                                        ivp_core_t **cores,
+                                        int n,
+                                        int *parent)
+{
+    for (int si = 0; si < fm->system_count; si++) {
+        ivp_friction_system_t *sys = fm->systems[si];
+        if (!sys) continue;
+        for (int pi = 0; pi < sys->pair_count; pi++) {
+            const ivp_friction_core_pair_t *pair = &sys->pairs[pi];
+            int ia = core_index_in_array(cores, n, pair->cores[0]);
+            int ib = core_index_in_array(cores, n, pair->cores[1]);
+            if (ia >= 0 && ib >= 0) {
+                ivp_union_find_union(parent, ia, ib);
+            }
+        }
+    }
+}
+
+static void union_dependent_controller_connectivity(ivp_environment_t *env,
+                                                    ivp_core_t **cores,
+                                                    int n,
+                                                    int *parent)
+{
+    ivp_controller_system_t *cs = controller_system_from_env(env);
+    ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    int sc = ivp_controller_system_count(cs);
+    for (int si = 0; si < sc; si++) {
+        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
+        if (!slot || !slot->enabled) continue;
+        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
+
+        int associated_count = ivp_controller_slot_collect_associated_handles(
+            slot, env, associated_handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        if (associated_count <= 1) continue;
+
+        int base_idx = -1;
+        for (int ai = 0; ai < associated_count; ai++) {
+            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, associated_handles[ai]);
+            if (!obj) continue;
+            int idx = core_index_in_array(cores, n, &obj->core);
+            if (idx < 0) continue;
+            if (base_idx < 0) {
+                base_idx = idx;
+            } else {
+                ivp_union_find_union(parent, base_idx, idx);
+            }
+        }
+    }
+}
+
+static int label_connected_components(int *parent,
+                                      int *component,
+                                      int *component_size,
+                                      int n)
+{
+    int component_count = 0;
+    for (int i = 0; i < n; i++) {
+        int root = ivp_union_find_find(parent, i);
+        int cid = -1;
+        for (int j = 0; j < component_count; j++) {
+            if (component[j] == root) {
+                cid = j;
+                break;
+            }
+        }
+        if (cid < 0) {
+            cid = component_count;
+            component[component_count] = root;
+            component_size[component_count] = 0;
+            component_count++;
+        }
+        parent[i] = cid;
+        component_size[cid]++;
+    }
+    return component_count;
+}
+
+static void rehome_friction_controllers_after_split(ivp_sim_unit_t *su,
+                                                    ivp_friction_manager_t *fm)
+{
+    for (int si = 0; si < fm->system_count; si++) {
+        ivp_friction_system_t *sys = fm->systems[si];
+        if (!sys || sys->core_count <= 0 || !sys->cores) continue;
+
+        ivp_sim_unit_t *target_su = NULL;
+        for (int ci = 0; ci < sys->core_count; ci++) {
+            ivp_core_t *core = sys->cores[ci];
+            if (core && core->sim_unit && core->sim_unit != &su->manager->still_slot) {
+                target_su = core->sim_unit;
+                break;
+            }
+        }
+        if (!target_su) continue;
+
+        ivp_controller_core_t *ccs[3] = { &sys->static_cc, &sys->dynamic_cc, &sys->energy_cc };
+        for (int ci = 0; ci < 3; ci++) {
+            ivp_controller_core_t *cc = ccs[ci];
+            if (cc->sim_unit == target_su) continue;
+            if (cc->sim_unit) {
+                ivp_sim_unit_remove_controller(cc);
+            }
+            ivp_sim_unit_add_controller(target_su, cc);
+        }
+    }
+}
+
+static void maybe_split_disconnected_components(ivp_sim_unit_t *su,
+                                                ivp_environment_t *env)
+{
+    if (!su || !env) return;
+    if (su->core_count <= 1) return;
+    if (has_sync_all_cores_controller_below_gravity(env)) return;
+
+    ivp_core_t *local_cores[64];
+    int local_parent[64];
+    int local_component[64];
+    int local_component_size[64];
+    ivp_core_t **cores = local_cores;
+    int *parent = NULL;
+    int *component = NULL;
+    int *component_size = NULL;
+    bool heap_alloc = false;
+
+    if (su->core_count > 64) {
+        size_t core_bytes = (size_t)su->core_count * sizeof(ivp_core_t *);
+        size_t int_bytes = (size_t)su->core_count * sizeof(int);
+        cores = (ivp_core_t **)ivp_alloc(su->manager->allocator, core_bytes);
+        parent = (int *)ivp_alloc(su->manager->allocator, int_bytes);
+        component = (int *)ivp_alloc(su->manager->allocator, int_bytes);
+        component_size = (int *)ivp_alloc(su->manager->allocator, int_bytes);
+        if (!cores || !parent || !component || !component_size) {
+            if (component_size) ivp_free(su->manager->allocator, component_size, int_bytes);
+            if (component) ivp_free(su->manager->allocator, component, int_bytes);
+            if (parent) ivp_free(su->manager->allocator, parent, int_bytes);
+            if (cores) ivp_free(su->manager->allocator, cores, core_bytes);
+            return;
+        }
+        heap_alloc = true;
+    } else {
+        parent = local_parent;
+        component = local_component;
+        component_size = local_component_size;
+    }
+
+    int n = 0;
+    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
+        cores[n] = ce->core;
+        component[n] = -1;
+        component_size[n] = 0;
+        n++;
+    }
+    ivp_union_find_init(parent, n);
+
+    ivp_friction_manager_t *fm = &env->friction_manager;
+    union_friction_connectivity(fm, cores, n, parent);
+    union_dependent_controller_connectivity(env, cores, n, parent);
+
+    int component_count = label_connected_components(parent, component, component_size, n);
+
+    if (component_count > 1) {
+        int keep_component = 0;
+        for (int c = 1; c < component_count; c++) {
+            if (component_size[c] > component_size[keep_component]) {
+                keep_component = c;
+            }
+        }
+
+        for (int c = 0; c < component_count; c++) {
+            if (c == keep_component) continue;
+
+            ivp_sim_unit_t *new_su = ivp_sim_unit_create(su->manager);
+            if (!new_su) continue;
+
+            for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ) {
+                ivp_sim_unit_core_entry_t *next = ce->next;
+                int idx = core_index_in_array(cores, n, ce->core);
+                if (idx >= 0 && parent[idx] == c) {
+                    move_core_entry_between_units(su, new_su, ce);
+                }
+                ce = next;
+            }
+        }
+
+        rehome_friction_controllers_after_split(su, fm);
+    }
+
+    if (heap_alloc) {
+        size_t core_bytes = (size_t)n * sizeof(ivp_core_t *);
+        size_t int_bytes = (size_t)n * sizeof(int);
+        ivp_free(su->manager->allocator, component_size, int_bytes);
+        ivp_free(su->manager->allocator, component, int_bytes);
+        ivp_free(su->manager->allocator, parent, int_bytes);
+        ivp_free(su->manager->allocator, cores, core_bytes);
+    }
+}
 
 /* ── Internal helpers ──────────────────────────────────────────────────── */
 
@@ -161,13 +424,7 @@ void ivp_sim_unit_add_core(ivp_sim_unit_t *su, ivp_core_t *core)
     if (!entry) return;
 
     entry->core = core;
-    entry->next = su->core_list;
-    entry->prev = NULL;
-    if (su->core_list) {
-        su->core_list->prev = entry;
-    }
-    su->core_list = entry;
-    su->core_count++;
+    link_core_entry_to_unit(su, entry);
 
     core->sim_unit = su;
     core->sim_unit_entry = entry;
@@ -181,16 +438,7 @@ void ivp_sim_unit_remove_core(ivp_sim_units_manager_t *mgr, ivp_core_t *core)
     ivp_sim_unit_core_entry_t *entry = core->sim_unit_entry;
     IVP_ASSERT(entry);
 
-    /* Unlink from DLL */
-    if (entry->prev) {
-        entry->prev->next = entry->next;
-    } else {
-        su->core_list = entry->next;
-    }
-    if (entry->next) {
-        entry->next->prev = entry->prev;
-    }
-    su->core_count--;
+    unlink_core_entry_from_unit(su, entry);
 
     core->sim_unit = NULL;
     core->sim_unit_entry = NULL;
@@ -216,21 +464,9 @@ ivp_sim_unit_t *ivp_sim_unit_merge(ivp_sim_units_manager_t *mgr,
     ivp_sim_unit_core_entry_t *ce = su_b->core_list;
     while (ce) {
         ivp_sim_unit_core_entry_t *next = ce->next;
-        ce->core->sim_unit = su_a;
-
-        /* Unlink from su_b */
-        ce->prev = NULL;
-        ce->next = su_a->core_list;
-        if (su_a->core_list) {
-            su_a->core_list->prev = ce;
-        }
-        su_a->core_list = ce;
-
+        move_core_entry_between_units(su_b, su_a, ce);
         ce = next;
     }
-    su_a->core_count += su_b->core_count;
-    su_b->core_list = NULL;
-    su_b->core_count = 0;
 
     /* Move all controllers from su_b to su_a (re-insert sorted) */
     ivp_controller_core_t *cc = su_b->controller_list;
@@ -407,9 +643,7 @@ void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
 
     /* Step 6: Union find if needed (deferred split) */
     if (su->union_find_needed) {
-        /* TODO: Implement union_find_for_sim_unit to detect disconnected
-         * components and split them into separate units.
-         * Reference: ivp_sim_unit.cxx do_sim_unit_union_find() */
+        maybe_split_disconnected_components(su, env);
         su->union_find_needed = false;
     }
 }

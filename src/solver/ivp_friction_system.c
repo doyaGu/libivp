@@ -1815,6 +1815,10 @@ void ivp_friction_system_remove_gained_energy(ivp_friction_system_t *sys)
 
 /* ── System merge ───────────────────────────────────────────────────────── */
 
+static int manager_find_system_index(const ivp_friction_manager_t *mgr,
+                                     const ivp_friction_system_t *sys);
+static void manager_remove_system_at(ivp_friction_manager_t *mgr, int index);
+
 void ivp_friction_system_merge(ivp_friction_system_t *dst,
                                  ivp_friction_system_t *src,
                                  ivp_friction_manager_t *mgr) {
@@ -1865,14 +1869,10 @@ void ivp_friction_system_merge(ivp_friction_system_t *dst,
     }
 
     /* Remove src from manager */
-    for (int i = 0; i < mgr->system_count; i++) {
-        if (mgr->systems[i] == src) {
-            /* Shift remaining systems down */
-            for (int j = i; j < mgr->system_count - 1; j++) {
-                mgr->systems[j] = mgr->systems[j + 1];
-            }
-            mgr->system_count--;
-            break;
+    {
+        int src_idx = manager_find_system_index(mgr, src);
+        if (src_idx >= 0) {
+            manager_remove_system_at(mgr, src_idx);
         }
     }
 
@@ -1883,23 +1883,126 @@ void ivp_friction_system_merge(ivp_friction_system_t *dst,
 
 /* ── System split ───────────────────────────────────────────────────────── */
 
+static int manager_find_system_index(const ivp_friction_manager_t *mgr,
+                                     const ivp_friction_system_t *sys)
+{
+    for (int i = 0; i < mgr->system_count; i++) {
+        if (mgr->systems[i] == sys) return i;
+    }
+    return -1;
+}
+
+static void manager_remove_system_at(ivp_friction_manager_t *mgr, int index)
+{
+    for (int j = index; j < mgr->system_count - 1; j++) {
+        mgr->systems[j] = mgr->systems[j + 1];
+    }
+    mgr->system_count--;
+}
+
 /* Remove a system from the manager's system array and free it. */
 static void manager_remove_system(ivp_friction_manager_t *mgr,
                                     ivp_friction_system_t *sys) {
     /* Unregister per-unit controllers before destruction */
     friction_system_unregister_controllers(sys);
 
-    for (int i = 0; i < mgr->system_count; i++) {
-        if (mgr->systems[i] == sys) {
-            for (int j = i; j < mgr->system_count - 1; j++) {
-                mgr->systems[j] = mgr->systems[j + 1];
-            }
-            mgr->system_count--;
-            friction_system_free_internals(sys);
-            ivp_free(mgr->alloc, sys, sizeof(*sys));
-            return;
+    int idx = manager_find_system_index(mgr, sys);
+    if (idx < 0) return;
+
+    manager_remove_system_at(mgr, idx);
+    friction_system_free_internals(sys);
+    ivp_free(mgr->alloc, sys, sizeof(*sys));
+}
+
+static void find_pair_core_indices(const ivp_friction_system_t *sys,
+                                   const ivp_friction_core_pair_t *pair,
+                                   int *out_idx0,
+                                   int *out_idx1)
+{
+    int idx0 = -1;
+    int idx1 = -1;
+    for (int k = 0; k < sys->core_count; k++) {
+        if (idx0 < 0 && sys->cores[k] == pair->cores[0]) idx0 = k;
+        if (idx1 < 0 && sys->cores[k] == pair->cores[1]) idx1 = k;
+        if (idx0 >= 0 && idx1 >= 0) break;
+    }
+    *out_idx0 = idx0;
+    *out_idx1 = idx1;
+}
+
+static bool core_has_live_contact(const ivp_friction_system_t *sys,
+                                  const ivp_core_t *core)
+{
+    for (int p = 0; p < sys->pair_count; p++) {
+        const ivp_friction_core_pair_t *pair = &sys->pairs[p];
+        if (pair->contact_count <= 0) continue;
+        if (pair->cores[0] == core || pair->cores[1] == core) {
+            return true;
         }
     }
+    return false;
+}
+
+static void move_contact_between_system_lists(ivp_friction_system_t *from,
+                                              ivp_friction_system_t *to,
+                                              ivp_persistent_contact_t *pc)
+{
+    if (pc->prev) pc->prev->next = pc->next;
+    else from->first_contact = pc->next;
+    if (pc->next) pc->next->prev = pc->prev;
+    from->contact_count--;
+
+    pc->prev = NULL;
+    pc->next = to->first_contact;
+    if (to->first_contact) to->first_contact->prev = pc;
+    to->first_contact = pc;
+    to->contact_count++;
+}
+
+static int collect_component_roots_from_labels(int *labels,
+                                               int core_count,
+                                               int *comp_roots)
+{
+    int comp_count = 0;
+    for (int i = 0; i < core_count; i++) {
+        int r = ivp_union_find_find(labels, i);
+        bool found = false;
+        for (int c = 0; c < comp_count; c++) {
+            if (comp_roots[c] == r) { found = true; break; }
+        }
+        if (!found) {
+            comp_roots[comp_count++] = r;
+        }
+    }
+    return comp_count;
+}
+
+static void trim_system_cores_to_root(ivp_friction_system_t *sys,
+                                      int *labels,
+                                      int core_count,
+                                      int keep_root)
+{
+    int write = 0;
+    for (int i = 0; i < core_count; i++) {
+        if (ivp_union_find_find(labels, i) == keep_root) {
+            sys->cores[write++] = sys->cores[i];
+        }
+    }
+    sys->core_count = write;
+}
+
+static bool pair_is_in_component_root(const ivp_friction_system_t *sys,
+                                      const ivp_friction_core_pair_t *pair,
+                                      int *labels,
+                                      int split_root)
+{
+    int idx0 = -1;
+    int idx1 = -1;
+    find_pair_core_indices(sys, pair, &idx0, &idx1);
+    if (idx0 < 0 || idx1 < 0) return false;
+    if (ivp_union_find_find(labels, idx0) != split_root) return false;
+    if (ivp_union_find_find(labels, idx1) != split_root) return false;
+    return true;
 }
 
 void ivp_friction_system_check_split(ivp_friction_system_t *sys,
@@ -1932,12 +2035,9 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
         ivp_friction_core_pair_t *pair = &sys->pairs[p];
         if (pair->contact_count == 0) continue;
 
-        /* Find indices of both cores */
-        int idx0 = -1, idx1 = -1;
-        for (int k = 0; k < nc; k++) {
-            if (sys->cores[k] == pair->cores[0]) idx0 = k;
-            if (sys->cores[k] == pair->cores[1]) idx1 = k;
-        }
+        int idx0 = -1;
+        int idx1 = -1;
+        find_pair_core_indices(sys, pair, &idx0, &idx1);
         if (idx0 >= 0 && idx1 >= 0) {
             ivp_union_find_union_min_root(labels, idx0, idx1);
         }
@@ -1957,15 +2057,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
         /* Remove orphaned cores that have no contacts at all */
         int write = 0;
         for (int i = 0; i < nc; i++) {
-            bool has_contact = false;
-            for (int p = 0; p < sys->pair_count && !has_contact; p++) {
-                ivp_friction_core_pair_t *pair = &sys->pairs[p];
-                if (pair->contact_count > 0 &&
-                    (pair->cores[0] == sys->cores[i] || pair->cores[1] == sys->cores[i])) {
-                    has_contact = true;
-                }
-            }
-            if (has_contact) {
+            if (core_has_live_contact(sys, sys->cores[i])) {
                 sys->cores[write++] = sys->cores[i];
             }
         }
@@ -1985,17 +2077,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
         return;
     }
 
-    int comp_count = 0;
-    for (int i = 0; i < nc; i++) {
-        int r = ivp_union_find_find(labels, i);
-        bool found = false;
-        for (int c = 0; c < comp_count; c++) {
-            if (comp_roots[c] == r) { found = true; break; }
-        }
-        if (!found) {
-            comp_roots[comp_count++] = r;
-        }
-    }
+    int comp_count = collect_component_roots_from_labels(labels, nc, comp_roots);
 
     /* Keep the first component in the existing system;
      * create new systems for the rest. */
@@ -2034,14 +2116,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
             ivp_friction_core_pair_t *pair = &sys->pairs[p];
             if (pair->contact_count == 0) continue;
 
-            /* Check if both cores belong to split_root */
-            int idx0 = -1, idx1 = -1;
-            for (int k = 0; k < nc; k++) {
-                if (sys->cores[k] == pair->cores[0]) idx0 = k;
-                if (sys->cores[k] == pair->cores[1]) idx1 = k;
-            }
-            if (idx0 < 0 || idx1 < 0) continue;
-            if (ivp_union_find_find(labels, idx0) != split_root) continue;
+            if (!pair_is_in_component_root(sys, pair, labels, split_root)) continue;
 
             /* Create pair in new system and move contacts */
             ivp_friction_core_pair_t *new_pair =
@@ -2050,19 +2125,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
 
             for (int j = 0; j < pair->contact_count; j++) {
                 ivp_persistent_contact_t *pc = pair->contacts[j];
-
-                /* Remove from old system's linked list */
-                if (pc->prev) pc->prev->next = pc->next;
-                else sys->first_contact = pc->next;
-                if (pc->next) pc->next->prev = pc->prev;
-                sys->contact_count--;
-
-                /* Add to new system's linked list */
-                pc->prev = NULL;
-                pc->next = new_sys->first_contact;
-                if (new_sys->first_contact) new_sys->first_contact->prev = pc;
-                new_sys->first_contact = pc;
-                new_sys->contact_count++;
+                move_contact_between_system_lists(sys, new_sys, pc);
 
                 pair_add_contact(new_pair, pc);
             }
@@ -2071,15 +2134,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
     }
 
     /* Remove split-out cores from original system */
-    {
-        int write = 0;
-        for (int i = 0; i < nc; i++) {
-            if (ivp_union_find_find(labels, i) == keep_root) {
-                sys->cores[write++] = sys->cores[i];
-            }
-        }
-        sys->core_count = write;
-    }
+    trim_system_cores_to_root(sys, labels, nc, keep_root);
 
     /* Compact empty pairs from original system */
     system_compact_empty_pairs(sys);

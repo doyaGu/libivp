@@ -146,6 +146,82 @@ static bool island_add_object(ivp_island_manager_t *mgr,
     return true;
 }
 
+static void union_dependent_controller_connectivity(ivp_island_manager_t *mgr,
+                                                    ivp_environment_t *env,
+                                                    int object_count)
+{
+    ivp_controller_system_t *csys = (ivp_controller_system_t *)env->controller_system;
+    if (!csys) return;
+
+    int nc = ivp_controller_system_count(csys);
+    for (int ci = 0; ci < nc; ci++) {
+        ivp_controller_slot_t *slot = ivp_controller_system_get_at(csys, ci);
+        if (!slot || !slot->enabled) continue;
+        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
+
+        ivp_object_handle_t associated[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+        int associated_count = ivp_controller_slot_collect_associated_handles(
+            slot, env, associated, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        if (associated_count < 2) continue;
+
+        int first = -1;
+        for (int t = 0; t < associated_count; t++) {
+            ivp_object_handle_t h = associated[t];
+            if (!ivp_object_handle_is_valid(h)) continue;
+            ivp_object_t *obj = ivp_object_system_get_by_handle(
+                (const ivp_object_system_t *)env->object_system, h);
+            if (!obj) continue;
+            if (obj->core.physical_unmoveable) continue;
+
+            int idx = obj->dense_index;
+            if (idx < 0 || idx >= object_count) continue;
+
+            if (first < 0) {
+                first = idx;
+            } else {
+                ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first, idx);
+            }
+        }
+    }
+}
+
+static void union_friction_connectivity(ivp_island_manager_t *mgr,
+                                        ivp_environment_t *env,
+                                        int object_count)
+{
+    ivp_friction_manager_t *fm = &env->friction_manager;
+    for (int si = 0; si < fm->system_count; si++) {
+        ivp_friction_system_t *fs = fm->systems[si];
+        if (!fs || fs->core_count < 2) continue;
+
+        int first_idx = -1;
+        for (int ci = 0; ci < fs->core_count; ci++) {
+            ivp_core_t *core = fs->cores[ci];
+            if (!core) continue;
+
+            ivp_object_t *obj = (ivp_object_t *)core;
+            if (obj->core.physical_unmoveable) continue;
+
+            int idx = obj->dense_index;
+            if (idx < 0 || idx >= object_count) continue;
+
+            if (first_idx < 0) {
+                first_idx = idx;
+            } else {
+                ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first_idx, idx);
+            }
+        }
+    }
+}
+
+static void island_init_defaults(ivp_island_t *isl, const ivp_allocator_t *alloc)
+{
+    memset(isl, 0, sizeof(*isl));
+    isl->alloc = alloc;
+    isl->all_frozen = true;
+    isl->has_moving = false;
+}
+
 /* ── Rebuild ───────────────────────────────────────────────────────────── */
 
 void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
@@ -164,66 +240,8 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
     /* Initialize: each object is its own parent */
     ivp_union_find_init_with_rank(mgr->parent, mgr->rank, n);
 
-    /* --- Union via dependent controllers using dynamic associated-core discovery --- */
-    ivp_controller_system_t *csys = (ivp_controller_system_t *)env->controller_system;
-    if (csys) {
-        int nc = ivp_controller_system_count(csys);
-        for (int ci = 0; ci < nc; ci++) {
-            ivp_controller_slot_t *slot = ivp_controller_system_get_at(csys, ci);
-            if (!slot || !slot->enabled) continue;
-            if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
-
-            ivp_object_handle_t associated[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
-            int associated_count = ivp_controller_slot_collect_associated_handles(
-                slot, env, associated, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
-            if (associated_count < 2) continue;
-
-            int first = -1;
-            for (int t = 0; t < associated_count; t++) {
-                ivp_object_handle_t h = associated[t];
-                if (!ivp_object_handle_is_valid(h)) continue;
-                ivp_object_t *obj = ivp_object_system_get_by_handle(
-                    (const ivp_object_system_t *)env->object_system, h);
-                if (!obj) continue;
-                if (obj->core.physical_unmoveable) continue;
-                int idx = obj->dense_index;
-                if (idx < 0 || idx >= n) continue;
-
-                if (first < 0) {
-                    first = idx;
-                } else {
-                    ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first, idx);
-                }
-            }
-        }
-    }
-
-    /* --- Union via friction contacts --- */
-    ivp_friction_manager_t *fm = &env->friction_manager;
-    for (int si = 0; si < fm->system_count; si++) {
-        ivp_friction_system_t *fs = fm->systems[si];
-        if (!fs || fs->core_count < 2) continue;
-
-        /* Friction system cores are connected — find their object indices */
-        int first_idx = -1;
-        for (int ci = 0; ci < fs->core_count; ci++) {
-            ivp_core_t *core = fs->cores[ci];
-            if (!core) continue;
-
-            /* Find the object that owns this core.  Core is embedded
-             * at offset 0 of ivp_object_t, so we can cast. */
-            ivp_object_t *obj = (ivp_object_t *)core;
-            if (obj->core.physical_unmoveable) continue;
-            int idx = obj->dense_index;
-            if (idx < 0 || idx >= n) continue;
-
-            if (first_idx < 0) {
-                first_idx = idx;
-            } else {
-                ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first_idx, idx);
-            }
-        }
-    }
+    union_dependent_controller_connectivity(mgr, env, n);
+    union_friction_connectivity(mgr, env, n);
 
     /* --- Build islands from union-find roots --- */
     free_islands(mgr);
@@ -250,10 +268,7 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
             root_to_island[root] = isl_idx;
 
             ivp_island_t *isl = &mgr->islands[isl_idx];
-            memset(isl, 0, sizeof(*isl));
-            isl->alloc = mgr->alloc;
-            isl->all_frozen = true;
-            isl->has_moving = false;
+            island_init_defaults(isl, mgr->alloc);
         }
 
         ivp_island_t *isl = &mgr->islands[isl_idx];

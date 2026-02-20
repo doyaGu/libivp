@@ -210,6 +210,73 @@ static bool core_is_in_unit(const ivp_core_t *core, const ivp_sim_unit_t *su) {
     return core->sim_unit == su;
 }
 
+static void dispatch_dependent_controller_for_unit(ivp_environment_t *env,
+                                                   ivp_object_system_t *os,
+                                                   ivp_controller_slot_t *slot,
+                                                   ivp_sim_unit_t *su,
+                                                   ivp_real_t dt)
+{
+    ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    int associated_count = ivp_controller_slot_collect_associated_handles(
+        slot, env, associated_handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+    if (associated_count <= 0) return;
+
+    ivp_object_t *dispatch_obj = NULL;
+    bool any_in_unit = false;
+    for (int ai = 0; ai < associated_count; ai++) {
+        ivp_object_t *obj = ivp_object_system_get_by_handle(os, associated_handles[ai]);
+        if (!obj) continue;
+        if (!core_is_in_unit(&obj->core, su)) continue;
+
+        any_in_unit = true;
+        if (!dispatch_obj && !obj->core.physical_unmoveable) {
+            dispatch_obj = obj;
+        }
+    }
+    if (!any_in_unit || !dispatch_obj) return;
+
+    ivp_environment_invoke_controller_slot(env, slot, dispatch_obj, dt,
+                                           associated_handles, associated_count);
+}
+
+static void dispatch_associated_controller_for_unit(ivp_environment_t *env,
+                                                    ivp_object_system_t *os,
+                                                    ivp_controller_slot_t *slot,
+                                                    ivp_sim_unit_t *su,
+                                                    ivp_real_t dt)
+{
+    for (int ai = 0; ai < slot->associated_count; ai++) {
+        ivp_object_handle_t h = slot->associated_handles[ai];
+        if (!ivp_object_handle_is_valid(h)) continue;
+
+        ivp_object_t *obj = ivp_object_system_get_by_handle(os, h);
+        if (!obj) continue;
+        if (!core_is_in_unit(&obj->core, su)) continue;
+
+        ivp_environment_invoke_controller_slot(env, slot, obj, dt, &h, 1);
+    }
+}
+
+static void dispatch_all_cores_controller_for_unit(ivp_environment_t *env,
+                                                   ivp_controller_slot_t *slot,
+                                                   ivp_sim_unit_t *su,
+                                                   ivp_real_t dt)
+{
+    ivp_sim_unit_core_entry_t *ce = su->core_list;
+    while (ce) {
+        ivp_core_t *core = ce->core;
+        ivp_sim_unit_core_entry_t *next_ce = ce->next;
+        if (!core->physical_unmoveable) {
+            ivp_object_t *obj = (ivp_object_t *)core;
+            ivp_object_handle_t oh;
+            oh.slot = obj->handle.slot;
+            oh.generation = obj->handle.generation;
+            ivp_environment_invoke_controller_slot(env, slot, obj, dt, &oh, 1);
+        }
+        ce = next_ce;
+    }
+}
+
 void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
                                                ivp_sim_unit_t *su,
                                                ivp_real_t dt)
@@ -247,53 +314,11 @@ void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
         if (!slot || !slot->enabled || !slot->event_fn) continue;
 
         if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
-            /* Dependent: dispatch if ANY associated object is in this unit. */
-            ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
-            int associated_count = ivp_controller_slot_collect_associated_handles(
-                slot, env, associated_handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
-            if (associated_count <= 0) continue;
-
-            ivp_object_t *dispatch_obj = NULL;
-            bool any_in_unit = false;
-            for (int ai = 0; ai < associated_count; ai++) {
-                ivp_object_t *obj = ivp_object_system_get_by_handle(os, associated_handles[ai]);
-                if (!obj) continue;
-                if (core_is_in_unit(&obj->core, su)) {
-                    any_in_unit = true;
-                    if (!dispatch_obj && !obj->core.physical_unmoveable) {
-                        dispatch_obj = obj;
-                    }
-                }
-            }
-            if (!any_in_unit || !dispatch_obj) continue;
-
-            ivp_environment_invoke_controller_slot(env, slot, dispatch_obj, dt,
-                                                   associated_handles, associated_count);
+            dispatch_dependent_controller_for_unit(env, os, slot, su, dt);
         } else if (!slot->run_for_all_cores && slot->associated_count > 0) {
-            /* Per-object: dispatch for each associated object in this unit. */
-            for (int ai = 0; ai < slot->associated_count; ai++) {
-                ivp_object_handle_t h = slot->associated_handles[ai];
-                if (!ivp_object_handle_is_valid(h)) continue;
-                ivp_object_t *obj = ivp_object_system_get_by_handle(os, h);
-                if (!obj) continue;
-                if (!core_is_in_unit(&obj->core, su)) continue;
-                ivp_environment_invoke_controller_slot(env, slot, obj, dt, &h, 1);
-            }
+            dispatch_associated_controller_for_unit(env, os, slot, su, dt);
         } else if (slot->run_for_all_cores) {
-            /* All-cores: dispatch only for objects in this unit. */
-            ivp_sim_unit_core_entry_t *ce = su->core_list;
-            while (ce) {
-                ivp_core_t *core = ce->core;
-                ivp_sim_unit_core_entry_t *next_ce = ce->next;
-                if (!core->physical_unmoveable) {
-                    ivp_object_t *obj = (ivp_object_t *)core; /* core is first member */
-                    ivp_object_handle_t oh;
-                    oh.slot = obj->handle.slot;
-                    oh.generation = obj->handle.generation;
-                    ivp_environment_invoke_controller_slot(env, slot, obj, dt, &oh, 1);
-                }
-                ce = next_ce;
-            }
+            dispatch_all_cores_controller_for_unit(env, slot, su, dt);
         }
         /* Note: is_global controllers have been removed. Friction sub-phases
          * are now per-system controller_cores in the sim unit's controller list,
