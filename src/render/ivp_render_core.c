@@ -1,7 +1,8 @@
 /* ivp_render_core.c -- Renderer lifecycle, frame loop, event dispatch
  *
  * Owns the full lifecycle of ivp_renderer_t: creation of GPU device,
- * shader cache, unified streams, frame loop (begin/end), and teardown.
+ * shader cache, unified streams, solid instanced pipeline, MSAA targets,
+ * frame loop (begin/end), ring-buffer advancement, and teardown.
  * Stats and projection also live here (trivial, no separate file needed).
  */
 
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <math.h>
 
 /* ── Config ────────────────────────────────────────────────────────────── */
 
@@ -29,6 +31,7 @@ void ivp_render_config_init(ivp_render_config_t *cfg)
     cfg->max_frame_dt      = 0.1f;
     cfg->max_draw_vertices = IVP_RENDER_DEFAULT_MAX_DRAW_VERTS;
     cfg->max_hud_vertices  = IVP_RENDER_DEFAULT_MAX_HUD_VERTS;
+    cfg->max_tri_vertices  = IVP_RENDER_DEFAULT_MAX_TRI_VERTS;
     cfg->sphere_segments   = IVP_RENDER_DEFAULT_SPHERE_SEGMENTS;
     cfg->hud_font_scale    = IVP_RENDER_DEFAULT_HUD_FONT_SCALE;
 }
@@ -57,6 +60,7 @@ static ivp_render_config_t resolve_config(const ivp_render_config_t *c)
 
     if (c->max_draw_vertices > 0) d.max_draw_vertices = c->max_draw_vertices;
     if (c->max_hud_vertices  > 0) d.max_hud_vertices  = c->max_hud_vertices;
+    if (c->max_tri_vertices  > 0) d.max_tri_vertices   = c->max_tri_vertices;
     if (c->sphere_segments   > 0) d.sphere_segments    = c->sphere_segments;
     if (c->hud_font_scale    > 0) d.hud_font_scale     = c->hud_font_scale;
 
@@ -67,6 +71,7 @@ static ivp_render_config_t resolve_config(const ivp_render_config_t *c)
 
 typedef struct { float pos[3]; float col[3]; } draw_vertex_t;
 typedef struct { float pos[2]; float col[3]; } hud_vertex_t;
+typedef struct { float pos[3]; float nrm[3]; float col[3]; } tri_vertex_t;
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
@@ -124,6 +129,7 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         desc.attrib_count = 2;
         desc.depth_test   = true;
         desc.depth_write  = true;
+        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
 
         res = ivp_gpu_stream_create(&r->stream_3d, &r->gpu, &desc,
                                     r->shaders.vs_3d, r->shaders.vs_3d_len,
@@ -144,11 +150,87 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         desc.attrib_count = 2;
         desc.depth_test   = false;
         desc.depth_write  = false;
+        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
 
         res = ivp_gpu_stream_create(&r->stream_2d, &r->gpu, &desc,
                                     r->shaders.vs_2d, r->shaders.vs_2d_len,
                                     r->shaders.fs, r->shaders.fs_len);
         if (res != IVP_OK) goto fail_3d;
+    }
+
+    /* 3D solid triangle stream (depth, triangle list) */
+    {
+        ivp_gpu_attrib_desc_t attrs[3] = {
+            { 0, 3, (int)offsetof(tri_vertex_t, pos) },
+            { 1, 3, (int)offsetof(tri_vertex_t, nrm) },
+            { 2, 3, (int)offsetof(tri_vertex_t, col) },
+        };
+        ivp_gpu_stream_desc_t desc = {0};
+        desc.capacity       = cfg.max_tri_vertices;
+        desc.stride         = (int)sizeof(tri_vertex_t);
+        desc.attribs        = attrs;
+        desc.attrib_count   = 3;
+        desc.depth_test     = true;
+        desc.depth_write    = true;
+        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        desc.cull_mode      = SDL_GPU_CULLMODE_NONE;
+
+        res = ivp_gpu_stream_create(&r->stream_tri, &r->gpu, &desc,
+                                    r->shaders.vs_tri3d, r->shaders.vs_tri3d_len,
+                                    r->shaders.fs_tri3d, r->shaders.fs_tri3d_len);
+        if (res != IVP_OK) goto fail_2d;
+    }
+
+    /* Instanced solid pipeline (for proto mesh sphere/box) */
+    {
+        /* Proto mesh vertex: pos[3] + nrm[3] */
+        ivp_gpu_attrib_desc_t vtx_attrs[2] = {
+            { 0, 3, 0                    },  /* aPos */
+            { 1, 3, 3 * (int)sizeof(float) },  /* aNrm */
+        };
+        /* Per-instance: 4×vec4 (transform rows) + vec3 color */
+        ivp_gpu_attrib_desc_t inst_attrs[5] = {
+            { 2, 4, 0                      },  /* iRow0 */
+            { 3, 4, 4  * (int)sizeof(float) },  /* iRow1 */
+            { 4, 4, 8  * (int)sizeof(float) },  /* iRow2 */
+            { 5, 4, 12 * (int)sizeof(float) },  /* iRow3 */
+            { 6, 3, 16 * (int)sizeof(float) },  /* iCol  */
+        };
+        ivp_gpu_stream_desc_t desc = {0};
+        desc.capacity         = 1;  /* dummy: pipeline only, no stream buf */
+        desc.stride           = 6 * (int)sizeof(float);  /* proto vertex */
+        desc.attribs          = vtx_attrs;
+        desc.attrib_count     = 2;
+        desc.inst_attribs     = inst_attrs;
+        desc.inst_attrib_count = 5;
+        desc.inst_stride      = (int)sizeof(ivp_solid_instance_t);
+        desc.depth_test       = true;
+        desc.depth_write      = true;
+        desc.primitive_type   = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        desc.cull_mode        = SDL_GPU_CULLMODE_NONE;
+
+        r->inst_pipeline = ivp_gpu_create_pipeline(&r->gpu, &desc,
+            r->shaders.vs_inst, r->shaders.vs_inst_len,
+            r->shaders.fs_tri3d, r->shaders.fs_tri3d_len);
+        if (!r->inst_pipeline) { res = IVP_ERR_RENDER_SHADER; goto fail_tri; }
+    }
+
+    /* Proto shapes (icosphere + unit box + instance buffers) */
+    res = ivp_proto_shapes_init(&r->protos, &r->gpu);
+    if (res != IVP_OK) goto fail_inst;
+
+    /* MSAA targets */
+    {
+        int pw, ph;
+        SDL_GetWindowSizeInPixels(r->window, &pw, &ph);
+        ivp_gpu_msaa_ensure(&r->msaa, &r->gpu, pw, ph);
+    }
+
+    /* Lighting defaults */
+    {
+        float default_dir[3] = { 0.577f, 0.577f, -0.577f };
+        memcpy(r->lighting.light_dir, default_dir, sizeof(default_dir));
+        r->lighting.ambient = 0.25f;
     }
 
     /* Timing */
@@ -166,6 +248,12 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
     *out = r;
     return IVP_OK;
 
+fail_inst:
+    SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
+fail_tri:
+    ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
+fail_2d:
+    ivp_gpu_stream_destroy(&r->stream_2d, &r->gpu);
 fail_3d:
     ivp_gpu_stream_destroy(&r->stream_3d, &r->gpu);
 fail_shaders:
@@ -183,6 +271,25 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
     if (!r) return;
     const ivp_allocator_t *alloc = ivp_default_allocator();
 
+    /* Wait for GPU idle before destroying resources */
+    if (r->gpu.device)
+        SDL_WaitForGPUIdle(r->gpu.device);
+
+    /* Release any pending frame fences */
+    for (int i = 0; i < IVP_GPU_RING_FRAMES; i++) {
+        if (r->frame_fences[i]) {
+            SDL_ReleaseGPUFence(r->gpu.device, r->frame_fences[i]);
+            r->frame_fences[i] = NULL;
+        }
+    }
+
+    ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
+    ivp_proto_shapes_destroy(&r->protos, &r->gpu);
+    if (r->inst_pipeline && r->gpu.device) {
+        SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
+        r->inst_pipeline = NULL;
+    }
+    ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_2d, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_3d, &r->gpu);
     ivp_shader_cache_free(&r->shaders);
@@ -233,11 +340,24 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_camera_compute_matrices(cam, r->width, r->height,
                                 r->view_mat, r->proj_mat, r->vp_mat);
 
-    /* Depth resize */
+    /* Extract frustum planes from VP matrix */
+    ivp_frustum_extract(&r->frustum, r->vp_mat);
+
+    /* Depth + MSAA resize */
     int pw, ph;
     SDL_GetWindowSizeInPixels(r->window, &pw, &ph);
     ivp_gpu_device_ensure_depth(&r->gpu, pw, ph);
+    ivp_gpu_msaa_ensure(&r->msaa, &r->gpu, pw, ph);
     if (!r->gpu.depth_texture) return true;
+
+    /* Wait on frame fence from ring_slot frames ago (ensures triple-buffered
+     * transfer buffers are safe to reuse before we upload into them). */
+    if (r->frame_fences[r->frame_ring]) {
+        SDL_WaitForGPUFences(r->gpu.device, true,
+                             &r->frame_fences[r->frame_ring], 1);
+        SDL_ReleaseGPUFence(r->gpu.device, r->frame_fences[r->frame_ring]);
+        r->frame_fences[r->frame_ring] = NULL;
+    }
 
     /* Acquire GPU frame */
     r->cmd = SDL_AcquireGPUCommandBuffer(r->gpu.device);
@@ -258,9 +378,15 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
         return true;
     }
 
-    /* Reset streams */
+    /* Reset streams + instance buffers */
     ivp_gpu_stream_reset(&r->stream_3d);
     ivp_gpu_stream_reset(&r->stream_2d);
+    ivp_gpu_stream_reset(&r->stream_tri);
+    if (r->protos.ready) {
+        ivp_gpu_instance_buf_reset(&r->protos.sphere_instances);
+        ivp_gpu_instance_buf_reset(&r->protos.box_instances);
+    }
+    r->culled_count = 0;
     return true;
 }
 
@@ -268,25 +394,42 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
 {
     if (!r->cmd || !r->swapchain_tex) return;
 
-    /* Upload */
+    /* Upload all streams + instance buffers */
     ivp_gpu_stream_upload(&r->stream_3d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
+    ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
+    if (r->protos.ready) {
+        ivp_gpu_instance_buf_upload(&r->protos.sphere_instances, &r->gpu, r->cmd);
+        ivp_gpu_instance_buf_upload(&r->protos.box_instances, &r->gpu, r->cmd);
+    }
 
-    /* Render pass */
+    /* ── Render pass setup (MSAA or direct) ───────────────────────────── */
     SDL_GPUColorTargetInfo ct = {0};
-    ct.texture     = r->swapchain_tex;
-    ct.clear_color = (SDL_FColor){ r->clear_col[0], r->clear_col[1],
-                                    r->clear_col[2], r->clear_col[3] };
-    ct.load_op     = SDL_GPU_LOADOP_CLEAR;
-    ct.store_op    = SDL_GPU_STOREOP_STORE;
-
     SDL_GPUDepthStencilTargetInfo dt = {0};
-    dt.texture           = r->gpu.depth_texture;
-    dt.clear_depth       = 1.0f;
-    dt.load_op           = SDL_GPU_LOADOP_CLEAR;
-    dt.store_op          = SDL_GPU_STOREOP_DONT_CARE;
-    dt.stencil_load_op   = SDL_GPU_LOADOP_DONT_CARE;
-    dt.stencil_store_op  = SDL_GPU_STOREOP_DONT_CARE;
+
+    if (r->msaa.enabled) {
+        /* Render to MSAA color target, resolve to swapchain */
+        ct.texture         = r->msaa.color_tex;
+        ct.resolve_texture = r->swapchain_tex;
+        ct.load_op         = SDL_GPU_LOADOP_CLEAR;
+        ct.store_op        = SDL_GPU_STOREOP_RESOLVE;
+        ct.clear_color     = (SDL_FColor){ r->clear_col[0], r->clear_col[1],
+                                            r->clear_col[2], r->clear_col[3] };
+        dt.texture         = r->msaa.depth_tex;
+    } else {
+        ct.texture     = r->swapchain_tex;
+        ct.load_op     = SDL_GPU_LOADOP_CLEAR;
+        ct.store_op    = SDL_GPU_STOREOP_STORE;
+        ct.clear_color = (SDL_FColor){ r->clear_col[0], r->clear_col[1],
+                                        r->clear_col[2], r->clear_col[3] };
+        dt.texture     = r->gpu.depth_texture;
+    }
+
+    dt.clear_depth      = 1.0f;
+    dt.load_op          = SDL_GPU_LOADOP_CLEAR;
+    dt.store_op         = SDL_GPU_STOREOP_DONT_CARE;
+    dt.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
+    dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
 
     SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(r->cmd, &ct, 1, &dt);
     if (!pass) {
@@ -299,15 +442,59 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     SDL_GPUViewport vp = { 0, 0, (float)r->width, (float)r->height, 0.0f, 1.0f };
     SDL_SetGPUViewport(pass, &vp);
 
-    /* 3D draw */
-    ivp_gpu_stream_draw(&r->stream_3d, pass, r->cmd, r->vp_mat);
+    /* ── 3D wireframe draw (push constant = VP matrix, 64 bytes) ──────── */
+    ivp_gpu_stream_draw(&r->stream_3d, pass, r->cmd,
+                        r->vp_mat, 64);
 
-    /* 2D HUD overlay (ortho matrix) */
+    /* ── 3D solid triangles (push constant = MVP + normal_mat + light_dir) */
+    if (r->stream_tri.vertex_count > 0) {
+        struct {
+            float mvp[16];
+            float normal_mat[16];
+            float light_dir[4];
+        } tri_uniform;
+        memcpy(tri_uniform.mvp, r->vp_mat, 64);
+        /* For streaming tris, normal_mat = identity (positions are world-space) */
+        memset(tri_uniform.normal_mat, 0, 64);
+        tri_uniform.normal_mat[0] = 1.0f;
+        tri_uniform.normal_mat[5] = 1.0f;
+        tri_uniform.normal_mat[10] = 1.0f;
+        tri_uniform.normal_mat[15] = 1.0f;
+        memcpy(tri_uniform.light_dir, r->lighting.light_dir, 12);
+        tri_uniform.light_dir[3] = r->lighting.ambient;
+        ivp_gpu_stream_draw(&r->stream_tri, pass, r->cmd,
+                            &tri_uniform, (Uint32)sizeof(tri_uniform));
+    }
+
+    /* ── Instanced solid draws (sphere + box proto meshes) ────────────── */
+    if (r->protos.ready && r->inst_pipeline) {
+        struct {
+            float vp[16];
+            float light_dir[4];
+        } inst_uniform;
+        memcpy(inst_uniform.vp, r->vp_mat, 64);
+        memcpy(inst_uniform.light_dir, r->lighting.light_dir, 12);
+        inst_uniform.light_dir[3] = r->lighting.ambient;
+
+        SDL_BindGPUGraphicsPipeline(pass, r->inst_pipeline);
+        SDL_PushGPUVertexUniformData(r->cmd, 0,
+            &inst_uniform, (Uint32)sizeof(inst_uniform));
+
+        if (r->protos.sphere_instances.count > 0)
+            ivp_gpu_proto_mesh_draw_instanced(&r->protos.sphere,
+                &r->protos.sphere_instances, pass);
+
+        if (r->protos.box_instances.count > 0)
+            ivp_gpu_proto_mesh_draw_instanced(&r->protos.box,
+                &r->protos.box_instances, pass);
+    }
+
+    /* ── 2D HUD overlay (ortho matrix, 64 bytes) ─────────────────────── */
     {
         float ortho[16];
         ivp_render_mat4_ortho(ortho, 0.0f, (float)r->width,
                               (float)r->height, 0.0f, -1.0f, 1.0f);
-        ivp_gpu_stream_draw(&r->stream_2d, pass, r->cmd, ortho);
+        ivp_gpu_stream_draw(&r->stream_2d, pass, r->cmd, ortho, 64);
     }
 
     SDL_EndGPURenderPass(pass);
@@ -316,7 +503,22 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     if (r->callbacks.pre_swap_cb)
         r->callbacks.pre_swap_cb(r->callbacks.pre_swap_cb_ud);
 
-    SDL_SubmitGPUCommandBuffer(r->cmd);
+    /* Submit and acquire fence for triple-buffering */
+    SDL_GPUFence *frame_fence = SDL_SubmitGPUCommandBufferAndAcquireFence(r->cmd);
+
+    /* Store frame fence in the ring (released in begin_frame 3 frames later) */
+    r->frame_fences[r->frame_ring] = frame_fence;
+    r->frame_ring = (r->frame_ring + 1) % IVP_GPU_RING_FRAMES;
+
+    /* Advance all ring buffers (slot cycling only, no fence management) */
+    ivp_gpu_stream_advance(&r->stream_3d, NULL);
+    ivp_gpu_stream_advance(&r->stream_2d, NULL);
+    ivp_gpu_stream_advance(&r->stream_tri, NULL);
+    if (r->protos.ready) {
+        ivp_gpu_instance_buf_advance(&r->protos.sphere_instances, NULL);
+        ivp_gpu_instance_buf_advance(&r->protos.box_instances, NULL);
+    }
+
     r->cmd = NULL;
     r->swapchain_tex = NULL;
 }
@@ -437,6 +639,18 @@ void ivp_render_stats_get(const ivp_renderer_t *r, ivp_render_stats_t *stats)
     stats->hud_utilization     = (stats->hud_vertex_capacity > 0)
         ? (float)stats->hud_vertex_count / (float)stats->hud_vertex_capacity
         : 0.0f;
+
+    stats->tri_vertex_count    = r->stream_tri.vertex_count;
+    stats->tri_vertex_capacity = r->stream_tri.capacity;
+    stats->tri_utilization     = (stats->tri_vertex_capacity > 0)
+        ? (float)stats->tri_vertex_count / (float)stats->tri_vertex_capacity
+        : 0.0f;
+
+    stats->solid_sphere_count = r->protos.ready
+        ? r->protos.sphere_instances.count : 0;
+    stats->solid_box_count    = r->protos.ready
+        ? r->protos.box_instances.count : 0;
+    stats->culled_count = r->culled_count;
 
     stats->frame_dt = r->frame_dt;
     stats->fps = (stats->frame_dt > 1e-6f) ? 1.0f / stats->frame_dt : 0.0f;

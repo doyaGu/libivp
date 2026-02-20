@@ -4,7 +4,7 @@
 # top-level CMakeLists.txt before add_subdirectory(examples) is called.
 
 add_library(ivp_example_interaction STATIC interaction.c interaction.h)
-target_link_libraries(ivp_example_interaction PRIVATE ivp ivp_render SDL3::SDL3)
+target_link_libraries(ivp_example_interaction PUBLIC ivp ivp_render SDL3::SDL3)
 target_include_directories(ivp_example_interaction
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -17,11 +17,16 @@ target_include_directories(ivp_example_inspect
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
     add_executable(${NAME} ${SOURCE})
-    target_link_libraries(${NAME} PRIVATE ivp ivp_render ivp_example_interaction ivp_example_inspect)
+    target_link_libraries(${NAME} PRIVATE ivp_example_interaction ivp_example_inspect)
     add_dependencies(${NAME} ivp_render_shaders)
-    if (NOT MSVC)
+    if (UNIX AND NOT APPLE AND NOT MSVC)
         target_link_libraries(${NAME} PRIVATE m)
         # Apply floating-point strictness and relax example-specific warnings
+        target_compile_options(${NAME} PRIVATE
+                -ffp-contract=off -fno-fast-math -frounding-math
+                -Wno-conversion -Wno-double-promotion -Wno-sign-conversion
+        )
+    elseif (NOT MSVC)
         target_compile_options(${NAME} PRIVATE
                 -ffp-contract=off -fno-fast-math -frounding-math
                 -Wno-conversion -Wno-double-promotion -Wno-sign-conversion

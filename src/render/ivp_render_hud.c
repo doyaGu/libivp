@@ -21,7 +21,7 @@ typedef struct hud_vertex {
 #define FONT_FIRST 32
 #define FONT_LAST  126
 
-static const unsigned char s_font[][IVP_RENDER_HUD_FONT_H] = {
+const unsigned char ivp_hud_font_data[][IVP_RENDER_HUD_FONT_H] = {
     /* 32 ' ' */ {0x00,0x00,0x00,0x00,0x00,0x00,0x00},
     /* 33 '!' */ {0x04,0x04,0x04,0x04,0x00,0x04,0x00},
     /* 34 '"' */ {0x0A,0x0A,0x00,0x00,0x00,0x00,0x00},
@@ -149,7 +149,7 @@ void ivp_render_draw_text_scaled(ivp_renderer_t *r,
         if (*p == '\n') { cx = x; cy += (IVP_RENDER_HUD_FONT_H + 1) * sc; continue; }
         int ch = (int)(unsigned char)*p;
         if (ch < FONT_FIRST || ch > FONT_LAST) { cx += (IVP_RENDER_HUD_FONT_W + 1)*sc; continue; }
-        const unsigned char *g = s_font[ch - FONT_FIRST];
+        const unsigned char *g = ivp_hud_font_data[ch - FONT_FIRST];
         for (int row = 0; row < IVP_RENDER_HUD_FONT_H; row++) {
             unsigned char bits = g[row];
             for (int col = 0; col < IVP_RENDER_HUD_FONT_W; col++) {

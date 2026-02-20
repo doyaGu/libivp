@@ -1,0 +1,38 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSIn {
+    float3 aPos [[attribute(0)]];
+    float3 aNrm [[attribute(1)]];
+    float4 iRow0 [[attribute(2)]];
+    float4 iRow1 [[attribute(3)]];
+    float4 iRow2 [[attribute(4)]];
+    float4 iRow3 [[attribute(5)]];
+    float3 iCol  [[attribute(6)]];
+};
+
+struct VSOut {
+    float4 pos [[position]];
+    float3 col;
+};
+
+struct Uniforms {
+    float4x4 vp;
+    float4   light_dir;   /* xyz = direction, w = ambient */
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant Uniforms& u [[buffer(0)]]) {
+    float4x4 model = float4x4(in.iRow0, in.iRow1, in.iRow2, in.iRow3);
+    float4 world_pos = model * float4(in.aPos, 1.0);
+
+    VSOut out;
+    out.pos = u.vp * world_pos;
+
+    float3x3 nm = float3x3(model[0].xyz, model[1].xyz, model[2].xyz);
+    float3 nrm_ws = normalize(nm * in.aNrm);
+    float ndotl = max(dot(nrm_ws, u.light_dir.xyz), 0.0f);
+    float ambient = u.light_dir.w;
+    out.col = in.iCol * (ndotl + ambient);
+    return out;
+}

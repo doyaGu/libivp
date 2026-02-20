@@ -343,6 +343,9 @@ if (IVP_BUILD_RENDER)
         ${IVP_SHADER_BIN_DIR}/line3d.vert.spv
         ${IVP_SHADER_BIN_DIR}/line2d.vert.spv
         ${IVP_SHADER_BIN_DIR}/line.frag.spv
+        ${IVP_SHADER_BIN_DIR}/tri3d.vert.spv
+        ${IVP_SHADER_BIN_DIR}/tri3d.frag.spv
+        ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.spv
     )
 
     add_custom_command(
@@ -370,6 +373,33 @@ if (IVP_BUILD_RENDER)
                 -o ${IVP_SHADER_BIN_DIR}/line.frag.spv
         DEPENDS ${IVP_SHADER_SRC_DIR}/line.frag.glsl
         COMMENT "Compiling line.frag.glsl -> SPIR-V"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d.vert.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S vert
+                ${IVP_SHADER_SRC_DIR}/tri3d.vert.glsl
+                -o ${IVP_SHADER_BIN_DIR}/tri3d.vert.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d.vert.glsl
+        COMMENT "Compiling tri3d.vert.glsl -> SPIR-V"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d.frag.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S frag
+                ${IVP_SHADER_SRC_DIR}/tri3d.frag.glsl
+                -o ${IVP_SHADER_BIN_DIR}/tri3d.frag.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d.frag.glsl
+        COMMENT "Compiling tri3d.frag.glsl -> SPIR-V"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S vert
+                ${IVP_SHADER_SRC_DIR}/tri3d_inst.vert.glsl
+                -o ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d_inst.vert.glsl
+        COMMENT "Compiling tri3d_inst.vert.glsl -> SPIR-V"
         VERBATIM
     )
 
@@ -400,6 +430,33 @@ if (IVP_BUILD_RENDER)
         COMMENT "Staging line.frag.msl"
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d.vert.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/tri3d.vert.msl
+                ${IVP_SHADER_BIN_DIR}/tri3d.vert.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d.vert.msl
+        COMMENT "Staging tri3d.vert.msl"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d.frag.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/tri3d.frag.msl
+                ${IVP_SHADER_BIN_DIR}/tri3d.frag.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d.frag.msl
+        COMMENT "Staging tri3d.frag.msl"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/tri3d_inst.vert.msl
+                ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/tri3d_inst.vert.msl
+        COMMENT "Staging tri3d_inst.vert.msl"
+        VERBATIM
+    )
 
     add_custom_target(ivp_render_shaders ALL
         DEPENDS
@@ -407,6 +464,9 @@ if (IVP_BUILD_RENDER)
             ${IVP_SHADER_BIN_DIR}/line3d.vert.msl
             ${IVP_SHADER_BIN_DIR}/line2d.vert.msl
             ${IVP_SHADER_BIN_DIR}/line.frag.msl
+            ${IVP_SHADER_BIN_DIR}/tri3d.vert.msl
+            ${IVP_SHADER_BIN_DIR}/tri3d.frag.msl
+            ${IVP_SHADER_BIN_DIR}/tri3d_inst.vert.msl
     )
 
     set(IVP_RENDER_SOURCES
@@ -414,9 +474,12 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_gpu.c
         src/render/ivp_render_draw.c
         src/render/ivp_render_hud.c
+        src/render/ivp_render_hud_atlas.c
         src/render/ivp_render_core.c
         src/render/ivp_render_pick.c
         src/render/ivp_render_stats.c
+        src/render/ivp_render_frustum.c
+        src/render/ivp_render_solid.c
     )
     add_library(ivp_render STATIC ${IVP_RENDER_SOURCES})
     add_dependencies(ivp_render ivp_render_shaders)

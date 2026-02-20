@@ -44,6 +44,7 @@ typedef enum ivp_text_align {
 #define IVP_RENDER_DEFAULT_HEIGHT          720
 #define IVP_RENDER_DEFAULT_MAX_DRAW_VERTS  (128 * 1024)
 #define IVP_RENDER_DEFAULT_MAX_HUD_VERTS   (32  * 1024)
+#define IVP_RENDER_DEFAULT_MAX_TRI_VERTS   (256 * 1024)
 #define IVP_RENDER_DEFAULT_SPHERE_SEGMENTS 24
 #define IVP_RENDER_DEFAULT_HUD_FONT_SCALE  2
 #define IVP_RENDER_HUD_FONT_W             5
@@ -57,10 +58,11 @@ typedef struct ivp_render_config {
     int         msaa_samples;       /* default: 4 (0=default, <0=disabled) */
     float       clear_color[4];     /* default: {0.20, 0.24, 0.30, 1.0} */
     float       max_frame_dt;       /* default: 0.1 */
-    int         max_draw_vertices;  /* 3D stream capacity   (default: 128K) */
-    int         max_hud_vertices;   /* 2D HUD stream cap    (default: 32K)  */
-    int         sphere_segments;    /* wireframe sphere segs (default: 24)   */
-    int         hud_font_scale;     /* bitmap font scale     (default: 2)    */
+    int         max_draw_vertices;  /* 3D wire stream capacity  (default: 128K) */
+    int         max_hud_vertices;   /* 2D HUD stream cap        (default: 32K)  */
+    int         max_tri_vertices;   /* 3D solid tri stream cap   (default: 256K) */
+    int         sphere_segments;    /* wireframe sphere segs     (default: 24)   */
+    int         hud_font_scale;     /* bitmap font scale         (default: 2)    */
 } ivp_render_config_t;
 
 void ivp_render_config_init(ivp_render_config_t *cfg);
@@ -206,6 +208,28 @@ void ivp_render_draw_contact(ivp_renderer_t *r,
                              float normal_length,
                              const float color[3]);
 
+/* ── 3D Solid drawing primitives (instanced, lit) ──────────────────────── */
+
+void ivp_render_draw_solid_sphere(ivp_renderer_t *r,
+                                  const float pos[3],
+                                  float radius,
+                                  const float color[3]);
+
+void ivp_render_draw_solid_box(ivp_renderer_t *r,
+                               const float pos[3],
+                               const float half_size[3],
+                               const float *rot,     /* 9 floats col-major, or NULL */
+                               const float color[3]);
+
+void ivp_render_draw_solid_aabb(ivp_renderer_t *r,
+                                const float min[3], const float max[3],
+                                const float color[3]);
+
+/* ── Lighting control ──────────────────────────────────────────────────── */
+
+void ivp_render_set_light_dir(ivp_renderer_t *r, const float dir[3]);
+void ivp_render_set_ambient(ivp_renderer_t *r, float ambient);
+
 /* ── 2D HUD text ───────────────────────────────────────────────────────── */
 
 void ivp_render_draw_text(ivp_renderer_t *r,
@@ -269,6 +293,12 @@ typedef struct ivp_render_stats {
     int   hud_vertex_count;
     int   hud_vertex_capacity;
     float hud_utilization;
+    int   tri_vertex_count;
+    int   tri_vertex_capacity;
+    float tri_utilization;
+    int   solid_sphere_count;
+    int   solid_box_count;
+    int   culled_count;
     float frame_dt;
     float fps;
 } ivp_render_stats_t;
