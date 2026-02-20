@@ -73,7 +73,7 @@ IVP_TEST(time_event_queue_deduplicates_pair)
     e.trigger_time = 2.0;
     IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &e));
 
-    IVP_ASSERT_EQ(queue.count, 1);
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&queue), 1);
 
     ivp_time_event_t out;
     IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 2.1, &out));
@@ -102,10 +102,10 @@ IVP_TEST(time_event_queue_remove_object)
 
     IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &a));
     IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &b));
-    IVP_ASSERT_EQ(queue.count, 2);
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&queue), 2);
 
     ivp_time_event_queue_remove_object(&queue, make_handle(20u, 1u));
-    IVP_ASSERT_EQ(queue.count, 1);
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&queue), 1);
 
     ivp_time_event_t out;
     IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 2.0, &out));

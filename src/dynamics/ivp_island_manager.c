@@ -11,38 +11,12 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/solver/ivp_friction_system.h>
+#include <ivp/utility/ivp_union_find.h>
 #include <string.h>
 
 /* Internal controller system header for target inspection */
 #include "controllers/ivp_controller_system.h"
 #include "ivp_object_system.h"
-
-/* ── Union-find ────────────────────────────────────────────────────────── */
-
-static int uf_find(int *parent, int x)
-{
-    while (parent[x] != x) {
-        parent[x] = parent[parent[x]]; /* path halving */
-        x = parent[x];
-    }
-    return x;
-}
-
-static void uf_union(int *parent, int *rank, int a, int b)
-{
-    a = uf_find(parent, a);
-    b = uf_find(parent, b);
-    if (a == b) return;
-
-    if (rank[a] < rank[b]) {
-        parent[a] = b;
-    } else if (rank[a] > rank[b]) {
-        parent[b] = a;
-    } else {
-        parent[b] = a;
-        rank[a]++;
-    }
-}
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
@@ -188,10 +162,7 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
     if (!ensure_uf_capacity(mgr, n)) return;
 
     /* Initialize: each object is its own parent */
-    for (int i = 0; i < n; i++) {
-        mgr->parent[i] = i;
-        mgr->rank[i] = 0;
-    }
+    ivp_union_find_init_with_rank(mgr->parent, mgr->rank, n);
 
     /* --- Union via dependent controllers using dynamic associated-core discovery --- */
     ivp_controller_system_t *csys = (ivp_controller_system_t *)env->controller_system;
@@ -221,7 +192,7 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
                 if (first < 0) {
                     first = idx;
                 } else {
-                    uf_union(mgr->parent, mgr->rank, first, idx);
+                    ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first, idx);
                 }
             }
         }
@@ -249,7 +220,7 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
             if (first_idx < 0) {
                 first_idx = idx;
             } else {
-                uf_union(mgr->parent, mgr->rank, first_idx, idx);
+                ivp_union_find_union_by_rank(mgr->parent, mgr->rank, first_idx, idx);
             }
         }
     }
@@ -269,7 +240,7 @@ void ivp_island_manager_rebuild(ivp_island_manager_t *mgr,
         if (!obj) continue;
         if (obj->core.physical_unmoveable) continue;
 
-        int root = uf_find(mgr->parent, i);
+        int root = ivp_union_find_find(mgr->parent, i);
         int isl_idx = root_to_island[root];
 
         if (isl_idx < 0) {

@@ -6,6 +6,7 @@
  */
 
 #include <ivp/controllers/ivp_constraint.h>
+#include <ivp/controllers/ivp_controller_util.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/events/ivp_event.h>
 #include <ivp/math/ivp_fast_math.h>
@@ -107,19 +108,6 @@ void ivp_constraint_set_limits(ivp_constraint_state_t *state,
     state->limits.limit_damping   = damping;
 }
 
-/* ── Helper: get anchor world position ──────────────────────────────────── */
-
-static void get_anchor_ws(const ivp_object_t *obj,
-                           const ivp_vec3r_t *anchor_os,
-                           ivp_vec3r_t *out)
-{
-    if (obj) {
-        ivp_transform_point(out, &obj->core.m_world_f_core_last_psi, anchor_os);
-    } else {
-        *out = *anchor_os;
-    }
-}
-
 /* ── Helper: compute virtual mass for positional constraint ─────────────── */
 
 static ivp_real_t compute_positional_virtual_mass(
@@ -127,31 +115,8 @@ static ivp_real_t compute_positional_virtual_mass(
     const ivp_core_t *cb, const ivp_vec3r_t *r_b_ws,
     const ivp_vec3r_t *direction)
 {
-    ivp_real_t inv_vm = IVP_REAL(0.0);
-
-    if (ca && !ca->physical_unmoveable) {
-        ivp_vec3r_t r_cs, n_cs, cross;
-        ivp_mat3r_vimult(&r_cs, &ca->m_world_f_core_last_psi.rot, r_a_ws);
-        ivp_mat3r_vimult(&n_cs, &ca->m_world_f_core_last_psi.rot, direction);
-        ivp_vec3r_cross(&cross, &r_cs, &n_cs);
-
-        inv_vm += ca->inv_mass;
-        inv_vm += cross.k[0] * cross.k[0] * ca->inv_rot_inertia.k[0] +
-                  cross.k[1] * cross.k[1] * ca->inv_rot_inertia.k[1] +
-                  cross.k[2] * cross.k[2] * ca->inv_rot_inertia.k[2];
-    }
-
-    if (cb && !cb->physical_unmoveable) {
-        ivp_vec3r_t r_cs, n_cs, cross;
-        ivp_mat3r_vimult(&r_cs, &cb->m_world_f_core_last_psi.rot, r_b_ws);
-        ivp_mat3r_vimult(&n_cs, &cb->m_world_f_core_last_psi.rot, direction);
-        ivp_vec3r_cross(&cross, &r_cs, &n_cs);
-
-        inv_vm += cb->inv_mass;
-        inv_vm += cross.k[0] * cross.k[0] * cb->inv_rot_inertia.k[0] +
-                  cross.k[1] * cross.k[1] * cb->inv_rot_inertia.k[1] +
-                  cross.k[2] * cross.k[2] * cb->inv_rot_inertia.k[2];
-    }
+    ivp_real_t inv_vm = ivp_controller_compute_positional_inv_vm(
+        ca, r_a_ws, cb, r_b_ws, direction);
 
     return (inv_vm > IVP_REAL_EPS) ? (IVP_REAL(1.0) / inv_vm) : IVP_REAL(0.0);
 }
@@ -163,39 +128,8 @@ static void apply_positional_impulse(ivp_core_t *ca, const ivp_vec3r_t *r_a_ws,
                                       const ivp_vec3r_t *direction,
                                       ivp_real_t impulse)
 {
-    /* Object A: push in -direction */
-    if (ca && !ca->physical_unmoveable) {
-        ivp_real_t s = impulse * ca->inv_mass;
-        ca->speed.k[0] -= direction->k[0] * s;
-        ca->speed.k[1] -= direction->k[1] * s;
-        ca->speed.k[2] -= direction->k[2] * s;
-
-        ivp_vec3r_t dir_cs, r_cs, cross;
-        ivp_mat3r_vimult(&dir_cs, &ca->m_world_f_core_last_psi.rot, direction);
-        ivp_mat3r_vimult(&r_cs, &ca->m_world_f_core_last_psi.rot, r_a_ws);
-        ivp_vec3r_cross(&cross, &r_cs, &dir_cs);
-
-        ca->rot_speed.k[0] -= (float)(cross.k[0] * ca->inv_rot_inertia.k[0] * impulse);
-        ca->rot_speed.k[1] -= (float)(cross.k[1] * ca->inv_rot_inertia.k[1] * impulse);
-        ca->rot_speed.k[2] -= (float)(cross.k[2] * ca->inv_rot_inertia.k[2] * impulse);
-    }
-
-    /* Object B: push in +direction */
-    if (cb && !cb->physical_unmoveable) {
-        ivp_real_t s = impulse * cb->inv_mass;
-        cb->speed.k[0] += direction->k[0] * s;
-        cb->speed.k[1] += direction->k[1] * s;
-        cb->speed.k[2] += direction->k[2] * s;
-
-        ivp_vec3r_t dir_cs, r_cs, cross;
-        ivp_mat3r_vimult(&dir_cs, &cb->m_world_f_core_last_psi.rot, direction);
-        ivp_mat3r_vimult(&r_cs, &cb->m_world_f_core_last_psi.rot, r_b_ws);
-        ivp_vec3r_cross(&cross, &r_cs, &dir_cs);
-
-        cb->rot_speed.k[0] += (float)(cross.k[0] * cb->inv_rot_inertia.k[0] * impulse);
-        cb->rot_speed.k[1] += (float)(cross.k[1] * cb->inv_rot_inertia.k[1] * impulse);
-        cb->rot_speed.k[2] += (float)(cross.k[2] * cb->inv_rot_inertia.k[2] * impulse);
-    }
+    ivp_controller_apply_positional_impulse(
+        ca, r_a_ws, cb, r_b_ws, direction, impulse);
 }
 
 /* ── Solve positional constraint ────────────────────────────────────────── */
@@ -205,8 +139,8 @@ static void solve_position(ivp_constraint_state_t *state, ivp_real_t dt)
     if (dt <= IVP_REAL_EPS) return;
 
     ivp_vec3r_t pos_a_ws, pos_b_ws;
-    get_anchor_ws(state->obj_a, &state->anchor_a_os, &pos_a_ws);
-    get_anchor_ws(state->obj_b, &state->anchor_b_os, &pos_b_ws);
+    ivp_controller_get_anchor_ws(state->obj_a, &state->anchor_a_os, &pos_a_ws);
+    ivp_controller_get_anchor_ws(state->obj_b, &state->anchor_b_os, &pos_b_ws);
 
     /* Position error: B_anchor - A_anchor (should be zero) */
     ivp_vec3r_t error;
@@ -293,20 +227,7 @@ static void apply_angular_impulse_on_axis(ivp_core_t *ca, ivp_core_t *cb,
                                             const ivp_vec3r_t *axis_ws,
                                             ivp_real_t impulse)
 {
-    if (ca && !ca->physical_unmoveable) {
-        ivp_vec3r_t ax_cs;
-        ivp_mat3r_vimult(&ax_cs, &ca->m_world_f_core_last_psi.rot, axis_ws);
-        ca->rot_speed.k[0] -= (float)(ax_cs.k[0] * ca->inv_rot_inertia.k[0] * impulse);
-        ca->rot_speed.k[1] -= (float)(ax_cs.k[1] * ca->inv_rot_inertia.k[1] * impulse);
-        ca->rot_speed.k[2] -= (float)(ax_cs.k[2] * ca->inv_rot_inertia.k[2] * impulse);
-    }
-    if (cb && !cb->physical_unmoveable) {
-        ivp_vec3r_t ax_cs;
-        ivp_mat3r_vimult(&ax_cs, &cb->m_world_f_core_last_psi.rot, axis_ws);
-        cb->rot_speed.k[0] += (float)(ax_cs.k[0] * cb->inv_rot_inertia.k[0] * impulse);
-        cb->rot_speed.k[1] += (float)(ax_cs.k[1] * cb->inv_rot_inertia.k[1] * impulse);
-        cb->rot_speed.k[2] += (float)(ax_cs.k[2] * cb->inv_rot_inertia.k[2] * impulse);
-    }
+    ivp_controller_apply_angular_impulse(ca, cb, axis_ws, impulse);
 }
 
 /* ── Helper: angular inverse virtual mass on an axis ────────────────────── */
@@ -314,22 +235,7 @@ static void apply_angular_impulse_on_axis(ivp_core_t *ca, ivp_core_t *cb,
 static ivp_real_t angular_inv_vm(const ivp_core_t *ca, const ivp_core_t *cb,
                                    const ivp_vec3r_t *axis_ws)
 {
-    ivp_real_t inv_vm = IVP_REAL(0.0);
-    if (ca && !ca->physical_unmoveable) {
-        ivp_vec3r_t ax_cs;
-        ivp_mat3r_vimult(&ax_cs, &ca->m_world_f_core_last_psi.rot, axis_ws);
-        inv_vm += ax_cs.k[0] * ax_cs.k[0] * ca->inv_rot_inertia.k[0] +
-                  ax_cs.k[1] * ax_cs.k[1] * ca->inv_rot_inertia.k[1] +
-                  ax_cs.k[2] * ax_cs.k[2] * ca->inv_rot_inertia.k[2];
-    }
-    if (cb && !cb->physical_unmoveable) {
-        ivp_vec3r_t ax_cs;
-        ivp_mat3r_vimult(&ax_cs, &cb->m_world_f_core_last_psi.rot, axis_ws);
-        inv_vm += ax_cs.k[0] * ax_cs.k[0] * cb->inv_rot_inertia.k[0] +
-                  ax_cs.k[1] * ax_cs.k[1] * cb->inv_rot_inertia.k[1] +
-                  ax_cs.k[2] * ax_cs.k[2] * cb->inv_rot_inertia.k[2];
-    }
-    return inv_vm;
+    return ivp_controller_compute_angular_inv_vm(ca, cb, axis_ws);
 }
 
 /* ── Solve angular constraint (hinge axis alignment + limits) ───────────── */

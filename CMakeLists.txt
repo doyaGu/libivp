@@ -173,6 +173,7 @@ set(IVP_UTILITY_SOURCES
         src/utility/ivp_hash.c
         src/utility/ivp_active_value.c
         src/utility/ivp_multidimensional_interp.c
+    src/utility/ivp_union_find.c
 )
 
 set(IVP_EVENT_SOURCES

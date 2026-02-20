@@ -57,7 +57,7 @@ IVP_TEST(contact_pipeline_uses_mindist_event_queue)
     IVP_ASSERT_NOT_NULL(b);
 
     IVP_ASSERT_EQ(env->mindist_manager.entry_count, 0);
-    IVP_ASSERT_EQ(env->time_event_queue.count, 0);
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&env->time_event_queue), 0);
 
     int resolved = ivp_environment_resolve_collisions(env);
 

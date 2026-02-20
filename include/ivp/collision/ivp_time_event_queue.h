@@ -7,6 +7,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/dynamics/ivp_handle.h>
 #include <ivp/collision/ivp_synapse.h>
+#include <ivp/containers/ivp_minheap.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,9 +33,7 @@ typedef struct ivp_time_event {
 } ivp_time_event_t;
 
 typedef struct ivp_time_event_queue {
-    ivp_time_event_t *events;
-    int count;
-    int capacity;
+    ivp_minheap_t heap;
     uint32_t serial_counter;
     const ivp_allocator_t *alloc;
 } ivp_time_event_queue_t;
@@ -52,6 +51,11 @@ bool ivp_time_event_queue_pop_due(ivp_time_event_queue_t *queue,
 
 void ivp_time_event_queue_remove_object(ivp_time_event_queue_t *queue,
                                         ivp_object_handle_t handle);
+
+static inline int ivp_time_event_queue_count(const ivp_time_event_queue_t *queue)
+{
+    return queue ? ivp_minheap_count(&queue->heap) : 0;
+}
 
 #ifdef __cplusplus
 }

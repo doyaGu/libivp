@@ -18,6 +18,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/events/ivp_listener_collision.h>
+#include <ivp/utility/ivp_union_find.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_mat3.h>
@@ -1901,26 +1902,6 @@ static void manager_remove_system(ivp_friction_manager_t *mgr,
     }
 }
 
-/* Find the component label for a core using union-find path compression.
- * labels[i] stores the parent index; roots have labels[i] == i. */
-static int uf_find(int *labels, int i) {
-    while (labels[i] != i) {
-        labels[i] = labels[labels[i]]; /* path halving */
-        i = labels[i];
-    }
-    return i;
-}
-
-static void uf_union(int *labels, int a, int b) {
-    a = uf_find(labels, a);
-    b = uf_find(labels, b);
-    if (a != b) {
-        /* Always merge higher into lower for determinism */
-        if (a > b) { int t = a; a = b; b = t; }
-        labels[b] = a;
-    }
-}
-
 void ivp_friction_system_check_split(ivp_friction_system_t *sys,
                                        ivp_friction_manager_t *mgr) {
     if (!sys || !mgr) return;
@@ -1944,7 +1925,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
                               : (int *)ivp_alloc(sys->alloc, (size_t)nc * sizeof(int));
     if (!labels) return;
 
-    for (int i = 0; i < nc; i++) labels[i] = i;
+    ivp_union_find_init(labels, nc);
 
     /* Build connectivity from live contacts in pairs */
     for (int p = 0; p < sys->pair_count; p++) {
@@ -1958,15 +1939,15 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
             if (sys->cores[k] == pair->cores[1]) idx1 = k;
         }
         if (idx0 >= 0 && idx1 >= 0) {
-            uf_union(labels, idx0, idx1);
+            ivp_union_find_union_min_root(labels, idx0, idx1);
         }
     }
 
     /* Check if all cores belong to the same component */
-    int root0 = uf_find(labels, 0);
+    int root0 = ivp_union_find_find(labels, 0);
     bool all_connected = true;
     for (int i = 1; i < nc; i++) {
-        if (uf_find(labels, i) != root0) {
+        if (ivp_union_find_find(labels, i) != root0) {
             all_connected = false;
             break;
         }
@@ -2006,7 +1987,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
 
     int comp_count = 0;
     for (int i = 0; i < nc; i++) {
-        int r = uf_find(labels, i);
+        int r = ivp_union_find_find(labels, i);
         bool found = false;
         for (int c = 0; c < comp_count; c++) {
             if (comp_roots[c] == r) { found = true; break; }
@@ -2027,7 +2008,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
         ivp_core_t *split_cores[2] = {NULL, NULL};
         int split_core_n = 0;
         for (int i = 0; i < nc && split_core_n < 2; i++) {
-            if (uf_find(labels, i) == split_root) {
+            if (ivp_union_find_find(labels, i) == split_root) {
                 split_cores[split_core_n++] = sys->cores[i];
             }
         }
@@ -2043,7 +2024,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
 
         /* Add any remaining cores beyond the first two */
         for (int i = 0; i < nc; i++) {
-            if (uf_find(labels, i) == split_root) {
+            if (ivp_union_find_find(labels, i) == split_root) {
                 system_add_core(new_sys, sys->cores[i]);
             }
         }
@@ -2060,7 +2041,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
                 if (sys->cores[k] == pair->cores[1]) idx1 = k;
             }
             if (idx0 < 0 || idx1 < 0) continue;
-            if (uf_find(labels, idx0) != split_root) continue;
+            if (ivp_union_find_find(labels, idx0) != split_root) continue;
 
             /* Create pair in new system and move contacts */
             ivp_friction_core_pair_t *new_pair =
@@ -2093,7 +2074,7 @@ void ivp_friction_system_check_split(ivp_friction_system_t *sys,
     {
         int write = 0;
         for (int i = 0; i < nc; i++) {
-            if (uf_find(labels, i) == keep_root) {
+            if (ivp_union_find_find(labels, i) == keep_root) {
                 sys->cores[write++] = sys->cores[i];
             }
         }
