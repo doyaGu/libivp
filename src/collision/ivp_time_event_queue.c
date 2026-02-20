@@ -74,7 +74,7 @@ bool ivp_time_event_queue_push(ivp_time_event_queue_t *queue,
             cur->expected_gap = event->expected_gap;
             cur->status_a = event->status_a;
             cur->status_b = event->status_b;
-            ivp_minheap_update_key(&queue->heap, i, (ivp_real_t)cur->trigger_time);
+            ivp_minheap_update_key(&queue->heap, i, cur->trigger_time);
         }
         return true;
     }
@@ -84,7 +84,7 @@ bool ivp_time_event_queue_push(ivp_time_event_queue_t *queue,
     ivp_time_event_t *evt = alloc_event(queue, &e);
     if (!evt) return false;
 
-    if (ivp_minheap_push(&queue->heap, (ivp_real_t)evt->trigger_time, evt) != IVP_OK) {
+    if (ivp_minheap_push(&queue->heap, evt->trigger_time, evt) != IVP_OK) {
         free_event(queue, evt);
         return false;
     }
@@ -98,7 +98,7 @@ bool ivp_time_event_queue_pop_due(ivp_time_event_queue_t *queue,
     if (!queue || ivp_minheap_empty(&queue->heap)) return false;
 
     ivp_heap_entry_t *top = ivp_minheap_peek(&queue->heap);
-    if (!top || (ivp_time_t)top->key > up_to_time) return false;
+    if (!top || top->key > up_to_time) return false;
 
     ivp_heap_entry_t popped;
     if (ivp_minheap_pop(&queue->heap, &popped) != IVP_OK) return false;

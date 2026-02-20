@@ -134,7 +134,7 @@ void ivp_minheap_destroy(ivp_minheap_t *heap) {
     heap->cap  = 0;
 }
 
-ivp_result_t ivp_minheap_push(ivp_minheap_t *heap, ivp_real_t key, void *value) {
+ivp_result_t ivp_minheap_push(ivp_minheap_t *heap, ivp_time_t key, void *value) {
     ivp_result_t r = ensure_capacity(heap, heap->len + 1);
     if (r != IVP_OK) return r;
 
@@ -167,10 +167,10 @@ ivp_result_t ivp_minheap_pop(ivp_minheap_t *heap, ivp_heap_entry_t *out_entry) {
     return IVP_OK;
 }
 
-void ivp_minheap_update_key(ivp_minheap_t *heap, int index, ivp_real_t new_key) {
+void ivp_minheap_update_key(ivp_minheap_t *heap, int index, ivp_time_t new_key) {
     IVP_ASSERT(index >= 0 && index < heap->len);
 
-    ivp_real_t old_key = heap->data[index].key;
+    ivp_time_t old_key = heap->data[index].key;
     heap->data[index].key = new_key;
 
     if (new_key < old_key) {

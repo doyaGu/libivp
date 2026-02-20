@@ -1,6 +1,6 @@
 /* ivp_minheap.h — Binary min-heap for event/time management
  *
- * Stores (key, value) pairs ordered by key (ivp_real_t).
+ * Stores (key, value) pairs ordered by key (ivp_time_t).
  * Supports push, pop-min, update-key, and remove-by-index.
  * Each element can track its heap index via an optional callback.
  */
@@ -8,6 +8,7 @@
 #define IVP_MINHEAP_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
 #include <ivp/containers/ivp_elem_typeinfo.h>
@@ -19,7 +20,7 @@ extern "C" {
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
 typedef struct ivp_heap_entry {
-    ivp_real_t  key;
+    ivp_time_t  key;
     void       *value;
 } ivp_heap_entry_t;
 
@@ -50,7 +51,7 @@ void         ivp_minheap_destroy(ivp_minheap_t *heap);
 /* ── Operations ─────────────────────────────────────────────────────────── */
 
 /* Push element. Returns IVP_ERR_OUT_OF_MEMORY on allocation failure. */
-ivp_result_t ivp_minheap_push(ivp_minheap_t *heap, ivp_real_t key, void *value);
+ivp_result_t ivp_minheap_push(ivp_minheap_t *heap, ivp_time_t key, void *value);
 
 /* Peek at minimum element without removing it. Returns NULL if empty. */
 static inline ivp_heap_entry_t *ivp_minheap_peek(const ivp_minheap_t *heap) {
@@ -61,7 +62,7 @@ static inline ivp_heap_entry_t *ivp_minheap_peek(const ivp_minheap_t *heap) {
 ivp_result_t ivp_minheap_pop(ivp_minheap_t *heap, ivp_heap_entry_t *out_entry);
 
 /* Update the key of element at given index. Re-heapifies. */
-void ivp_minheap_update_key(ivp_minheap_t *heap, int index, ivp_real_t new_key);
+void ivp_minheap_update_key(ivp_minheap_t *heap, int index, ivp_time_t new_key);
 
 /* Remove element at given index. */
 void ivp_minheap_remove(ivp_minheap_t *heap, int index);

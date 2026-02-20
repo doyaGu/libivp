@@ -805,11 +805,11 @@ IVP_TEST(minheap_push_pop) {
     IVP_ASSERT_TRUE(ivp_minheap_empty(&heap));
 
     /* Push in random order */
-    ivp_minheap_push(&heap, IVP_REAL(5.0), &dummy_vals[5]);
-    ivp_minheap_push(&heap, IVP_REAL(2.0), &dummy_vals[2]);
-    ivp_minheap_push(&heap, IVP_REAL(8.0), &dummy_vals[8]);
-    ivp_minheap_push(&heap, IVP_REAL(1.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(3.0), &dummy_vals[3]);
+    ivp_minheap_push(&heap, 5.0, &dummy_vals[5]);
+    ivp_minheap_push(&heap, 2.0, &dummy_vals[2]);
+    ivp_minheap_push(&heap, 8.0, &dummy_vals[8]);
+    ivp_minheap_push(&heap, 1.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 3.0, &dummy_vals[3]);
 
     IVP_ASSERT_EQ(ivp_minheap_count(&heap), 5);
 
@@ -841,9 +841,9 @@ IVP_TEST(minheap_peek) {
     ivp_minheap_t heap;
     ivp_minheap_init(&heap, NULL, 16, NULL);
 
-    ivp_minheap_push(&heap, IVP_REAL(10.0), &dummy_vals[0]);
-    ivp_minheap_push(&heap, IVP_REAL(3.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(7.0), &dummy_vals[2]);
+    ivp_minheap_push(&heap, 10.0, &dummy_vals[0]);
+    ivp_minheap_push(&heap, 3.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 7.0, &dummy_vals[2]);
 
     ivp_heap_entry_t *top = ivp_minheap_peek(&heap);
     IVP_ASSERT_NOT_NULL(top);
@@ -856,9 +856,9 @@ IVP_TEST(minheap_update_key) {
     ivp_minheap_t heap;
     ivp_minheap_init(&heap, NULL, 16, NULL);
 
-    ivp_minheap_push(&heap, IVP_REAL(5.0), &dummy_vals[0]);
-    ivp_minheap_push(&heap, IVP_REAL(3.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(7.0), &dummy_vals[2]);
+    ivp_minheap_push(&heap, 5.0, &dummy_vals[0]);
+    ivp_minheap_push(&heap, 3.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 7.0, &dummy_vals[2]);
 
     /* The min is 3.0 at some index. Let's update it to 10.0 */
     /* Find the entry with key=3 */
@@ -866,7 +866,7 @@ IVP_TEST(minheap_update_key) {
     IVP_ASSERT_NEAR(top->key, 3.0, 1e-10);
 
     /* Update index 0 (the min) to a large value */
-    ivp_minheap_update_key(&heap, 0, IVP_REAL(10.0));
+    ivp_minheap_update_key(&heap, 0, 10.0);
 
     /* New min should be 5.0 */
     top = ivp_minheap_peek(&heap);
@@ -879,10 +879,10 @@ IVP_TEST(minheap_remove) {
     ivp_minheap_t heap;
     ivp_minheap_init(&heap, NULL, 16, NULL);
 
-    ivp_minheap_push(&heap, IVP_REAL(5.0), &dummy_vals[0]);
-    ivp_minheap_push(&heap, IVP_REAL(3.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(7.0), &dummy_vals[2]);
-    ivp_minheap_push(&heap, IVP_REAL(1.0), &dummy_vals[3]);
+    ivp_minheap_push(&heap, 5.0, &dummy_vals[0]);
+    ivp_minheap_push(&heap, 3.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 7.0, &dummy_vals[2]);
+    ivp_minheap_push(&heap, 1.0, &dummy_vals[3]);
 
     /* Remove the root (1.0) */
     ivp_minheap_remove(&heap, 0);
@@ -922,9 +922,9 @@ IVP_TEST(minheap_index_callback) {
     ivp_minheap_t heap;
     ivp_minheap_init(&heap, NULL, 16, test_heap_index_cb);
 
-    ivp_minheap_push(&heap, IVP_REAL(5.0), &dummy_vals[0]);
-    ivp_minheap_push(&heap, IVP_REAL(3.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(1.0), &dummy_vals[2]);
+    ivp_minheap_push(&heap, 5.0, &dummy_vals[0]);
+    ivp_minheap_push(&heap, 3.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 1.0, &dummy_vals[2]);
 
     /* After pushes, the minimum (dummy_vals[2]) should be at index 0 */
     IVP_ASSERT_EQ(s_heap_indices[2], 0);
@@ -938,7 +938,7 @@ IVP_TEST(minheap_many_elements) {
 
     /* Push 50 elements in reverse order */
     for (int i = 49; i >= 0; i--) {
-        ivp_minheap_push(&heap, (ivp_real_t)i, NULL);
+        ivp_minheap_push(&heap, (ivp_time_t)i, NULL);
     }
     IVP_ASSERT_EQ(ivp_minheap_count(&heap), 50);
 
@@ -979,10 +979,10 @@ IVP_TEST(minheap_lifecycle_callbacks) {
     ivp_result_t r = ivp_minheap_init_ex(&heap, NULL, 2, NULL, &ti, NULL);
     IVP_ASSERT_TRUE(ivp_ok(r));
 
-    ivp_minheap_push(&heap, IVP_REAL(5.0), &dummy_vals[0]);
-    ivp_minheap_push(&heap, IVP_REAL(2.0), &dummy_vals[1]);
-    ivp_minheap_push(&heap, IVP_REAL(8.0), &dummy_vals[2]);
-    ivp_minheap_push(&heap, IVP_REAL(1.0), &dummy_vals[3]);
+    ivp_minheap_push(&heap, 5.0, &dummy_vals[0]);
+    ivp_minheap_push(&heap, 2.0, &dummy_vals[1]);
+    ivp_minheap_push(&heap, 8.0, &dummy_vals[2]);
+    ivp_minheap_push(&heap, 1.0, &dummy_vals[3]);
     IVP_ASSERT_EQ(s_lifecycle_init_count, 4);
 
     ivp_heap_entry_t out;
