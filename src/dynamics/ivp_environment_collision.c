@@ -25,9 +25,11 @@
 #include <ivp/collision/ivp_compact_ledge_solver.h>
 #include <ivp/collision/ivp_range_manager.h>
 #include <ivp/geometry/ivp_surman.h>
+#include <ivp/controllers/ivp_constraint.h>
 #include <string.h>
 #include <math.h>
 #include "dynamics/ivp_environment_events.h"
+#include "controllers/ivp_controller_system.h"
 
 static ivp_collision_event_t ivp_make_collision_event(const ivp_contact_point_t *cp,
                                                       ivp_real_t closing_speed,
@@ -55,6 +57,43 @@ static ivp_real_t ivp_environment_get_effective_step_dt(const ivp_environment_t 
     }
 
     return env->delta_psi_time;
+}
+
+static bool ivp_pair_blocked_by_active_constraint(const ivp_environment_t *env,
+                                                  const ivp_object_t *obj_a,
+                                                  const ivp_object_t *obj_b)
+{
+    if (!env || !obj_a || !obj_b || !env->controller_system) return false;
+
+    const ivp_controller_system_t *sys =
+        (const ivp_controller_system_t *)env->controller_system;
+    const int count = ivp_controller_system_count(sys);
+    bool a_in_constraint_network = false;
+    bool b_in_constraint_network = false;
+
+    for (int i = 0; i < count; i++) {
+        const ivp_controller_slot_t *slot = ivp_controller_system_get_at(sys, i);
+        if (!slot || !slot->enabled) continue;
+        if (slot->event_fn != ivp_controller_constraint) continue;
+
+        const ivp_constraint_state_t *state = (const ivp_constraint_state_t *)slot->ctx;
+        if (!state || !state->active) continue;
+
+        const ivp_object_t *a = state->obj_a;
+        const ivp_object_t *b = state->obj_b;
+        if (!b) continue;
+
+        if (a == obj_a || b == obj_a) a_in_constraint_network = true;
+        if (a == obj_b || b == obj_b) b_in_constraint_network = true;
+
+        if ((a == obj_a && b == obj_b) || (a == obj_b && b == obj_a)) {
+            return true;
+        }
+    }
+
+    /* Aggressive policy: objects controlled by active joint constraints
+     * are treated as one articulated structure and do not self-collide. */
+    return a_in_constraint_network && b_in_constraint_network;
 }
 
 /* ── Environment collision resolution ───────────────────────────────────── */
@@ -369,6 +408,13 @@ int ivp_broadphase_detect(ivp_environment_t *env,
 
             /* Collision filter check (new system) */
             if (!ivp_collision_filter_check(&env->collision_filter, obj_a, obj_b)) {
+                continue;
+            }
+
+            /* Constraints and collision responses should not fight each other.
+             * If a pair is explicitly linked by an active joint constraint,
+             * skip direct collision generation for that pair. */
+            if (ivp_pair_blocked_by_active_constraint(env, obj_a, obj_b)) {
                 continue;
             }
 

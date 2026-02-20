@@ -16,9 +16,9 @@
 
 /* ── Default parameters ─────────────────────────────────────────────────── */
 
-#define IVP_CONSTRAINT_DEFAULT_TAU          IVP_REAL(0.2)
-#define IVP_CONSTRAINT_DEFAULT_DAMPING      IVP_REAL(0.9)
-#define IVP_CONSTRAINT_DEFAULT_ITERATIONS   4
+#define IVP_CONSTRAINT_DEFAULT_TAU          IVP_REAL(0.20)
+#define IVP_CONSTRAINT_DEFAULT_DAMPING      IVP_REAL(1.0)
+#define IVP_CONSTRAINT_DEFAULT_ITERATIONS   12
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
@@ -146,14 +146,6 @@ static void solve_position(ivp_constraint_state_t *state, ivp_real_t dt)
     ivp_vec3r_t error;
     ivp_vec3r_sub(&error, &pos_b_ws, &pos_a_ws);
 
-    ivp_real_t error_len = ivp_vec3r_length(&error);
-    if (error_len < IVP_REAL_EPS) return;
-
-    /* Direction of constraint force */
-    ivp_vec3r_t dir;
-    ivp_real_t inv_error = IVP_REAL(1.0) / error_len;
-    ivp_vec3r_scale(&dir, &error, inv_error);
-
     /* Offset from CoM */
     ivp_vec3r_t r_a_ws, r_b_ws;
     if (state->obj_a) {
@@ -166,58 +158,44 @@ static void solve_position(ivp_constraint_state_t *state, ivp_real_t dt)
     ivp_core_t *ca = state->obj_a ? &state->obj_a->core : NULL;
     ivp_core_t *cb = &state->obj_b->core;
 
-    ivp_real_t vm = compute_positional_virtual_mass(ca, &r_a_ws, cb, &r_b_ws, &dir);
-    if (vm < IVP_REAL_EPS) return;
+    /* Solve translation on all 3 world axes (reference-style 3DOF joint solve).
+     * The old scalar solve along error direction only could leave tangential
+     * anchor drift and inject energy in chained constraints. */
+    static const ivp_vec3r_t axes[3] = {
+        {.k = {IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0)}},
+        {.k = {IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0)}},
+        {.k = {IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0)}}
+    };
 
-    /* Baumgarte position correction: bias = tau/dt * error */
-    ivp_real_t bias = state->tau / dt * error_len;
+    ivp_vec3r_t vel_a_ws, vel_b_ws, rel_v_ws;
+    ivp_controller_get_point_velocity_ws(state->obj_a, &pos_a_ws, &vel_a_ws);
+    ivp_controller_get_point_velocity_ws(state->obj_b, &pos_b_ws, &vel_b_ws);
+    ivp_vec3r_sub(&rel_v_ws, &vel_b_ws, &vel_a_ws);
 
-    /* Relative velocity along constraint direction */
-    ivp_real_t rel_vel = IVP_REAL(0.0);
-    if (ca) {
-        rel_vel -= ivp_vec3r_dot(&ca->speed, &dir);
-    }
-    rel_vel += ivp_vec3r_dot(&cb->speed, &dir);
+    for (int i = 0; i < 3; i++) {
+        const ivp_vec3r_t *axis = &axes[i];
+        ivp_real_t pos_err = ivp_vec3r_dot(&error, axis);
+        ivp_real_t rel_vel = ivp_vec3r_dot(&rel_v_ws, axis);
 
-    /* Impulse = vm * (-rel_vel * damping - bias)
-     * so positive position error produces a restoring impulse. */
-    ivp_real_t impulse = vm * (-rel_vel * state->damping - bias);
-
-    apply_positional_impulse(ca, &r_a_ws, cb, &r_b_ws, &dir, impulse);
-    state->accumulated_impulse += ivp_fabs(impulse);
-
-    /* Positional projection (XPBD-style stabilization):
-     * Directly project anchor error to avoid long-term drift after strong impacts.
-     * This complements velocity-level Baumgarte impulses and keeps joints tight. */
-    {
-        ivp_real_t inv_ma = (ca && !ca->physical_unmoveable) ? ca->inv_mass : IVP_REAL(0.0);
-        ivp_real_t inv_mb = (cb && !cb->physical_unmoveable) ? cb->inv_mass : IVP_REAL(0.0);
-        ivp_real_t inv_m_sum = inv_ma + inv_mb;
-
-        if (inv_m_sum > IVP_REAL_EPS) {
-            const ivp_real_t proj_factor = IVP_REAL(0.35);
-            ivp_real_t corr_mag = error_len * proj_factor;
-
-            if (ca && !ca->physical_unmoveable) {
-                ivp_real_t wa = inv_ma / inv_m_sum;
-                ivp_vec3r_t pos = ca->pos_world_f_core_last_psi;
-                pos.k[0] += dir.k[0] * corr_mag * wa;
-                pos.k[1] += dir.k[1] * corr_mag * wa;
-                pos.k[2] += dir.k[2] * corr_mag * wa;
-                ca->pos_world_f_core_last_psi = pos;
-                ca->m_world_f_core_last_psi.pos = pos;
-            }
-
-            if (cb && !cb->physical_unmoveable) {
-                ivp_real_t wb = inv_mb / inv_m_sum;
-                ivp_vec3r_t pos = cb->pos_world_f_core_last_psi;
-                pos.k[0] -= dir.k[0] * corr_mag * wb;
-                pos.k[1] -= dir.k[1] * corr_mag * wb;
-                pos.k[2] -= dir.k[2] * corr_mag * wb;
-                cb->pos_world_f_core_last_psi = pos;
-                cb->m_world_f_core_last_psi.pos = pos;
-            }
+        if (ivp_fabs(pos_err) < IVP_REAL_EPS && ivp_fabs(rel_vel) < IVP_REAL_EPS) {
+            continue;
         }
+
+        ivp_real_t vm = compute_positional_virtual_mass(ca, &r_a_ws, cb, &r_b_ws, axis);
+        if (vm < IVP_REAL_EPS) {
+            continue;
+        }
+
+        ivp_real_t bias = state->tau / dt * pos_err;
+        ivp_real_t impulse = vm * (-(rel_vel * state->damping) - bias);
+
+        apply_positional_impulse(ca, &r_a_ws, cb, &r_b_ws, axis, impulse);
+        state->accumulated_impulse += ivp_fabs(impulse);
+
+        /* Recompute relative point velocity after each axis solve (sequential impulse). */
+        ivp_controller_get_point_velocity_ws(state->obj_a, &pos_a_ws, &vel_a_ws);
+        ivp_controller_get_point_velocity_ws(state->obj_b, &pos_b_ws, &vel_b_ws);
+        ivp_vec3r_sub(&rel_v_ws, &vel_b_ws, &vel_a_ws);
     }
 }
 
