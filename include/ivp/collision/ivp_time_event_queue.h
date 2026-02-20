@@ -8,6 +8,7 @@
 #include <ivp/dynamics/ivp_handle.h>
 #include <ivp/collision/ivp_synapse.h>
 #include <ivp/containers/ivp_minheap.h>
+#include <ivp/containers/ivp_hashmap.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,6 +19,14 @@ typedef enum ivp_time_event_type {
     IVP_TIME_EVENT_MINDIST_IMPACT,
     IVP_TIME_EVENT_MINDIST_RECALC
 } ivp_time_event_type_t;
+
+typedef struct ivp_time_event_pair_key {
+    uint32_t a_slot;
+    uint32_t a_gen;
+    uint32_t b_slot;
+    uint32_t b_gen;
+    uint32_t type;
+} ivp_time_event_pair_key_t;
 
 typedef struct ivp_time_event {
     ivp_time_t trigger_time;
@@ -30,12 +39,16 @@ typedef struct ivp_time_event {
 
     ivp_real_t expected_gap;
     uint32_t serial;
+    int heap_index;
+    ivp_time_event_pair_key_t pair_key;
 } ivp_time_event_t;
 
 typedef struct ivp_time_event_queue {
     ivp_minheap_t heap;
+    ivp_hashmap_t pair_index;
     uint32_t serial_counter;
     const ivp_allocator_t *alloc;
+    bool initialized;
 } ivp_time_event_queue_t;
 
 void ivp_time_event_queue_init(ivp_time_event_queue_t *queue,
