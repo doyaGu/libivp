@@ -36,7 +36,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Force Field -- Mode Switching", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -232,10 +233,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 18.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 18.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {18.0f, 0.5f, 18.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Objects */
@@ -249,10 +250,10 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
 
             if (objs[i].is_sphere) {
-                ivp_draw_wire_sphere(renderer, fp, objs[i].radius, objs[i].col);
+                ivp_render_draw_wire_sphere(renderer, fp, objs[i].radius, objs[i].col);
             } else {
                 float rot[9]; quat_to_col_rot(&q, rot);
-                ivp_draw_wire_box(renderer, fp, objs[i].hs, rot, objs[i].col);
+                ivp_render_draw_wire_box(renderer, fp, objs[i].hs, rot, objs[i].col);
             }
 
             ivp_vec3r_t v;
@@ -267,7 +268,7 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
         avg_height /= (float)n_obj;
@@ -275,7 +276,7 @@ int main(void)
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -293,11 +294,11 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
                      sl.fps_display, n_obj, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Mode: %s  [1]Gravity [2]Wind [3]Drag",
                      mode_names[current_mode]);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_mode);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_mode);
 
             /* Mode description */
             const char *desc[] = {
@@ -305,11 +306,11 @@ int main(void)
                 "Horizontal force +X 15N (light blown, heavy resist)",
                 "Drag coeff 5 (moving objects slow down)"
             };
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, desc[current_mode], c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, desc[current_mode], c_hud);
 
             snprintf(buf, sizeof(buf),
                 "Red=0.5kg  Green=3kg  Blue=10kg  Airborne: %d", airborne);
-            ivp_draw_text_2d(renderer, 10.0f, 66.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 66.0f, buf, c_hud);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 88.0f,
                                              c_hud, c_drag);

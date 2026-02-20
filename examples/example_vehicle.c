@@ -25,7 +25,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Vehicle -- Raycast Car", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -223,10 +224,10 @@ int main(void)
         }
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 40.0f, 4.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 40.0f, 4.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {40.0f, 0.5f, 40.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Ramps */
@@ -238,7 +239,7 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
             float rot[9]; quat_to_col_rot(&q, rot);
             float hs[3] = {4.0f, 0.3f, 3.0f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_ramp);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_ramp);
         }
 
         /* Obstacles */
@@ -249,7 +250,7 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
             float rot[9]; quat_to_col_rot(&q, rot);
             float hs[3] = {0.8f, 0.8f, 0.8f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_obs);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_obs);
         }
 
         /* Chassis */
@@ -260,7 +261,7 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
             float rot[9]; quat_to_col_rot(&q, rot);
             float hs[3] = {1.0f, 0.4f, 2.0f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_chassis);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_chassis);
 
             /* Velocity arrow */
             ivp_vec3r_t v;
@@ -271,7 +272,7 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.3f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.3f);
             }
         }
 
@@ -304,18 +305,18 @@ int main(void)
                                (float)w->contact_point_ws.k[1],
                                (float)w->contact_point_ws.k[2]};
                 /* Draw wheel as circle at wheel center using actual radius (0.35m) */
-                ivp_draw_wire_sphere(renderer, cp, 0.35f, c_wheel_g);
-                ivp_draw_line(renderer, hp, cp, c_susp);
+                ivp_render_draw_wire_sphere(renderer, cp, 0.35f, c_wheel_g);
+                ivp_render_draw_line(renderer, hp, cp, c_susp);
             } else {
                 /* Draw ungrounded wheel marker at transformed hardpoint */
-                ivp_draw_wire_sphere(renderer, hp, 0.35f, c_wheel_a);
+                ivp_render_draw_wire_sphere(renderer, hp, 0.35f, c_wheel_a);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 2.0f);
+            ivp_render_draw_axes(renderer, org, NULL, 2.0f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -342,18 +343,18 @@ int main(void)
 
             snprintf(buf, sizeof(buf), "FPS: %.0f  Speed: %.1f m/s  Time: %.1fs",
                      sl.fps_display, speed, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf),
                 "Arrows: steer/drive  Space: brake  Grounded: %d/%d",
                 n_grounded, car.n_wheels);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Steer: %.2f  Engine: %.0f N  Brake: %.0f N",
                      (float)car.steering_angle,
                      (float)car.engine_force,
                      (float)car.brake_force);
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, buf, c_susp);
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf, c_susp);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,
                                              c_hud, c_drag);

@@ -34,7 +34,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Rope -- Chain Pendulum", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -300,10 +301,10 @@ int main(void)
         }
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 12.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 12.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 2.0f, 0}, gs[3] = {12.0f, 0.5f, 12.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Ceiling bar */
@@ -312,7 +313,7 @@ int main(void)
             ivp_object_get_position(ceiling, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {1.5f, 0.3f, 0.3f};
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_ceil);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_ceil);
         }
 
         /* Chain links and joint connectors */
@@ -335,10 +336,10 @@ int main(void)
             float lc[3] = {c_link[0], c_link[1], c_link[2]};
             if (i % 2) { lc[0] *= 0.8f; lc[1] *= 0.8f; lc[2] *= 0.8f; }
 
-            ivp_draw_wire_box(renderer, fp, hs, rot, lc);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, lc);
 
             /* Joint connector line */
-            ivp_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
+            ivp_render_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
 
             /* Small sphere at joint */
             float jp[3] = {
@@ -346,7 +347,7 @@ int main(void)
                 (prev_pos[1] + fp[1]) * 0.5f,
                 (prev_pos[2] + fp[2]) * 0.5f
             };
-            ivp_draw_wire_sphere(renderer, jp, 0.08f, c_joint);
+            ivp_render_draw_wire_sphere(renderer, jp, 0.08f, c_joint);
 
             prev_pos[0] = fp[0]; prev_pos[1] = fp[1]; prev_pos[2] = fp[2];
         }
@@ -361,8 +362,8 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.6f, 0.6f, 0.6f};
 
-            ivp_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_weight);
+            ivp_render_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_weight);
 
             /* Velocity arrow on weight */
             ivp_vec3r_t v;
@@ -373,14 +374,14 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.25f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.25f);
             }
         }
 
         /* Origin axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
@@ -390,7 +391,7 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Chain: %d links + weight",
                      sl.fps_display, CHAIN_LEN);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             ivp_vec3r_t wp;
             ivp_object_get_position(weight, &wp);
@@ -399,7 +400,7 @@ int main(void)
             float wspeed = vec3r_speed(&wv);
             snprintf(buf, sizeof(buf), "Weight pos: (%.1f, %.1f, %.1f)  speed: %.2f m/s",
                      (float)wp.k[0], (float)wp.k[1], (float)wp.k[2], wspeed);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_weight);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_weight);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 50.0f, c_hud, c_drag);
         }

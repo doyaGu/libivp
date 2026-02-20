@@ -33,7 +33,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Motor -- Spinning Blade", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -256,10 +257,10 @@ int main(void)
         }
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0,0,0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Pedestal */
@@ -268,7 +269,7 @@ int main(void)
             ivp_object_get_position(pedestal, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.15f, 0.8f, 0.15f};
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_ped);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_ped);
         }
 
         /* Blade */
@@ -279,10 +280,10 @@ int main(void)
             float rot[9]; quat_to_col_rot(&q, rot);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {4.0f, 0.25f, 0.4f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_blade);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_blade);
 
             /* Axes at blade center showing local frame */
-            ivp_draw_axes(renderer, fp, rot, 1.5f);
+            ivp_render_draw_axes(renderer, fp, rot, 1.5f);
         }
 
         /* Targets */
@@ -293,7 +294,7 @@ int main(void)
             float rot[9]; quat_to_col_rot(&q, rot);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.4f, 0.4f, 0.4f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_target);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_target);
 
             /* Velocity arrow if moving */
             ivp_vec3r_t v;
@@ -302,14 +303,14 @@ int main(void)
             if (spd > 1.0f) {
                 float sc = 0.25f;
                 float to[3] = {fp[0]+(float)v.k[0]*sc, fp[1]+(float)v.k[1]*sc, fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
         /* Origin axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 2.0f);
+            ivp_render_draw_axes(renderer, org, NULL, 2.0f);
         }
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
@@ -319,14 +320,14 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Targets: %d",
                      sl.fps_display, N_TARGETS);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             /* Angular velocity of blade (from core, float vec3) */
             ivp_vec3f_t w = blade->core.rot_speed;
             float omega = sqrtf(w.k[0]*w.k[0]+w.k[1]*w.k[1]+w.k[2]*w.k[2]);
             float rpm = omega * 60.0f / (2.0f * 3.14159f);
             snprintf(buf, sizeof(buf), "Blade: %.1f rad/s  (%.0f RPM)", omega, rpm);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_blade);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_blade);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 50.0f, c_hud, c_drag);
         }

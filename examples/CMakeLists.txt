@@ -3,21 +3,8 @@
 # All dependencies (ivp, ivp_render, SDL3) are provided by the
 # top-level CMakeLists.txt before add_subdirectory(examples) is called.
 
-# ── Backward-compatible facade for examples ───────────────────────────────────
-add_library(ivp_example_render STATIC render.c render.h)
-target_link_libraries(ivp_example_render PUBLIC ivp_render)
-target_include_directories(ivp_example_render
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-)
-# Relax warnings for facade
-if (NOT MSVC)
-    target_compile_options(ivp_example_render PRIVATE
-            -Wno-conversion -Wno-double-promotion -Wno-sign-conversion
-    )
-endif ()
-
 add_library(ivp_example_interaction STATIC interaction.c interaction.h)
-target_link_libraries(ivp_example_interaction PRIVATE ivp SDL3::SDL3)
+target_link_libraries(ivp_example_interaction PRIVATE ivp ivp_render SDL3::SDL3)
 target_include_directories(ivp_example_interaction
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -30,7 +17,7 @@ target_include_directories(ivp_example_inspect
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
     add_executable(${NAME} ${SOURCE})
-    target_link_libraries(${NAME} PRIVATE ivp ivp_example_render ivp_example_interaction ivp_example_inspect)
+    target_link_libraries(${NAME} PRIVATE ivp ivp_render ivp_example_interaction ivp_example_inspect)
     add_dependencies(${NAME} ivp_render_shaders)
     if (NOT MSVC)
         target_link_libraries(${NAME} PRIVATE m)

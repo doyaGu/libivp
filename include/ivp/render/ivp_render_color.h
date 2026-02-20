@@ -2,7 +2,22 @@
 #ifndef IVP_RENDER_COLOR_H
 #define IVP_RENDER_COLOR_H
 
-#include <ivp/render/ivp_render_types.h>
+/* ── Color type ────────────────────────────────────────────────────────── */
+
+typedef struct ivp_color3f {
+    float r, g, b;
+} ivp_color3f_t;
+
+static inline ivp_color3f_t ivp_color3f(float r, float g, float b)
+{
+    ivp_color3f_t c = {r, g, b};
+    return c;
+}
+
+static inline const float *ivp_color3f_ptr(const ivp_color3f_t *c)
+{
+    return &c->r;
+}
 
 #ifdef __cplusplus
 extern "C" {

@@ -22,7 +22,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Force Actuator -- Magnet Toggle", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -160,10 +161,10 @@ int main(void)
         if (dist > max_dist) max_dist = dist;
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 10.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Cubes */
@@ -176,7 +177,7 @@ int main(void)
             float rot[9]; quat_to_col_rot(&qa, rot);
             vec3r_to_float3(&pa, fpa);
             float hs[3] = {1.0f, 1.0f, 1.0f};
-            ivp_draw_wire_box(renderer, fpa, hs, rot, c_cube_a);
+            ivp_render_draw_wire_box(renderer, fpa, hs, rot, c_cube_a);
         }
         {
             ivp_quatr_t qb;
@@ -185,12 +186,12 @@ int main(void)
             float rot[9]; quat_to_col_rot(&qb, rot);
             vec3r_to_float3(&pb, fpb);
             float hs[3] = {1.0f, 1.0f, 1.0f};
-            ivp_draw_wire_box(renderer, fpb, hs, rot, c_cube_b);
+            ivp_render_draw_wire_box(renderer, fpb, hs, rot, c_cube_b);
         }
 
         /* Force direction arrow (A→B) when magnet is on */
         if (magnet_on)
-            ivp_draw_arrow(renderer, fpa, fpb, c_force, 0.4f);
+            ivp_render_draw_arrow(renderer, fpa, fpb, c_force, 0.4f);
 
         /* Velocity arrows */
         for (int i = 0; i < 2; i++) {
@@ -204,14 +205,14 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         /* Inspector */
@@ -237,15 +238,15 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Time: %.1fs",
                      sl.fps_display, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Force: %.1f N  Distance: %.2f m",
                      (float)fa_state.force, dist);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_force);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_force);
 
             snprintf(buf, sizeof(buf), "Magnet: %s  (toggles every 5s)",
                      magnet_on ? "ON" : "OFF");
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, buf,
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf,
                              magnet_on ? c_on : c_off);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,

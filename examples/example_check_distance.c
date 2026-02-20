@@ -55,7 +55,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Check Distance -- Motor Trigger", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -221,10 +222,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Pivot */
@@ -233,7 +234,7 @@ int main(void)
             ivp_object_get_position(pivot, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.3f, 0.3f, 0.3f};
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_pivot);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_pivot);
         }
 
         /* Bob + pendulum rod */
@@ -244,8 +245,8 @@ int main(void)
             ivp_object_get_position(pivot, &pp);
             vec3r_to_float3(&pb, fp_bob);
             vec3r_to_float3(&pp, fp_pivot);
-            ivp_draw_wire_sphere(renderer, fp_bob, 0.6f, c_bob);
-            ivp_draw_thick_line(renderer, fp_pivot, fp_bob, c_link, 2);
+            ivp_render_draw_wire_sphere(renderer, fp_bob, 0.6f, c_bob);
+            ivp_render_draw_thick_line(renderer, fp_pivot, fp_bob, c_link, 2);
         }
 
         /* Spin box (color depends on motor state) */
@@ -257,7 +258,7 @@ int main(void)
             vec3r_to_float3(&p, fp_box);
             float rot[9]; quat_to_col_rot(&q, rot);
             float hs[3] = {0.8f, 0.4f, 0.8f};
-            ivp_draw_wire_box(renderer, fp_box, hs, rot,
+            ivp_render_draw_wire_box(renderer, fp_box, hs, rot,
                               dist_ctx.motor_active ? c_box_on : c_box_off);
         }
 
@@ -272,7 +273,7 @@ int main(void)
                                fp_box[2] + r * sinf(a0)};
                 float p1[3] = {fp_box[0] + r * cosf(a1), -0.2f,
                                fp_box[2] + r * sinf(a1)};
-                ivp_draw_line(renderer, p0, p1, c_range);
+                ivp_render_draw_line(renderer, p0, p1, c_range);
             }
         }
 
@@ -286,14 +287,14 @@ int main(void)
                 float to[3] = {fp_bob[0]+(float)v.k[0]*sc,
                                fp_bob[1]+(float)v.k[1]*sc,
                                fp_bob[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp_bob, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp_bob, to, c_vel, 0.2f);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -315,16 +316,16 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Time: %.1fs",
                      sl.fps_display, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Distance: %.2f m  Threshold: 4.0 m",
                      (float)dist_check.current_distance);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_range);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_range);
 
             snprintf(buf, sizeof(buf), "Motor: %s  Speed: %.1f rad/s",
                      dist_ctx.motor_active ? "ON" : "OFF",
                      (float)motor.current_speed);
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, buf,
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf,
                              dist_ctx.motor_active ? c_box_on : c_box_off);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,

@@ -401,7 +401,7 @@ void ivp_example_interaction_draw_overlays(ivp_renderer_t *renderer,
         ivp_vec3r_t p;
         ivp_object_get_position(dragger->target, &p);
         float from[3] = {(float)p.k[0], (float)p.k[1], (float)p.k[2]};
-        ivp_draw_arrow(renderer, from, dragger->target_ws, drag_color, 0.25f);
+        ivp_render_draw_arrow(renderer, from, dragger->target_ws, drag_color, 0.25f);
     }
 
     if (focus && focus->focused) {
@@ -409,7 +409,7 @@ void ivp_example_interaction_draw_overlays(ivp_renderer_t *renderer,
         ivp_object_get_position(focus->focused, &p);
         float pos[3] = {(float)p.k[0], (float)p.k[1], (float)p.k[2]};
         float hs[3] = {0.6f, 0.6f, 0.6f};
-        ivp_draw_wire_box(renderer, pos, hs, NULL, focus_color);
+        ivp_render_draw_wire_box(renderer, pos, hs, NULL, focus_color);
     }
 }
 
@@ -435,10 +435,10 @@ void ivp_example_draw_interaction_hud(ivp_renderer_t *renderer,
                                       const float secondary_color[3])
 {
     if (!renderer) return;
-    ivp_draw_text_2d(renderer, x, y,
+    ivp_render_draw_text(renderer, x, y,
         ivp_example_interaction_hud_primary_line(), primary_color);
-    ivp_draw_text_2d(renderer, x, y + 18.0f,
+    ivp_render_draw_text(renderer, x, y + 18.0f,
         ivp_example_interaction_hud_secondary_line(), secondary_color);
-    ivp_draw_text_2d(renderer, x, y + 36.0f,
+    ivp_render_draw_text(renderer, x, y + 36.0f,
         ivp_example_interaction_hud_tertiary_line(), secondary_color);
 }

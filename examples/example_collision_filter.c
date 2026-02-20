@@ -28,7 +28,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Collision Filters -- Group, Layer, Pair", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -247,10 +248,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 25.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 25.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {25.0f, 0.5f, 10.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Draw all objects per zone */
@@ -274,22 +275,22 @@ int main(void)
             else
                 col = c_yellow;
 
-            ivp_draw_wire_box(renderer, fp, hs, rot, col);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, col);
         }
 
         /* Zone separators (vertical lines) */
         {
             float a[3] = {-6.0f, -12.0f, -5.0f};
             float b[3] = {-6.0f, 0.0f, -5.0f};
-            ivp_draw_line(renderer, a, b, c_hud);
+            ivp_render_draw_line(renderer, a, b, c_hud);
             a[0] = b[0] = 6.0f;
-            ivp_draw_line(renderer, a, b, c_hud);
+            ivp_render_draw_line(renderer, a, b, c_hud);
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -307,18 +308,18 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
                      sl.fps_display, n_obj, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf),
                 "Zone1: ExclusivePair %s (toggle 5s)",
                 pair_collision_off ? "OFF (ghost)" : "ON (collide)");
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf,
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf,
                              pair_collision_off ? c_z1_off : c_z1_on);
 
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f,
+            ivp_render_draw_text(renderer, 10.0f, 48.0f,
                 "Zone2: GroupFilter (same group=ghost)", c_red);
 
-            ivp_draw_text_2d(renderer, 10.0f, 66.0f,
+            ivp_render_draw_text(renderer, 10.0f, 66.0f,
                 "Zone3: LayerMask (disjoint layers=ghost)", c_green);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 88.0f,

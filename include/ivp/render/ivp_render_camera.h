@@ -2,7 +2,6 @@
 #ifndef IVP_RENDER_CAMERA_H
 #define IVP_RENDER_CAMERA_H
 
-#include <ivp/render/ivp_render_types.h>
 #include <ivp/render/ivp_render_math.h>
 #include <stdbool.h>
 #include <SDL3/SDL_events.h>
@@ -51,6 +50,8 @@ typedef struct ivp_camera_config {
 } ivp_camera_config_t;
 
 /* ── Camera struct ─────────────────────────────────────────────────────── */
+
+typedef struct ivp_camera ivp_camera_t;
 
 struct ivp_camera {
     float eye[3];

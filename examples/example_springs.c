@@ -30,7 +30,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Springs -- Bridge & Bungee", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -377,10 +378,10 @@ int main(void)
         /* Diagnostics only; avoid mutating simulation state in debug path. */
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0,0,0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Pillars */
@@ -389,11 +390,11 @@ int main(void)
             ivp_object_get_position(pillar_l, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.5f, 2.0f, 0.5f};
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_pillar);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_pillar);
 
             ivp_object_get_position(pillar_r, &p);
             vec3r_to_float3(&p, fp);
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_pillar);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_pillar);
         }
 
         /* Bridge nodes + inter-node spring lines */
@@ -407,21 +408,21 @@ int main(void)
             vec3r_to_float3(&p, node_positions[i]);
 
             float hs[3] = {0.5f, 0.5f, 0.5f};
-            ivp_draw_wire_box(renderer, node_positions[i], hs, rot, c_node);
+            ivp_render_draw_wire_box(renderer, node_positions[i], hs, rot, c_node);
         }
 
         /* Spring lines for bridge */
         {
             ivp_vec3r_t pl; ivp_object_get_position(pillar_l, &pl);
             float lp[3]; vec3r_to_float3(&pl, lp);
-            ivp_draw_thick_line(renderer, lp, node_positions[0], c_spring, 2);
+            ivp_render_draw_thick_line(renderer, lp, node_positions[0], c_spring, 2);
 
             for (int i = 1; i < N_BRIDGE; i++)
-                ivp_draw_thick_line(renderer, node_positions[i-1], node_positions[i], c_spring, 2);
+                ivp_render_draw_thick_line(renderer, node_positions[i-1], node_positions[i], c_spring, 2);
 
             ivp_vec3r_t pr; ivp_object_get_position(pillar_r, &pr);
             float rp[3]; vec3r_to_float3(&pr, rp);
-            ivp_draw_thick_line(renderer, node_positions[N_BRIDGE-1], rp, c_spring, 2);
+            ivp_render_draw_thick_line(renderer, node_positions[N_BRIDGE-1], rp, c_spring, 2);
         }
 
         /* Heavy ball */
@@ -429,7 +430,7 @@ int main(void)
             ivp_vec3r_t p;
             ivp_object_get_position(ball, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
-            ivp_draw_wire_sphere(renderer, fp, 0.8f, c_ball);
+            ivp_render_draw_wire_sphere(renderer, fp, 0.8f, c_ball);
 
             /* Velocity arrow */
             ivp_vec3r_t v;
@@ -438,7 +439,7 @@ int main(void)
             if (spd > 0.3f) {
                 float sc = 0.3f;
                 float to[3] = {fp[0]+(float)v.k[0]*sc, fp[1]+(float)v.k[1]*sc, fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
@@ -447,7 +448,7 @@ int main(void)
             ivp_vec3r_t pa; ivp_object_get_position(anchor, &pa);
             float ap[3]; vec3r_to_float3(&pa, ap);
             float ahs[3] = {0.3f, 0.3f, 0.3f};
-            ivp_draw_wire_box(renderer, ap, ahs, NULL, c_anchor);
+            ivp_render_draw_wire_box(renderer, ap, ahs, NULL, c_anchor);
 
             ivp_vec3r_t pb; ivp_quatr_t qb;
             ivp_object_get_position(bungee, &pb);
@@ -455,10 +456,10 @@ int main(void)
             float rot[9]; quat_to_col_rot(&qb, rot);
             float bp[3]; vec3r_to_float3(&pb, bp);
             float bhs[3] = {0.6f, 0.6f, 0.6f};
-            ivp_draw_wire_box(renderer, bp, bhs, rot, c_bungee);
+            ivp_render_draw_wire_box(renderer, bp, bhs, rot, c_bungee);
 
             /* Bungee cord */
-            ivp_draw_thick_line(renderer, ap, bp, c_spring, 2);
+            ivp_render_draw_thick_line(renderer, ap, bp, c_spring, 2);
 
             /* Velocity arrow */
             ivp_vec3r_t v;
@@ -467,14 +468,14 @@ int main(void)
             if (spd > 0.3f) {
                 float sc = 0.3f;
                 float to[3] = {bp[0]+(float)v.k[0]*sc, bp[1]+(float)v.k[1]*sc, bp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, bp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, bp, to, c_vel, 0.2f);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
@@ -484,19 +485,19 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Springs: %d  Time: %.1fs",
                      sl.fps_display, n_springs, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             ivp_vec3r_t bp; ivp_object_get_position(ball, &bp);
             ivp_vec3r_t bv; ivp_object_get_speed(ball, &bv);
             float bspd = vec3r_speed(&bv);
             snprintf(buf, sizeof(buf), "Ball: (%.1f,%.1f,%.1f) speed:%.1f",
                      (float)bp.k[0], (float)bp.k[1], (float)bp.k[2], bspd);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_ball);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_ball);
 
             ivp_vec3r_t bgp; ivp_object_get_position(bungee, &bgp);
             snprintf(buf, sizeof(buf), "Bungee: (%.1f,%.1f,%.1f)",
                      (float)bgp.k[0], (float)bgp.k[1], (float)bgp.k[2]);
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, buf, c_bungee);
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf, c_bungee);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f, c_hud, c_drag);
         }

@@ -45,7 +45,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Freefall -- Bouncing Balls", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -154,10 +155,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 20.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 20.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {20.0f, 0.5f, 12.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
@@ -165,7 +166,7 @@ int main(void)
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 2.0f);
+            ivp_render_draw_axes(renderer, org, NULL, 2.0f);
         }
 
         /* Balls */
@@ -180,7 +181,7 @@ int main(void)
 
             float fp[3];
             vec3r_to_float3(&p, fp);
-            ivp_draw_wire_sphere(renderer, fp, d->radius, d->col);
+            ivp_render_draw_wire_sphere(renderer, fp, d->radius, d->col);
 
             /* Bounce detection: sign change of vertical speed (Y component) */
             float cur_vy = (float)v.k[1];
@@ -203,7 +204,7 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
@@ -232,7 +233,7 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Balls: %d  Time: %.1fs  CCD: ON",
                      sl.fps_display, N_BALLS, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             for (int i = 0; i < N_BALLS; i++) {
                 ivp_vec3r_t p, v;
@@ -243,7 +244,7 @@ int main(void)
                 snprintf(buf, sizeof(buf), "%s (e=%.2f m=%.0f): h=%.1f v=%.1f bounces=%d",
                          descs[i].label, descs[i].elasticity, descs[i].mass,
                          height, speed, bounces[i]);
-                ivp_draw_text_2d(renderer, 10.0f, 30.0f + 18.0f * (float)i, buf, descs[i].col);
+                ivp_render_draw_text(renderer, 10.0f, 30.0f + 18.0f * (float)i, buf, descs[i].col);
             }
 
             ivp_example_draw_interaction_hud(renderer,

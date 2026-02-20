@@ -2,7 +2,7 @@
 #ifndef IVP_EXAMPLE_INTERACTION_H
 #define IVP_EXAMPLE_INTERACTION_H
 
-#include "render.h"
+#include <ivp/render/ivp_render.h>
 
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_handle.h>

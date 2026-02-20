@@ -83,7 +83,8 @@ int main(int argc, char **argv)
         .width = 1280, .height = 720,
         .title = "IVP 3DS Import Example", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -166,7 +167,7 @@ int main(int argc, char **argv)
                            (float)c->pos_world_f_core_last_psi.k[2]};
             float grot[9];
             quat_to_col_rot(&c->q_world_f_core_last_psi, grot);
-            ivp_draw_wire_box(renderer, gp, ground_half, grot, ground_color);
+            ivp_render_draw_wire_box(renderer, gp, ground_half, grot, ground_color);
         }
 
         /* Draw imported object */
@@ -177,7 +178,7 @@ int main(int argc, char **argv)
                            (float)c->pos_world_f_core_last_psi.k[2]};
             float drot[9];
             quat_to_col_rot(&c->q_world_f_core_last_psi, drot);
-            ivp_draw_wire_box(renderer, dp, dyn_half, drot, dyn_color);
+            ivp_render_draw_wire_box(renderer, dp, dyn_half, drot, dyn_color);
         }
 
         ivp_renderer_end_frame(renderer);

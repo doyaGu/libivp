@@ -32,7 +32,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Cubes -- Stacking Demo", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
     ivp_renderer_set_clear_color(renderer, 0.26f, 0.30f, 0.36f, 1.0f);
 
@@ -285,10 +286,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Ramp */
@@ -299,13 +300,13 @@ int main(void)
             float rot[9]; quat_to_col_rot(&q, rot);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {4.0f, 0.2f, 2.0f};
-            ivp_draw_wire_box(renderer, fp, hs, rot, c_ramp);
+            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_ramp);
         }
 
         /* Origin axes */
         {
             float origin[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, origin, NULL, 2.0f);
+            ivp_render_draw_axes(renderer, origin, NULL, 2.0f);
         }
 
         /* Dynamic objects */
@@ -322,10 +323,10 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
 
             if (dyn[i].is_sphere) {
-                ivp_draw_wire_sphere(renderer, fp, dyn[i].radius, dyn[i].col);
+                ivp_render_draw_wire_sphere(renderer, fp, dyn[i].radius, dyn[i].col);
             } else {
                 float rot[9]; quat_to_col_rot(&q, rot);
-                ivp_draw_wire_box(renderer, fp, dyn[i].hs, rot, dyn[i].col);
+                ivp_render_draw_wire_box(renderer, fp, dyn[i].hs, rot, dyn[i].col);
 
                 float up_y = fabsf(rot[4]);
                 if (up_y < 0.72f) toppled_count++;
@@ -346,7 +347,7 @@ int main(void)
                     fp[1] + (float)v.k[1] * scale,
                     fp[2] + (float)v.k[2] * scale
                 };
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.3f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.3f);
             }
         }
 
@@ -367,7 +368,7 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
                      sl.fps_display, n_dyn, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
             ivp_example_draw_interaction_hud(renderer, 10.0f, 30.0f, c_hud, c_drag);
         }
 

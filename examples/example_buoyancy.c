@@ -53,7 +53,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Buoyancy -- Floating & Sinking", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -207,16 +208,16 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 5.0f, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
         /* Walls */
         {
             float ws[3] = {0.3f, 6.0f, 15.0f};
-            float wl[3] = {-12.0f, 0, 0}; ivp_draw_wire_box(renderer, wl, ws, NULL, c_wall);
-            float wr[3] = { 12.0f, 0, 0}; ivp_draw_wire_box(renderer, wr, ws, NULL, c_wall);
+            float wl[3] = {-12.0f, 0, 0}; ivp_render_draw_wire_box(renderer, wl, ws, NULL, c_wall);
+            float wr[3] = { 12.0f, 0, 0}; ivp_render_draw_wire_box(renderer, wr, ws, NULL, c_wall);
         }
 
         /* Water surface grid (denser, with thick border) */
@@ -225,23 +226,23 @@ int main(void)
             float wy = WATER_SURFACE_Y;
             for (float x = -ext; x <= ext; x += 1.5f) {
                 float a[3] = {x, wy, -ext}, b[3] = {x, wy, ext};
-                ivp_draw_line(renderer, a, b, c_water);
+                ivp_render_draw_line(renderer, a, b, c_water);
             }
             for (float z = -ext; z <= ext; z += 1.5f) {
                 float a[3] = {-ext, wy, z}, b[3] = {ext, wy, z};
-                ivp_draw_line(renderer, a, b, c_water);
+                ivp_render_draw_line(renderer, a, b, c_water);
             }
             /* Thick border lines */
             float a[3], b[3];
             a[1] = b[1] = wy;
             a[2] = -ext; b[2] = ext; a[0] = b[0] = -ext;
-            ivp_draw_thick_line(renderer, a, b, c_water, 3);
+            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
             a[0] = b[0] = ext;
-            ivp_draw_thick_line(renderer, a, b, c_water, 3);
+            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
             a[0] = -ext; b[0] = ext; a[2] = b[2] = -ext;
-            ivp_draw_thick_line(renderer, a, b, c_water, 3);
+            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
             a[2] = b[2] = ext;
-            ivp_draw_thick_line(renderer, a, b, c_water, 3);
+            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
         }
 
         /* Flow direction arrow in the water */
@@ -249,7 +250,7 @@ int main(void)
             float fa[3] = {-8.0f, WATER_SURFACE_Y, 8.0f};
             float fb[3] = {-3.0f, WATER_SURFACE_Y, 8.0f};
             const float c_flow[] = {0.3f, 0.7f, 1.0f};
-            ivp_draw_arrow(renderer, fa, fb, c_flow, 0.5f);
+            ivp_render_draw_arrow(renderer, fa, fb, c_flow, 0.5f);
         }
 
         /* Draw objects */
@@ -269,11 +270,11 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
 
             if (d->is_sphere) {
-                ivp_draw_wire_sphere(renderer, fp, d->hs[0], d->col);
+                ivp_render_draw_wire_sphere(renderer, fp, d->hs[0], d->col);
             } else {
                 float rot[9]; quat_to_col_rot(&q, rot);
                 float hs[3] = {d->hs[0], d->hs[1], d->hs[2]};
-                ivp_draw_wire_box(renderer, fp, hs, rot, d->col);
+                ivp_render_draw_wire_box(renderer, fp, hs, rot, d->col);
             }
 
             /* Velocity arrow */
@@ -286,7 +287,7 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
 
             /* Upward buoyancy indicator when submerged.
@@ -310,7 +311,7 @@ int main(void)
                 submerged_count++;
                 float ba[3] = {fp[0], fp[1], fp[2]};
                 float bb[3] = {fp[0], fp[1] - 1.5f, fp[2]};
-                ivp_draw_arrow(renderer, ba, bb, c_buoy, 0.2f);
+                ivp_render_draw_arrow(renderer, ba, bb, c_buoy, 0.2f);
             }
             if (submerge > 0.50f) mostly_submerged_count++;
             if (submerge > 0.10f && submerge < 0.90f && fabsf((float)v.k[1]) < 1.0f)
@@ -335,7 +336,7 @@ int main(void)
         /* Axes at origin */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
@@ -345,7 +346,7 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Water Y=%.1f",
                      sl.fps_display, N_OBJS, WATER_SURFACE_Y);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             for (int i = 0; i < N_OBJS; i++) {
                 ivp_vec3r_t p;
@@ -363,10 +364,10 @@ int main(void)
                 float density = (vol > 1e-6f) ? descs[i].mass / vol : 0.0f;
                 snprintf(buf, sizeof(buf), "%s  depth:%.1f  %s  d:%.0f",
                          descs[i].label, depth, status, density);
-                ivp_draw_text_2d(renderer, 10.0f, 30.0f + 18.0f * (float)i, buf, descs[i].col);
+                ivp_render_draw_text(renderer, 10.0f, 30.0f + 18.0f * (float)i, buf, descs[i].col);
             }
 
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f + 18.0f * N_OBJS + 10.0f,
+            ivp_render_draw_text(renderer, 10.0f, 30.0f + 18.0f * N_OBJS + 10.0f,
                 "Current:+X 1.5m/s", c_hud);
             ivp_example_draw_interaction_hud(renderer,
                 10.0f, 30.0f + 18.0f * N_OBJS + 28.0f, c_hud, c_drag);

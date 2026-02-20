@@ -1,31 +1,20 @@
-/* ivp_render_hud.c -- 2D text overlay with bitmap font (SDL3 GPU backend) */
+/* ivp_render_hud.c -- 2D text overlay with bitmap font
+ *
+ * All functions take ivp_renderer_t* directly and push vertices into
+ * the renderer's unified stream_2d via ivp_gpu_stream_push.
+ */
 
-#include <ivp/render/ivp_render_hud.h>
-#include <ivp/render/ivp_render_math.h>
-#include <ivp/base/ivp_allocator.h>
-#include "ivp_render_gpu.h"
-
+#include "ivp_render_internal.h"
 #include <string.h>
-#include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
 
-/* ── Internal vertex type ──────────────────────────────────────────────── */
+/* ── Internal vertex type (must match stream_2d layout) ────────────────── */
 
 typedef struct hud_vertex {
     float pos[2];
     float col[3];
 } hud_vertex_t;
-
-/* ── HUD context ───────────────────────────────────────────────────────── */
-
-struct ivp_render_hud_ctx {
-    ivp_gpu_pipeline_t  pipeline;
-    ivp_gpu_buffer_t    buffer;
-    hud_vertex_t       *vertices;
-    int                 vertex_count;
-    ivp_render_hud_config_t config;
-};
 
 /* ── Bitmap font data (5x7, ASCII 32-126) ──────────────────────────────── */
 
@@ -130,142 +119,29 @@ static const unsigned char s_font[][IVP_RENDER_HUD_FONT_H] = {
     /*126 '~' */ {0x00,0x00,0x08,0x15,0x02,0x00,0x00},
 };
 
-/* ── Internal: push a HUD line segment ─────────────────────────────────── */
+/* ── Push helper ───────────────────────────────────────────────────────── */
 
-static void push_hud_line(ivp_render_hud_ctx_t *ctx,
+static void push_hud_line(ivp_renderer_t *r,
                           float x0, float y0, float x1, float y1,
                           const float col[3])
 {
-    if (ctx->vertex_count + 2 > ctx->config.max_vertices) return;
-    hud_vertex_t *v = &ctx->vertices[ctx->vertex_count];
+    hud_vertex_t *v = (hud_vertex_t *)ivp_gpu_stream_push(&r->stream_2d, 2);
+    if (!v) return;
     v[0].pos[0] = x0; v[0].pos[1] = y0;
     memcpy(v[0].col, col, 3 * sizeof(float));
     v[1].pos[0] = x1; v[1].pos[1] = y1;
     memcpy(v[1].col, col, 3 * sizeof(float));
-    ctx->vertex_count += 2;
-}
-
-/* ── Config ────────────────────────────────────────────────────────────── */
-
-void ivp_render_hud_config_init(ivp_render_hud_config_t *cfg)
-{
-    cfg->max_vertices = IVP_RENDER_HUD_MAX_VERTICES;
-    cfg->font_scale   = IVP_RENDER_HUD_FONT_SCALE;
-}
-
-/* ── Lifecycle ─────────────────────────────────────────────────────────── */
-
-ivp_result_t ivp_render_hud_ctx_create_ex(ivp_render_hud_ctx_t **out,
-                                          const ivp_render_hud_config_t *config,
-                                          ivp_gpu_device_t *gpu)
-{
-    const ivp_allocator_t *alloc = ivp_default_allocator();
-
-    ivp_render_hud_ctx_t *ctx = (ivp_render_hud_ctx_t *)ivp_alloc(alloc, sizeof(*ctx));
-    if (!ctx) return IVP_ERR_OUT_OF_MEMORY;
-    memset(ctx, 0, sizeof(*ctx));
-
-    if (config) {
-        ctx->config = *config;
-    } else {
-        ivp_render_hud_config_init(&ctx->config);
-    }
-    if (ctx->config.max_vertices <= 0)
-        ctx->config.max_vertices = IVP_RENDER_HUD_MAX_VERTICES;
-    if (ctx->config.font_scale <= 0)
-        ctx->config.font_scale = IVP_RENDER_HUD_FONT_SCALE;
-
-    /* Create 2D pipeline (no depth test, no depth write) */
-    size_t vs_len, fs_len;
-    const unsigned char *vs = ivp_gpu_vs_2d_code(gpu, &vs_len);
-    const unsigned char *fs = ivp_gpu_fs_2d_code(gpu, &fs_len);
-
-    ivp_gpu_attrib_desc_t attribs[2] = {
-        { 0, 2, (int)offsetof(hud_vertex_t, pos) },
-        { 1, 3, (int)offsetof(hud_vertex_t, col) },
-    };
-    ivp_result_t res = ivp_gpu_pipeline_create(
-        &ctx->pipeline, gpu, vs, vs_len, fs, fs_len,
-        (int)sizeof(hud_vertex_t), attribs, 2, false, false);
-    if (res != IVP_OK) {
-        ivp_free(alloc, ctx, sizeof(*ctx));
-        return res;
-    }
-
-    res = ivp_gpu_buffer_create(&ctx->buffer, gpu,
-                                ctx->config.max_vertices,
-                                (int)sizeof(hud_vertex_t));
-    if (res != IVP_OK) {
-        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
-        ivp_free(alloc, ctx, sizeof(*ctx));
-        return res;
-    }
-
-    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(hud_vertex_t);
-    ctx->vertices = (hud_vertex_t *)ivp_alloc(alloc, vertices_bytes);
-    if (!ctx->vertices) {
-        ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
-        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
-        ivp_free(alloc, ctx, sizeof(*ctx));
-        return IVP_ERR_OUT_OF_MEMORY;
-    }
-    ctx->vertex_count = 0;
-
-    *out = ctx;
-    return IVP_OK;
-}
-
-void ivp_render_hud_ctx_destroy(ivp_render_hud_ctx_t *ctx,
-                                ivp_gpu_device_t *gpu)
-{
-    if (!ctx) return;
-    const ivp_allocator_t *alloc = ivp_default_allocator();
-    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(hud_vertex_t);
-    if (ctx->vertices) {
-        ivp_free(alloc, ctx->vertices, vertices_bytes);
-    }
-    ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
-    ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
-    ivp_free(alloc, ctx, sizeof(*ctx));
-}
-
-void ivp_render_hud_ctx_reset(ivp_render_hud_ctx_t *ctx)
-{
-    ctx->vertex_count = 0;
-}
-
-void ivp_render_hud_ctx_upload(ivp_render_hud_ctx_t *ctx,
-                               ivp_gpu_device_t *gpu,
-                               SDL_GPUCommandBuffer *cmd)
-{
-    ivp_gpu_buffer_upload(&ctx->buffer, gpu, cmd,
-                          ctx->vertices, ctx->vertex_count);
-}
-
-void ivp_render_hud_ctx_draw(ivp_render_hud_ctx_t *ctx,
-                             ivp_gpu_device_t *gpu,
-                             SDL_GPUCommandBuffer *cmd,
-                             SDL_GPURenderPass *pass,
-                             int width, int height)
-{
-    if (ctx->vertex_count <= 0) return;
-    (void)gpu;
-    float ortho[16];
-    ivp_render_mat4_ortho(ortho, 0.0f, (float)width, (float)height, 0.0f,
-                          -1.0f, 1.0f);
-    ivp_gpu_buffer_draw(&ctx->buffer, pass, cmd,
-                        &ctx->pipeline, ortho, ctx->vertex_count);
 }
 
 /* ── Text drawing ──────────────────────────────────────────────────────── */
 
-void ivp_render_draw_text_2d_scaled(ivp_render_hud_ctx_t *ctx,
-                                    float x, float y,
-                                    const char *text,
-                                    const float color[3],
-                                    int scale)
+void ivp_render_draw_text_scaled(ivp_renderer_t *r,
+                                 float x, float y,
+                                 const char *text,
+                                 const float color[3],
+                                 int scale)
 {
-    if (scale <= 0) scale = ctx->config.font_scale;
+    if (scale <= 0) scale = r->hud_font_scale;
     float cx = x, cy = y;
     float sc = (float)scale;
 
@@ -273,7 +149,6 @@ void ivp_render_draw_text_2d_scaled(ivp_render_hud_ctx_t *ctx,
         if (*p == '\n') { cx = x; cy += (IVP_RENDER_HUD_FONT_H + 1) * sc; continue; }
         int ch = (int)(unsigned char)*p;
         if (ch < FONT_FIRST || ch > FONT_LAST) { cx += (IVP_RENDER_HUD_FONT_W + 1)*sc; continue; }
-
         const unsigned char *g = s_font[ch - FONT_FIRST];
         for (int row = 0; row < IVP_RENDER_HUD_FONT_H; row++) {
             unsigned char bits = g[row];
@@ -281,7 +156,7 @@ void ivp_render_draw_text_2d_scaled(ivp_render_hud_ctx_t *ctx,
                 if (bits & (1 << (IVP_RENDER_HUD_FONT_W - 1 - col))) {
                     float px = cx + (float)col * sc;
                     float py = cy + (float)row * sc;
-                    push_hud_line(ctx, px, py, px + sc, py, color);
+                    push_hud_line(r, px, py, px + sc, py, color);
                 }
             }
         }
@@ -289,77 +164,55 @@ void ivp_render_draw_text_2d_scaled(ivp_render_hud_ctx_t *ctx,
     }
 }
 
-void ivp_render_draw_text_2d(ivp_render_hud_ctx_t *ctx,
-                             float x, float y,
-                             const char *text,
-                             const float color[3])
+void ivp_render_draw_text(ivp_renderer_t *r,
+                          float x, float y,
+                          const char *text,
+                          const float color[3])
 {
-    ivp_render_draw_text_2d_scaled(ctx, x, y, text, color,
-                                   ctx->config.font_scale);
+    ivp_render_draw_text_scaled(r, x, y, text, color, r->hud_font_scale);
 }
 
-void ivp_render_draw_text_2d_aligned(ivp_render_hud_ctx_t *ctx,
-                                     float x, float y,
-                                     const char *text,
-                                     const float color[3],
-                                     ivp_text_align_t align)
+void ivp_render_draw_text_aligned(ivp_renderer_t *r,
+                                  float x, float y,
+                                  const char *text,
+                                  const float color[3],
+                                  ivp_text_align_t align)
 {
     if (align == IVP_TEXT_ALIGN_CENTER) {
-        float w = ivp_render_hud_text_width_scaled(text, ctx->config.font_scale);
+        float w = ivp_render_text_width(text, r->hud_font_scale);
         x -= w * 0.5f;
     } else if (align == IVP_TEXT_ALIGN_RIGHT) {
-        float w = ivp_render_hud_text_width_scaled(text, ctx->config.font_scale);
+        float w = ivp_render_text_width(text, r->hud_font_scale);
         x -= w;
     }
-    ivp_render_draw_text_2d(ctx, x, y, text, color);
+    ivp_render_draw_text(r, x, y, text, color);
 }
 
-void ivp_render_draw_text_2d_fmt(ivp_render_hud_ctx_t *ctx,
-                                 float x, float y,
-                                 const float color[3],
-                                 const char *fmt, ...)
+void ivp_render_draw_text_fmt(ivp_renderer_t *r,
+                              float x, float y,
+                              const float color[3],
+                              const char *fmt, ...)
 {
     char buf[256];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    ivp_render_draw_text_2d(ctx, x, y, buf, color);
+    ivp_render_draw_text(r, x, y, buf, color);
 }
 
-/* ── Utilities ─────────────────────────────────────────────────────────── */
+/* ── Text measurement ──────────────────────────────────────────────────── */
 
-float ivp_render_hud_line_height_scaled(int scale)
-{
-    return (IVP_RENDER_HUD_FONT_H + 1) * (float)scale;
-}
-
-float ivp_render_hud_line_height(void)
-{
-    return ivp_render_hud_line_height_scaled(IVP_RENDER_HUD_FONT_SCALE);
-}
-
-float ivp_render_hud_text_width_scaled(const char *text, int scale)
+float ivp_render_text_width(const char *text, int scale)
 {
     float sc = (float)scale;
     int count = 0;
-    for (const char *p = text; *p && *p != '\n'; p++) {
+    for (const char *p = text; *p && *p != '\n'; p++)
         count++;
-    }
     return (float)count * (IVP_RENDER_HUD_FONT_W + 1) * sc;
 }
 
-float ivp_render_hud_text_width(const char *text)
+float ivp_render_line_height(int scale)
 {
-    return ivp_render_hud_text_width_scaled(text, IVP_RENDER_HUD_FONT_SCALE);
-}
-
-int ivp_render_hud_ctx_count(const ivp_render_hud_ctx_t *ctx)
-{
-    return ctx->vertex_count;
-}
-
-int ivp_render_hud_ctx_capacity(const ivp_render_hud_ctx_t *ctx)
-{
-    return ctx->config.max_vertices;
+    return (IVP_RENDER_HUD_FONT_H + 1) * (float)scale;
 }

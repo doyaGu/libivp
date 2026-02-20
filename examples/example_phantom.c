@@ -53,7 +53,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Phantom -- Trigger Volumes", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -190,10 +191,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Phantom volume (wireframe sphere) */
@@ -201,7 +202,7 @@ int main(void)
             float pc[3] = {(float)phantom.center_ws.k[0],
                            (float)phantom.center_ws.k[1],
                            (float)phantom.center_ws.k[2]};
-            ivp_draw_wire_sphere(renderer, pc,
+            ivp_render_draw_wire_sphere(renderer, pc,
                 (float)phantom.radius, c_phantom);
         }
 
@@ -223,11 +224,11 @@ int main(void)
             const float *col = inside ? c_bright : drop_cols[i];
 
             if (drop_is_sphere[i]) {
-                ivp_draw_wire_sphere(renderer, fp, 0.5f, col);
+                ivp_render_draw_wire_sphere(renderer, fp, 0.5f, col);
             } else {
                 float rot[9]; quat_to_col_rot(&q, rot);
                 float hs[3] = {0.5f, 0.5f, 0.5f};
-                ivp_draw_wire_box(renderer, fp, hs, rot, col);
+                ivp_render_draw_wire_box(renderer, fp, hs, rot, col);
             }
 
             /* Velocity arrow */
@@ -239,14 +240,14 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -265,20 +266,20 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
                      sl.fps_display, N_DROP, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Phantom: tracked=%d  enters=%d  exits=%d",
                      phantom.n_tracked,
                      tracker.total_enters,
                      tracker.total_exits);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_phantom);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_phantom);
 
             /* Event log */
             for (int i = 0; i < EVENT_LOG_SIZE; i++) {
                 int idx = (tracker.log_head - 1 - i + EVENT_LOG_SIZE)
                           % EVENT_LOG_SIZE;
                 if (tracker.last_events[idx][0] != '\0') {
-                    ivp_draw_text_2d(renderer, 10.0f, 50.0f + 18.0f * (float)i,
+                    ivp_render_draw_text(renderer, 10.0f, 50.0f + 18.0f * (float)i,
                                      tracker.last_events[idx], c_hud);
                 }
             }

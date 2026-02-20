@@ -24,7 +24,8 @@ int main(void)
         .width = 1280, .height = 720,
         .title = "IVP Stiff Spring -- Regular vs Implicit", .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -204,10 +205,10 @@ int main(void)
         if (stiff_ext > max_stiff_ext) max_stiff_ext = stiff_ext;
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 20.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 20.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {20.0f, 0.5f, 10.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Draw anchors */
@@ -217,7 +218,7 @@ int main(void)
             ivp_object_get_position(a, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.3f, 0.3f, 0.3f};
-            ivp_draw_wire_box(renderer, fp, hs, NULL, c_anchor);
+            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_anchor);
         }
 
         /* Draw hanging cubes + spring lines */
@@ -239,8 +240,8 @@ int main(void)
 
             float rot[9]; quat_to_col_rot(&cq, rot);
             float hs[3] = {0.8f, 0.8f, 0.8f};
-            ivp_draw_wire_box(renderer, fp_cubes[i], hs, rot, col);
-            ivp_draw_thick_line(renderer, fp_anchors[i], fp_cubes[i], spr, 2);
+            ivp_render_draw_wire_box(renderer, fp_cubes[i], hs, rot, col);
+            ivp_render_draw_thick_line(renderer, fp_anchors[i], fp_cubes[i], spr, 2);
         }
 
         /* Draw stress-test balls */
@@ -249,7 +250,7 @@ int main(void)
             ivp_vec3r_t p;
             ivp_object_get_position(b, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
-            ivp_draw_wire_sphere(renderer, fp, 0.6f, c_ball);
+            ivp_render_draw_wire_sphere(renderer, fp, 0.6f, c_ball);
 
             ivp_vec3r_t v;
             ivp_object_get_speed(b, &v);
@@ -259,7 +260,7 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
@@ -267,16 +268,16 @@ int main(void)
         {
             float lp[3] = {-6.0f, -14.0f, 0.0f};
             float rp[3] = { 6.0f, -14.0f, 0.0f};
-            ivp_draw_text_2d(renderer, (float)(win_w / 4 - 60), (float)(win_h - 30),
+            ivp_render_draw_text(renderer, (float)(win_w / 4 - 60), (float)(win_h - 30),
                              "REGULAR (explicit)", c_reg);
-            ivp_draw_text_2d(renderer, (float)(3 * win_w / 4 - 50), (float)(win_h - 30),
+            ivp_render_draw_text(renderer, (float)(3 * win_w / 4 - 50), (float)(win_h - 30),
                              "STIFF (implicit)", c_stiff);
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -297,16 +298,16 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  k=5000 N/m  Time: %.1fs",
                      sl.fps_display, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Regular: len=%.2f force=%.1f",
                      (float)reg_spring.current_length,
                      (float)reg_spring.current_force);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_reg);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_reg);
 
             snprintf(buf, sizeof(buf), "Stiff:   len=%.2f",
                      (float)stiff_spring.current_length);
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f, buf, c_stiff);
+            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf, c_stiff);
 
             /* Anomaly detection status */
             int anom = env->anomaly_manager.anomalies_detected;
@@ -314,7 +315,7 @@ int main(void)
             snprintf(buf, sizeof(buf), "Anomalies: %d detected, %d corrected (max_speed=50)",
                      anom, corr);
             const float c_anom[] = {1.0f, 0.6f, 0.2f};
-            ivp_draw_text_2d(renderer, 10.0f, 66.0f, buf,
+            ivp_render_draw_text(renderer, 10.0f, 66.0f, buf,
                              anom > prev_anomalies ? c_anom : c_hud);
             prev_anomalies = anom;
 

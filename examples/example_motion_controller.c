@@ -44,7 +44,8 @@ int main(void)
         .title = "IVP Motion Controller -- Velocity/Force/Impulse",
         .vsync = true
     };
-    ivp_renderer_t *renderer = ivp_renderer_create(&rcfg);
+    ivp_renderer_t *renderer = NULL;
+    ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
 
     ivp_camera_t cam;
@@ -267,10 +268,10 @@ int main(void)
         sim_loop_step(&sl, env, frame_dt);
 
         /* Grid & ground */
-        ivp_draw_ground_grid(renderer, 10.0f, 2.0f, c_grid);
+        ivp_render_draw_ground_grid(renderer, 10.0f, 2.0f, c_grid);
         {
             float gp[3] = {0, 0, 0}, gs[3] = {10.0f, 0.5f, 8.0f};
-            ivp_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
         }
 
         /* Walls */
@@ -281,7 +282,7 @@ int main(void)
                 float wp[3] = {(float)wall_pos[i][0],
                                (float)wall_pos[i][1],
                                (float)wall_pos[i][2]};
-                ivp_draw_wire_box(renderer, wp,
+                ivp_render_draw_wire_box(renderer, wp,
                     (i < 2) ? whs_x : whs_z, NULL, c_wall);
             }
         }
@@ -293,11 +294,11 @@ int main(void)
             ivp_object_get_orientation(tbl_objs[i], &q);
             float fp[3]; vec3r_to_float3(&p, fp);
             if (tbl_is_sphere[i]) {
-                ivp_draw_wire_sphere(renderer, fp, 0.5f, palette[i % 8]);
+                ivp_render_draw_wire_sphere(renderer, fp, 0.5f, palette[i % 8]);
             } else {
                 float rot[9]; quat_to_col_rot(&q, rot);
                 float hs[3] = {0.6f, 0.6f, 0.6f};
-                ivp_draw_wire_box(renderer, fp, hs, rot, palette[i % 8]);
+                ivp_render_draw_wire_box(renderer, fp, hs, rot, palette[i % 8]);
             }
         }
 
@@ -306,7 +307,7 @@ int main(void)
             ivp_vec3r_t p;
             ivp_object_get_position(cue, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
-            ivp_draw_wire_sphere(renderer, fp, 0.5f, c_cue);
+            ivp_render_draw_wire_sphere(renderer, fp, 0.5f, c_cue);
 
             ivp_vec3r_t v;
             ivp_object_get_speed(cue, &v);
@@ -316,14 +317,14 @@ int main(void)
                 float to[3] = {fp[0]+(float)v.k[0]*sc,
                                fp[1]+(float)v.k[1]*sc,
                                fp[2]+(float)v.k[2]*sc};
-                ivp_draw_arrow(renderer, fp, to, c_vel, 0.2f);
+                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
             }
         }
 
         /* Axes */
         {
             float org[3] = {0, 0, 0};
-            ivp_draw_axes(renderer, org, NULL, 1.5f);
+            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
         }
 
         if (ivp_example_inspector_tick(&inspector)) {
@@ -342,13 +343,13 @@ int main(void)
             char buf[128];
             snprintf(buf, sizeof(buf), "FPS: %.0f  Time: %.1fs",
                      sl.fps_display, (float)sl.t_prev);
-            ivp_draw_text_2d(renderer, 10.0f, 10.0f, buf, c_hud);
+            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             snprintf(buf, sizeof(buf), "Mode: %s  [1]VEL [2]FORCE [3]IMPULSE",
                      mode_names[current_mode]);
-            ivp_draw_text_2d(renderer, 10.0f, 30.0f, buf, c_mode);
+            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_mode);
 
-            ivp_draw_text_2d(renderer, 10.0f, 48.0f,
+            ivp_render_draw_text(renderer, 10.0f, 48.0f,
                 "Arrow keys: move cue    White sphere = cue", c_cue);
 
             ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,

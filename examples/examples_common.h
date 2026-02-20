@@ -2,7 +2,7 @@
 #ifndef IVP_EXAMPLES_COMMON_H
 #define IVP_EXAMPLES_COMMON_H
 
-#include "render.h"
+#include <ivp/render/ivp_render.h>
 #include <ivp/math/ivp_quat.h>
 #include <ivp/math/ivp_mat3.h>
 #include <ivp/math/ivp_vec3.h>
