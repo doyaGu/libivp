@@ -17,7 +17,7 @@ if (NOT MSVC)
 endif ()
 
 add_library(ivp_example_interaction STATIC interaction.c interaction.h)
-target_link_libraries(ivp_example_interaction PUBLIC ivp SDL3::SDL3)
+target_link_libraries(ivp_example_interaction PRIVATE ivp SDL3::SDL3)
 target_include_directories(ivp_example_interaction
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
