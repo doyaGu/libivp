@@ -2,9 +2,9 @@
 
 #include <ivp/render/ivp_render_draw.h>
 #include <ivp/render/ivp_render_math.h>
+#include <ivp/base/ivp_allocator.h>
 #include "ivp_render_gpu.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stddef.h>
@@ -19,8 +19,8 @@ typedef struct draw_vertex {
 /* ── Draw context ──────────────────────────────────────────────────────── */
 
 struct ivp_render_draw_ctx {
-    ivp_render_shader_t shader;
-    ivp_render_vbuf_t   vbuf;
+    ivp_gpu_pipeline_t  pipeline;
+    ivp_gpu_buffer_t    buffer;
     draw_vertex_t      *vertices;
     int                 vertex_count;
     ivp_render_draw_config_t config;
@@ -37,10 +37,14 @@ void ivp_render_draw_config_init(ivp_render_draw_config_t *cfg)
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
 ivp_result_t ivp_render_draw_ctx_create_ex(ivp_render_draw_ctx_t **out,
-                                           const ivp_render_draw_config_t *config)
+                                           const ivp_render_draw_config_t *config,
+                                           ivp_gpu_device_t *gpu)
 {
-    ivp_render_draw_ctx_t *ctx = (ivp_render_draw_ctx_t *)calloc(1, sizeof(*ctx));
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+
+    ivp_render_draw_ctx_t *ctx = (ivp_render_draw_ctx_t *)ivp_alloc(alloc, sizeof(*ctx));
     if (!ctx) return IVP_ERR_OUT_OF_MEMORY;
+    memset(ctx, 0, sizeof(*ctx));
 
     if (config) {
         ctx->config = *config;
@@ -52,28 +56,38 @@ ivp_result_t ivp_render_draw_ctx_create_ex(ivp_render_draw_ctx_t **out,
     if (ctx->config.sphere_segments <= 0)
         ctx->config.sphere_segments = IVP_RENDER_SPHERE_SEGMENTS;
 
-    ivp_result_t res = ivp_render_shader_compile(
-        &ctx->shader, ivp_render_vs_3d_src, ivp_render_fs_3d_src, "uMVP");
-    if (res != IVP_OK) { free(ctx); return res; }
+    /* Create 3D pipeline (depth test + depth write) */
+    size_t vs_len, fs_len;
+    const unsigned char *vs = ivp_gpu_vs_3d_code(gpu, &vs_len);
+    const unsigned char *fs = ivp_gpu_fs_3d_code(gpu, &fs_len);
 
-    ivp_render_attrib_desc_t attribs[2] = {
+    ivp_gpu_attrib_desc_t attribs[2] = {
         { 0, 3, (int)offsetof(draw_vertex_t, pos) },
         { 1, 3, (int)offsetof(draw_vertex_t, col) },
     };
-    res = ivp_render_vbuf_create(&ctx->vbuf, ctx->config.max_vertices,
-                                 (int)sizeof(draw_vertex_t), attribs, 2);
+    ivp_result_t res = ivp_gpu_pipeline_create(
+        &ctx->pipeline, gpu, vs, vs_len, fs, fs_len,
+        (int)sizeof(draw_vertex_t), attribs, 2, true, true);
     if (res != IVP_OK) {
-        ivp_render_shader_destroy(&ctx->shader);
-        free(ctx);
+        ivp_free(alloc, ctx, sizeof(*ctx));
         return res;
     }
 
-    ctx->vertices = (draw_vertex_t *)malloc(
-        (size_t)ctx->config.max_vertices * sizeof(draw_vertex_t));
+    res = ivp_gpu_buffer_create(&ctx->buffer, gpu,
+                                ctx->config.max_vertices,
+                                (int)sizeof(draw_vertex_t));
+    if (res != IVP_OK) {
+        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+        ivp_free(alloc, ctx, sizeof(*ctx));
+        return res;
+    }
+
+    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(draw_vertex_t);
+    ctx->vertices = (draw_vertex_t *)ivp_alloc(alloc, vertices_bytes);
     if (!ctx->vertices) {
-        ivp_render_vbuf_destroy(&ctx->vbuf);
-        ivp_render_shader_destroy(&ctx->shader);
-        free(ctx);
+        ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
+        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+        ivp_free(alloc, ctx, sizeof(*ctx));
         return IVP_ERR_OUT_OF_MEMORY;
     }
     ctx->vertex_count = 0;
@@ -82,18 +96,18 @@ ivp_result_t ivp_render_draw_ctx_create_ex(ivp_render_draw_ctx_t **out,
     return IVP_OK;
 }
 
-ivp_result_t ivp_render_draw_ctx_create(ivp_render_draw_ctx_t **out)
-{
-    return ivp_render_draw_ctx_create_ex(out, NULL);
-}
-
-void ivp_render_draw_ctx_destroy(ivp_render_draw_ctx_t *ctx)
+void ivp_render_draw_ctx_destroy(ivp_render_draw_ctx_t *ctx,
+                                 ivp_gpu_device_t *gpu)
 {
     if (!ctx) return;
-    free(ctx->vertices);
-    ivp_render_vbuf_destroy(&ctx->vbuf);
-    ivp_render_shader_destroy(&ctx->shader);
-    free(ctx);
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(draw_vertex_t);
+    if (ctx->vertices) {
+        ivp_free(alloc, ctx->vertices, vertices_bytes);
+    }
+    ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
+    ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+    ivp_free(alloc, ctx, sizeof(*ctx));
 }
 
 void ivp_render_draw_ctx_reset(ivp_render_draw_ctx_t *ctx)
@@ -101,11 +115,23 @@ void ivp_render_draw_ctx_reset(ivp_render_draw_ctx_t *ctx)
     ctx->vertex_count = 0;
 }
 
-void ivp_render_draw_ctx_flush(ivp_render_draw_ctx_t *ctx,
-                               const float vp_mat[16])
+void ivp_render_draw_ctx_upload(ivp_render_draw_ctx_t *ctx,
+                                ivp_gpu_device_t *gpu,
+                                SDL_GPUCommandBuffer *cmd)
 {
-    ivp_render_vbuf_draw_lines(&ctx->vbuf, &ctx->shader, vp_mat,
-                               ctx->vertices, ctx->vertex_count);
+    ivp_gpu_buffer_upload(&ctx->buffer, gpu, cmd,
+                          ctx->vertices, ctx->vertex_count);
+}
+
+void ivp_render_draw_ctx_draw(ivp_render_draw_ctx_t *ctx,
+                              ivp_gpu_device_t *gpu,
+                              SDL_GPUCommandBuffer *cmd,
+                              SDL_GPURenderPass *pass,
+                              const float vp_mat[16])
+{
+    (void)gpu;
+    ivp_gpu_buffer_draw(&ctx->buffer, pass, cmd,
+                        &ctx->pipeline, vp_mat, ctx->vertex_count);
 }
 
 int ivp_render_draw_ctx_count(const ivp_render_draw_ctx_t *ctx)

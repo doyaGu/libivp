@@ -303,8 +303,8 @@ if (NOT MSVC)
     target_link_libraries(ivp PRIVATE m)
 endif ()
 
-# ── Render module (optional, requires SDL3 + OpenGL) ──────────────────────────
-option(IVP_BUILD_RENDER "Build the render module (requires SDL3 + OpenGL)" OFF)
+# ── Render module (optional, requires SDL3 GPU) ──────────────────────────
+option(IVP_BUILD_RENDER "Build the render module (requires SDL3 GPU)" OFF)
 
 # Auto-enable render when examples are requested
 if (IVP_BUILD_EXAMPLES AND NOT IVP_BUILD_RENDER)
@@ -329,36 +329,86 @@ if (IVP_BUILD_RENDER)
         FetchContent_MakeAvailable(SDL3)
     endif ()
 
-    # ── glad: prefer installed, then local deps/, fallback FetchContent ──
-    set(GLAD_LOCAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/glad)
-    find_package(glad QUIET CONFIG)
-    if (TARGET glad::glad)
-        add_library(glad_gl_33_core INTERFACE)
-        target_link_libraries(glad_gl_33_core INTERFACE glad::glad)
-    else ()
-        if (EXISTS ${GLAD_LOCAL_DIR}/src/glad.c AND EXISTS ${GLAD_LOCAL_DIR}/include/glad/glad.h)
-            message(STATUS "Using local glad from ${GLAD_LOCAL_DIR}")
-            add_library(glad_gl_33_core STATIC ${GLAD_LOCAL_DIR}/src/glad.c)
-            target_include_directories(glad_gl_33_core
-                PUBLIC ${GLAD_LOCAL_DIR}/include
-                PRIVATE ${GLAD_LOCAL_DIR}/src
-            )
-        else ()
-            message(STATUS "Local glad not found, using FetchContent")
-            FetchContent_Declare(
-                    glad
-                    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-                    GIT_TAG glad2
-                    GIT_SHALLOW TRUE
-            )
-            FetchContent_MakeAvailable(glad)
-
-            add_subdirectory(${glad_SOURCE_DIR}/cmake ${glad_BINARY_DIR})
-            glad_add_library(glad_gl_33_core REPRODUCIBLE API gl:core=3.3)
-        endif ()
+    # ── ivp_render static library ────────────────────────────────────────
+    find_program(GLSLANG_VALIDATOR_EXECUTABLE glslangValidator)
+    if (NOT GLSLANG_VALIDATOR_EXECUTABLE)
+        message(FATAL_ERROR "IVP_BUILD_RENDER=ON requires glslangValidator in PATH")
     endif ()
 
-    # ── ivp_render static library ────────────────────────────────────────
+    set(IVP_SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders)
+    set(IVP_SHADER_BIN_DIR ${CMAKE_BINARY_DIR}/shaders)
+    file(MAKE_DIRECTORY ${IVP_SHADER_BIN_DIR})
+
+    set(IVP_SHADER_SPV_OUTPUTS
+        ${IVP_SHADER_BIN_DIR}/line3d.vert.spv
+        ${IVP_SHADER_BIN_DIR}/line2d.vert.spv
+        ${IVP_SHADER_BIN_DIR}/line.frag.spv
+    )
+
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line3d.vert.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S vert
+                ${IVP_SHADER_SRC_DIR}/line3d.vert.glsl
+                -o ${IVP_SHADER_BIN_DIR}/line3d.vert.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line3d.vert.glsl
+        COMMENT "Compiling line3d.vert.glsl -> SPIR-V"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line2d.vert.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S vert
+                ${IVP_SHADER_SRC_DIR}/line2d.vert.glsl
+                -o ${IVP_SHADER_BIN_DIR}/line2d.vert.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line2d.vert.glsl
+        COMMENT "Compiling line2d.vert.glsl -> SPIR-V"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line.frag.spv
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S frag
+                ${IVP_SHADER_SRC_DIR}/line.frag.glsl
+                -o ${IVP_SHADER_BIN_DIR}/line.frag.spv
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line.frag.glsl
+        COMMENT "Compiling line.frag.glsl -> SPIR-V"
+        VERBATIM
+    )
+
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line3d.vert.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/line3d.vert.msl
+                ${IVP_SHADER_BIN_DIR}/line3d.vert.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line3d.vert.msl
+        COMMENT "Staging line3d.vert.msl"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line2d.vert.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/line2d.vert.msl
+                ${IVP_SHADER_BIN_DIR}/line2d.vert.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line2d.vert.msl
+        COMMENT "Staging line2d.vert.msl"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${IVP_SHADER_BIN_DIR}/line.frag.msl
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${IVP_SHADER_SRC_DIR}/line.frag.msl
+                ${IVP_SHADER_BIN_DIR}/line.frag.msl
+        DEPENDS ${IVP_SHADER_SRC_DIR}/line.frag.msl
+        COMMENT "Staging line.frag.msl"
+        VERBATIM
+    )
+
+    add_custom_target(ivp_render_shaders ALL
+        DEPENDS
+            ${IVP_SHADER_SPV_OUTPUTS}
+            ${IVP_SHADER_BIN_DIR}/line3d.vert.msl
+            ${IVP_SHADER_BIN_DIR}/line2d.vert.msl
+            ${IVP_SHADER_BIN_DIR}/line.frag.msl
+    )
+
     set(IVP_RENDER_SOURCES
         src/render/ivp_render_camera.c
         src/render/ivp_render_gpu.c
@@ -369,11 +419,15 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_stats.c
     )
     add_library(ivp_render STATIC ${IVP_RENDER_SOURCES})
+    add_dependencies(ivp_render ivp_render_shaders)
     target_include_directories(ivp_render
         PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     )
-    target_link_libraries(ivp_render PUBLIC SDL3::SDL3 glad_gl_33_core)
+    target_link_libraries(ivp_render PUBLIC SDL3::SDL3)
+    target_compile_definitions(ivp_render PRIVATE
+        IVP_RENDER_SHADER_DIR_FALLBACK="${IVP_SHADER_BIN_DIR}"
+    )
 
     # Apply floating-point strictness
     if (MSVC)

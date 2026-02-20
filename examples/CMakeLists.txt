@@ -1,6 +1,6 @@
 # examples/CMakeLists.txt — Example programs for IVP
 #
-# All dependencies (ivp, ivp_render, SDL3, glad) are provided by the
+# All dependencies (ivp, ivp_render, SDL3) are provided by the
 # top-level CMakeLists.txt before add_subdirectory(examples) is called.
 
 # ── Backward-compatible facade for examples ───────────────────────────────────
@@ -31,6 +31,7 @@ target_include_directories(ivp_example_inspect
 function(ivp_add_example NAME SOURCE)
     add_executable(${NAME} ${SOURCE})
     target_link_libraries(${NAME} PRIVATE ivp ivp_example_render ivp_example_interaction ivp_example_inspect)
+    add_dependencies(${NAME} ivp_render_shaders)
     if (NOT MSVC)
         target_link_libraries(${NAME} PRIVATE m)
         # Apply floating-point strictness and relax example-specific warnings
@@ -47,6 +48,15 @@ function(ivp_add_example NAME SOURCE)
                 $<TARGET_FILE_DIR:${NAME}>
         )
     endif ()
+
+    # Stage render shader assets next to example executables.
+    add_custom_command(TARGET ${NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:${NAME}>/shaders
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_BINARY_DIR}/shaders
+            $<TARGET_FILE_DIR:${NAME}>/shaders
+    )
 endfunction()
 
 # ── Examples ──────────────────────────────────────────────────────────────────

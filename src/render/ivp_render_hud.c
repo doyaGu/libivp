@@ -1,10 +1,10 @@
-/* ivp_render_hud.c -- 2D text overlay with bitmap font */
+/* ivp_render_hud.c -- 2D text overlay with bitmap font (SDL3 GPU backend) */
 
 #include <ivp/render/ivp_render_hud.h>
 #include <ivp/render/ivp_render_math.h>
+#include <ivp/base/ivp_allocator.h>
 #include "ivp_render_gpu.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -20,8 +20,8 @@ typedef struct hud_vertex {
 /* ── HUD context ───────────────────────────────────────────────────────── */
 
 struct ivp_render_hud_ctx {
-    ivp_render_shader_t shader;
-    ivp_render_vbuf_t   vbuf;
+    ivp_gpu_pipeline_t  pipeline;
+    ivp_gpu_buffer_t    buffer;
     hud_vertex_t       *vertices;
     int                 vertex_count;
     ivp_render_hud_config_t config;
@@ -156,10 +156,14 @@ void ivp_render_hud_config_init(ivp_render_hud_config_t *cfg)
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
 ivp_result_t ivp_render_hud_ctx_create_ex(ivp_render_hud_ctx_t **out,
-                                          const ivp_render_hud_config_t *config)
+                                          const ivp_render_hud_config_t *config,
+                                          ivp_gpu_device_t *gpu)
 {
-    ivp_render_hud_ctx_t *ctx = (ivp_render_hud_ctx_t *)calloc(1, sizeof(*ctx));
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+
+    ivp_render_hud_ctx_t *ctx = (ivp_render_hud_ctx_t *)ivp_alloc(alloc, sizeof(*ctx));
     if (!ctx) return IVP_ERR_OUT_OF_MEMORY;
+    memset(ctx, 0, sizeof(*ctx));
 
     if (config) {
         ctx->config = *config;
@@ -171,28 +175,38 @@ ivp_result_t ivp_render_hud_ctx_create_ex(ivp_render_hud_ctx_t **out,
     if (ctx->config.font_scale <= 0)
         ctx->config.font_scale = IVP_RENDER_HUD_FONT_SCALE;
 
-    ivp_result_t res = ivp_render_shader_compile(
-        &ctx->shader, ivp_render_vs_2d_src, ivp_render_fs_2d_src, "uProj");
-    if (res != IVP_OK) { free(ctx); return res; }
+    /* Create 2D pipeline (no depth test, no depth write) */
+    size_t vs_len, fs_len;
+    const unsigned char *vs = ivp_gpu_vs_2d_code(gpu, &vs_len);
+    const unsigned char *fs = ivp_gpu_fs_2d_code(gpu, &fs_len);
 
-    ivp_render_attrib_desc_t attribs[2] = {
+    ivp_gpu_attrib_desc_t attribs[2] = {
         { 0, 2, (int)offsetof(hud_vertex_t, pos) },
         { 1, 3, (int)offsetof(hud_vertex_t, col) },
     };
-    res = ivp_render_vbuf_create(&ctx->vbuf, ctx->config.max_vertices,
-                                 (int)sizeof(hud_vertex_t), attribs, 2);
+    ivp_result_t res = ivp_gpu_pipeline_create(
+        &ctx->pipeline, gpu, vs, vs_len, fs, fs_len,
+        (int)sizeof(hud_vertex_t), attribs, 2, false, false);
     if (res != IVP_OK) {
-        ivp_render_shader_destroy(&ctx->shader);
-        free(ctx);
+        ivp_free(alloc, ctx, sizeof(*ctx));
         return res;
     }
 
-    ctx->vertices = (hud_vertex_t *)malloc(
-        (size_t)ctx->config.max_vertices * sizeof(hud_vertex_t));
+    res = ivp_gpu_buffer_create(&ctx->buffer, gpu,
+                                ctx->config.max_vertices,
+                                (int)sizeof(hud_vertex_t));
+    if (res != IVP_OK) {
+        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+        ivp_free(alloc, ctx, sizeof(*ctx));
+        return res;
+    }
+
+    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(hud_vertex_t);
+    ctx->vertices = (hud_vertex_t *)ivp_alloc(alloc, vertices_bytes);
     if (!ctx->vertices) {
-        ivp_render_vbuf_destroy(&ctx->vbuf);
-        ivp_render_shader_destroy(&ctx->shader);
-        free(ctx);
+        ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
+        ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+        ivp_free(alloc, ctx, sizeof(*ctx));
         return IVP_ERR_OUT_OF_MEMORY;
     }
     ctx->vertex_count = 0;
@@ -201,18 +215,18 @@ ivp_result_t ivp_render_hud_ctx_create_ex(ivp_render_hud_ctx_t **out,
     return IVP_OK;
 }
 
-ivp_result_t ivp_render_hud_ctx_create(ivp_render_hud_ctx_t **out)
-{
-    return ivp_render_hud_ctx_create_ex(out, NULL);
-}
-
-void ivp_render_hud_ctx_destroy(ivp_render_hud_ctx_t *ctx)
+void ivp_render_hud_ctx_destroy(ivp_render_hud_ctx_t *ctx,
+                                ivp_gpu_device_t *gpu)
 {
     if (!ctx) return;
-    free(ctx->vertices);
-    ivp_render_vbuf_destroy(&ctx->vbuf);
-    ivp_render_shader_destroy(&ctx->shader);
-    free(ctx);
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+    size_t vertices_bytes = (size_t)ctx->config.max_vertices * sizeof(hud_vertex_t);
+    if (ctx->vertices) {
+        ivp_free(alloc, ctx->vertices, vertices_bytes);
+    }
+    ivp_gpu_buffer_destroy(&ctx->buffer, gpu);
+    ivp_gpu_pipeline_destroy(&ctx->pipeline, gpu);
+    ivp_free(alloc, ctx, sizeof(*ctx));
 }
 
 void ivp_render_hud_ctx_reset(ivp_render_hud_ctx_t *ctx)
@@ -220,16 +234,27 @@ void ivp_render_hud_ctx_reset(ivp_render_hud_ctx_t *ctx)
     ctx->vertex_count = 0;
 }
 
-void ivp_render_hud_ctx_flush(ivp_render_hud_ctx_t *ctx, int width, int height)
+void ivp_render_hud_ctx_upload(ivp_render_hud_ctx_t *ctx,
+                               ivp_gpu_device_t *gpu,
+                               SDL_GPUCommandBuffer *cmd)
+{
+    ivp_gpu_buffer_upload(&ctx->buffer, gpu, cmd,
+                          ctx->vertices, ctx->vertex_count);
+}
+
+void ivp_render_hud_ctx_draw(ivp_render_hud_ctx_t *ctx,
+                             ivp_gpu_device_t *gpu,
+                             SDL_GPUCommandBuffer *cmd,
+                             SDL_GPURenderPass *pass,
+                             int width, int height)
 {
     if (ctx->vertex_count <= 0) return;
-
-    glDisable(GL_DEPTH_TEST);
+    (void)gpu;
     float ortho[16];
-    ivp_render_mat4_ortho(ortho, 0.0f, (float)width, (float)height, 0.0f, -1.0f, 1.0f);
-    ivp_render_vbuf_draw_lines(&ctx->vbuf, &ctx->shader, ortho,
-                               ctx->vertices, ctx->vertex_count);
-    glEnable(GL_DEPTH_TEST);
+    ivp_render_mat4_ortho(ortho, 0.0f, (float)width, (float)height, 0.0f,
+                          -1.0f, 1.0f);
+    ivp_gpu_buffer_draw(&ctx->buffer, pass, cmd,
+                        &ctx->pipeline, ortho, ctx->vertex_count);
 }
 
 /* ── Text drawing ──────────────────────────────────────────────────────── */

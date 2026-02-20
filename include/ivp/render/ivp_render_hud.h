@@ -32,18 +32,10 @@ typedef enum ivp_text_align {
     IVP_TEXT_ALIGN_RIGHT  = 2
 } ivp_text_align_t;
 
-/* ── Context lifecycle ─────────────────────────────────────────────────── */
-
-ivp_result_t ivp_render_hud_ctx_create(ivp_render_hud_ctx_t **out);
-ivp_result_t ivp_render_hud_ctx_create_ex(ivp_render_hud_ctx_t **out,
-                                          const ivp_render_hud_config_t *config);
-void         ivp_render_hud_ctx_destroy(ivp_render_hud_ctx_t *ctx);
+/* ── Context lifecycle (managed by renderer; not called directly) ───────── */
 
 /* Reset vertex count to zero (called at start of frame). */
 void ivp_render_hud_ctx_reset(ivp_render_hud_ctx_t *ctx);
-
-/* Upload buffered vertices and draw as GL_LINES with ortho projection. */
-void ivp_render_hud_ctx_flush(ivp_render_hud_ctx_t *ctx, int width, int height);
 
 /* ── Text drawing ──────────────────────────────────────────────────────── */
 

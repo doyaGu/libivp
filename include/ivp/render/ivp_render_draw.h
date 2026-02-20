@@ -22,19 +22,10 @@ typedef struct ivp_render_draw_config {
 
 void ivp_render_draw_config_init(ivp_render_draw_config_t *cfg);
 
-/* ── Context lifecycle ─────────────────────────────────────────────────── */
-
-ivp_result_t ivp_render_draw_ctx_create(ivp_render_draw_ctx_t **out);
-ivp_result_t ivp_render_draw_ctx_create_ex(ivp_render_draw_ctx_t **out,
-                                           const ivp_render_draw_config_t *config);
-void         ivp_render_draw_ctx_destroy(ivp_render_draw_ctx_t *ctx);
+/* ── Context lifecycle (managed by renderer; not called directly) ───────── */
 
 /* Reset vertex count to zero (called at start of frame). */
 void ivp_render_draw_ctx_reset(ivp_render_draw_ctx_t *ctx);
-
-/* Upload buffered vertices and draw as GL_LINES with the given VP matrix. */
-void ivp_render_draw_ctx_flush(ivp_render_draw_ctx_t *ctx,
-                               const float vp_mat[16]);
 
 /* Current vertex count. */
 int  ivp_render_draw_ctx_count(const ivp_render_draw_ctx_t *ctx);

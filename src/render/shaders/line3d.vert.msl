@@ -1,0 +1,11 @@
+#include <metal_stdlib>
+using namespace metal;
+struct VSIn3D { float3 aPos [[attribute(0)]]; float3 aCol [[attribute(1)]]; };
+struct VSOut { float4 pos [[position]]; float3 col; };
+struct Uniforms { float4x4 mvp; };
+vertex VSOut vs_main(VSIn3D in [[stage_in]], constant Uniforms& u [[buffer(0)]]) {
+    VSOut out;
+    out.pos = u.mvp * float4(in.aPos, 1.0);
+    out.col = in.aCol;
+    return out;
+}

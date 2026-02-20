@@ -21,8 +21,6 @@ typedef struct ivp_render_config {
     const char *title;           /* default: "IVP Example" */
     bool        vsync;           /* default: true */
     int         msaa_samples;    /* default: 4 (0=use default, <0=disabled) */
-    int         depth_bits;      /* default: 24 */
-    float       line_width;      /* default: 1.5 */
     float       clear_color[4];  /* default: {0.20, 0.24, 0.30, 1.0} */
     float       max_frame_dt;    /* default: 0.1 */
     ivp_render_draw_config_t draw_config;

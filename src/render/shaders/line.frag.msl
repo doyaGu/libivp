@@ -1,0 +1,6 @@
+#include <metal_stdlib>
+using namespace metal;
+struct VSOut { float4 pos [[position]]; float3 col; };
+fragment float4 fs_main(VSOut in [[stage_in]]) {
+    return float4(in.col, 1.0);
+}

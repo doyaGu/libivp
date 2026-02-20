@@ -28,8 +28,8 @@ typedef enum ivp_result {
     /* Render module errors (400–499) */
     IVP_ERR_RENDER_SDL_INIT         = 400,
     IVP_ERR_RENDER_WINDOW           = 401,
-    IVP_ERR_RENDER_GL_CONTEXT       = 402,
-    IVP_ERR_RENDER_GL_LOAD          = 403,
+    IVP_ERR_RENDER_GPU_DEVICE       = 402,
+    IVP_ERR_RENDER_SWAPCHAIN        = 403,
     IVP_ERR_RENDER_SHADER           = 404,
 
     /* I/O errors (500–599) */
@@ -58,8 +58,8 @@ static inline const char *ivp_result_str(ivp_result_t r) {
         case IVP_ERR_CAPACITY_EXCEEDED:       return "CAPACITY_EXCEEDED";
         case IVP_ERR_RENDER_SDL_INIT:         return "RENDER_SDL_INIT";
         case IVP_ERR_RENDER_WINDOW:           return "RENDER_WINDOW";
-        case IVP_ERR_RENDER_GL_CONTEXT:       return "RENDER_GL_CONTEXT";
-        case IVP_ERR_RENDER_GL_LOAD:          return "RENDER_GL_LOAD";
+        case IVP_ERR_RENDER_GPU_DEVICE:       return "RENDER_GPU_DEVICE";
+        case IVP_ERR_RENDER_SWAPCHAIN:        return "RENDER_SWAPCHAIN";
         case IVP_ERR_RENDER_SHADER:           return "RENDER_SHADER";
         case IVP_ERR_FILE_NOT_FOUND:          return "FILE_NOT_FOUND";
         case IVP_ERR_FILE_READ:               return "FILE_READ";

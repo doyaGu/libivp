@@ -1,4 +1,4 @@
-/* ivp_render_gpu.h -- Internal: shader compile, VAO/VBO management
+/* ivp_render_gpu.h -- Internal: SDL3 GPU pipeline and buffer management
  *
  * This header is INTERNAL to the render module. It is not part of the public
  * API and should not be included by code outside src/render/.
@@ -7,71 +7,107 @@
 #define IVP_RENDER_GPU_H
 
 #include <ivp/render/ivp_render_types.h>
-#include <glad/glad.h>
+#include <SDL3/SDL.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── Shader handle ─────────────────────────────────────────────────────── */
+/* ── GPU device handle ─────────────────────────────────────────────────── */
 
-typedef struct ivp_render_shader {
-    GLuint program;
-    GLint  u_mvp;   /* uniform location for MVP / projection matrix */
-} ivp_render_shader_t;
+typedef struct ivp_gpu_device {
+    SDL_GPUDevice          *device;
+    SDL_Window             *window;
+    SDL_GPUShaderFormat     shader_format;
+    SDL_GPUTextureFormat    swapchain_format;
+    SDL_GPUTexture         *depth_texture;
+    int                     depth_w, depth_h;
+    SDL_GPUSampleCount      sample_count;
+} ivp_gpu_device_t;
 
-/* ── Vertex buffer handle ──────────────────────────────────────────────── */
+/* ── Pipeline handle ───────────────────────────────────────────────────── */
 
-typedef struct ivp_render_vbuf {
-    GLuint vao;
-    GLuint vbo;
-    int    capacity;
-    int    stride;
-} ivp_render_vbuf_t;
+typedef struct ivp_gpu_pipeline {
+    SDL_GPUGraphicsPipeline *pipeline;
+} ivp_gpu_pipeline_t;
 
-/* ── Vertex attribute descriptor ───────────────────────────────────────── */
+/* ── Transfer / vertex buffer handle ───────────────────────────────────── */
 
-typedef struct ivp_render_attrib_desc {
-    GLuint index;
-    GLint  size;        /* number of components (2 or 3) */
-    int    offset;      /* byte offset within vertex struct */
-} ivp_render_attrib_desc_t;
+typedef struct ivp_gpu_buffer {
+    SDL_GPUBuffer          *gpu_buf;
+    SDL_GPUTransferBuffer  *transfer_buf;
+    int                     capacity;  /* in vertices */
+    int                     stride;    /* bytes per vertex */
+} ivp_gpu_buffer_t;
 
-/* ── Shader sources ────────────────────────────────────────────────────── */
+/* ── Embedded shader code (SPIR-V / MSL) ───────────────────────────────── */
 
-/* 3D line shader (position + color, MVP transform) */
-extern const char *ivp_render_vs_3d_src;
-extern const char *ivp_render_fs_3d_src;
+/* These are set during pipeline creation from embedded SPIRV or runtime
+ * compilation via SDL_ShaderCross.  No raw GLSL source strings are used. */
 
-/* 2D HUD shader (position + color, orthographic projection) */
-extern const char *ivp_render_vs_2d_src;
-extern const char *ivp_render_fs_2d_src;
+/* ── Device lifecycle ──────────────────────────────────────────────────── */
 
-/* ── Functions ─────────────────────────────────────────────────────────── */
+ivp_result_t ivp_gpu_device_init(ivp_gpu_device_t *dev, SDL_Window *window,
+                                 int msaa_samples);
+void         ivp_gpu_device_destroy(ivp_gpu_device_t *dev);
 
-/* Compile and link a shader program. Returns IVP_OK on success. */
-ivp_result_t ivp_render_shader_compile(ivp_render_shader_t *out,
-                                       const char *vs_src,
-                                       const char *fs_src,
-                                       const char *uniform_name);
+/* Ensure depth texture matches current window size. Returns true if recreated. */
+bool ivp_gpu_device_ensure_depth(ivp_gpu_device_t *dev, int w, int h);
 
-void ivp_render_shader_destroy(ivp_render_shader_t *s);
+/* ── Pipeline creation ─────────────────────────────────────────────────── */
 
-/* Create a vertex buffer with the given capacity and vertex layout. */
-ivp_result_t ivp_render_vbuf_create(ivp_render_vbuf_t *out,
-                                    int capacity,
-                                    int stride,
-                                    const ivp_render_attrib_desc_t *attribs,
-                                    int attrib_count);
+/* Vertex attribute descriptor for pipeline creation */
+typedef struct ivp_gpu_attrib_desc {
+    int         location;
+    int         components;  /* 2 or 3 */
+    int         offset;      /* byte offset within vertex struct */
+} ivp_gpu_attrib_desc_t;
 
-void ivp_render_vbuf_destroy(ivp_render_vbuf_t *buf);
+ivp_result_t ivp_gpu_pipeline_create(ivp_gpu_pipeline_t *out,
+                                     ivp_gpu_device_t *dev,
+                                     const unsigned char *vs_spirv,
+                                     size_t vs_spirv_len,
+                                     const unsigned char *fs_spirv,
+                                     size_t fs_spirv_len,
+                                     int stride,
+                                     const ivp_gpu_attrib_desc_t *attribs,
+                                     int attrib_count,
+                                     bool depth_test,
+                                     bool depth_write);
 
-/* Upload vertex data and draw as GL_LINES. */
-void ivp_render_vbuf_draw_lines(const ivp_render_vbuf_t *buf,
-                                const ivp_render_shader_t *shader,
-                                const float *matrix,
-                                const void *data,
-                                int vertex_count);
+void ivp_gpu_pipeline_destroy(ivp_gpu_pipeline_t *pipe, ivp_gpu_device_t *dev);
+
+/* ── Buffer management ─────────────────────────────────────────────────── */
+
+ivp_result_t ivp_gpu_buffer_create(ivp_gpu_buffer_t *out,
+                                   ivp_gpu_device_t *dev,
+                                   int capacity,
+                                   int stride);
+void         ivp_gpu_buffer_destroy(ivp_gpu_buffer_t *buf, ivp_gpu_device_t *dev);
+
+/* Upload CPU vertex data to the GPU via a copy pass.
+ * Must be called BEFORE the render pass begins on the same command buffer. */
+void ivp_gpu_buffer_upload(ivp_gpu_buffer_t *buf,
+                           ivp_gpu_device_t *dev,
+                           SDL_GPUCommandBuffer *cmd,
+                           const void *data,
+                           int vertex_count);
+
+/* Bind pipeline, bind vertex buffer, push matrix, and draw lines.
+ * Must be called INSIDE an active render pass. */
+void ivp_gpu_buffer_draw(ivp_gpu_buffer_t *buf,
+                         SDL_GPURenderPass *pass,
+                         SDL_GPUCommandBuffer *cmd,
+                         const ivp_gpu_pipeline_t *pipe,
+                         const float *matrix,
+                         int vertex_count);
+
+/* ── Shader code accessors ─────────────────────────────────────────────── */
+
+const unsigned char *ivp_gpu_vs_3d_code(const ivp_gpu_device_t *dev, size_t *len);
+const unsigned char *ivp_gpu_fs_3d_code(const ivp_gpu_device_t *dev, size_t *len);
+const unsigned char *ivp_gpu_vs_2d_code(const ivp_gpu_device_t *dev, size_t *len);
+const unsigned char *ivp_gpu_fs_2d_code(const ivp_gpu_device_t *dev, size_t *len);
 
 #ifdef __cplusplus
 }

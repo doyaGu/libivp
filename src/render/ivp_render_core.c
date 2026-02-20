@@ -1,34 +1,36 @@
-/* ivp_render_core.c -- Renderer lifecycle, frame loop, event dispatch */
+/* ivp_render_core.c -- Renderer lifecycle, frame loop, event dispatch (SDL3 GPU) */
 
 #include <ivp/render/ivp_render_core.h>
 #include <ivp/render/ivp_render_math.h>
-#include "ivp_render_gpu.h"
+#include <ivp/base/ivp_allocator.h>
+#include "ivp_render_internal.h"
 
-#include <glad/glad.h>
 #include <SDL3/SDL.h>
 
-#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 /* ── Renderer struct ───────────────────────────────────────────────────── */
 
 struct ivp_renderer {
-    SDL_Window          *window;
-    SDL_GLContext         gl_ctx;
-    ivp_render_draw_ctx_t *draw_ctx;
-    ivp_render_hud_ctx_t  *hud_ctx;
-    ivp_camera_input_t    cam_input;
-    ivp_render_mat4_t     view_mat;
-    ivp_render_mat4_t     proj_mat;
-    ivp_render_mat4_t     vp_mat;
-    int                   width, height;
-    Uint64                start_ticks;
-    Uint64                prev_ticks;
-    float                 frame_dt;
-    float                 max_frame_dt;
-    float                 clear_col[4];
-    ivp_render_callbacks_t callbacks;
+    SDL_Window              *window;
+    ivp_gpu_device_t         gpu;
+    ivp_render_draw_ctx_t   *draw_ctx;
+    ivp_render_hud_ctx_t    *hud_ctx;
+    ivp_camera_input_t       cam_input;
+    ivp_render_mat4_t        view_mat;
+    ivp_render_mat4_t        proj_mat;
+    ivp_render_mat4_t        vp_mat;
+    int                      width, height;
+    Uint64                   start_ticks;
+    Uint64                   prev_ticks;
+    float                    frame_dt;
+    float                    max_frame_dt;
+    float                    clear_col[4];
+    ivp_render_callbacks_t   callbacks;
+    /* Per-frame GPU command state (valid between begin_frame / end_frame) */
+    SDL_GPUCommandBuffer    *cmd;
+    SDL_GPUTexture          *swapchain_tex;
 };
 
 /* ── Config ────────────────────────────────────────────────────────────── */
@@ -41,8 +43,6 @@ void ivp_render_config_init(ivp_render_config_t *cfg)
     cfg->title        = "IVP Example";
     cfg->vsync        = true;
     cfg->msaa_samples = 4;
-    cfg->depth_bits   = 24;
-    cfg->line_width   = 1.5f;
     cfg->clear_color[0] = 0.20f;
     cfg->clear_color[1] = 0.24f;
     cfg->clear_color[2] = 0.30f;
@@ -69,8 +69,6 @@ static ivp_render_config_t resolve_config(const ivp_render_config_t *config)
         resolved.msaa_samples = config->msaa_samples;
     }
 
-    if (config->depth_bits > 0)     resolved.depth_bits   = config->depth_bits;
-    if (config->line_width > 0.0f)  resolved.line_width   = config->line_width;
     if (config->max_frame_dt > 0.0f) resolved.max_frame_dt = config->max_frame_dt;
 
     /* clear_color: use if any component is non-zero */
@@ -107,79 +105,58 @@ ivp_result_t ivp_renderer_create_ex(ivp_renderer_t **out,
         return IVP_ERR_RENDER_SDL_INIT;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, cfg.depth_bits);
-    if (cfg.msaa_samples > 0) {
-        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, cfg.msaa_samples);
-    }
-
     SDL_Window *win = SDL_CreateWindow(
         cfg.title,
         cfg.width, cfg.height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_RESIZABLE);
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return IVP_ERR_RENDER_WINDOW;
     }
 
-    SDL_GLContext gl = SDL_GL_CreateContext(win);
-    if (!gl) {
-        fprintf(stderr, "GL context failed: %s\n", SDL_GetError());
-        SDL_DestroyWindow(win);
-        return IVP_ERR_RENDER_GL_CONTEXT;
-    }
+    const ivp_allocator_t *alloc = ivp_default_allocator();
 
-    int version = gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress);
-    if (!version) {
-        fprintf(stderr, "gladLoadGL failed\n");
-        SDL_GL_DestroyContext(gl);
-        SDL_DestroyWindow(win);
-        return IVP_ERR_RENDER_GL_LOAD;
-    }
-
-    SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
-
-    glEnable(GL_DEPTH_TEST);
-    if (cfg.msaa_samples > 0) {
-        glEnable(GL_MULTISAMPLE);
-    }
-    glLineWidth(cfg.line_width);
-
-    /* Create sub-contexts with config */
-    ivp_render_draw_ctx_t *draw_ctx = NULL;
-    ivp_result_t res = ivp_render_draw_ctx_create_ex(&draw_ctx, &cfg.draw_config);
-    if (res != IVP_OK) {
-        SDL_GL_DestroyContext(gl);
-        SDL_DestroyWindow(win);
-        return res;
-    }
-
-    ivp_render_hud_ctx_t *hud_ctx = NULL;
-    res = ivp_render_hud_ctx_create_ex(&hud_ctx, &cfg.hud_config);
-    if (res != IVP_OK) {
-        ivp_render_draw_ctx_destroy(draw_ctx);
-        SDL_GL_DestroyContext(gl);
-        SDL_DestroyWindow(win);
-        return res;
-    }
-
-    /* Allocate renderer */
-    ivp_renderer_t *r = (ivp_renderer_t *)calloc(1, sizeof(*r));
+    /* Allocate renderer early so we can use its gpu field */
+    ivp_renderer_t *r = (ivp_renderer_t *)ivp_alloc(alloc, sizeof(*r));
     if (!r) {
-        ivp_render_hud_ctx_destroy(hud_ctx);
-        ivp_render_draw_ctx_destroy(draw_ctx);
-        SDL_GL_DestroyContext(gl);
         SDL_DestroyWindow(win);
         return IVP_ERR_OUT_OF_MEMORY;
     }
+    memset(r, 0, sizeof(*r));
+    r->window = win;
 
-    r->window       = win;
-    r->gl_ctx       = gl;
-    r->draw_ctx     = draw_ctx;
-    r->hud_ctx      = hud_ctx;
+    /* Initialize GPU device */
+    ivp_result_t res = ivp_gpu_device_init(&r->gpu, win, cfg.msaa_samples);
+    if (res != IVP_OK) {
+        SDL_DestroyWindow(win);
+        ivp_free(alloc, r, sizeof(*r));
+        return res;
+    }
+
+    /* Set vsync present mode */
+    SDL_SetGPUSwapchainParameters(r->gpu.device, win,
+        SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+        cfg.vsync ? SDL_GPU_PRESENTMODE_VSYNC
+                  : SDL_GPU_PRESENTMODE_IMMEDIATE);
+
+    /* Create sub-contexts with config */
+    res = ivp_render_draw_ctx_create_ex(&r->draw_ctx, &cfg.draw_config, &r->gpu);
+    if (res != IVP_OK) {
+        ivp_gpu_device_destroy(&r->gpu);
+        SDL_DestroyWindow(win);
+        ivp_free(alloc, r, sizeof(*r));
+        return res;
+    }
+
+    res = ivp_render_hud_ctx_create_ex(&r->hud_ctx, &cfg.hud_config, &r->gpu);
+    if (res != IVP_OK) {
+        ivp_render_draw_ctx_destroy(r->draw_ctx, &r->gpu);
+        ivp_gpu_device_destroy(&r->gpu);
+        SDL_DestroyWindow(win);
+        ivp_free(alloc, r, sizeof(*r));
+        return res;
+    }
+
     r->width        = cfg.width;
     r->height       = cfg.height;
     r->start_ticks  = SDL_GetPerformanceCounter();
@@ -207,11 +184,12 @@ ivp_renderer_t *ivp_renderer_create(const ivp_render_config_t *config)
 void ivp_renderer_destroy(ivp_renderer_t *r)
 {
     if (!r) return;
-    ivp_render_draw_ctx_destroy(r->draw_ctx);
-    ivp_render_hud_ctx_destroy(r->hud_ctx);
-    SDL_GL_DestroyContext(r->gl_ctx);
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+    ivp_render_draw_ctx_destroy(r->draw_ctx, &r->gpu);
+    ivp_render_hud_ctx_destroy(r->hud_ctx, &r->gpu);
+    ivp_gpu_device_destroy(&r->gpu);
     SDL_DestroyWindow(r->window);
-    free(r);
+    ivp_free(alloc, r, sizeof(*r));
     SDL_Quit();
 }
 
@@ -259,10 +237,34 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_camera_compute_matrices(cam, r->width, r->height,
                                 r->view_mat, r->proj_mat, r->vp_mat);
 
-    glViewport(0, 0, r->width, r->height);
-    glClearColor(r->clear_col[0], r->clear_col[1],
-                 r->clear_col[2], r->clear_col[3]);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    /* Ensure depth texture matches window size */
+    int pw, ph;
+    SDL_GetWindowSizeInPixels(r->window, &pw, &ph);
+    ivp_gpu_device_ensure_depth(&r->gpu, pw, ph);
+    if (!r->gpu.depth_texture) {
+        return true; /* skip frame on transient allocation failure */
+    }
+
+    /* Acquire swapchain texture */
+    r->cmd = SDL_AcquireGPUCommandBuffer(r->gpu.device);
+    if (!r->cmd) return false;
+
+    r->swapchain_tex = NULL;
+    Uint32 sw, sh;
+    if (!SDL_WaitAndAcquireGPUSwapchainTexture(r->cmd, r->window,
+                                                &r->swapchain_tex, &sw, &sh)) {
+        SDL_CancelGPUCommandBuffer(r->cmd);
+        r->cmd = NULL;
+        return true; /* minimised — skip frame but don't quit */
+    }
+    (void)sw;
+    (void)sh;
+    if (!r->swapchain_tex) {
+        /* Window minimised or no texture available */
+        SDL_SubmitGPUCommandBuffer(r->cmd);
+        r->cmd = NULL;
+        return true;
+    }
 
     ivp_render_draw_ctx_reset(r->draw_ctx);
     ivp_render_hud_ctx_reset(r->hud_ctx);
@@ -271,17 +273,64 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
 
 void ivp_renderer_end_frame(ivp_renderer_t *r)
 {
-    /* Draw 3D lines */
-    ivp_render_draw_ctx_flush(r->draw_ctx, r->vp_mat);
+    if (!r->cmd || !r->swapchain_tex) return;
 
-    /* Draw 2D HUD overlay */
-    ivp_render_hud_ctx_flush(r->hud_ctx, r->width, r->height);
+    /* Upload draw + HUD vertex data via copy passes (before the render pass) */
+    ivp_render_draw_ctx_upload(r->draw_ctx, &r->gpu, r->cmd);
+    ivp_render_hud_ctx_upload(r->hud_ctx, &r->gpu, r->cmd);
+
+    /* Begin render pass with clear */
+    SDL_GPUColorTargetInfo color_target = {0};
+    color_target.texture     = r->swapchain_tex;
+    color_target.clear_color.r = r->clear_col[0];
+    color_target.clear_color.g = r->clear_col[1];
+    color_target.clear_color.b = r->clear_col[2];
+    color_target.clear_color.a = r->clear_col[3];
+    color_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+    color_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+    SDL_GPUDepthStencilTargetInfo depth_target = {0};
+    depth_target.texture        = r->gpu.depth_texture;
+    depth_target.clear_depth    = 1.0f;
+    depth_target.load_op        = SDL_GPU_LOADOP_CLEAR;
+    depth_target.store_op       = SDL_GPU_STOREOP_DONT_CARE;
+    depth_target.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
+    depth_target.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(
+        r->cmd, &color_target, 1, &depth_target);
+    if (!pass) {
+        SDL_CancelGPUCommandBuffer(r->cmd);
+        r->cmd = NULL;
+        r->swapchain_tex = NULL;
+        return;
+    }
+
+    /* Set viewport */
+    SDL_GPUViewport vp = {0};
+    vp.x = 0; vp.y = 0;
+    vp.w = (float)r->width;
+    vp.h = (float)r->height;
+    vp.min_depth = 0.0f;
+    vp.max_depth = 1.0f;
+    SDL_SetGPUViewport(pass, &vp);
+
+    /* Draw 3D lines */
+    ivp_render_draw_ctx_draw(r->draw_ctx, &r->gpu, r->cmd, pass, r->vp_mat);
+
+    /* Draw 2D HUD overlay (no depth) */
+    ivp_render_hud_ctx_draw(r->hud_ctx, &r->gpu, r->cmd, pass,
+                            r->width, r->height);
+
+    SDL_EndGPURenderPass(pass);
 
     /* Pre-swap callback */
     if (r->callbacks.pre_swap_cb)
         r->callbacks.pre_swap_cb(r->callbacks.pre_swap_cb_ud);
 
-    SDL_GL_SwapWindow(r->window);
+    SDL_SubmitGPUCommandBuffer(r->cmd);
+    r->cmd = NULL;
+    r->swapchain_tex = NULL;
 }
 
 /* ── Accessors ─────────────────────────────────────────────────────────── */
