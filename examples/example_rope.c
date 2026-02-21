@@ -16,6 +16,7 @@
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/controllers/ivp_constraint.h>
+#include <ivp/controllers/ivp_controller.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -24,8 +25,9 @@
 #define LINK_HX     0.20f
 #define LINK_HY     0.55f
 #define LINK_HZ     0.20f
-#define LINK_GAP    0.05f
-#define INITIAL_SWING_X 1.8
+#define LINK_GAP    0.00f
+#define INITIAL_SWING_X 0.02f
+#define ROPE_SIM_DT  (1.0f / 600.0f)
 
 int main(void)
 {
@@ -37,6 +39,11 @@ int main(void)
     ivp_renderer_t *renderer = NULL;
     ivp_renderer_create(&renderer, &rcfg);
     if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    {
+        const float light_dir[3] = {0.45f, 0.80f, -0.40f};
+        ivp_render_set_light_dir(renderer, light_dir);
+        ivp_render_set_ambient(renderer, 0.35f);
+    }
 
     ivp_camera_t cam;
     ivp_camera_init(&cam);
@@ -48,7 +55,17 @@ int main(void)
     /* ── Physics ────────────────────────────────────────────────────────── */
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
+    ecfg.delta_psi_time = (ivp_real_t)ROPE_SIM_DT;
+    ivp_solver_config_init_default(&ecfg.solver_config);
+    ecfg.ccd_enabled = false;
+    ecfg.solver_config.enable_shock_propagation = false;
+    ecfg.solver_config.enable_post_stabilization = true;
+    ecfg.solver_config.enable_warm_start_impulse = true;
+    ecfg.solver_config.enable_adaptive_pgs = true;
+    ecfg.solver_config.pgs_base_iterations = 32;
+    ecfg.solver_config.pgs_max_iterations  = 64;
     ivp_environment_t *env = ivp_environment_create(&ecfg);
+    env->use_forward_projection = false;
     ivp_example_inspector_t inspector;
     ivp_example_inspector_init(&inspector, "rope");
     float weight_peak_abs_x = 0.0f;
@@ -101,16 +118,15 @@ int main(void)
         ivp_object_template_t lt;
         ivp_object_template_init(&lt);
         lt.type = IVP_OBJECT_POLYGON;
-        lt.mass = IVP_REAL(0.6);
-        set_box_inertia(&lt, IVP_REAL(0.6),
+        lt.mass = IVP_REAL(0.8);
+        set_box_inertia(&lt, IVP_REAL(0.8),
             (ivp_real_t)LINK_HX, (ivp_real_t)LINK_HY, (ivp_real_t)LINK_HZ);
         lt.material.friction   = IVP_REAL(0.6);
-        lt.material.elasticity = IVP_REAL(0.05);
-        lt.speed_damp_factor     = IVP_REAL(0.03);
-        lt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.03), IVP_REAL(0.03), IVP_REAL(0.03));
-        /* Arc: X offset decays from INITIAL_SWING_X at top toward 0 at bottom */
-        float t_frac = (float)(i + 1) / (float)(CHAIN_LEN + 1);
-        ivp_real_t offset_x = (ivp_real_t)(INITIAL_SWING_X * (1.0f - t_frac));
+        lt.material.elasticity = IVP_REAL(0.0);
+        lt.speed_damp_factor     = IVP_REAL(0.14);
+        lt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.18), IVP_REAL(0.18), IVP_REAL(0.18));
+        /* Keep the full chain at one lateral offset so constraints start near-rest. */
+        ivp_real_t offset_x = (ivp_real_t)INITIAL_SWING_X;
         lt.position = ivp_vec3r(offset_x,
             IVP_REAL(-15.0) + step * (ivp_real_t)(i + 1),
             IVP_REAL(0.0));
@@ -126,16 +142,15 @@ int main(void)
     ivp_object_template_t wt;
     ivp_object_template_init(&wt);
     wt.type = IVP_OBJECT_POLYGON;
-    wt.mass = IVP_REAL(2.0);
+    wt.mass = IVP_REAL(1.4);
     /* 0.6m half-extent cube, 2kg: I_x = (2/3)(0.36+0.36) = 0.48. Use helper for consistency. */
-    set_box_inertia(&wt, IVP_REAL(2.0), IVP_REAL(0.6), IVP_REAL(0.6), IVP_REAL(0.6));
+    set_box_inertia(&wt, IVP_REAL(1.4), IVP_REAL(0.6), IVP_REAL(0.6), IVP_REAL(0.6));
     wt.material.friction   = IVP_REAL(0.8);
-    wt.material.elasticity = IVP_REAL(0.1);
-    wt.speed_damp_factor     = IVP_REAL(0.02);
-    wt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.02), IVP_REAL(0.02), IVP_REAL(0.02));
-    /* Weight at bottom of arc — smallest X offset */
-    float w_frac = (float)(CHAIN_LEN + 1) / (float)(CHAIN_LEN + 1);
-    ivp_real_t weight_x = (ivp_real_t)(INITIAL_SWING_X * (1.0f - w_frac));
+    wt.material.elasticity = IVP_REAL(0.0);
+    wt.speed_damp_factor     = IVP_REAL(0.12);
+    wt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.15), IVP_REAL(0.15), IVP_REAL(0.15));
+    /* Match chain lateral offset to avoid initial constraint stretch. */
+    ivp_real_t weight_x = (ivp_real_t)INITIAL_SWING_X;
     wt.position = ivp_vec3r(weight_x,
         IVP_REAL(-15.0) + step * (ivp_real_t)(CHAIN_LEN + 1),
         IVP_REAL(0.0));
@@ -151,7 +166,7 @@ int main(void)
         ivp_vec3r_t b_pt = ivp_vec3r(IVP_REAL(0.0), -LINK_HY, IVP_REAL(0.0));
         ivp_constraint_init_ball_socket(&constraints[0],
             ceiling, &a_pt, links[0], &b_pt);
-        ivp_environment_add_controller(env, 50,
+        ivp_environment_add_controller(env, IVP_CP_CONSTRAINTS,
             ivp_controller_constraint, &constraints[0]);
     }
 
@@ -161,7 +176,7 @@ int main(void)
         ivp_vec3r_t b_top = ivp_vec3r(IVP_REAL(0.0), -LINK_HY, IVP_REAL(0.0));
         ivp_constraint_init_ball_socket(&constraints[i],
             links[i - 1], &a_bot, links[i], &b_top);
-        ivp_environment_add_controller(env, 50,
+        ivp_environment_add_controller(env, IVP_CP_CONSTRAINTS,
             ivp_controller_constraint, &constraints[i]);
     }
 
@@ -171,7 +186,7 @@ int main(void)
         ivp_vec3r_t b_top = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.6), IVP_REAL(0.0));
         ivp_constraint_init_ball_socket(&constraints[CHAIN_LEN],
             links[CHAIN_LEN - 1], &a_bot, weight, &b_top);
-        ivp_environment_add_controller(env, 50,
+        ivp_environment_add_controller(env, IVP_CP_CONSTRAINTS,
             ivp_controller_constraint, &constraints[CHAIN_LEN]);
     }
 
@@ -180,12 +195,15 @@ int main(void)
     const float c_weight[]  = {0.90f, 0.25f, 0.20f};
     const float c_ceil[]    = {0.50f, 0.50f, 0.55f};
     const float c_joint[]   = {1.0f,  0.30f, 0.30f};
-    const float c_ground[]  = {0.30f, 0.30f, 0.35f};
+    const float c_ground[]  = {0.58f, 0.58f, 0.60f};
     const float c_grid[]    = {0.12f, 0.12f, 0.18f};
     const float c_hud[]     = {0.80f, 0.80f, 0.80f};
     const float c_vel[]     = {0.20f, 1.0f,  0.40f};
     const float c_drag[]    = {1.0f, 0.85f, 0.25f};
     const float c_focus[]   = {1.0f, 0.65f, 0.25f};
+
+    bool wireframe_view = false;
+    bool prev_v_down = false;
 
     ivp_example_dragger_t dragger;
     ivp_example_dragger_init(&dragger);
@@ -205,6 +223,9 @@ int main(void)
 
     sim_loop_t sl;
     sim_loop_init(&sl, renderer);
+    /* Must match env delta_psi_time to avoid jitter from dt mismatch. */
+    sl.sim_dt = ROPE_SIM_DT;
+    sl.max_substeps = 64;
 
     while (ivp_renderer_begin_frame(renderer, &cam)) {
         float frame_dt = sim_loop_begin(&sl, renderer);
@@ -217,12 +238,30 @@ int main(void)
             ivp_camera_restore_defaults(&cam, &cam_defaults);
         }
 
+        {
+            const bool *keys = SDL_GetKeyboardState(NULL);
+            bool v_down = keys[SDL_SCANCODE_V];
+            if (v_down && !prev_v_down)
+                wireframe_view = !wireframe_view;
+            prev_v_down = v_down;
+        }
+
         int win_w = 0, win_h = 0;
         ivp_renderer_get_size(renderer, &win_w, &win_h);
         ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
         ivp_example_focus_update(&focus, &cam, env, frame_dt);
 
-        sim_loop_step(&sl, env, frame_dt);
+        ivp_time_t env_time_before = ivp_environment_get_time(env);
+        int substeps = sim_loop_step(&sl, env, frame_dt);
+        ivp_time_t env_time_after = ivp_environment_get_time(env);
+
+        ivp_real_t psi_dt = ivp_environment_get_delta_psi_time(env);
+        int physics_steps = 0;
+        float residual_ratio = 0.0f;
+        if (psi_dt > IVP_REAL(1e-8)) {
+            physics_steps = (int)(((env_time_after - env_time_before) / psi_dt) + IVP_REAL(0.5));
+            residual_ratio = (float)(env->residual_time / psi_dt);
+        }
 
         float max_speed = 0.0f;
         float max_stretch_ratio = 0.0f;
@@ -285,26 +324,33 @@ int main(void)
             ivp_vec3r_t wp;
             ivp_object_get_position(weight, &wp);
             ivp_example_inspector_log(&inspector,
-                "max_speed=%.3f stretch_ratio=%.3f worst_link=%d weight_x=%.3f swing_x_peak=%.3f chain_mean_x=%.3f",
+                "max_speed=%.3f stretch_ratio=%.3f worst_link=%d weight_x=%.3f chain_mean_x=%.3f frame_sub=%d phys_steps=%d resid=%.2f",
                 max_speed,
                 max_stretch_ratio,
                 max_stretch_link,
                 (float)wp.k[0],
-                weight_peak_abs_x,
-                sum_link_x / (float)CHAIN_LEN);
+                sum_link_x / (float)CHAIN_LEN,
+                substeps,
+                physics_steps,
+                residual_ratio);
         }
 
-        if (max_speed > 35.0f || max_stretch_ratio > 4.0f) {
+        if (max_speed > 40.0f || max_stretch_ratio > 1.5f) {
             ivp_example_inspector_log(&inspector,
                 "instability flag (speed=%.3f ratio=%.3f)",
                 max_speed, max_stretch_ratio);
         }
 
         /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 12.0f, 2.0f, c_grid);
+        /* Keep scene solid-focused; remove dense wire grid. */
         {
             float gp[3] = {0, 2.0f, 0}, gs[3] = {12.0f, 0.5f, 12.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            if (wireframe_view) {
+                ivp_render_draw_ground_grid(renderer, 12.0f, 2.0f, c_grid);
+                ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
+            } else {
+                ivp_render_draw_solid_box(renderer, gp, gs, NULL, c_ground);
+            }
         }
 
         /* Ceiling bar */
@@ -313,7 +359,10 @@ int main(void)
             ivp_object_get_position(ceiling, &p);
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {1.5f, 0.3f, 0.3f};
-            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_ceil);
+            if (wireframe_view)
+                ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_ceil);
+            else
+                ivp_render_draw_solid_box(renderer, fp, hs, NULL, c_ceil);
         }
 
         /* Chain links and joint connectors */
@@ -336,10 +385,10 @@ int main(void)
             float lc[3] = {c_link[0], c_link[1], c_link[2]};
             if (i % 2) { lc[0] *= 0.8f; lc[1] *= 0.8f; lc[2] *= 0.8f; }
 
-            ivp_render_draw_wire_box(renderer, fp, hs, rot, lc);
-
-            /* Joint connector line */
-            ivp_render_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
+            if (wireframe_view)
+                ivp_render_draw_wire_box(renderer, fp, hs, rot, lc);
+            else
+                ivp_render_draw_solid_box(renderer, fp, hs, rot, lc);
 
             /* Small sphere at joint */
             float jp[3] = {
@@ -347,7 +396,10 @@ int main(void)
                 (prev_pos[1] + fp[1]) * 0.5f,
                 (prev_pos[2] + fp[2]) * 0.5f
             };
-            ivp_render_draw_wire_sphere(renderer, jp, 0.08f, c_joint);
+            if (wireframe_view)
+                ivp_render_draw_wire_sphere(renderer, jp, 0.08f, c_joint);
+            else
+                ivp_render_draw_solid_sphere(renderer, jp, 0.08f, c_joint);
 
             prev_pos[0] = fp[0]; prev_pos[1] = fp[1]; prev_pos[2] = fp[2];
         }
@@ -362,8 +414,10 @@ int main(void)
             float fp[3]; vec3r_to_float3(&p, fp);
             float hs[3] = {0.6f, 0.6f, 0.6f};
 
-            ivp_render_draw_thick_line(renderer, prev_pos, fp, c_joint, 2);
-            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_weight);
+            if (wireframe_view)
+                ivp_render_draw_wire_box(renderer, fp, hs, rot, c_weight);
+            else
+                ivp_render_draw_solid_box(renderer, fp, hs, rot, c_weight);
 
             /* Velocity arrow on weight */
             ivp_vec3r_t v;
@@ -378,19 +432,16 @@ int main(void)
             }
         }
 
-        /* Origin axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
+        /* Disable origin wire axes for cleaner solid presentation. */
 
         ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
 
         /* HUD */
         {
             char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Chain: %d links + weight",
-                     sl.fps_display, CHAIN_LEN);
+            snprintf(buf, sizeof(buf), "FPS: %.0f  Chain:%d  View:%s(V)  psi:%.4f  sub:%d phys:%d",
+                     sl.fps_display, CHAIN_LEN, wireframe_view ? "wire" : "solid",
+                     (float)ivp_environment_get_delta_psi_time(env), substeps, physics_steps);
             ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
 
             ivp_vec3r_t wp;
@@ -402,7 +453,20 @@ int main(void)
                      (float)wp.k[0], (float)wp.k[1], (float)wp.k[2], wspeed);
             ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_weight);
 
-            ivp_example_draw_interaction_hud(renderer, 10.0f, 50.0f, c_hud, c_drag);
+            snprintf(buf, sizeof(buf), "stretch: %.3f  peak_swing_x: %.3f  resid: %.2f",
+                     max_stretch_ratio, weight_peak_abs_x, residual_ratio);
+            ivp_render_draw_text(renderer, 10.0f, 50.0f, buf, c_hud);
+
+            snprintf(buf, sizeof(buf), "solver: pgs=%d..%d warm=%d adapt=%d post=%d shock=%d",
+                     env->solver_config.pgs_base_iterations,
+                     env->solver_config.pgs_max_iterations,
+                     env->solver_config.enable_warm_start_impulse ? 1 : 0,
+                     env->solver_config.enable_adaptive_pgs ? 1 : 0,
+                     env->solver_config.enable_post_stabilization ? 1 : 0,
+                     env->solver_config.enable_shock_propagation ? 1 : 0);
+            ivp_render_draw_text(renderer, 10.0f, 70.0f, buf, c_hud);
+
+            ivp_example_draw_interaction_hud(renderer, 10.0f, 90.0f, c_hud, c_drag);
         }
 
         ivp_renderer_end_frame(renderer);
