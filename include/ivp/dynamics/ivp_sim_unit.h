@@ -39,7 +39,7 @@ typedef void (*ivp_controller_core_fn_t)(void *ctx,
                                           ivp_real_t delta_time);
 
 /* A controller entry registered in a simulation unit's controller list.
- * Sorted by priority (ascending) within the unit. */
+ * Sorted by priority (descending) within the unit. */
 struct ivp_controller_core {
     ivp_controller_core_fn_t fn;
     void *ctx;
@@ -88,7 +88,7 @@ struct ivp_sim_unit {
     ivp_sim_unit_core_entry_t *core_list;   /* head of intrusive DLL */
     int core_count;
 
-    /* Controllers sorted by priority (ascending) */
+    /* Controllers sorted by priority (descending) */
     ivp_controller_core_t *controller_list; /* head of sorted intrusive DLL */
     int controller_count;
 
@@ -164,7 +164,7 @@ void ivp_sim_unit_remove_controller(ivp_controller_core_t *cc);
 /* Execute one PSI step for a single sim unit. Follows reference ordering:
  * 1. init_moving_core_for_psi + reset temporarily_unmovable/impacts
  * 2. commit_all_async_pushes
- * 3. run controllers in priority order
+ * 3. run controllers from highest priority to lowest
  * 4. calc_next_psi_matrix (integration)
  * 5. calc movement state (freeze check)
  * 6. union_find if needed */

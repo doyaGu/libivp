@@ -12,6 +12,7 @@ option(IVP_ENABLE_ASSERTS "Enable IVP_ASSERT in Release builds" OFF)
 option(IVP_CONTAINER_DEBUG "Enable container debug checks (iterator, bounds, canaries)" OFF)
 option(IVP_ENABLE_STATS "Enable runtime statistics counters" OFF)
 option(IVP_ENABLE_PARITY_TESTS "Enable C17 vs golden-reference parity tests" OFF)
+option(IVP_ENABLE_SCENARIO_TESTS "Enable scenario regression tests (test_scenario_*)" OFF)
 option(IVP_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(IVP_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(IVP_BUILD_TESTS "Build unit tests" ON)
@@ -152,6 +153,7 @@ set(IVP_CONTROLLER_SOURCES
         src/controllers/ivp_controller_phantom.c
         src/controllers/ivp_controller_world_friction.c
         src/controllers/ivp_controller_buoyancy.c
+        src/controllers/ivp_buoyancy_solver.c
         src/controllers/ivp_controller_raycast_car.c
         src/controllers/ivp_actuator_rot_mot.c
         src/controllers/ivp_actuator_force.c
@@ -186,6 +188,7 @@ set(IVP_SOLVER_SOURCES
         src/solver/ivp_great_matrix.c
         src/solver/ivp_contact.c
         src/solver/ivp_impact.c
+        src/solver/ivp_impact_rescue.c
         src/solver/ivp_friction_system.c
         src/solver/ivp_mindist_friction_update.c
         src/solver/ivp_impact_system.c
@@ -588,13 +591,15 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_perf tests/test_perf.c)
 
     # Scenario parity runner (not a unit test — a JSONL producer)
-    add_executable(test_scenarios tests/test_scenarios.c)
-    target_link_libraries(test_scenarios PRIVATE ivp)
-    target_include_directories(test_scenarios PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests
-    )
-    if (NOT MSVC)
-        target_link_libraries(test_scenarios PRIVATE m)
+    if (IVP_ENABLE_SCENARIO_TESTS)
+        add_executable(test_scenarios tests/test_scenarios.c)
+        target_link_libraries(test_scenarios PRIVATE ivp)
+        target_include_directories(test_scenarios PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        if (NOT MSVC)
+            target_link_libraries(test_scenarios PRIVATE m)
+        endif ()
     endif ()
 
     set(IVP_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
@@ -645,67 +650,68 @@ if (IVP_BUILD_TESTS)
     set_tests_properties(test_perf PROPERTIES LABELS "perf")
     set_tests_properties(test_stability_benchmarks PROPERTIES LABELS "perf;stability")
 
-    # ── Scenario parity tests (C17 vs reference JSONL) ──────────────────
-    # Each scenario: run test_scenarios to produce JSONL, then compare
-    # against golden reference via compare_jsonl.py.
-    # Self-compare mode: run scenario → compare output against itself.
-    # When reference JSONL golden files exist, compare against those.
+    if (IVP_ENABLE_SCENARIO_TESTS)
+        # ── Scenario parity tests (C17 vs reference JSONL) ──────────────
+        # Each scenario: run test_scenarios to produce JSONL, then compare
+        # against golden reference via compare_jsonl.py.
+        # Self-compare mode: run scenario → compare output against itself.
+        # When reference JSONL golden files exist, compare against those.
 
-    set(IVP_SCENARIO_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/scenario_output)
-    file(MAKE_DIRECTORY ${IVP_SCENARIO_OUTPUT_DIR})
+        set(IVP_SCENARIO_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/scenario_output)
+        file(MAKE_DIRECTORY ${IVP_SCENARIO_OUTPUT_DIR})
 
-    set(IVP_VALIDATION_CONFIG ${IVP_REPO_ROOT}/tools/validation_config.json)
+        set(IVP_VALIDATION_CONFIG ${IVP_REPO_ROOT}/tools/validation_config.json)
 
-    # Per-scenario parameters
-    # Original 3 scenarios: 240 steps, dt=1/60
-    set(SCENARIO_STEPS_freefall 240)
-    set(SCENARIO_DT_freefall "0.016666666666666666")
-    set(SCENARIO_STEPS_two_balls 240)
-    set(SCENARIO_DT_two_balls "0.016666666666666666")
-    set(SCENARIO_STEPS_slope_friction 240)
-    set(SCENARIO_DT_slope_friction "0.016666666666666666")
-    # Remaining scenarios: 480 steps, dt=1/180
-    set(SCENARIO_STEPS_springs 480)
-    set(SCENARIO_DT_springs "0.005555555555555556")
-    set(SCENARIO_STEPS_rope 480)
-    set(SCENARIO_DT_rope "0.005555555555555556")
-    set(SCENARIO_STEPS_motor 480)
-    set(SCENARIO_DT_motor "0.005555555555555556")
-    set(SCENARIO_STEPS_buoyancy 480)
-    set(SCENARIO_DT_buoyancy "0.005555555555555556")
-    set(SCENARIO_STEPS_cubes 480)
-    set(SCENARIO_DT_cubes "0.005555555555555556")
-    set(SCENARIO_STEPS_force_actuator 480)
-    set(SCENARIO_DT_force_actuator "0.005555555555555556")
-    set(SCENARIO_STEPS_forcefield 480)
-    set(SCENARIO_DT_forcefield "0.005555555555555556")
-    set(SCENARIO_STEPS_stiff_spring 480)
-    set(SCENARIO_DT_stiff_spring "0.005555555555555556")
-    set(SCENARIO_STEPS_check_distance 480)
-    set(SCENARIO_DT_check_distance "0.005555555555555556")
-    set(SCENARIO_STEPS_collision_filter 480)
-    set(SCENARIO_DT_collision_filter "0.005555555555555556")
-    set(SCENARIO_STEPS_motion_controller 480)
-    set(SCENARIO_DT_motion_controller "0.005555555555555556")
-    set(SCENARIO_STEPS_phantom 480)
-    set(SCENARIO_DT_phantom "0.005555555555555556")
-    set(SCENARIO_STEPS_vehicle 480)
-    set(SCENARIO_DT_vehicle "0.005555555555555556")
+        # Per-scenario parameters
+        # Original 3 scenarios: 240 steps, dt=1/60
+        set(SCENARIO_STEPS_freefall 240)
+        set(SCENARIO_DT_freefall "0.016666666666666666")
+        set(SCENARIO_STEPS_two_balls 240)
+        set(SCENARIO_DT_two_balls "0.016666666666666666")
+        set(SCENARIO_STEPS_slope_friction 240)
+        set(SCENARIO_DT_slope_friction "0.016666666666666666")
+        # Remaining scenarios: 480 steps, dt=1/180
+        set(SCENARIO_STEPS_springs 480)
+        set(SCENARIO_DT_springs "0.005555555555555556")
+        set(SCENARIO_STEPS_rope 480)
+        set(SCENARIO_DT_rope "0.005555555555555556")
+        set(SCENARIO_STEPS_motor 480)
+        set(SCENARIO_DT_motor "0.005555555555555556")
+        set(SCENARIO_STEPS_buoyancy 480)
+        set(SCENARIO_DT_buoyancy "0.005555555555555556")
+        set(SCENARIO_STEPS_cubes 480)
+        set(SCENARIO_DT_cubes "0.005555555555555556")
+        set(SCENARIO_STEPS_force_actuator 480)
+        set(SCENARIO_DT_force_actuator "0.005555555555555556")
+        set(SCENARIO_STEPS_forcefield 480)
+        set(SCENARIO_DT_forcefield "0.005555555555555556")
+        set(SCENARIO_STEPS_stiff_spring 480)
+        set(SCENARIO_DT_stiff_spring "0.005555555555555556")
+        set(SCENARIO_STEPS_check_distance 480)
+        set(SCENARIO_DT_check_distance "0.005555555555555556")
+        set(SCENARIO_STEPS_collision_filter 480)
+        set(SCENARIO_DT_collision_filter "0.005555555555555556")
+        set(SCENARIO_STEPS_motion_controller 480)
+        set(SCENARIO_DT_motion_controller "0.005555555555555556")
+        set(SCENARIO_STEPS_phantom 480)
+        set(SCENARIO_DT_phantom "0.005555555555555556")
+        set(SCENARIO_STEPS_vehicle 480)
+        set(SCENARIO_DT_vehicle "0.005555555555555556")
 
-    set(IVP_SCENARIO_BASELINE_DIR ${IVP_REPO_ROOT}/tools/baselines)
-    file(MAKE_DIRECTORY ${IVP_SCENARIO_BASELINE_DIR})
+        set(IVP_SCENARIO_BASELINE_DIR ${IVP_REPO_ROOT}/tools/baselines)
+        file(MAKE_DIRECTORY ${IVP_SCENARIO_BASELINE_DIR})
 
-    foreach (SCENARIO
-            freefall two_balls slope_friction
-            springs rope motor buoyancy
-            cubes force_actuator forcefield stiff_spring
-            check_distance collision_filter motion_controller phantom vehicle)
-        set(SCENARIO_OUTPUT ${IVP_SCENARIO_OUTPUT_DIR}/${SCENARIO}.jsonl)
-        set(SCENARIO_REF ${IVP_SCENARIO_REFDIR}/ref_${SCENARIO}.jsonl)
-        set(SCENARIO_METRICS ${IVP_SCENARIO_OUTPUT_DIR}/metrics_${SCENARIO}.json)
-        set(SCENARIO_BASELINE ${IVP_SCENARIO_BASELINE_DIR}/${SCENARIO}.json)
-        set(S_STEPS ${SCENARIO_STEPS_${SCENARIO}})
-        set(S_DT ${SCENARIO_DT_${SCENARIO}})
+        foreach (SCENARIO
+                freefall two_balls slope_friction
+                springs rope motor buoyancy
+                cubes force_actuator forcefield stiff_spring
+                check_distance collision_filter motion_controller phantom vehicle)
+            set(SCENARIO_OUTPUT ${IVP_SCENARIO_OUTPUT_DIR}/${SCENARIO}.jsonl)
+            set(SCENARIO_REF ${IVP_SCENARIO_REFDIR}/ref_${SCENARIO}.jsonl)
+            set(SCENARIO_METRICS ${IVP_SCENARIO_OUTPUT_DIR}/metrics_${SCENARIO}.json)
+            set(SCENARIO_BASELINE ${IVP_SCENARIO_BASELINE_DIR}/${SCENARIO}.json)
+            set(S_STEPS ${SCENARIO_STEPS_${SCENARIO}})
+            set(S_DT ${SCENARIO_DT_${SCENARIO}})
 
         # Generate: run the scenario and produce JSONL
         add_test(
@@ -798,7 +804,10 @@ if (IVP_BUILD_TESTS)
                 endif ()
             endif ()
         endif ()
-    endforeach ()
+        endforeach ()
+    else ()
+        message(STATUS "Scenario regression tests (test_scenario_*) are disabled (IVP_ENABLE_SCENARIO_TESTS=OFF).")
+    endif ()
 
     # ── Smoke tests for graphical examples ────────────────────────────────
     # Only available when examples are built; requires Python3.

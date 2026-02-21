@@ -165,6 +165,123 @@ static void update_coll_dist_selector(ivp_mindist_entry_t *entry)
     }
 }
 
+static bool time_event_is_impact(const ivp_time_event_t *event)
+{
+    if (!event) return false;
+    if (event->mindist_kind != 0u) {
+        return (event->mindist_kind & 0x0Fu) == 0u;
+    }
+    return event->type == IVP_TIME_EVENT_MINDIST_IMPACT;
+}
+
+static bool topology_event_should_tighten(uint32_t kind)
+{
+    switch (kind) {
+        case IVP_MINDIST_EVENT_PP_PK:
+        case IVP_MINDIST_EVENT_PF_NPF:
+        case IVP_MINDIST_EVENT_PK_PF:
+        case IVP_MINDIST_EVENT_PK_KK:
+        case IVP_MINDIST_EVENT_KK_PF:
+            return true;
+        case IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL:
+        case IVP_MINDIST_EVENT_KK_PARALLEL:
+            return false;
+        default:
+            return true;
+    }
+}
+
+static void apply_topology_kind_to_synapse(ivp_mindist_entry_t *entry,
+                                           uint32_t kind,
+                                           ivp_synapse_status_t fallback_a,
+                                           ivp_synapse_status_t fallback_b)
+{
+    if (!entry) return;
+
+    ivp_synapse_status_t sa = fallback_a;
+    ivp_synapse_status_t sb = fallback_b;
+
+    switch (kind) {
+        case IVP_MINDIST_EVENT_PP_PK:
+            sa = IVP_ST_POINT;
+            sb = IVP_ST_EDGE;
+            break;
+        case IVP_MINDIST_EVENT_PF_NPF:
+        case IVP_MINDIST_EVENT_PK_PF:
+        case IVP_MINDIST_EVENT_KK_PF:
+            sa = IVP_ST_POINT;
+            sb = IVP_ST_TRIANGLE;
+            break;
+        case IVP_MINDIST_EVENT_PK_KK:
+        case IVP_MINDIST_EVENT_KK_PARALLEL:
+            sa = IVP_ST_EDGE;
+            sb = IVP_ST_EDGE;
+            break;
+        case IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL:
+            sa = IVP_ST_POINT;
+            sb = IVP_ST_EDGE;
+            break;
+        case IVP_MINDIST_EVENT_BALL_RECALC:
+            sa = IVP_ST_BALL;
+            sb = IVP_ST_BALL;
+            break;
+        default:
+            break;
+    }
+
+    entry->synapse[0].status = sa;
+    entry->synapse[1].status = sb;
+}
+
+static void schedule_followup_mindist_event(ivp_environment_t *env,
+                                            const ivp_collision_settings_t *settings,
+                                            ivp_mindist_entry_t *entry,
+                                            ivp_time_t now,
+                                            ivp_time_t horizon_end)
+{
+    if (!env || !settings || !entry) return;
+    if (horizon_end <= now) return;
+
+    /* Debounce: if this entry already has a pending event in the current
+     * horizon window, avoid re-scheduling to reduce jittery re-queues. */
+    if (entry->event_registered && entry->event_time > now && entry->event_time <= horizon_end) {
+        return;
+    }
+
+    ivp_mindist_event_prediction_t prediction;
+    if (!ivp_mindist_event_predict(entry, settings, now, horizon_end, &prediction)) {
+        return;
+    }
+    if (!isfinite((double)prediction.event_time)) {
+        return;
+    }
+
+    /* Keep events strictly in the future to avoid immediate pop/requeue loops
+     * when prediction lands exactly on current time due to numeric noise. */
+    {
+        const ivp_time_t horizon = horizon_end - now;
+        const ivp_time_t min_ahead = horizon > (ivp_time_t)1e-6
+            ? horizon * (ivp_time_t)0.1
+            : (ivp_time_t)1e-6;
+        if (prediction.event_time <= now + min_ahead) {
+            prediction.event_time = now + min_ahead;
+            if (prediction.event_time > horizon_end) {
+                prediction.event_time = horizon_end;
+            }
+        }
+        if (!isfinite((double)prediction.event_time)) {
+            return;
+        }
+    }
+
+    ivp_time_event_t time_event;
+    ivp_mindist_event_to_time_event(entry, &prediction, &time_event);
+    if (ivp_time_event_queue_push(&env->time_event_queue, &time_event)) {
+        entry->event_registered = true;
+        entry->event_time = prediction.event_time;
+    }
+}
+
 static int dispatch_due_mindist_events(ivp_environment_t *env,
                                        const ivp_collision_settings_t *settings,
                                        ivp_time_t now,
@@ -196,10 +313,23 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
          * No narrowphase, no impact resolution.
          * Note: rescheduling is deferred to the broadphase in the next
          * collision resolution call to avoid infinite dispatch loops. */
-        if (event.type == IVP_TIME_EVENT_MINDIST_RECALC) {
+        /* Important: follow-up events must be scheduled strictly AFTER the
+         * current dispatch horizon (`max_time`), otherwise pop_due(max_time)
+         * can repeatedly consume newly requeued events in the same pass. */
+        const ivp_time_t small_delay_end = max_time + (ivp_time_t)step_dt;
+        const ivp_time_t big_delay_end = max_time + (ivp_time_t)(step_dt * IVP_REAL(4.0));
+
+        if (!time_event_is_impact(&event)) {
             if (entry) {
+                apply_topology_kind_to_synapse(entry,
+                                               event.mindist_kind,
+                                               event.status_a,
+                                               event.status_b);
                 ivp_mindist_entry_recompute(entry);
-                update_coll_dist_selector(entry);
+                if (topology_event_should_tighten(event.mindist_kind)) {
+                    update_coll_dist_selector(entry);
+                }
+                schedule_followup_mindist_event(env, settings, entry, max_time, small_delay_end);
             }
             continue;
         }
@@ -217,12 +347,23 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
             update_coll_dist_selector(entry);
         }
 
-        /* Step 2: false-alarm check — if the recomputed distance is far
-         * beyond the maximum impact range, skip narrowphase entirely.
-         * The per-contact projected-gap check will handle the fine-grained
-         * discrimination inside the narrowphase loop below. */
+        /* Step 2: false-alarm check using reference-like secondary distance:
+         * sec_dist = coll_dist + mindist_change_force_dist.
+         * If current distance exceeds sec_dist, schedule a big-delay recheck. */
+        {
+            ivp_real_t coll_dist = entry
+                ? get_entry_coll_dist(entry, settings)
+                : settings->min_coll_dist;
+            ivp_real_t sec_dist = coll_dist + settings->mindist_change_force_dist;
+            if (entry && entry->last_distance > sec_dist) {
+                schedule_followup_mindist_event(env, settings, entry, max_time, big_delay_end);
+                continue;
+            }
+        }
+
+        /* Additional coarse far-separation guard. */
         if (entry && entry->last_distance > settings->max_distance_for_impact) {
-            /* Objects are well separated — clearly a false alarm. */
+            schedule_followup_mindist_event(env, settings, entry, max_time, big_delay_end);
             continue;
         }
 
@@ -232,8 +373,17 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
                                                             generated,
                                                             IVP_MAX_CONTACTS_PER_PAIR);
         if (n_generated <= 0) {
+            if (entry) {
+                schedule_followup_mindist_event(env, settings, entry, max_time, big_delay_end);
+            }
             continue;
         }
+
+        bool any_need_impact = false;
+        bool any_impact_resolved = false;
+        ivp_persistent_contact_t *impact_candidate_pc = NULL;
+        ivp_contact_point_t *impact_candidate_cp = NULL;
+        ivp_real_t impact_candidate_metric = IVP_REAL(1e30);
 
         for (int ci = 0; ci < n_generated; ci++) {
             ivp_contact_point_t *cp = &generated[ci];
@@ -255,6 +405,10 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
                 }
             }
 
+            if (need_impact) {
+                any_need_impact = true;
+            }
+
             ivp_persistent_contact_t *pc = NULL;
             if (cp->gap_length <= settings->keeper_dist || need_impact) {
                 pc = ivp_friction_manager_match_or_create(&env->friction_manager, cp);
@@ -266,14 +420,28 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
             }
 
             if (!pc) {
-                /* Hard switch: event-time impacts are anchored on persistent
-                 * synapse contacts only; no immediate single-contact fallback. */
                 continue;
             }
+
+            /* Choose one most urgent candidate for event-time impact.
+             * Reference simulate_time_event triggers a single do_impact
+             * for the announced mindist event. */
+            ivp_real_t candidate_metric = cp->gap_length - closing_speed * step_dt;
+            if (!impact_candidate_cp || candidate_metric < impact_candidate_metric) {
+                impact_candidate_metric = candidate_metric;
+                impact_candidate_cp = cp;
+                impact_candidate_pc = pc;
+            }
+        }
+
+        if (impact_candidate_cp && impact_candidate_pc) {
+            ivp_contact_point_t *cp = impact_candidate_cp;
+            ivp_persistent_contact_t *pc = impact_candidate_pc;
 
             ivp_environment_emit_event_internal(env, IVP_EVENT_COLLISION_DETECTED,
                                                 step_dt, cp->obj_a->dense_index, 0);
 
+            ivp_real_t closing_speed = ivp_contact_closing_speed(cp);
             ivp_collision_event_t pre_event =
                 ivp_make_collision_event(cp, closing_speed, IVP_REAL(0.0));
             ivp_collision_listeners_fire_pre(cp->obj_a, cp->obj_b, &pre_event);
@@ -291,6 +459,7 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
             if (impact_sys.sum_of_pushes > 0) {
                 *any_impulse_applied = true;
                 pc->impact_resolved = true;
+                any_impact_resolved = true;
             }
 
             ivp_real_t cs_now = ivp_contact_closing_speed(cp);
@@ -308,6 +477,11 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
         /* Recompute entry after impact for subsequent broadphase tracking */
         if (entry) {
             ivp_mindist_entry_recompute(entry);
+            if (!any_need_impact) {
+                schedule_followup_mindist_event(env, settings, entry, max_time, big_delay_end);
+            } else if (!any_impact_resolved) {
+                schedule_followup_mindist_event(env, settings, entry, max_time, small_delay_end);
+            }
         }
     }
 
@@ -338,7 +512,20 @@ int ivp_environment_resolve_collisions(ivp_environment_t *env)
 
     ivp_mindist_manager_age_entries(&env->mindist_manager);
     if (ivp_hull_manager_update(&env->hull_manager, step_dt) > 0) {
-        ivp_mindist_manager_invalidate_all(&env->mindist_manager);
+        ivp_object_t *expanded_local[64];
+        int expanded_count = ivp_hull_manager_collect_expanded_objects(
+            &env->hull_manager,
+            expanded_local,
+            (int)(sizeof(expanded_local) / sizeof(expanded_local[0])));
+
+        if (expanded_count > (int)(sizeof(expanded_local) / sizeof(expanded_local[0]))) {
+            ivp_mindist_manager_invalidate_all(&env->mindist_manager);
+        } else {
+            for (int ei = 0; ei < expanded_count; ei++) {
+                ivp_mindist_manager_invalidate_object(&env->mindist_manager,
+                                                      expanded_local[ei]);
+            }
+        }
     }
 
     /* Broadphase: detect all overlapping pairs.
@@ -370,6 +557,7 @@ int ivp_environment_resolve_collisions(ivp_environment_t *env)
                         ivp_time_event_t evt;
                         memset(&evt, 0, sizeof(evt));
                         evt.type = IVP_TIME_EVENT_MINDIST_IMPACT;
+                        evt.mindist_kind = (uint32_t)IVP_MINDIST_EVENT_BALL_COLL;
                         evt.trigger_time = now + (ivp_time_t)hit.toi;
                         evt.obj_a.slot = cp->obj_a->handle.slot;
                         evt.obj_a.generation = cp->obj_a->handle.generation;

@@ -1,5 +1,6 @@
 #include "ivp_test.h"
 
+#include <ivp/collision/ivp_mindist_persistent.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_environment_collision.h>
 
@@ -88,9 +89,74 @@ IVP_TEST(contact_pipeline_preserves_non_colliding_pairs)
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(mindist_recompute_far_pair_transitions_to_hull)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(6.0), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+    entry->state = IVP_MDIST_EXACT;
+
+    ivp_mindist_entry_recompute(entry);
+    IVP_ASSERT_EQ(entry->state, IVP_MDIST_HULL);
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(mindist_recompute_near_pair_stays_exact)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.01), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    ivp_mindist_entry_recompute(entry);
+    IVP_ASSERT_EQ(entry->state, IVP_MDIST_EXACT);
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(contact_pipeline_separating_pair_stays_stable_across_steps)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(-1.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(6.0), IVP_REAL(1.0));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    int total_resolved = 0;
+    for (int i = 0; i < 8; i++) {
+        total_resolved += ivp_environment_resolve_collisions(env);
+    }
+
+    IVP_ASSERT_EQ(total_resolved, 0);
+    IVP_ASSERT_EQ(count_impact_resolved_contacts(env), 0);
+
+    ivp_environment_destroy(env);
+}
+
 int main(void)
 {
     IVP_REGISTER(contact_pipeline_uses_mindist_event_queue);
     IVP_REGISTER(contact_pipeline_preserves_non_colliding_pairs);
+    IVP_REGISTER(mindist_recompute_far_pair_transitions_to_hull);
+    IVP_REGISTER(mindist_recompute_near_pair_stays_exact);
+    IVP_REGISTER(contact_pipeline_separating_pair_stays_stable_across_steps);
     IVP_RUN_ALL();
 }

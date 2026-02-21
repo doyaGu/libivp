@@ -71,7 +71,7 @@ IVP_TEST(mindist_event_predicts_impact)
                                         IVP_REAL(0.0), IVP_REAL(0.1),
                                         &prediction);
     IVP_ASSERT_TRUE(ok);
-    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_IMPACT);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_BALL_COLL);
     IVP_ASSERT_TRUE(prediction.event_time >= IVP_REAL(0.0));
     IVP_ASSERT_TRUE(prediction.event_time <= IVP_REAL(0.1));
 
@@ -106,9 +106,184 @@ IVP_TEST(mindist_event_ignores_separating_pair)
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(mindist_event_predicts_topology_for_near_threshold_separation)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(-0.5));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.0105), IVP_REAL(0.5));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    seed_entry_from_contact(entry, a, b);
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
+    ivp_mindist_event_prediction_t prediction;
+    bool ok = ivp_mindist_event_predict(entry, &settings,
+                                        IVP_REAL(0.0), IVP_REAL(0.1),
+                                        &prediction);
+    IVP_ASSERT_TRUE(ok);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_BALL_RECALC);
+    IVP_ASSERT_FALSE(ivp_mindist_event_is_impact(prediction.kind));
+    IVP_ASSERT_TRUE(prediction.event_time > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(prediction.event_time < IVP_REAL(0.1));
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(mindist_event_pk_topology_pf)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(-0.02));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.0102), IVP_REAL(0.02));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    seed_entry_from_contact(entry, a, b);
+    entry->synapse[0].status = IVP_ST_POINT;
+    entry->synapse[1].status = IVP_ST_EDGE;
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
+    ivp_mindist_event_prediction_t prediction;
+    bool ok = ivp_mindist_event_predict(entry, &settings,
+                                        IVP_REAL(0.0), IVP_REAL(0.1),
+                                        &prediction);
+    IVP_ASSERT_TRUE(ok);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_PK_PF);
+    IVP_ASSERT_TRUE(prediction.event_time > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(prediction.event_time < IVP_REAL(0.1));
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(mindist_event_pk_topology_not_more_parallel)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.0102), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_vec3r_set(&a->core.speed, IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->core.speed, IVP_REAL(0.0), IVP_REAL(-0.5), IVP_REAL(0.0));
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    seed_entry_from_contact(entry, a, b);
+    entry->synapse[0].status = IVP_ST_POINT;
+    entry->synapse[1].status = IVP_ST_EDGE;
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
+    ivp_mindist_event_prediction_t prediction;
+    bool ok = ivp_mindist_event_predict(entry, &settings,
+                                        IVP_REAL(0.0), IVP_REAL(0.1),
+                                        &prediction);
+    IVP_ASSERT_TRUE(ok);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL);
+    IVP_ASSERT_TRUE(prediction.event_time > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(prediction.event_time < IVP_REAL(0.1));
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(mindist_event_kk_topology_parallel)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.0102), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_vec3r_set(&a->core.speed, IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->core.speed, IVP_REAL(0.0), IVP_REAL(-0.5), IVP_REAL(0.0));
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    seed_entry_from_contact(entry, a, b);
+    entry->synapse[0].status = IVP_ST_EDGE;
+    entry->synapse[1].status = IVP_ST_EDGE;
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
+    ivp_mindist_event_prediction_t prediction;
+    bool ok = ivp_mindist_event_predict(entry, &settings,
+                                        IVP_REAL(0.0), IVP_REAL(0.1),
+                                        &prediction);
+    IVP_ASSERT_TRUE(ok);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_KK_PARALLEL);
+    IVP_ASSERT_TRUE(prediction.event_time > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(prediction.event_time < IVP_REAL(0.1));
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(mindist_event_kk_topology_pf)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(0.0), IVP_REAL(-0.5));
+    ivp_object_t *b = make_ball(env, IVP_REAL(2.0102), IVP_REAL(0.5));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+
+    ivp_mindist_entry_t *entry =
+        ivp_mindist_manager_get_or_create(&env->mindist_manager, a, b);
+    IVP_ASSERT_NOT_NULL(entry);
+
+    seed_entry_from_contact(entry, a, b);
+    entry->synapse[0].status = IVP_ST_EDGE;
+    entry->synapse[1].status = IVP_ST_EDGE;
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
+    ivp_mindist_event_prediction_t prediction;
+    bool ok = ivp_mindist_event_predict(entry, &settings,
+                                        IVP_REAL(0.0), IVP_REAL(0.1),
+                                        &prediction);
+    IVP_ASSERT_TRUE(ok);
+    IVP_ASSERT_EQ(prediction.kind, IVP_MINDIST_EVENT_KK_PF);
+    IVP_ASSERT_TRUE(prediction.event_time > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(prediction.event_time < IVP_REAL(0.1));
+
+    ivp_environment_destroy(env);
+}
+
 int main(void)
 {
     IVP_REGISTER(mindist_event_predicts_impact);
     IVP_REGISTER(mindist_event_ignores_separating_pair);
+    IVP_REGISTER(mindist_event_predicts_topology_for_near_threshold_separation);
+    IVP_REGISTER(mindist_event_pk_topology_pf);
+    IVP_REGISTER(mindist_event_pk_topology_not_more_parallel);
+    IVP_REGISTER(mindist_event_kk_topology_parallel);
+    IVP_REGISTER(mindist_event_kk_topology_pf);
     IVP_RUN_ALL();
 }

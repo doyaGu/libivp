@@ -748,13 +748,16 @@ IVP_TEST(impact_inelastic) {
     ivp_collision_settings_init_default(&settings);
     ivp_impact_resolve(&cp, &settings);
 
+    ivp_real_t va_eff = obj_a->core.speed.k[0] + obj_a->core.speed_change.k[0];
+    ivp_real_t vb_eff = obj_b->core.speed.k[0] + obj_b->core.speed_change.k[0];
+
     /* Perfectly inelastic: both should move at v_cm = 2/(1+1) = 1 m/s */
-    ivp_real_t p = obj_a->core.speed.k[0] + obj_b->core.speed.k[0];
+    ivp_real_t p = va_eff * obj_a->core.mass + vb_eff * obj_b->core.mass;
     IVP_ASSERT_NEAR(p, 2.0, 1e-5); /* momentum conservation */
 
     /* Both approximately equal (center-of-mass velocity) */
-    IVP_ASSERT_NEAR(obj_a->core.speed.k[0], 1.0, 0.25);
-    IVP_ASSERT_NEAR(obj_b->core.speed.k[0], 1.0, 0.25);
+    IVP_ASSERT_NEAR(va_eff, 1.0, 0.25);
+    IVP_ASSERT_NEAR(vb_eff, 1.0, 0.25);
 
     ivp_environment_destroy(env);
 }
@@ -797,6 +800,66 @@ IVP_TEST(impact_static_wall) {
     /* Ball should bounce back (e=1), wall stays still */
     IVP_ASSERT_TRUE(ball->core.speed.k[0] < IVP_REAL(0.0));
     IVP_ASSERT_NEAR(wall->core.speed.k[0], 0.0, 1e-6);
+
+    ivp_environment_destroy(env);
+}
+
+/* Reference delay_decision parity: heavier core may be deferred to next PSI. */
+IVP_TEST(impact_delay_defers_heavy_core_delta) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.material.elasticity = IVP_REAL(0.0);
+    tmpl.material.friction = IVP_REAL(0.0);
+
+    tmpl.mass = IVP_REAL(100.0);
+    ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(40.0), IVP_REAL(40.0), IVP_REAL(40.0));
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(-0.5), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *heavy = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(heavy);
+    heavy->core.upper_limit_radius = IVP_REAL(0.5);
+    ivp_vec3r_set(&heavy->core.speed, IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    tmpl.mass = IVP_REAL(1.0);
+    ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(0.4), IVP_REAL(0.4), IVP_REAL(0.4));
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(0.5), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *light = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(light);
+    light->core.upper_limit_radius = IVP_REAL(0.5);
+    ivp_vec3r_set(&light->core.speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    ivp_contact_point_t cp;
+    memset(&cp, 0, sizeof(cp));
+    cp.obj_a = heavy;
+    cp.obj_b = light;
+    ivp_contact_compute_sphere_sphere(&cp);
+    ivp_contact_combine_materials(&cp);
+    ivp_contact_compute_virtual_mass(&cp);
+
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+    settings.min_coll_dist = IVP_REAL(1e-4);
+    settings.inv_delta_psi_time = IVP_REAL(60.0);
+
+    ivp_real_t heavy_before = heavy->core.speed.k[0];
+    ivp_real_t light_before = light->core.speed.k[0];
+    IVP_ASSERT_NEAR(heavy->core.speed_change.k[0], 0.0, 1e-9);
+
+    ivp_impact_resolve_system(&cp, &settings, 1);
+
+    /* Reference delay_decision is conditional; both paths are valid:
+     *   1) immediate: heavy speed changes now
+     *   2) delayed: heavy keeps current speed and stores negative speed_change */
+    bool delayed_path =
+        ivp_fabs(heavy->core.speed.k[0] - heavy_before) < IVP_REAL(0.2) &&
+        heavy->core.speed_change.k[0] < IVP_REAL(0.0);
+    bool immediate_path =
+        heavy->core.speed.k[0] < heavy_before &&
+        heavy->core.speed.k[0] > IVP_REAL(0.0);
+    IVP_ASSERT_TRUE(delayed_path || immediate_path);
+    IVP_ASSERT_TRUE(light->core.speed.k[0] > light_before);
 
     ivp_environment_destroy(env);
 }
@@ -1258,6 +1321,7 @@ int main(void) {
     IVP_REGISTER(impact_elastic_exchange);
     IVP_REGISTER(impact_inelastic);
     IVP_REGISTER(impact_static_wall);
+    IVP_REGISTER(impact_delay_defers_heavy_core_delta);
 
     /* Friction */
     IVP_REGISTER(friction_static_arrests_motion);

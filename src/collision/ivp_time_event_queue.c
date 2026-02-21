@@ -3,6 +3,7 @@
 #include <ivp/collision/ivp_time_event_queue.h>
 #include <ivp/utility/ivp_hash.h>
 
+#include <math.h>
 #include <string.h>
 
 static bool handle_eq(ivp_object_handle_t a, ivp_object_handle_t b)
@@ -18,20 +19,30 @@ static bool handle_less(ivp_object_handle_t a, ivp_object_handle_t b)
 
 static ivp_time_event_pair_key_t make_pair_key(ivp_object_handle_t a,
                                                 ivp_object_handle_t b,
-                                                ivp_time_event_type_t type)
+                                                ivp_time_event_type_t type,
+                                                uint32_t mindist_kind,
+                                                ivp_synapse_status_t status_a,
+                                                ivp_synapse_status_t status_b)
 {
     ivp_time_event_pair_key_t key;
     ivp_object_handle_t first = a;
     ivp_object_handle_t second = b;
+    ivp_synapse_status_t first_status = status_a;
+    ivp_synapse_status_t second_status = status_b;
     if (handle_less(second, first)) {
         first = b;
         second = a;
+        first_status = status_b;
+        second_status = status_a;
     }
     key.a_slot = first.slot;
     key.a_gen = first.generation;
     key.b_slot = second.slot;
     key.b_gen = second.generation;
     key.type = (uint32_t)type;
+    key.mindist_kind = mindist_kind;
+    key.status_a = (uint32_t)first_status;
+    key.status_b = (uint32_t)second_status;
     return key;
 }
 
@@ -148,13 +159,20 @@ bool ivp_time_event_queue_push(ivp_time_event_queue_t *queue,
                                const ivp_time_event_t *event)
 {
     if (!queue || !queue->initialized || !event) return false;
+    if (!isfinite((double)event->trigger_time)) return false;
 
-    ivp_time_event_pair_key_t key = make_pair_key(event->obj_a, event->obj_b, event->type);
+    ivp_time_event_pair_key_t key = make_pair_key(event->obj_a,
+                                                  event->obj_b,
+                                                  event->type,
+                                                  event->mindist_kind,
+                                                  event->status_a,
+                                                  event->status_b);
     ivp_time_event_t *cur = pair_index_get(queue, &key);
     if (cur) {
         if (event->trigger_time < cur->trigger_time) {
             cur->trigger_time = event->trigger_time;
             cur->expected_gap = event->expected_gap;
+            cur->mindist_kind = event->mindist_kind;
             cur->status_a = event->status_a;
             cur->status_b = event->status_b;
             ivp_minheap_update_key(&queue->heap, cur->heap_index, cur->trigger_time);

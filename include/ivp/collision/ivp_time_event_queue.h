@@ -26,6 +26,9 @@ typedef struct ivp_time_event_pair_key {
     uint32_t b_slot;
     uint32_t b_gen;
     uint32_t type;
+    uint32_t mindist_kind;
+    uint32_t status_a;
+    uint32_t status_b;
 } ivp_time_event_pair_key_t;
 
 typedef struct ivp_time_event {
@@ -34,6 +37,7 @@ typedef struct ivp_time_event {
     ivp_object_handle_t obj_b;
 
     ivp_time_event_type_t type;
+    uint32_t mindist_kind;
     ivp_synapse_status_t status_a;
     ivp_synapse_status_t status_b;
 

@@ -220,6 +220,174 @@ ivp_real_t ivp_3d_dist_convex_convex(const ivp_transform_r_t *m_a,
     }
 }
 
+static bool ccd_find_sphere_poly_contact(const ivp_object_t *sphere_obj,
+                                         const ivp_object_t *poly_obj,
+                                         const ivp_transform_r_t *m_sphere,
+                                         const ivp_transform_r_t *m_poly,
+                                         ivp_vec3r_t *point_sphere_ws_out,
+                                         ivp_vec3r_t *point_poly_ws_out,
+                                         ivp_vec3r_t *normal_ws_out,
+                                         ivp_real_t *gap_out)
+{
+    const ivp_compact_ledge_t *ledge_poly =
+        poly_obj->surman ? ivp_surman_get_single_convex(poly_obj->surman) : NULL;
+    if (!ledge_poly) return false;
+
+    const ivp_vec3r_t sphere_center_ws = m_sphere->pos;
+    ivp_vec3r_t center_in_poly_os;
+    ivp_transform_inv_point(&center_in_poly_os, m_poly, &sphere_center_ws);
+
+    ivp_real_t best_qdist = IVP_REAL_MAX;
+    ivp_vec3r_t best_closest_os = ivp_vec3r_zero();
+
+    int n_tri = ivp_ledge_get_n_triangles(ledge_poly);
+    const ivp_compact_triangle_t *tri0 = ivp_ledge_get_first_triangle(ledge_poly);
+
+    for (int t = 0; t < n_tri; t++) {
+        const ivp_compact_triangle_t *tri = &tri0[t];
+        ivp_vec3r_t v[3];
+        for (int e = 0; e < 3; e++) {
+            const ivp_compact_edge_t *edge = ivp_tri_get_edge(tri, e);
+            const ivp_compact_poly_point_t *pp =
+                ivp_edge_get_start_point(edge, ledge_poly);
+            v[e] = ivp_vec3r((ivp_real_t)pp->k[0],
+                             (ivp_real_t)pp->k[1],
+                             (ivp_real_t)pp->k[2]);
+        }
+
+        ivp_vec3r_t ab, ac, ap;
+        ivp_vec3r_sub(&ab, &v[1], &v[0]);
+        ivp_vec3r_sub(&ac, &v[2], &v[0]);
+        ivp_vec3r_sub(&ap, &center_in_poly_os, &v[0]);
+
+        ivp_real_t d00 = ivp_vec3r_dot(&ab, &ab);
+        ivp_real_t d01 = ivp_vec3r_dot(&ab, &ac);
+        ivp_real_t d11 = ivp_vec3r_dot(&ac, &ac);
+        ivp_real_t d20 = ivp_vec3r_dot(&ap, &ab);
+        ivp_real_t d21 = ivp_vec3r_dot(&ap, &ac);
+
+        ivp_real_t denom = d00 * d11 - d01 * d01;
+        if (ivp_fabs(denom) < IVP_REAL_EPS) continue;
+
+        ivp_real_t inv_d = IVP_REAL(1.0) / denom;
+        ivp_real_t u = (d11 * d20 - d01 * d21) * inv_d;
+        ivp_real_t w = (d00 * d21 - d01 * d20) * inv_d;
+
+        ivp_vec3r_t closest;
+        if (u >= IVP_REAL(0.0) && w >= IVP_REAL(0.0) &&
+            u + w <= IVP_REAL(1.0)) {
+            closest.k[0] = v[0].k[0] + ab.k[0] * u + ac.k[0] * w;
+            closest.k[1] = v[0].k[1] + ab.k[1] * u + ac.k[1] * w;
+            closest.k[2] = v[0].k[2] + ab.k[2] * u + ac.k[2] * w;
+        } else {
+            ivp_real_t bq = IVP_REAL_MAX;
+            closest = v[0];
+            for (int i = 0; i < 3; i++) {
+                int j = (i + 1) % 3;
+                ivp_vec3r_t ev, tp;
+                ivp_vec3r_sub(&ev, &v[j], &v[i]);
+                ivp_vec3r_sub(&tp, &center_in_poly_os, &v[i]);
+                ivp_real_t el = ivp_vec3r_dot(&ev, &ev);
+                if (el < IVP_REAL_EPS) continue;
+                ivp_real_t s = ivp_vec3r_dot(&tp, &ev) / el;
+                if (s < IVP_REAL(0.0)) s = IVP_REAL(0.0);
+                if (s > IVP_REAL(1.0)) s = IVP_REAL(1.0);
+                ivp_vec3r_t cand;
+                cand.k[0] = v[i].k[0] + ev.k[0] * s;
+                cand.k[1] = v[i].k[1] + ev.k[1] * s;
+                cand.k[2] = v[i].k[2] + ev.k[2] * s;
+                ivp_real_t q = ivp_vec3r_quad_distance(&center_in_poly_os, &cand);
+                if (q < bq) { bq = q; closest = cand; }
+            }
+        }
+
+        ivp_real_t q = ivp_vec3r_quad_distance(&center_in_poly_os, &closest);
+        if (q < best_qdist) {
+            best_qdist = q;
+            best_closest_os = closest;
+        }
+    }
+
+    if (best_qdist >= IVP_REAL_MAX) return false;
+
+    ivp_transform_point(point_poly_ws_out, m_poly, &best_closest_os);
+    ivp_vec3r_t diff;
+    ivp_vec3r_sub(&diff, point_poly_ws_out, &sphere_center_ws);
+    ivp_real_t dist = ivp_vec3r_length(&diff);
+
+    if (dist > IVP_REAL_EPS) {
+        ivp_vec3r_scale(normal_ws_out, &diff, IVP_REAL(1.0) / dist);
+    } else {
+        ivp_vec3r_sub(normal_ws_out, &m_poly->pos, &m_sphere->pos);
+        if (ivp_vec3r_normalize(normal_ws_out) != IVP_OK) {
+            normal_ws_out->k[0] = IVP_REAL(1.0);
+            normal_ws_out->k[1] = IVP_REAL(0.0);
+            normal_ws_out->k[2] = IVP_REAL(0.0);
+        }
+        dist = IVP_REAL(0.0);
+    }
+
+    ivp_real_t r = sphere_obj->core.upper_limit_radius;
+    point_sphere_ws_out->k[0] = sphere_center_ws.k[0] + normal_ws_out->k[0] * r;
+    point_sphere_ws_out->k[1] = sphere_center_ws.k[1] + normal_ws_out->k[1] * r;
+    point_sphere_ws_out->k[2] = sphere_center_ws.k[2] + normal_ws_out->k[2] * r;
+
+    *gap_out = dist - r;
+    return true;
+}
+
+static bool ccd_find_poly_poly_pair(const ivp_object_t *obj_a,
+                                    const ivp_object_t *obj_b,
+                                    const ivp_transform_r_t *m_a,
+                                    const ivp_transform_r_t *m_b,
+                                    ivp_closest_pair_t *pair_out)
+{
+    const ivp_compact_ledge_t *ledge_a =
+        obj_a->surman ? ivp_surman_get_single_convex(obj_a->surman) : NULL;
+    const ivp_compact_ledge_t *ledge_b =
+        obj_b->surman ? ivp_surman_get_single_convex(obj_b->surman) : NULL;
+    if (!ledge_a || !ledge_b) return false;
+
+    ivp_transform_r_t b_in_a;
+    ivp_transform_inv_compose(&b_in_a, m_a, m_b);
+
+    int ledge_b_size = ivp_ledge_get_size(ledge_b);
+    int n_pts = ivp_ledge_get_n_points(ledge_b);
+    int n_tri = ivp_ledge_get_n_triangles(ledge_b);
+    if (ledge_b_size < (int)sizeof(ivp_compact_ledge_t) ||
+        (ledge_b_size & 0xF) != 0 || n_tri <= 0 || n_pts <= 0) {
+        return false;
+    }
+
+    _Alignas(16) uint8_t stack_buf[4096];
+    const ivp_allocator_t *alloc = ivp_default_allocator();
+    uint8_t *buf = (ledge_b_size <= (int)sizeof(stack_buf))
+                 ? stack_buf : (uint8_t *)ivp_alloc(alloc, (size_t)ledge_b_size);
+    if (!buf) return false;
+
+    memcpy(buf, ledge_b, (size_t)ledge_b_size);
+    ivp_compact_ledge_t *ledge_b_tx = (ivp_compact_ledge_t *)buf;
+    ivp_compact_poly_point_t *pts = ivp_ledge_get_point_array_mut(ledge_b_tx);
+    for (int i = 0; i < n_pts; i++) {
+        ivp_vec3r_t local = ivp_vec3r((ivp_real_t)pts[i].k[0],
+                                      (ivp_real_t)pts[i].k[1],
+                                      (ivp_real_t)pts[i].k[2]);
+        ivp_vec3r_t transformed;
+        ivp_transform_point(&transformed, &b_in_a, &local);
+        pts[i].k[0] = (float)transformed.k[0];
+        pts[i].k[1] = (float)transformed.k[1];
+        pts[i].k[2] = (float)transformed.k[2];
+    }
+
+    ivp_result_t res = ivp_find_closest_pair(ledge_a, ledge_b_tx, pair_out);
+    bool ok = (res == IVP_OK && pair_out->status == IVP_MINDIST_STATUS_OK);
+
+    if (buf != stack_buf) {
+        ivp_free(alloc, buf, (size_t)ledge_b_size);
+    }
+    return ok;
+}
+
 /* ── Sweep pair query ───────────────────────────────────────────────────── */
 
 bool ivp_ccd_pair_needs_sweep(const ivp_object_t *obj_a,
@@ -245,7 +413,7 @@ bool ivp_ccd_pair_needs_sweep(const ivp_object_t *obj_a,
             threshold = IVP_REAL(0.5) * obj->core.upper_limit_radius / dt;
         }
 
-        if (speed * dt > IVP_REAL(0.5) * obj->core.upper_limit_radius) {
+        if (speed > threshold) {
             return true;
         }
     }
@@ -310,41 +478,102 @@ bool ivp_ccd_sweep_pair(ivp_object_t *obj_a,
     cp->obj_a = obj_a;
     cp->obj_b = obj_b;
 
-    /* Use the same dispatch as the discrete narrowphase but with TOI positions.
-     * For simplicity, compute a sphere-sphere-like contact using TOI positions
-     * and the actual surface radii. */
-    const ivp_vec3r_t *pos_a = &m_a_toi->pos;
-    const ivp_vec3r_t *pos_b = &m_b_toi->pos;
+    bool built = false;
+    bool ball_a = (obj_a->type == IVP_OBJECT_BALL);
+    bool ball_b = (obj_b->type == IVP_OBJECT_BALL);
 
-    ivp_vec3r_t diff;
-    ivp_vec3r_sub(&diff, pos_b, pos_a);
-    ivp_real_t dist = ivp_vec3r_length(&diff);
+    if (ball_a && ball_b) {
+        const ivp_vec3r_t *pos_a = &m_a_toi->pos;
+        const ivp_vec3r_t *pos_b = &m_b_toi->pos;
+        ivp_vec3r_t diff;
+        ivp_vec3r_sub(&diff, pos_b, pos_a);
+        ivp_real_t dist = ivp_vec3r_length(&diff);
 
-    if (dist < IVP_REAL_EPS) {
-        cp->normal.k[0] = IVP_REAL(1.0);
-        cp->normal.k[1] = IVP_REAL(0.0);
-        cp->normal.k[2] = IVP_REAL(0.0);
-        dist = IVP_REAL_EPS;
+        if (dist < IVP_REAL_EPS) {
+            cp->normal.k[0] = IVP_REAL(1.0);
+            cp->normal.k[1] = IVP_REAL(0.0);
+            cp->normal.k[2] = IVP_REAL(0.0);
+            dist = IVP_REAL_EPS;
+        } else {
+            ivp_real_t inv_dist = IVP_REAL(1.0) / dist;
+            cp->normal.k[0] = diff.k[0] * inv_dist;
+            cp->normal.k[1] = diff.k[1] * inv_dist;
+            cp->normal.k[2] = diff.k[2] * inv_dist;
+        }
+
+        ivp_real_t ra = obj_a->core.upper_limit_radius;
+        ivp_real_t rb = obj_b->core.upper_limit_radius;
+        cp->point_a.k[0] = pos_a->k[0] + cp->normal.k[0] * ra;
+        cp->point_a.k[1] = pos_a->k[1] + cp->normal.k[1] * ra;
+        cp->point_a.k[2] = pos_a->k[2] + cp->normal.k[2] * ra;
+        cp->point_b.k[0] = pos_b->k[0] - cp->normal.k[0] * rb;
+        cp->point_b.k[1] = pos_b->k[1] - cp->normal.k[1] * rb;
+        cp->point_b.k[2] = pos_b->k[2] - cp->normal.k[2] * rb;
+        cp->gap_length = dist - (ra + rb);
+        built = true;
+    } else if (ball_a && !ball_b) {
+        built = ccd_find_sphere_poly_contact(obj_a, obj_b, m_a_toi, m_b_toi,
+                                             &cp->point_a, &cp->point_b,
+                                             &cp->normal, &cp->gap_length);
+    } else if (!ball_a && ball_b) {
+        ivp_vec3r_t normal_ba;
+        built = ccd_find_sphere_poly_contact(obj_b, obj_a, m_b_toi, m_a_toi,
+                                             &cp->point_b, &cp->point_a,
+                                             &normal_ba, &cp->gap_length);
+        if (built) {
+            cp->normal.k[0] = -normal_ba.k[0];
+            cp->normal.k[1] = -normal_ba.k[1];
+            cp->normal.k[2] = -normal_ba.k[2];
+        }
     } else {
-        ivp_real_t inv_dist = IVP_REAL(1.0) / dist;
-        cp->normal.k[0] = diff.k[0] * inv_dist;
-        cp->normal.k[1] = diff.k[1] * inv_dist;
-        cp->normal.k[2] = diff.k[2] * inv_dist;
+        ivp_closest_pair_t pair;
+        built = ccd_find_poly_poly_pair(obj_a, obj_b, m_a_toi, m_b_toi, &pair);
+        if (built) {
+            ivp_transform_point(&cp->point_a, m_a_toi, &pair.point_a);
+            ivp_transform_point(&cp->point_b, m_a_toi, &pair.point_b);
+            ivp_mat3r_vmult(&cp->normal, &m_a_toi->rot, &pair.normal);
+            if (ivp_vec3r_normalize(&cp->normal) != IVP_OK) {
+                ivp_vec3r_t diff;
+                ivp_vec3r_sub(&diff, &cp->point_b, &cp->point_a);
+                if (ivp_vec3r_normalize(&diff) == IVP_OK) {
+                    cp->normal = diff;
+                } else {
+                    cp->normal.k[0] = IVP_REAL(1.0);
+                    cp->normal.k[1] = IVP_REAL(0.0);
+                    cp->normal.k[2] = IVP_REAL(0.0);
+                }
+            }
+            cp->gap_length = pair.distance;
+        }
     }
 
-    ivp_real_t ra = obj_a->core.upper_limit_radius;
-    ivp_real_t rb = obj_b->core.upper_limit_radius;
-
-    /* Contact points on surfaces along normal */
-    cp->point_a.k[0] = pos_a->k[0] + cp->normal.k[0] * ra;
-    cp->point_a.k[1] = pos_a->k[1] + cp->normal.k[1] * ra;
-    cp->point_a.k[2] = pos_a->k[2] + cp->normal.k[2] * ra;
-
-    cp->point_b.k[0] = pos_b->k[0] - cp->normal.k[0] * rb;
-    cp->point_b.k[1] = pos_b->k[1] - cp->normal.k[1] * rb;
-    cp->point_b.k[2] = pos_b->k[2] - cp->normal.k[2] * rb;
-
-    cp->gap_length = dist - (ra + rb);
+    if (!built) {
+        const ivp_vec3r_t *pos_a = &m_a_toi->pos;
+        const ivp_vec3r_t *pos_b = &m_b_toi->pos;
+        ivp_vec3r_t diff;
+        ivp_vec3r_sub(&diff, pos_b, pos_a);
+        ivp_real_t dist = ivp_vec3r_length(&diff);
+        if (dist < IVP_REAL_EPS) {
+            cp->normal.k[0] = IVP_REAL(1.0);
+            cp->normal.k[1] = IVP_REAL(0.0);
+            cp->normal.k[2] = IVP_REAL(0.0);
+            dist = IVP_REAL_EPS;
+        } else {
+            ivp_real_t inv_dist = IVP_REAL(1.0) / dist;
+            cp->normal.k[0] = diff.k[0] * inv_dist;
+            cp->normal.k[1] = diff.k[1] * inv_dist;
+            cp->normal.k[2] = diff.k[2] * inv_dist;
+        }
+        ivp_real_t ra = obj_a->core.upper_limit_radius;
+        ivp_real_t rb = obj_b->core.upper_limit_radius;
+        cp->point_a.k[0] = pos_a->k[0] + cp->normal.k[0] * ra;
+        cp->point_a.k[1] = pos_a->k[1] + cp->normal.k[1] * ra;
+        cp->point_a.k[2] = pos_a->k[2] + cp->normal.k[2] * ra;
+        cp->point_b.k[0] = pos_b->k[0] - cp->normal.k[0] * rb;
+        cp->point_b.k[1] = pos_b->k[1] - cp->normal.k[1] * rb;
+        cp->point_b.k[2] = pos_b->k[2] - cp->normal.k[2] * rb;
+        cp->gap_length = dist - (ra + rb);
+    }
 
     /* Compute r vectors using CURRENT positions (for impulse application) */
     const ivp_core_t *ca = &obj_a->core;

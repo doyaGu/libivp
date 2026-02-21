@@ -20,6 +20,51 @@ typedef struct event_solver_data {
     ivp_vec3r_t anchor_b_local;
 } event_solver_data_t;
 
+static ivp_real_t topology_event_speed(ivp_mindist_event_kind_t kind,
+                                       ivp_real_t abs_normal_speed,
+                                       ivp_real_t tangential_speed)
+{
+    switch (kind) {
+        case IVP_MINDIST_EVENT_KK_PARALLEL:
+        case IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL:
+            return tangential_speed + abs_normal_speed * IVP_REAL(0.2);
+
+        case IVP_MINDIST_EVENT_KK_PF:
+        case IVP_MINDIST_EVENT_PK_PF:
+        case IVP_MINDIST_EVENT_PF_NPF:
+            return abs_normal_speed + tangential_speed * IVP_REAL(0.25);
+
+        case IVP_MINDIST_EVENT_BALL_RECALC:
+            return abs_normal_speed * IVP_REAL(0.5) + tangential_speed * IVP_REAL(0.5);
+
+        default:
+            return abs_normal_speed + tangential_speed * IVP_REAL(0.5);
+    }
+}
+
+static ivp_time_t topology_min_eta_fraction(ivp_mindist_event_kind_t kind,
+                                            ivp_time_t horizon)
+{
+    ivp_time_t frac = (ivp_time_t)0.05;
+    switch (kind) {
+        case IVP_MINDIST_EVENT_KK_PARALLEL:
+        case IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL:
+            frac = (ivp_time_t)0.03;
+            break;
+        case IVP_MINDIST_EVENT_KK_PF:
+        case IVP_MINDIST_EVENT_PK_PF:
+        case IVP_MINDIST_EVENT_PF_NPF:
+            frac = (ivp_time_t)0.08;
+            break;
+        default:
+            break;
+    }
+
+    ivp_time_t min_eta = horizon * frac;
+    if (min_eta < (ivp_time_t)1e-6) min_eta = (ivp_time_t)1e-6;
+    return min_eta;
+}
+
 static ivp_real_t distance_anchor_anchor(const ivp_transform_r_t *m_a,
                                          const ivp_transform_r_t *m_b,
                                          void *ud)
@@ -38,6 +83,8 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
                                    const ivp_collision_settings_t *settings,
                                    ivp_time_t now,
                                    ivp_time_t max_time,
+                                   ivp_mindist_event_kind_t impact_kind,
+                                   ivp_mindist_event_kind_t topology_kind,
                                    ivp_mindist_event_prediction_t *out_prediction)
 {
     if (!entry || !settings || !out_prediction) return false;
@@ -56,10 +103,17 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
     ivp_vec3r_sub(&rel_speed,
                   &entry->obj_b->core.speed,
                   &entry->obj_a->core.speed);
-
     ivp_real_t closing_speed = -ivp_vec3r_dot(&rel_speed, &entry->last_normal);
-    if (closing_speed <= IVP_IMPACT_EPS && entry->last_distance > coll_dist) {
-        return false;
+    ivp_real_t rel_speed_len = ivp_vec3r_length(&rel_speed);
+    ivp_real_t tangential_speed = rel_speed_len;
+    {
+        ivp_real_t normal_sq = closing_speed * closing_speed;
+        ivp_real_t rel_sq = rel_speed_len * rel_speed_len;
+        if (rel_sq > normal_sq) {
+            tangential_speed = ivp_sqrt(rel_sq - normal_sq);
+        } else {
+            tangential_speed = IVP_REAL(0.0);
+        }
     }
 
     event_solver_data_t data;
@@ -86,10 +140,55 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
                                     &cache_a,
                                     &cache_b,
                                     &hit_time)) {
+        ivp_real_t sec_dist = coll_dist + settings->mindist_change_force_dist;
+        if (entry->last_distance <= sec_dist) {
+            ivp_mindist_event_kind_t fallback_kind = topology_kind;
+            if (topology_kind == IVP_MINDIST_EVENT_PK_KK) {
+                if (ivp_fabs(closing_speed) <= IVP_IMPACT_EPS) {
+                    fallback_kind = IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL;
+                } else if (entry->last_distance <= coll_dist + settings->mindist_change_force_dist * IVP_REAL(0.25)) {
+                    fallback_kind = IVP_MINDIST_EVENT_PK_PF;
+                }
+            } else if (topology_kind == IVP_MINDIST_EVENT_KK_PARALLEL) {
+                const ivp_real_t abs_normal = ivp_fabs(closing_speed);
+                const ivp_real_t kk_parallel_band = tangential_speed * IVP_REAL(0.5) + IVP_IMPACT_EPS;
+                if (abs_normal > kk_parallel_band) {
+                    fallback_kind = IVP_MINDIST_EVENT_KK_PF;
+                } else {
+                    fallback_kind = IVP_MINDIST_EVENT_KK_PARALLEL;
+                }
+            }
+
+            out_prediction->kind = fallback_kind;
+            {
+                ivp_real_t slack = sec_dist - entry->last_distance;
+                if (slack < IVP_REAL(0.0)) slack = IVP_REAL(0.0);
+
+                ivp_real_t event_speed = topology_event_speed(
+                    fallback_kind,
+                    ivp_fabs(closing_speed),
+                    tangential_speed);
+                if (event_speed < IVP_REAL(1e-4)) event_speed = IVP_REAL(1e-4);
+
+                ivp_time_t horizon = max_time - now;
+                ivp_time_t eta = (ivp_time_t)(slack / event_speed);
+                ivp_time_t min_eta = topology_min_eta_fraction(fallback_kind, horizon);
+
+                ivp_time_t dt = eta;
+                if (dt < min_eta) dt = min_eta;
+                if (dt > horizon) dt = horizon;
+
+                out_prediction->event_time = now + dt;
+            }
+            out_prediction->status_a = entry->synapse[0].status;
+            out_prediction->status_b = entry->synapse[1].status;
+            out_prediction->expected_gap = coll_dist;
+            return true;
+        }
         return false;
     }
 
-    out_prediction->kind = IVP_MINDIST_EVENT_IMPACT;
+    out_prediction->kind = impact_kind;
     out_prediction->event_time = hit_time;
     out_prediction->status_a = entry->synapse[0].status;
     out_prediction->status_b = entry->synapse[1].status;
@@ -103,7 +202,10 @@ static bool predict_case_pp(const ivp_mindist_entry_t *entry,
                             ivp_time_t max_time,
                             ivp_mindist_event_prediction_t *out_prediction)
 {
-    return predict_with_3d_solver(entry, settings, now, max_time, out_prediction);
+    return predict_with_3d_solver(entry, settings, now, max_time,
+                                  IVP_MINDIST_EVENT_PP_COLL,
+                                  IVP_MINDIST_EVENT_PP_PK,
+                                  out_prediction);
 }
 
 static bool predict_case_pf(const ivp_mindist_entry_t *entry,
@@ -112,7 +214,10 @@ static bool predict_case_pf(const ivp_mindist_entry_t *entry,
                             ivp_time_t max_time,
                             ivp_mindist_event_prediction_t *out_prediction)
 {
-    return predict_with_3d_solver(entry, settings, now, max_time, out_prediction);
+    return predict_with_3d_solver(entry, settings, now, max_time,
+                                  IVP_MINDIST_EVENT_PF_COLL,
+                                  IVP_MINDIST_EVENT_PF_NPF,
+                                  out_prediction);
 }
 
 static bool predict_case_pk(const ivp_mindist_entry_t *entry,
@@ -121,7 +226,10 @@ static bool predict_case_pk(const ivp_mindist_entry_t *entry,
                             ivp_time_t max_time,
                             ivp_mindist_event_prediction_t *out_prediction)
 {
-    return predict_with_3d_solver(entry, settings, now, max_time, out_prediction);
+    return predict_with_3d_solver(entry, settings, now, max_time,
+                                  IVP_MINDIST_EVENT_PK_COLL,
+                                  IVP_MINDIST_EVENT_PK_KK,
+                                  out_prediction);
 }
 
 static bool predict_case_kk(const ivp_mindist_entry_t *entry,
@@ -130,7 +238,10 @@ static bool predict_case_kk(const ivp_mindist_entry_t *entry,
                             ivp_time_t max_time,
                             ivp_mindist_event_prediction_t *out_prediction)
 {
-    return predict_with_3d_solver(entry, settings, now, max_time, out_prediction);
+    return predict_with_3d_solver(entry, settings, now, max_time,
+                                  IVP_MINDIST_EVENT_KK_COLL,
+                                  IVP_MINDIST_EVENT_KK_PARALLEL,
+                                  out_prediction);
 }
 
 static bool predict_case_ball(const ivp_mindist_entry_t *entry,
@@ -139,7 +250,10 @@ static bool predict_case_ball(const ivp_mindist_entry_t *entry,
                               ivp_time_t max_time,
                               ivp_mindist_event_prediction_t *out_prediction)
 {
-    return predict_with_3d_solver(entry, settings, now, max_time, out_prediction);
+    return predict_with_3d_solver(entry, settings, now, max_time,
+                                  IVP_MINDIST_EVENT_BALL_COLL,
+                                  IVP_MINDIST_EVENT_BALL_RECALC,
+                                  out_prediction);
 }
 
 static mindist_case_fn_t mim_function_table[IVP_ST_MAX_LEGAL][IVP_ST_MAX_LEGAL] = {
@@ -185,9 +299,10 @@ void ivp_mindist_event_to_time_event(const ivp_mindist_entry_t *entry,
 
     memset(out_event, 0, sizeof(*out_event));
     out_event->trigger_time = prediction->event_time;
-    out_event->type = (prediction->kind == IVP_MINDIST_EVENT_IMPACT)
+    out_event->type = ivp_mindist_event_is_impact(prediction->kind)
         ? IVP_TIME_EVENT_MINDIST_IMPACT
         : IVP_TIME_EVENT_MINDIST_RECALC;
+    out_event->mindist_kind = (uint32_t)prediction->kind;
 
     out_event->obj_a = entry->obj_a->handle;
     out_event->obj_b = entry->obj_b->handle;

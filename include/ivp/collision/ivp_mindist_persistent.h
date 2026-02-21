@@ -134,6 +134,10 @@ bool ivp_mindist_entry_update_cached(ivp_mindist_entry_t *entry);
 /* Mark all active entries as INVALID (e.g. hull wakeup sweep). */
 void ivp_mindist_manager_invalidate_all(ivp_mindist_manager_t *mgr);
 
+/* Mark entries touching the given object as INVALID. */
+void ivp_mindist_manager_invalidate_object(ivp_mindist_manager_t *mgr,
+                                           const ivp_object_t *obj);
+
 #ifdef __cplusplus
 }
 #endif

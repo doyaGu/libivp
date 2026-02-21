@@ -208,7 +208,7 @@ static void ivp_environment_invoke_controller_slot(ivp_environment_t *env,
  *
  * Reference ordering (ivp_sim_unit.cxx:907-952):
  *   async_commit happens BEFORE this function (in sim unit PSI step 2).
- *   Controllers run in ascending priority order.
+ *   Controllers run in descending priority order (highest first).
  *   No mid-controller async commits — those were a C17 artifact.
  */
 static bool core_is_in_unit(const ivp_core_t *core, const ivp_sim_unit_t *su) {
@@ -291,7 +291,7 @@ void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
 
     const int cn = ivp_controller_system_count(cs);
 
-    /* ── Snapshot global controller handles (sorted ascending by priority) ── */
+    /* ── Snapshot global controller handles (sorted descending by priority) ── */
     typedef struct { ivp_controller_handle_t h; int priority; } gc_entry_t;
     gc_entry_t local_gc[32];
     gc_entry_t *gc = local_gc;
@@ -336,20 +336,20 @@ void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
         }
     }
 
-    /* ── Two-pointer merge: dispatch global + per-unit in ascending priority ─
+    /* ── Two-pointer merge: dispatch global + per-unit in descending priority ─
      *
      * Reference (ivp_sim_unit.cxx:907-952): all controllers are dispatched in
-     * ONE unified pass, sorted ascending by priority. The C17 architecture
+     * ONE unified pass, sorted descending by priority. The C17 architecture
      * splits them into global (controller_system) and per-unit (controller_list)
      * so we interleave here. */
     int gi = 0;
     ivp_controller_core_t *pu = su->controller_list;
 
     while (gi < gc_count || pu) {
-        int g_prio = (gi < gc_count) ? gc[gi].priority : 0x7FFFFFFF;
-        int p_prio = pu ? pu->priority : 0x7FFFFFFF;
+        int g_prio = (gi < gc_count) ? gc[gi].priority : -0x7FFFFFFF;
+        int p_prio = pu ? pu->priority : -0x7FFFFFFF;
 
-        if (g_prio <= p_prio) {
+        if (g_prio >= p_prio) {
             /* Dispatch global controller */
             ivp_controller_slot_t *slot =
                 ivp_controller_system_get_by_handle(cs, gc[gi].h);

@@ -1,6 +1,9 @@
 #include "ivp_test.h"
 
+#include <ivp/collision/ivp_mindist_event.h>
 #include <ivp/collision/ivp_time_event_queue.h>
+
+#include <string.h>
 
 static ivp_object_handle_t make_handle(uint32_t slot, uint32_t generation)
 {
@@ -114,10 +117,80 @@ IVP_TEST(time_event_queue_remove_object)
     ivp_time_event_queue_destroy(&queue);
 }
 
+IVP_TEST(time_event_queue_keeps_distinct_status_pairs)
+{
+    ivp_time_event_queue_t queue;
+    ivp_time_event_queue_init(&queue, NULL);
+
+    ivp_time_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.obj_a = make_handle(30u, 1u);
+    e.obj_b = make_handle(31u, 1u);
+    e.type = IVP_TIME_EVENT_MINDIST_RECALC;
+
+    e.trigger_time = 1.0;
+    e.status_a = IVP_ST_POINT;
+    e.status_b = IVP_ST_EDGE;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &e));
+
+    e.trigger_time = 1.1;
+    e.status_a = IVP_ST_EDGE;
+    e.status_b = IVP_ST_TRIANGLE;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &e));
+
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&queue), 2);
+
+    ivp_time_event_t out;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 2.0, &out));
+    IVP_ASSERT_EQ(out.status_a, IVP_ST_POINT);
+    IVP_ASSERT_EQ(out.status_b, IVP_ST_EDGE);
+
+    IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 2.0, &out));
+    IVP_ASSERT_EQ(out.status_a, IVP_ST_EDGE);
+    IVP_ASSERT_EQ(out.status_b, IVP_ST_TRIANGLE);
+
+    ivp_time_event_queue_destroy(&queue);
+}
+
+IVP_TEST(time_event_queue_keeps_distinct_mindist_kinds)
+{
+    ivp_time_event_queue_t queue;
+    ivp_time_event_queue_init(&queue, NULL);
+
+    ivp_time_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.obj_a = make_handle(40u, 1u);
+    e.obj_b = make_handle(41u, 1u);
+    e.type = IVP_TIME_EVENT_MINDIST_RECALC;
+    e.status_a = IVP_ST_EDGE;
+    e.status_b = IVP_ST_TRIANGLE;
+
+    e.trigger_time = 2.0;
+    e.mindist_kind = (uint32_t)IVP_MINDIST_EVENT_PK_PF;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &e));
+
+    e.trigger_time = 2.1;
+    e.mindist_kind = (uint32_t)IVP_MINDIST_EVENT_PK_KK;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_push(&queue, &e));
+
+    IVP_ASSERT_EQ(ivp_time_event_queue_count(&queue), 2);
+
+    ivp_time_event_t out;
+    IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 3.0, &out));
+    IVP_ASSERT_EQ(out.mindist_kind, (uint32_t)IVP_MINDIST_EVENT_PK_PF);
+
+    IVP_ASSERT_TRUE(ivp_time_event_queue_pop_due(&queue, 3.0, &out));
+    IVP_ASSERT_EQ(out.mindist_kind, (uint32_t)IVP_MINDIST_EVENT_PK_KK);
+
+    ivp_time_event_queue_destroy(&queue);
+}
+
 int main(void)
 {
     IVP_REGISTER(time_event_queue_orders_by_time);
     IVP_REGISTER(time_event_queue_deduplicates_pair);
     IVP_REGISTER(time_event_queue_remove_object);
+    IVP_REGISTER(time_event_queue_keeps_distinct_status_pairs);
+    IVP_REGISTER(time_event_queue_keeps_distinct_mindist_kinds);
     IVP_RUN_ALL();
 }

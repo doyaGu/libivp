@@ -144,6 +144,30 @@ int ivp_hull_manager_update(ivp_hull_manager_t *mgr, ivp_real_t dt)
     return expanded;
 }
 
+int ivp_hull_manager_collect_expanded_objects(const ivp_hull_manager_t *mgr,
+                                              ivp_object_t **out_objects,
+                                              int max_objects)
+{
+    if (!mgr) return 0;
+
+    int expanded_count = 0;
+    int write_count = 0;
+    for (int i = 0; i < mgr->entry_count; i++) {
+        const ivp_hull_entry_t *e = &mgr->entries[i];
+        if (!e->active || !e->obj) continue;
+        if (e->accumulated_travel <= e->base_radius * IVP_HULL_EXPANSION_FRACTION) {
+            continue;
+        }
+
+        expanded_count++;
+        if (out_objects && write_count < max_objects) {
+            out_objects[write_count++] = e->obj;
+        }
+    }
+
+    return expanded_count;
+}
+
 ivp_real_t ivp_hull_manager_get_radius(const ivp_hull_manager_t *mgr,
                                          const ivp_object_t *obj)
 {

@@ -176,15 +176,16 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys)
     const int n = ivp_registry_count(&sys->registry);
     void **data = sys->registry.dense.data;
 
-    /* Sort ascending by priority (lower priority dispatches first).
-     * Reference: controllers run in ascending priority order within a sim unit PSI. */
+    /* Sort descending by priority (higher priority dispatches first).
+     * Reference executes sorted controllers in reverse index order,
+     * which is equivalent to high-priority-first dispatch. */
     for (int i = 1; i < n; i++) {
         ivp_controller_slot_t *key = (ivp_controller_slot_t *)data[i];
         int j = i - 1;
         while (j >= 0) {
             ivp_controller_slot_t *cur = (ivp_controller_slot_t *)data[j];
             const bool should_shift =
-                (cur->priority > key->priority) ||
+                (cur->priority < key->priority) ||
                 (cur->priority == key->priority && cur->handle.slot > key->handle.slot);
             if (!should_shift) break;
             data[j + 1] = data[j];

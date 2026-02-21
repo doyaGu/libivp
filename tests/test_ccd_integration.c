@@ -226,6 +226,39 @@ IVP_TEST(ccd_speed_threshold) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(ccd_custom_speed_threshold_overrides_auto) {
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+
+    ivp_object_template_t ta;
+    ivp_object_template_init(&ta);
+    ta.ccd_enabled = true;
+    ivp_object_t *obj_a = ivp_environment_create_object(env, &ta, NULL);
+
+    ivp_object_template_t tb;
+    ivp_object_template_init(&tb);
+    ivp_object_t *obj_b = ivp_environment_create_object(env, &tb, NULL);
+
+    IVP_ASSERT_NOT_NULL(obj_a);
+    IVP_ASSERT_NOT_NULL(obj_b);
+
+    ivp_real_t dt = IVP_REAL(1.0) / IVP_REAL(66.0);
+    obj_a->core.speed = ivp_vec3r(IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    obj_a->ccd_speed_threshold = IVP_REAL(0.0);
+    IVP_ASSERT_FALSE(ivp_ccd_pair_needs_sweep(obj_a, obj_b, dt));
+
+    obj_a->ccd_speed_threshold = IVP_REAL(5.0);
+    IVP_ASSERT_TRUE(ivp_ccd_pair_needs_sweep(obj_a, obj_b, dt));
+
+    obj_a->ccd_speed_threshold = IVP_REAL(20.0);
+    IVP_ASSERT_FALSE(ivp_ccd_pair_needs_sweep(obj_a, obj_b, dt));
+
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(ccd_disabled_environment) {
     /* With env->ccd_enabled = false, the CCD pass should not run at all */
     ivp_environment_config_t cfg;
@@ -397,6 +430,7 @@ int main(void) {
     IVP_REGISTER(ccd_dist_poly_poly);
     IVP_REGISTER(ccd_per_object_enable);
     IVP_REGISTER(ccd_speed_threshold);
+    IVP_REGISTER(ccd_custom_speed_threshold_overrides_auto);
     IVP_REGISTER(ccd_disabled_environment);
     IVP_REGISTER(ccd_does_not_regress_discrete);
     IVP_REGISTER(ccd_tunneling_prevention);

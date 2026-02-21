@@ -939,9 +939,9 @@ static void controller_high_async(const ivp_event_sim_t *event_sim,
     ivp_environment_t *env = event_sim->environment;
     const ivp_real_t dt = event_sim->delta_time;
     (void)ctx;
-    /* Check if low-priority (400) has already modified speed.
-     * Controllers dispatch in ascending priority order (reference parity),
-     * so low (400) runs BEFORE high (1400) → speed should be > 0. */
+    /* Check whether lower-priority (400) already modified speed.
+     * Reference parity executes higher priorities first, so this should
+     * observe the pre-low state and stay false. */
     if (obj->core.speed.k[0] > IVP_REAL(0.9)) {
         s_controller_sync_seen = 1;
     }
@@ -1109,9 +1109,9 @@ IVP_TEST(controller_priority_sync_async) {
 
     ivp_environment_simulate_one_psi(env);
 
-    /* Reference parity: low(400) runs before high(1400) in ascending order.
-     * High controller sees speed > 0.9 from low's sync push. */
-    IVP_ASSERT_EQ(s_controller_sync_seen, 1);
+    /* Reference parity: high(1400) runs before low(400) in descending order.
+     * High controller should not observe low's sync push yet. */
+    IVP_ASSERT_EQ(s_controller_sync_seen, 0);
     /* final velocity includes low sync push (1.0) + high async push (2.0,
      * committed by gravity barrier at priority 1000). */
     IVP_ASSERT_NEAR(obj->core.speed.k[0], 3.0, 1e-6);
@@ -1231,11 +1231,10 @@ IVP_TEST(controller_dependent_dynamic_discovery_unions_island) {
     IVP_ASSERT_EQ(probe.hits_a + probe.hits_b, 1);
     IVP_ASSERT_EQ(probe.hits_other, 0);
 
-    /* With dynamic sim units, connected objects share the same unit.
-     * For now, verify the sim unit pointers are non-NULL.
-     * (Full island merge via controllers is deferred to Task 4.) */
+    /* Connected dependent-controller targets must share one sim unit. */
     IVP_ASSERT_NOT_NULL(obj_a->core.sim_unit);
     IVP_ASSERT_NOT_NULL(obj_b->core.sim_unit);
+    IVP_ASSERT_TRUE(obj_a->core.sim_unit == obj_b->core.sim_unit);
 
     ivp_environment_destroy(env);
 }
@@ -1333,8 +1332,8 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_environment_t *env = ivp_environment_create(&cfg);
-    /* Keep default gravity controller (zero gravity, zero-damp) so its
-     * commit_all_async_pushes() barrier commits the rot_mot async push. */
+    /* Descending dispatch parity: gravity(1000) runs before rot_mot(500),
+     * so rot_mot async push is committed at the next PSI's gravity barrier. */
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -1357,7 +1356,9 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
 
     ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.0, 1e-6);
 
+    ivp_environment_simulate_one_psi(env);
     IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.5, 1e-6);
     IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[0], 0.0, 1e-6);
     IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[1], 0.0, 1e-6);
@@ -1533,8 +1534,7 @@ int main(void) {
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);
     IVP_REGISTER(controller_dependent_ignores_destroyed_targets);
-    /* TODO: re-enable after Task 4 completes sim unit merge via controllers */
-    /* IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island); */
+    IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);
     /* TODO: re-enable after cross-unit controller dispatch is fixed */

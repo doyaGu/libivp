@@ -14,6 +14,7 @@
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_vec3.h>
+#include "solver/ivp_impact_rescue.h"
 #include <string.h>
 
 /* ── Impact resolution: effective elasticity ──────────────────────────── */
@@ -58,6 +59,12 @@ typedef struct {
 
     ivp_real_t cos_friction;      /* cos(arctan(friction_factor))            */
     ivp_real_t sin_friction;      /* sin(arctan(friction_factor))            */
+
+    /* Core speeds before the first impact push (for delay_of_impact). */
+    ivp_vec3r_t initial_speed_a;
+    ivp_vec3r_t initial_speed_b;
+    ivp_vec3f_t initial_rot_a;
+    ivp_vec3f_t initial_rot_b;
 
     /* Saved core speeds for test-push undo */
     ivp_vec3r_t saved_speed_a;
@@ -192,6 +199,122 @@ static void do_push(impact_work_t *w, ivp_real_t impulse)
     w->integral_pushes.k[2] += w->push_dir.k[2] * impulse;
 }
 
+/* Signed normal speed for arbitrary speed/rot states.
+ * Mirrors reference delay_decision sign path:
+ *   rel = v_b - v_a
+ *   return rel · normal (approaching is negative in canonical ordering). */
+static ivp_real_t contact_signed_normal_speed_for_states(const ivp_contact_point_t *cp,
+                                                         const ivp_vec3r_t *speed_a,
+                                                         const ivp_vec3f_t *rot_a_cs,
+                                                         const ivp_vec3r_t *speed_b,
+                                                         const ivp_vec3f_t *rot_b_cs)
+{
+    const ivp_core_t *ca = &cp->obj_a->core;
+    const ivp_core_t *cb = &cp->obj_b->core;
+
+    ivp_vec3r_t omega_a_cs = ivp_vec3r((ivp_real_t)rot_a_cs->k[0],
+                                       (ivp_real_t)rot_a_cs->k[1],
+                                       (ivp_real_t)rot_a_cs->k[2]);
+    ivp_vec3r_t omega_a_ws, va_rot;
+    ivp_mat3r_vmult(&omega_a_ws, &ca->m_world_f_core_last_psi.rot, &omega_a_cs);
+    ivp_vec3r_cross(&va_rot, &omega_a_ws, &cp->r_a);
+    ivp_vec3r_t v_a;
+    ivp_vec3r_add(&v_a, speed_a, &va_rot);
+
+    ivp_vec3r_t omega_b_cs = ivp_vec3r((ivp_real_t)rot_b_cs->k[0],
+                                       (ivp_real_t)rot_b_cs->k[1],
+                                       (ivp_real_t)rot_b_cs->k[2]);
+    ivp_vec3r_t omega_b_ws, vb_rot;
+    ivp_mat3r_vmult(&omega_b_ws, &cb->m_world_f_core_last_psi.rot, &omega_b_cs);
+    ivp_vec3r_cross(&vb_rot, &omega_b_ws, &cp->r_b);
+    ivp_vec3r_t v_b;
+    ivp_vec3r_add(&v_b, speed_b, &vb_rot);
+
+    ivp_vec3r_t v_rel;
+    ivp_vec3r_sub(&v_rel, &v_b, &v_a);
+    return ivp_vec3r_dot(&v_rel, &cp->normal);
+}
+
+/* Move one core's impact delta to speed_change/rot_speed_change (next PSI). */
+static void delay_core_to_next_psi(ivp_core_t *core,
+                                   const ivp_vec3r_t *pre_speed,
+                                   const ivp_vec3f_t *pre_rot)
+{
+    if (!core || core->physical_unmoveable) return;
+
+    ivp_vec3r_t delta_speed;
+    ivp_vec3r_sub(&delta_speed, &core->speed, pre_speed);
+    core->speed = *pre_speed;
+    core->speed_change.k[0] += delta_speed.k[0];
+    core->speed_change.k[1] += delta_speed.k[1];
+    core->speed_change.k[2] += delta_speed.k[2];
+
+    ivp_vec3r_t delta_rot = ivp_vec3r((ivp_real_t)core->rot_speed.k[0] - (ivp_real_t)pre_rot->k[0],
+                                      (ivp_real_t)core->rot_speed.k[1] - (ivp_real_t)pre_rot->k[1],
+                                      (ivp_real_t)core->rot_speed.k[2] - (ivp_real_t)pre_rot->k[2]);
+    core->rot_speed = *pre_rot;
+    core->rot_speed_change.k[0] += delta_rot.k[0];
+    core->rot_speed_change.k[1] += delta_rot.k[1];
+    core->rot_speed_change.k[2] += delta_rot.k[2];
+}
+
+/* Reference parity: when a core is marked temporarily_unmovable during
+ * impact handling, both cores in the pair are switched to temporary
+ * unmovable mode for the remainder of this PSI and their current velocity
+ * is moved to async change slots. */
+static void apply_temporary_unmovable_pair(ivp_contact_point_t *cp)
+{
+    if (!cp || !cp->obj_a || !cp->obj_b) return;
+    ivp_core_t *cores[2] = { &cp->obj_a->core, &cp->obj_b->core };
+    for (int i = 0; i < 2; i++) {
+        ivp_core_t *c = cores[i];
+        c->temporarily_unmovable = !c->physical_unmoveable;
+        c->speed_change.k[0] += c->speed.k[0];
+        c->speed_change.k[1] += c->speed.k[1];
+        c->speed_change.k[2] += c->speed.k[2];
+        c->rot_speed_change.k[0] += (ivp_real_t)c->rot_speed.k[0];
+        c->rot_speed_change.k[1] += (ivp_real_t)c->rot_speed.k[1];
+        c->rot_speed_change.k[2] += (ivp_real_t)c->rot_speed.k[2];
+        ivp_vec3r_set_zero(&c->speed);
+        c->rot_speed.k[0] = 0.0f;
+        c->rot_speed.k[1] = 0.0f;
+        c->rot_speed.k[2] = 0.0f;
+    }
+}
+
+/* Rescue push along contact normal.
+ * panic_mode mirrors reference behavior: treat separating velocity as zero
+ * so a positive rescue push is always produced. */
+static ivp_real_t apply_rescue_push(impact_work_t *w,
+                                    ivp_real_t rescue_speed_target,
+                                    bool panic_mode)
+{
+    if (!w || !w->cp || rescue_speed_target <= IVP_REAL(0.0)) {
+        return IVP_REAL(0.0);
+    }
+
+    ivp_real_t dist_velocity = -ivp_contact_closing_speed(w->cp);
+    if (panic_mode && dist_velocity > IVP_REAL(0.0)) {
+        dist_velocity = IVP_REAL(0.0);
+    }
+
+    ivp_real_t desired_velo_change = rescue_speed_target - dist_velocity;
+    if (desired_velo_change <= IVP_REAL(0.0)) {
+        return IVP_REAL(0.0);
+    }
+
+    ivp_real_t impulse = desired_velo_change * w->cp->virtual_mass;
+    if (impulse <= IVP_REAL_EPS) {
+        return IVP_REAL(0.0);
+    }
+
+    ivp_contact_apply_impulse(w->cp, impulse);
+    w->integral_pushes.k[0] += w->cp->normal.k[0] * impulse;
+    w->integral_pushes.k[1] += w->cp->normal.k[1] * impulse;
+    w->integral_pushes.k[2] += w->cp->normal.k[2] * impulse;
+    return impulse;
+}
+
 /* ── Main iterative impact resolution ─────────────────────────────────── */
 
 /* Matches legacy do_impact() (ivp_impact.cxx lines 680-913):
@@ -207,18 +330,16 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
                                                  const ivp_collision_settings_t *settings,
                                                  int pushes_while_system)
 {
-    /* Only resolve if objects are actually approaching */
-    ivp_real_t closing_speed = ivp_contact_closing_speed(cp);
-    if (closing_speed <= IVP_IMPACT_EPS) {
-        return IVP_REAL(0.0);
-    }
-
     /* ── Setup ─────────────────────────────────────────────────────── */
 
     impact_work_t w;
     memset(&w, 0, sizeof(w));
     w.cp       = cp;
     w.push_dir = cp->normal; /* start pushing along contact normal */
+    w.initial_speed_a = cp->obj_a->core.speed;
+    w.initial_speed_b = cp->obj_b->core.speed;
+    w.initial_rot_a   = cp->obj_a->core.rot_speed;
+    w.initial_rot_b   = cp->obj_b->core.rot_speed;
 
     /* Effective elasticity (already sqrt'd) */
     ivp_real_t effective_e =
@@ -226,6 +347,20 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
 
     /* Friction-cone parameters */
     init_friction_cone(&w, cp->elasticity);
+
+    /* Rescue / delay thresholds shared with impact-system projections. */
+    ivp_real_t rescue_speed_addon =
+        ivp_impact_rescue_speed_addon(cp, settings);
+    ivp_real_t rescue_push_target =
+        ivp_impact_rescue_speed_target(cp, settings);
+    ivp_real_t delay_threshold =
+        settings->min_vertical_speed_at_collision + rescue_speed_addon;
+
+    bool allow_delay = true;
+    int push_count = 0;
+
+    /* Current normal closing speed (positive means approaching). */
+    ivp_real_t closing_speed = ivp_contact_closing_speed(cp);
 
     /* Give-back speed = how fast the objects should be separating after
      * the impact.  effective_e = sqrt(used_conservation), so
@@ -239,25 +374,14 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
                          * ivp_sqrt((ivp_real_t)pushes_while_system);
     }
 
-    /* Rescue speed target for minimum separation velocity.
-     * Reference: IVP_Impact::get_rescue_speed_impact (ivp_impact.cxx)
-     *   resc_val = (min_coll_dists - gap) * inv_delta_psi_time + rot_uncertainty
-     *   return 2.0 * resc_val
-     * Uses min_coll_dist (not real_coll_dist) as threshold. */
-    ivp_real_t rescue_speed = IVP_REAL(0.0);
-    if (cp->gap_length < settings->min_coll_dist) {
-        ivp_real_t rescue_depth = settings->min_coll_dist - cp->gap_length;
-        ivp_real_t resc_val = rescue_depth * settings->inv_delta_psi_time;
-        /* Rotational uncertainty estimate:
-         * max_surface_rot_speed from each core gives an upper bound on
-         * contact-velocity contribution from angular motion. */
-        ivp_real_t rot_uncertainty = IVP_REAL(0.0);
-        if (cp->obj_a && !cp->obj_a->core.physical_unmoveable)
-            rot_uncertainty += cp->obj_a->core.max_surface_rot_speed;
-        if (cp->obj_b && !cp->obj_b->core.physical_unmoveable)
-            rot_uncertainty += cp->obj_b->core.max_surface_rot_speed;
-        resc_val += rot_uncertainty;
-        rescue_speed = IVP_REAL(2.0) * resc_val;
+    /* Reference panic path: if not approaching, do rescue push and skip
+     * iterative impact. */
+    if (closing_speed <= IVP_IMPACT_EPS) {
+        apply_rescue_push(&w, rescue_push_target, true);
+        if (pushes_while_system > 10) {
+            allow_delay = false;
+        }
+        goto delay_test;
     }
 
     /* ── Initial impulse estimate ──────────────────────────────────── */
@@ -268,18 +392,13 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
                        * IVP_IMPACT_INITIAL_FRACTION;
 
     if (impulse < IVP_REAL_EPS) {
-        /* Negligible impulse — bail out with rescue only */
-        if (rescue_speed > IVP_REAL(0.0)) {
-            ivp_real_t ri = rescue_speed * cp->virtual_mass;
-            ivp_contact_apply_impulse(cp, ri);
-            return ri;
-        }
-        return IVP_REAL(0.0);
+        /* Negligible impulse — rescue-only path. */
+        apply_rescue_push(&w, rescue_push_target, false);
+        goto delay_test;
     }
 
     /* ── Phase 1: iterative zeroing loop ───────────────────────────── */
 
-    int push_count = 0;
     while (virtual_speed > IVP_REAL(0.0) && push_count < IVP_IMPACT_MAX_PUSHES) {
         push_count++;
         do_push(&w, impulse);
@@ -329,61 +448,51 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
 
     /* ── Phase 3: rescue push for safety gap ───────────────────────── */
 
-    if (rescue_speed > IVP_REAL(0.0)) {
-        /* Compute current separation speed */
-        ivp_real_t current_sep = -ivp_contact_closing_speed(cp);
-        /* current_sep > 0 means separating */
+    apply_rescue_push(&w, rescue_push_target, false);
 
-        ivp_real_t needed = rescue_speed - current_sep;
-        if (needed > IVP_REAL(0.0)) {
-            ivp_real_t ri = needed * cp->virtual_mass;
-            ivp_contact_apply_impulse(cp, ri);
-            w.integral_pushes.k[0] += cp->normal.k[0] * ri;
-            w.integral_pushes.k[1] += cp->normal.k[1] * ri;
-            w.integral_pushes.k[2] += cp->normal.k[2] * ri;
-        }
-    }
-
-    /* ── Phase 4: delay-of-impact for asymmetric mass ─────────────── */
-    /* Reference: IVP_Impact::delay_decision (ivp_impact.cxx ~891-960)
-     * When mass ratio is extreme, defer the heavy core's velocity delta
-     * to speed_change (applied next PSI) to improve numerical stability.
-     * The light core keeps the full immediate speed change.
-     *
-     * Criterion: if the heavy core's virtual mass is >> light core's,
-     * the heavy core gets a tiny velocity change that causes noise.
-     * Deferring it accumulates with other pushes for a cleaner result. */
+    /* ── Phase 4: delay-of-impact (reference delay_decision) ───────── */
+delay_test:
     {
         ivp_core_t *ca = &cp->obj_a->core;
         ivp_core_t *cb = &cp->obj_b->core;
-        if (!ca->physical_unmoveable && !cb->physical_unmoveable) {
+
+        if (allow_delay) {
             ivp_real_t vm_a = ivp_calc_virtual_mass(ca, &cp->r_a, &cp->normal);
             ivp_real_t vm_b = ivp_calc_virtual_mass(cb, &cp->r_b, &cp->normal);
-            /* Delay heavier core if mass ratio > ~10:1 */
-            ivp_core_t *delay_core = NULL;
-            if (vm_a > vm_b * IVP_REAL(10.0)) {
-                delay_core = ca;
-            } else if (vm_b > vm_a * IVP_REAL(10.0)) {
-                delay_core = cb;
-            }
-            if (delay_core) {
-                /* Move the velocity delta from speed → speed_change.
-                 * delta = current_speed - saved_speed_before_impact.
-                 * We stored the saved speeds in the work structure initially
-                 * but they were overwritten during fine-tuning.
-                 * Approximation: move a fraction of the impulse to speed_change. */
-                ivp_real_t total_impulse = ivp_vec3r_length(&w.integral_pushes);
-                if (total_impulse > IVP_REAL_EPS) {
-                    ivp_real_t frac = IVP_REAL(0.5); /* defer half */
-                    ivp_real_t sign = (delay_core == ca) ? IVP_REAL(-1.0) : IVP_REAL(1.0);
-                    for (int ax = 0; ax < 3; ax++) {
-                        ivp_real_t delta = w.integral_pushes.k[ax] *
-                                           delay_core->inv_mass * sign * frac;
-                        delay_core->speed.k[ax] -= delta;
-                        delay_core->speed_change.k[ax] += delta;
+
+            int delay_idx = (vm_a > vm_b) ? 0 : 1; /* heavier virtual mass */
+            ivp_core_t *delay_core = (delay_idx == 0) ? ca : cb;
+
+            if (!delay_core->physical_unmoveable) {
+                const ivp_vec3r_t *test_speed_a =
+                    (delay_idx == 0) ? &w.initial_speed_a : &ca->speed;
+                const ivp_vec3f_t *test_rot_a =
+                    (delay_idx == 0) ? &w.initial_rot_a : &ca->rot_speed;
+                const ivp_vec3r_t *test_speed_b =
+                    (delay_idx == 1) ? &w.initial_speed_b : &cb->speed;
+                const ivp_vec3f_t *test_rot_b =
+                    (delay_idx == 1) ? &w.initial_rot_b : &cb->rot_speed;
+
+                ivp_real_t delayed_signed_speed =
+                    contact_signed_normal_speed_for_states(cp,
+                                                           test_speed_a, test_rot_a,
+                                                           test_speed_b, test_rot_b);
+                if (delay_idx == 1) {
+                    delayed_signed_speed = -delayed_signed_speed;
+                }
+
+                if (delayed_signed_speed < -delay_threshold) {
+                    if (delay_idx == 0) {
+                        delay_core_to_next_psi(ca, &w.initial_speed_a, &w.initial_rot_a);
+                    } else {
+                        delay_core_to_next_psi(cb, &w.initial_speed_b, &w.initial_rot_b);
                     }
                 }
             }
+        }
+
+        if (ca->temporarily_unmovable || cb->temporarily_unmovable) {
+            apply_temporary_unmovable_pair(cp);
         }
     }
 

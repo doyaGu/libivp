@@ -27,6 +27,12 @@ Options:
   --save-metrics FILE    Save per-scenario metrics summary to JSON
   --baseline FILE        Baseline metrics JSON for drift comparison
   --max-drift-percent F  Max allowed drift from baseline (default: 10.0)
+    --timing-step-eps N    Allowed step mismatch for onset timing checks (default: 0)
+    --timing-vel-jump-eps FLOAT
+                                                 Velocity jump threshold for timing checks (default: 5e-3)
+    --timing-angvel-jump-eps FLOAT
+                                                 Angular-velocity jump threshold for timing checks (default: 5e-3)
+    --disable-timing-check Disable onset timing checks
   --verbose              Print per-frame details
   --summary              Print summary statistics (default when not --verbose)
 """
@@ -109,6 +115,8 @@ class CompareMetrics:
         self.time_errors = []
         self.frame_count = 0
         self.object_count = 0
+        self.timing_check_count = 0
+        self.timing_mismatch_count = 0
         self.failures = []
 
     def add_frame_time_error(self, step, ref_time, test_time):
@@ -196,13 +204,85 @@ class CompareMetrics:
             "time": {
                 "max": self.max_time_error(),
             },
+            "timing": {
+                "checks": self.timing_check_count,
+                "mismatches": self.timing_mismatch_count,
+            },
             "failure_count": len(self.failures),
             "failures": self.failures[:20],  # cap for readability
         }
 
 
+def vec3_length(v):
+    return math.sqrt(sum(x * x for x in v))
+
+
+def build_object_step_series(frames):
+    """Return {obj_id: [(step, object_dict), ...]} across all frames."""
+    series = {}
+    for i, frame in enumerate(frames):
+        step = frame.get("step", i)
+        for j, obj in enumerate(frame.get("objects", [])):
+            obj_id = obj.get("id", j)
+            series.setdefault(obj_id, []).append((step, obj))
+    return series
+
+
+def first_jump_step(step_series, field_name, jump_eps):
+    """First step where successive vector magnitudes jump beyond jump_eps."""
+    if len(step_series) < 2:
+        return None
+    prev_mag = None
+    for step, obj in step_series:
+        vec = parse_vec3(obj[field_name])
+        mag = vec3_length(vec)
+        if prev_mag is not None and abs(mag - prev_mag) > jump_eps:
+            return step
+        prev_mag = mag
+    return None
+
+
+def compare_onset_timing(ref_frames, test_frames, metrics,
+                         timing_step_eps,
+                         vel_jump_eps,
+                         angvel_jump_eps,
+                         verbose=False):
+    """Compare first onset steps of velocity/ang-velocity jumps per object id."""
+    ref_series = build_object_step_series(ref_frames)
+    test_series = build_object_step_series(test_frames)
+    common_ids = sorted(set(ref_series.keys()) & set(test_series.keys()))
+
+    for obj_id in common_ids:
+        ref_steps = ref_series[obj_id]
+        test_steps = test_series[obj_id]
+
+        ref_vel_step = first_jump_step(ref_steps, "lin_vel", vel_jump_eps)
+        test_vel_step = first_jump_step(test_steps, "lin_vel", vel_jump_eps)
+        ref_ang_step = first_jump_step(ref_steps, "ang_vel", angvel_jump_eps)
+        test_ang_step = first_jump_step(test_steps, "ang_vel", angvel_jump_eps)
+
+        for label, r, t in (
+            ("lin_vel_jump", ref_vel_step, test_vel_step),
+            ("ang_vel_jump", ref_ang_step, test_ang_step),
+        ):
+            if r is None and t is None:
+                continue
+            metrics.timing_check_count += 1
+            if r is None or t is None or abs(r - t) > timing_step_eps:
+                metrics.timing_mismatch_count += 1
+                msg = (f"timing obj {obj_id} {label}: ref={r} test={t} "
+                       f"(allowed_step_delta={timing_step_eps})")
+                metrics.record_failure(msg)
+                if verbose:
+                    print(f"  FAIL: {msg}", file=sys.stderr)
+
+
 def compare_frames(ref_frames, test_frames, thresholds, adaptive=False,
-                   verbose=False):
+                   verbose=False,
+                   timing_step_eps=0,
+                   timing_vel_jump_eps=5e-3,
+                   timing_angvel_jump_eps=5e-3,
+                   timing_check_enabled=True):
     """Compare two lists of JSONL frames. Returns CompareMetrics."""
     metrics = CompareMetrics()
 
@@ -256,10 +336,32 @@ def compare_frames(ref_frames, test_frames, thresholds, adaptive=False,
             metrics.record_failure(msg)
             continue
 
+        test_by_id = {}
+        duplicate_test_ids = set()
+        for j, to in enumerate(test_objs):
+            tid = to.get("id", j)
+            if tid in test_by_id:
+                duplicate_test_ids.add(tid)
+            test_by_id[tid] = to
+        if duplicate_test_ids:
+            msg = f"step {step}: duplicate object ids in test={sorted(duplicate_test_ids)}"
+            metrics.record_failure(msg)
+            continue
+
         for j in range(len(ref_objs)):
             ro = ref_objs[j]
-            to = test_objs[j]
             obj_id = ro.get("id", j)
+            to = test_by_id.get(obj_id)
+            if not to:
+                msg = f"step {step}: missing object id in test: {obj_id}"
+                metrics.record_failure(msg)
+                continue
+
+            ref_type = ro.get("type")
+            test_type = to.get("type")
+            if ref_type is not None and test_type is not None and ref_type != test_type:
+                msg = f"step {step} obj {obj_id}: type mismatch ref={ref_type} test={test_type}"
+                metrics.record_failure(msg)
 
             # Position
             rp = parse_vec3(ro["pos"])
@@ -320,6 +422,21 @@ def compare_frames(ref_frames, test_frames, thresholds, adaptive=False,
                 if verbose:
                     print(f"  FAIL: {msg}", file=sys.stderr)
 
+        ref_ids = {ro.get("id", idx) for idx, ro in enumerate(ref_objs)}
+        extra_test_ids = [tid for tid in test_by_id.keys() if tid not in ref_ids]
+        if extra_test_ids:
+            msg = f"step {step}: extra object ids in test={sorted(extra_test_ids)}"
+            metrics.record_failure(msg)
+            if verbose:
+                print(f"  FAIL: {msg}", file=sys.stderr)
+
+    if timing_check_enabled:
+        compare_onset_timing(ref_frames, test_frames, metrics,
+                             timing_step_eps,
+                             timing_vel_jump_eps,
+                             timing_angvel_jump_eps,
+                             verbose=verbose)
+
     return metrics
 
 
@@ -376,6 +493,14 @@ def main():
     parser.add_argument("--baseline", help="Baseline metrics JSON for drift comparison")
     parser.add_argument("--max-drift-percent", type=float, default=10.0,
                         help="Max allowed drift from baseline (%%)")
+    parser.add_argument("--timing-step-eps", type=int, default=0,
+                        help="Allowed step mismatch for onset timing checks")
+    parser.add_argument("--timing-vel-jump-eps", type=float, default=5e-3,
+                        help="Velocity jump threshold for timing checks")
+    parser.add_argument("--timing-angvel-jump-eps", type=float, default=5e-3,
+                        help="Angular-velocity jump threshold for timing checks")
+    parser.add_argument("--disable-timing-check", action="store_true",
+                        help="Disable onset timing checks")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--summary", action="store_true",
                         help="Print summary (default when not --verbose)")
@@ -410,7 +535,12 @@ def main():
 
     # Compare
     metrics = compare_frames(ref_frames, test_frames, thresholds,
-                             adaptive=args.adaptive, verbose=args.verbose)
+                             adaptive=args.adaptive,
+                             verbose=args.verbose,
+                             timing_step_eps=args.timing_step_eps,
+                             timing_vel_jump_eps=args.timing_vel_jump_eps,
+                             timing_angvel_jump_eps=args.timing_angvel_jump_eps,
+                             timing_check_enabled=not args.disable_timing_check)
 
     # Save metrics if requested
     if args.save_metrics:
@@ -421,28 +551,30 @@ def main():
         with open(args.save_metrics, "w") as f:
             json.dump(metrics_dict, f, indent=2)
 
-    # Print summary
-    if args.verbose or args.summary or not args.verbose:
-        d = metrics.to_dict()
-        scenario_label = args.scenario or "unknown"
-        print(f"=== compare_jsonl: {scenario_label} ===")
-        print(f"  frames: {d['frame_count']}  objects/frame: "
+        # Print summary
+        if args.verbose or args.summary or not args.verbose:
+          d = metrics.to_dict()
+          scenario_label = args.scenario or "unknown"
+          print(f"=== compare_jsonl: {scenario_label} ===")
+          print(f"  frames: {d['frame_count']}  objects/frame: "
               f"{d['object_comparisons'] // max(d['frame_count'], 1)}")
-        print(f"  position     max={d['position']['max']:.2e}  "
+          print(f"  position     max={d['position']['max']:.2e}  "
               f"rms={d['position']['rms']:.2e}")
-        print(f"  orientation  max={d['orientation']['max']:.2e}  "
+          print(f"  orientation  max={d['orientation']['max']:.2e}  "
               f"rms={d['orientation']['rms']:.2e}")
-        print(f"  lin_velocity max={d['linear_velocity']['max']:.2e}  "
+          print(f"  lin_velocity max={d['linear_velocity']['max']:.2e}  "
               f"rms={d['linear_velocity']['rms']:.2e}")
-        print(f"  ang_velocity max={d['angular_velocity']['max']:.2e}  "
+          print(f"  ang_velocity max={d['angular_velocity']['max']:.2e}  "
               f"rms={d['angular_velocity']['rms']:.2e}")
-        print(f"  energy_abs   max={d['energy_absolute']['max']:.2e}  "
+          print(f"  energy_abs   max={d['energy_absolute']['max']:.2e}  "
               f"rms={d['energy_absolute']['rms']:.2e}")
-        print(f"  energy_rel   max={d['energy_relative']['max']:.2e}  "
+          print(f"  energy_rel   max={d['energy_relative']['max']:.2e}  "
               f"rms={d['energy_relative']['rms']:.2e}")
-        print(f"  time         max={d['time']['max']:.2e}")
-        print(f"  failures: {d['failure_count']}")
-        if d['failures']:
+          print(f"  time         max={d['time']['max']:.2e}")
+          print(f"  timing       checks={d['timing']['checks']}  "
+              f"mismatches={d['timing']['mismatches']}")
+          print(f"  failures: {d['failure_count']}")
+          if d['failures']:
             for fail in d['failures'][:10]:
                 print(f"    {fail}")
             if d['failure_count'] > 10:

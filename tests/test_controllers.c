@@ -1045,13 +1045,37 @@ IVP_TEST(buoyancy_init_plane) {
 
     ivp_buoyancy_state_t state;
     ivp_vec3r_t custom_normal;
-    ivp_vec3r_set(&custom_normal, IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&custom_normal, IVP_REAL(0.0), IVP_REAL(-10.0), IVP_REAL(0.0));
     ivp_buoyancy_init_plane(&state, &custom_normal, IVP_REAL(5.0), IVP_REAL(1000.0));
 
     IVP_ASSERT_NEAR(state.surface_height, IVP_REAL(5.0), TOL);
+    IVP_ASSERT_NEAR(state.surface_normal.k[0], IVP_REAL(0.0), TOL);
     IVP_ASSERT_NEAR(state.surface_normal.k[1], IVP_REAL(-1.0), TOL);
+    IVP_ASSERT_NEAR(state.surface_normal.k[2], IVP_REAL(0.0), TOL);
 
     ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(buoyancy_impulse_opposes_gravity_not_surface_normal) {
+    ivp_environment_t *env = make_env(DT60, true);
+    ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    ivp_buoyancy_state_t state;
+    ivp_vec3r_t vertical_surface_normal;
+    ivp_vec3r_set(&vertical_surface_normal, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_buoyancy_init_plane(&state, &vertical_surface_normal, IVP_REAL(5.0), IVP_REAL(1000.0));
+    state.linear_drag = IVP_REAL(0.0);
+    state.angular_drag = IVP_REAL(0.0);
+
+    ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
+    step(env, 1);
+
+    ivp_vec3r_t vel;
+    ivp_object_get_speed(obj, &vel);
+    IVP_ASSERT_TRUE(vel.k[1] < IVP_REAL(0.0));
+    IVP_ASSERT_NEAR(vel.k[0], IVP_REAL(0.0), LTOL);
 
     ivp_environment_destroy(env);
 }
@@ -2101,6 +2125,7 @@ int main(void) {
     /* Buoyancy tests (6) */
     IVP_REGISTER(buoyancy_init_default);
     IVP_REGISTER(buoyancy_init_plane);
+    IVP_REGISTER(buoyancy_impulse_opposes_gravity_not_surface_normal);
     IVP_REGISTER(buoyancy_submerged_rises);
     IVP_REGISTER(buoyancy_above_no_force);
     IVP_REGISTER(buoyancy_drag_slows);

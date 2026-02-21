@@ -59,6 +59,12 @@ void ivp_hull_manager_remove_object(ivp_hull_manager_t *mgr,
  * Returns the number of objects whose hulls have expanded significantly. */
 int ivp_hull_manager_update(ivp_hull_manager_t *mgr, ivp_real_t dt);
 
+/* Collect objects whose accumulated hull expansion exceeds threshold.
+ * Returns total expanded count. If out_objects is NULL, only returns count. */
+int ivp_hull_manager_collect_expanded_objects(const ivp_hull_manager_t *mgr,
+                                              ivp_object_t **out_objects,
+                                              int max_objects);
+
 /* Get current hull radius for an object (base_radius + expansion).
  * Returns base radius if object is not tracked. */
 ivp_real_t ivp_hull_manager_get_radius(const ivp_hull_manager_t *mgr,

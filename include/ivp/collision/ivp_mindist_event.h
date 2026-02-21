@@ -14,9 +14,33 @@ extern "C" {
 
 typedef enum ivp_mindist_event_kind {
     IVP_MINDIST_EVENT_NONE = 0,
-    IVP_MINDIST_EVENT_IMPACT,
-    IVP_MINDIST_EVENT_TOPOLOGY
+    /* Reference-aligned event coding (matches legacy IVP_COLL_TYPE shape):
+     * low nibble == 0 => collision impact event
+     * low nibble != 0 => topology/feature-transition event */
+    IVP_MINDIST_EVENT_PP_COLL = 0x10,
+    IVP_MINDIST_EVENT_PP_PK = 0x11,
+
+    IVP_MINDIST_EVENT_PF_COLL = 0x20,
+    IVP_MINDIST_EVENT_PF_NPF = 0x21,
+
+    IVP_MINDIST_EVENT_PK_COLL = 0x30,
+    IVP_MINDIST_EVENT_PK_PF = 0x31,
+    IVP_MINDIST_EVENT_PK_KK = 0x32,
+    IVP_MINDIST_EVENT_PK_NOT_MORE_PARALLEL = 0x33,
+
+    IVP_MINDIST_EVENT_KK_COLL = 0x40,
+    IVP_MINDIST_EVENT_KK_PARALLEL = 0x41,
+    IVP_MINDIST_EVENT_KK_PF = 0x42,
+
+    /* Ball fallback used by the C17 implementation's generic solver path. */
+    IVP_MINDIST_EVENT_BALL_COLL = 0x50,
+    IVP_MINDIST_EVENT_BALL_RECALC = 0x51
 } ivp_mindist_event_kind_t;
+
+static inline bool ivp_mindist_event_is_impact(ivp_mindist_event_kind_t kind)
+{
+    return kind != IVP_MINDIST_EVENT_NONE && ((((uint32_t)kind) & 0x0Fu) == 0u);
+}
 
 typedef struct ivp_mindist_event_prediction {
     ivp_mindist_event_kind_t kind;

@@ -181,6 +181,9 @@ void ivp_mindist_entry_recompute(ivp_mindist_entry_t *entry)
     int produced = ivp_contact_compute_generic_multi(
         entry->obj_a, entry->obj_b, &cp, 1);
 
+    ivp_collision_settings_t settings;
+    ivp_collision_settings_init_default(&settings);
+
     if (produced > 0) {
         entry->last_distance = cp.gap_length;
         entry->last_normal = cp.normal;
@@ -210,13 +213,35 @@ void ivp_mindist_entry_recompute(ivp_mindist_entry_t *entry)
             entry->state = IVP_MDIST_INVALID;
             entry->halfspace_hint = 0;
         } else {
-            entry->state = IVP_MDIST_EXACT;
+            /* Reference-aligned exact/hull split: only keep EXACT while
+             * inside the event-relevant shell around coll_dist. */
+            int sel = entry->coll_dist_selector;
+            if (sel < 0) sel = 0;
+            if (sel >= IVP_MAX_STEPS_FOR_COLLDIST_DECREASE) {
+                sel = IVP_MAX_STEPS_FOR_COLLDIST_DECREASE - 1;
+            }
+            ivp_real_t coll_dist = settings.coll_dists[sel];
+            ivp_real_t exact_shell = coll_dist + settings.mindist_change_force_dist;
+            if (cp.gap_length <= exact_shell) {
+                entry->state = IVP_MDIST_EXACT;
+            } else {
+                entry->state = IVP_MDIST_HULL;
+            }
+
+            entry->synapse[0].status =
+                (entry->obj_a->type == IVP_OBJECT_BALL) ? IVP_ST_BALL : IVP_ST_TRIANGLE;
+            entry->synapse[1].status =
+                (entry->obj_b->type == IVP_OBJECT_BALL) ? IVP_ST_BALL : IVP_ST_TRIANGLE;
         }
         entry->age = 0;
     } else {
         /* No contact found — objects are far apart */
         entry->state = IVP_MDIST_HULL;
         entry->halfspace_hint = 0;
+        entry->synapse[0].status =
+            (entry->obj_a->type == IVP_OBJECT_BALL) ? IVP_ST_BALL : IVP_ST_TRIANGLE;
+        entry->synapse[1].status =
+            (entry->obj_b->type == IVP_OBJECT_BALL) ? IVP_ST_BALL : IVP_ST_TRIANGLE;
     }
 }
 
@@ -303,5 +328,18 @@ void ivp_mindist_manager_invalidate_all(ivp_mindist_manager_t *mgr)
         ivp_mindist_entry_t *e = &mgr->entries[i];
         if (!e->active) continue;
         e->state = IVP_MDIST_INVALID;
+    }
+}
+
+void ivp_mindist_manager_invalidate_object(ivp_mindist_manager_t *mgr,
+                                           const ivp_object_t *obj)
+{
+    if (!mgr || !obj) return;
+    for (int i = 0; i < mgr->entry_count; i++) {
+        ivp_mindist_entry_t *e = &mgr->entries[i];
+        if (!e->active) continue;
+        if (e->obj_a == obj || e->obj_b == obj) {
+            e->state = IVP_MDIST_INVALID;
+        }
     }
 }

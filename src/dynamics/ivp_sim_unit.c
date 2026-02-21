@@ -77,6 +77,52 @@ static bool has_sync_all_cores_controller_below_gravity(ivp_environment_t *env)
     return false;
 }
 
+/* Reference-aligned behavior: dependent controllers connect simulation
+ * units. Perform eager merges before PSI stepping so connected cores are
+ * advanced/frozen as one island instead of relying on freeze suppression. */
+static void merge_units_connected_by_dependent_controllers(ivp_sim_units_manager_t *mgr,
+                                                           ivp_environment_t *env)
+{
+    if (!mgr || !env) return;
+
+    ivp_controller_system_t *cs = controller_system_from_env(env);
+    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    const int sc = ivp_controller_system_count(cs);
+
+    for (int si = 0; si < sc; si++) {
+        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
+        if (!slot || !slot->enabled) continue;
+        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
+
+        int count = ivp_controller_slot_collect_associated_handles(
+            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        if (count <= 1) continue;
+
+        ivp_sim_unit_t *base = NULL;
+        for (int ai = 0; ai < count; ai++) {
+            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, handles[ai]);
+            if (!obj) continue;
+            ivp_core_t *core = &obj->core;
+            if (core->physical_unmoveable) continue;
+            ivp_sim_unit_t *su = core->sim_unit;
+            if (!su || su == &mgr->still_slot) continue;
+
+            if (!base) {
+                base = su;
+                continue;
+            }
+            if (su == base) continue;
+
+            if (su->core_count > base->core_count) {
+                ivp_sim_unit_t *tmp = base;
+                base = su;
+                su = tmp;
+            }
+            base = ivp_sim_unit_merge(mgr, base, su);
+        }
+    }
+}
+
 static void union_friction_connectivity(ivp_friction_manager_t *fm,
                                         ivp_core_t **cores,
                                         int n,
@@ -503,9 +549,9 @@ void ivp_sim_unit_add_controller(ivp_sim_unit_t *su, ivp_controller_core_t *cc)
 
     cc->sim_unit = su;
 
-    /* Insert sorted by priority (ascending) */
+    /* Insert sorted by priority (descending: higher first) */
     ivp_controller_core_t **pp = &su->controller_list;
-    while (*pp && (*pp)->priority <= cc->priority) {
+    while (*pp && (*pp)->priority >= cc->priority) {
         pp = &(*pp)->next_in_unit;
     }
 
@@ -582,14 +628,14 @@ void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
         ivp_core_commit_async_pushes(ce->core);
     }
 
-    /* Step 3: Run ALL controllers (global + per-unit) in unified ascending
+    /* Step 3: Run ALL controllers (global + per-unit) in unified descending
      * priority order via two-pointer merge.
      *
      * Reference ordering (ivp_sim_unit.cxx:907-952):
-     *   All controllers dispatch in ascending priority within one pass:
-     *   static_friction(0) → constraints(405) → motion(500) →
-     *   dynamic_friction(600) → gravity(1000) → spring(1400) →
-     *   actuator(1500) → forcefield(1600) → energy_friction(2000)
+     *   Controllers are sorted, then executed from highest priority first:
+     *   energy_friction(2000) → forcefield(1600) → actuator(1500) →
+     *   spring(1400) → gravity(1000) → dynamic_friction(600) →
+     *   motion(500) → constraints(405) → static_friction(0)
      */
     ivp_environment_run_controllers_for_unit(env, su, delta_time);
 
@@ -632,6 +678,10 @@ void ivp_sim_units_manager_simulate_all_psi(ivp_sim_units_manager_t *mgr,
 {
     if (!mgr) return;
 
+    /* Pre-pass: enforce dependent-controller island connectivity before
+     * per-unit PSI traversal to keep iteration pointers stable. */
+    merge_units_connected_by_dependent_controllers(mgr, mgr->env);
+
     /* Iterate active units. We snapshot the list because simulate_psi
      * may freeze a unit and move it to still_slot. */
     ivp_sim_unit_t *su = mgr->active_units;
@@ -643,50 +693,6 @@ void ivp_sim_units_manager_simulate_all_psi(ivp_sim_units_manager_t *mgr,
 }
 
 /* ── Freeze / wake ─────────────────────────────────────────────────────── */
-
-/* Check if any dependent controller connects a core in this sim unit
- * to a core in a DIFFERENT active sim unit (or associated object that is
- * active).  If so, the unit must not freeze because those controllers
- * need the core to be simulated.
- *
- * Reference: In the original IVP, dependent controllers cause sim units
- * to merge, so all connected cores share the same unit and freeze together.
- * Our C17 architecture doesn't always merge eagerly, so we must prevent
- * a unit from freezing while cross-unit dependencies exist. */
-static bool has_cross_unit_dependent_controllers(ivp_sim_unit_t *su,
-                                                  ivp_environment_t *env)
-{
-    ivp_controller_system_t *cs = controller_system_from_env(env);
-    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
-    const int sc = ivp_controller_system_count(cs);
-
-    for (int si = 0; si < sc; si++) {
-        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
-        if (!slot || !slot->enabled) continue;
-        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
-
-        int count = ivp_controller_slot_collect_associated_handles(
-            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
-        if (count <= 1) continue;
-
-        bool any_in_unit = false;
-        bool any_outside = false;
-        for (int ai = 0; ai < count; ai++) {
-            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, handles[ai]);
-            if (!obj) continue;
-            ivp_core_t *core = &obj->core;
-            if (core->physical_unmoveable) continue;
-            if (core->sim_unit == su) {
-                any_in_unit = true;
-            } else if (core->sim_unit != &su->manager->still_slot) {
-                /* Core is in another active unit */
-                any_outside = true;
-            }
-        }
-        if (any_in_unit && any_outside) return true;
-    }
-    return false;
-}
 
 /* Actually freeze a sim unit: zero velocities, set NOT_SIM, detach
  * per-unit controllers, move all cores to still_slot, emit events.
@@ -773,15 +779,9 @@ void ivp_sim_unit_calc_movement_state(ivp_sim_unit_t *su,
     if (any_moving) {
         su->movement_type = IVP_SUM_MOVING;
     } else if (all_calm) {
-        /* All cores are calm — freeze the unit unless it has cross-unit
-         * dependent controller connections (springs, constraints etc.
-         * linking to other active sim units).
-         * Reference: IVP_Simulation_Unit::do_freeze_check_sim_unit() */
-        if (!has_cross_unit_dependent_controllers(su, env)) {
-            freeze_sim_unit(su, env);
-        } else {
-            su->movement_type = IVP_SUM_CALM;
-        }
+        /* Reference-aligned behavior: dependent-controller connectivity
+         * is handled by pre-PSI island merging, so calm units freeze directly. */
+        freeze_sim_unit(su, env);
     } else {
         su->movement_type = IVP_SUM_CALM;
     }
