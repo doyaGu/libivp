@@ -218,7 +218,7 @@ IVP_TEST(env_create_destroy) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     IVP_ASSERT_NOT_NULL(env);
 
-    IVP_ASSERT_NEAR(env->gravity.k[1], 9.81, 1e-5);
+    IVP_ASSERT_NEAR(env->gravity.k[1], 9.83, 1e-5);
     IVP_ASSERT_NEAR(ivp_environment_get_delta_psi_time(env), 1.0/66.0, 1e-6);
     IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 0);
 
@@ -377,7 +377,7 @@ IVP_TEST(env_single_psi_step) {
     /* After 1 step at dt = 1/66:
      * Speed should be�?g*dt (after damping, but damping is tiny) */
     double dt = 1.0 / 66.0;
-    double expected_vy = 9.81 * dt;  /* velocity after gravity */
+    double expected_vy = 9.83 * dt;  /* velocity after gravity */
 
     /* Speed was 0, damped to 0, then += g*dt */
     IVP_ASSERT_NEAR(obj->core.speed.k[0], 0.0, 1e-6);
@@ -444,7 +444,7 @@ IVP_TEST(freefall_default_damping) {
     ivp_object_template_init(&tmpl);
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
-    double g = 9.81;
+    double g = 9.83;
     double dt = 1.0 / 66.0;
     double damp = 0.01;
 
@@ -485,7 +485,7 @@ IVP_TEST(freefall_240_frames_position) {
     ivp_object_template_init(&tmpl);
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
-    double g = 9.81;
+    double g = 9.83;
     double dt = 1.0 / 66.0;
     double damp = 0.01;
 
@@ -929,7 +929,8 @@ static void controller_low_sync(const ivp_event_sim_t *event_sim,
     ivp_environment_t *env = event_sim->environment;
     const ivp_real_t dt = event_sim->delta_time;
     (void)ctx;
-    obj->core.speed_change.k[0] += IVP_REAL(1.0);
+    /* Sync push: write directly to speed */
+    obj->core.speed.k[0] += IVP_REAL(1.0);
 }
 
 static void controller_high_async(const ivp_event_sim_t *event_sim,
@@ -938,10 +939,14 @@ static void controller_high_async(const ivp_event_sim_t *event_sim,
     ivp_environment_t *env = event_sim->environment;
     const ivp_real_t dt = event_sim->delta_time;
     (void)ctx;
+    /* Check if low-priority (400) has already modified speed.
+     * Controllers dispatch in ascending priority order (reference parity),
+     * so low (400) runs BEFORE high (1400) → speed should be > 0. */
     if (obj->core.speed.k[0] > IVP_REAL(0.9)) {
         s_controller_sync_seen = 1;
     }
-    obj->core.speed_change.k[0] += IVP_REAL(2.0);
+    /* Direct speed write for test simplicity (tests dispatch ORDER). */
+    obj->core.speed.k[0] += IVP_REAL(2.0);
 }
 
 static void controller_dependent_probe(const ivp_event_sim_t *event_sim,
@@ -1104,9 +1109,11 @@ IVP_TEST(controller_priority_sync_async) {
 
     ivp_environment_simulate_one_psi(env);
 
-    /* Reference parity: high(>=1000) runs before low(<1000). */
-    IVP_ASSERT_EQ(s_controller_sync_seen, 0);
-    /* final velocity includes low sync + high async contributions */
+    /* Reference parity: low(400) runs before high(1400) in ascending order.
+     * High controller sees speed > 0.9 from low's sync push. */
+    IVP_ASSERT_EQ(s_controller_sync_seen, 1);
+    /* final velocity includes low sync push (1.0) + high async push (2.0,
+     * committed by gravity barrier at priority 1000). */
     IVP_ASSERT_NEAR(obj->core.speed.k[0], 3.0, 1e-6);
 
     ivp_environment_destroy(env);
@@ -1326,7 +1333,8 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_environment_t *env = ivp_environment_create(&cfg);
-    ivp_environment_clear_controllers(env);
+    /* Keep default gravity controller (zero gravity, zero-damp) so its
+     * commit_all_async_pushes() barrier commits the rot_mot async push. */
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);

@@ -55,8 +55,8 @@ typedef struct ivp_anomaly_config {
 } ivp_anomaly_config_t;
 
 static inline void ivp_anomaly_config_init(ivp_anomaly_config_t *cfg) {
-    cfg->max_speed = IVP_REAL(1000.0);
-    cfg->max_angular_speed = IVP_REAL(100.0);
+    cfg->max_speed = IVP_REAL(2000.0);         /* reference: IVP_Anomaly_Limits::max_velocity = 2000 */
+    cfg->max_angular_speed = IVP_REAL(100.0);   /* reference: PI/2 per PSI ≈ 103 rad/s at 66Hz */
     cfg->energy_gain_ratio = IVP_REAL(10.0);
     cfg->auto_correct = true;
     cfg->max_collisions_per_psi = 200;

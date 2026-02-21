@@ -17,7 +17,12 @@ static bool ivp_environment_core_has_pending_push(const ivp_core_t *core)
 {
     const ivp_real_t lin_q = ivp_vec3r_quad_length(&core->speed_change);
     const ivp_real_t ang_q = ivp_vec3r_quad_length(&core->rot_speed_change);
-    return lin_q > IVP_REAL_EPS || ang_q > IVP_REAL_EPS;
+    /* Also detect sync writes to speed/rot_speed by controllers that
+     * modified a frozen core's velocity directly.  Freeze zeroes all
+     * velocity fields, so any non-zero value means something wrote to
+     * the core after it was frozen and it needs to be revived. */
+    const ivp_real_t spd_q = ivp_vec3r_quad_length(&core->speed);
+    return lin_q > IVP_REAL_EPS || ang_q > IVP_REAL_EPS || spd_q > IVP_REAL_EPS;
 }
 
 static void ivp_environment_emit_phase(ivp_environment_t *env, ivp_psi_phase_t phase, ivp_real_t dt)
@@ -285,48 +290,94 @@ void ivp_environment_run_controllers_for_unit(ivp_environment_t *env,
     ivp_object_system_t *os = ivp_environment_get_object_system(env);
 
     const int cn = ivp_controller_system_count(cs);
-    if (cn <= 0) return;
 
-    /* Snapshot controller handles for iteration safety. */
-    ivp_controller_handle_t local_handles[32];
-    ivp_controller_handle_t *handles = local_handles;
-    bool handles_allocated = false;
-    if (cn > (int)(sizeof(local_handles) / sizeof(local_handles[0]))) {
-        handles = (ivp_controller_handle_t *)ivp_alloc(
-            env->allocator, (size_t)cn * sizeof(ivp_controller_handle_t));
-        if (!handles) return;
-        handles_allocated = true;
+    /* ── Snapshot global controller handles (sorted ascending by priority) ── */
+    typedef struct { ivp_controller_handle_t h; int priority; } gc_entry_t;
+    gc_entry_t local_gc[32];
+    gc_entry_t *gc = local_gc;
+    bool gc_allocated = false;
+    if (cn > (int)(sizeof(local_gc) / sizeof(local_gc[0]))) {
+        gc = (gc_entry_t *)ivp_alloc(
+            env->allocator, (size_t)cn * sizeof(gc_entry_t));
+        if (!gc) return;
+        gc_allocated = true;
     }
 
-    int handle_count = 0;
+    int gc_count = 0;
     for (int i = 0; i < cn; i++) {
         ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, i);
         if (!slot) continue;
-        ivp_controller_handle_t h;
-        h.slot = slot->handle.slot;
-        h.generation = slot->handle.generation;
-        handles[handle_count++] = h;
+        gc[gc_count].h.slot = slot->handle.slot;
+        gc[gc_count].h.generation = slot->handle.generation;
+        gc[gc_count].priority = slot->priority;
+        gc_count++;
     }
 
-    for (int ci = 0; ci < handle_count; ci++) {
-        ivp_controller_slot_t *slot =
-            ivp_controller_system_get_by_handle(cs, handles[ci]);
-        if (!slot || !slot->enabled || !slot->event_fn) continue;
-
-        if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
-            dispatch_dependent_controller_for_unit(env, os, slot, su, dt);
-        } else if (!slot->run_for_all_cores && slot->associated_count > 0) {
-            dispatch_associated_controller_for_unit(env, os, slot, su, dt);
-        } else if (slot->run_for_all_cores) {
-            dispatch_all_cores_controller_for_unit(env, slot, su, dt);
+    /* ── Collect cores for per-unit controller dispatch ── */
+    ivp_core_t *local_cores[64];
+    ivp_core_t **pu_cores = local_cores;
+    bool cores_allocated = false;
+    int pu_core_count = 0;
+    if (su->controller_count > 0) {
+        if (su->core_count > 64) {
+            pu_cores = (ivp_core_t **)ivp_alloc(
+                su->manager->allocator,
+                (size_t)su->core_count * sizeof(ivp_core_t *));
+            if (!pu_cores) {
+                if (gc_allocated) ivp_free(env->allocator, gc, (size_t)cn * sizeof(gc_entry_t));
+                return;
+            }
+            cores_allocated = true;
         }
-        /* Note: is_global controllers have been removed. Friction sub-phases
-         * are now per-system controller_cores in the sim unit's controller list,
-         * dispatched in ivp_sim_unit_simulate_psi step 3 (per-unit controllers). */
+        ivp_sim_unit_core_entry_t *ce = su->core_list;
+        while (ce && pu_core_count < su->core_count) {
+            pu_cores[pu_core_count++] = ce->core;
+            ce = ce->next;
+        }
     }
 
-    if (handles_allocated) {
-        ivp_free(env->allocator, handles, (size_t)cn * sizeof(ivp_controller_handle_t));
+    /* ── Two-pointer merge: dispatch global + per-unit in ascending priority ─
+     *
+     * Reference (ivp_sim_unit.cxx:907-952): all controllers are dispatched in
+     * ONE unified pass, sorted ascending by priority. The C17 architecture
+     * splits them into global (controller_system) and per-unit (controller_list)
+     * so we interleave here. */
+    int gi = 0;
+    ivp_controller_core_t *pu = su->controller_list;
+
+    while (gi < gc_count || pu) {
+        int g_prio = (gi < gc_count) ? gc[gi].priority : 0x7FFFFFFF;
+        int p_prio = pu ? pu->priority : 0x7FFFFFFF;
+
+        if (g_prio <= p_prio) {
+            /* Dispatch global controller */
+            ivp_controller_slot_t *slot =
+                ivp_controller_system_get_by_handle(cs, gc[gi].h);
+            if (slot && slot->enabled && slot->event_fn) {
+                if (slot->mode == IVP_CONTROLLER_DEPENDENT) {
+                    dispatch_dependent_controller_for_unit(env, os, slot, su, dt);
+                } else if (!slot->run_for_all_cores && slot->associated_count > 0) {
+                    dispatch_associated_controller_for_unit(env, os, slot, su, dt);
+                } else if (slot->run_for_all_cores) {
+                    dispatch_all_cores_controller_for_unit(env, slot, su, dt);
+                }
+            }
+            gi++;
+        } else {
+            /* Dispatch per-unit controller */
+            if (pu->fn) {
+                pu->fn(pu->ctx, env, pu_cores, pu_core_count, dt);
+            }
+            pu = pu->next_in_unit;
+        }
+    }
+
+    if (cores_allocated) {
+        ivp_free(su->manager->allocator, pu_cores,
+                 (size_t)su->core_count * sizeof(ivp_core_t *));
+    }
+    if (gc_allocated) {
+        ivp_free(env->allocator, gc, (size_t)cn * sizeof(gc_entry_t));
     }
 }
 
@@ -341,20 +392,20 @@ static void ivp_environment_default_gravity_controller(const ivp_event_sim_t *ev
     if (core->pinned) return;
 
     /* Reference: IVP_Standard_Gravity_Controller::do_simulation_controller()
+     * (ivp_sim_unit.cxx:770-780)
      *   1. global_damp_core(core)
-     *   2. speed += gravity * dt
-     *
-     * Note: commit_all_async_pushes is no longer called here — it happens
-     * once for all cores in sim unit PSI step 2 (before controllers run),
-     * matching the reference ordering. */
+     *   2. commit_all_async_pushes()  ← commits impulses from higher-priority controllers
+     *   3. speed += gravity * dt
+     */
     ivp_core_damp(core, dt);
+    ivp_core_commit_async_pushes(core);
     ivp_vec3r_add_scaled(&core->speed, &env->gravity, dt);
 }
 
 void ivp_environment_config_init(ivp_environment_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
-    ivp_vec3r_set(&cfg->gravity, IVP_REAL(0.0), IVP_REAL(9.81), IVP_REAL(0.0));
+    ivp_vec3r_set(&cfg->gravity, IVP_REAL(0.0), IVP_REAL(9.83), IVP_REAL(0.0));
     cfg->delta_psi_time = (ivp_real_t)IVP_DEFAULT_DELTA_TIME;
     cfg->freeze_params = ivp_freeze_params_default();
     cfg->allocator = NULL;
@@ -438,6 +489,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* Initialize anomaly manager */
     ivp_anomaly_manager_init(&env->anomaly_manager, &cfg.anomaly_config);
 
+    /* Active value time source (reference: mod_current_time).
+     * Updated every PSI to drive time-dependent active value nodes. */
+    env->mod_current_time = ivp_active_float_terminal_create(env->allocator, "current_time", 0.0);
+
     /* Collision filter */
     env->collision_filter = cfg.collision_filter;
 
@@ -511,6 +566,13 @@ void ivp_environment_destroy(ivp_environment_t *env)
     ivp_mindist_manager_destroy(&env->mindist_manager);
     ivp_friction_manager_destroy(&env->friction_manager);
     ivp_broadphase_sap_destroy(&env->broadphase_sap);
+
+    /* Release active value time source */
+    if (env->mod_current_time) {
+        ivp_active_float_remove_ref(env->mod_current_time);
+        env->mod_current_time = NULL;
+    }
+
     if (env->sim_units_manager) {
         ivp_sim_units_manager_destroy(env->sim_units_manager);
         env->sim_units_manager = NULL;
@@ -687,7 +749,15 @@ bool ivp_environment_ensure_core_in_simulation(ivp_environment_t *env,
     ivp_core_t *core = &object->core;
     if (core->physical_unmoveable) return false;
     if (core->movement_state == IVP_MT_NOT_SIM) {
-        core->movement_state = IVP_MT_MOVING;
+        /* Revive: transfer core from still_slot to a new active sim unit.
+         * Reference: ensure_in_simulation calls revive_core which handles
+         * the actual still_slot → active transfer. */
+        if (env->sim_units_manager &&
+            core->sim_unit == &env->sim_units_manager->still_slot) {
+            ivp_sim_unit_revive_core(env->sim_units_manager, core);
+        } else {
+            core->movement_state = IVP_MT_MOVING;
+        }
         core->movement_check_counter = 0;
         ivp_environment_emit_event_internal(env, IVP_EVENT_CORE_REVIVED, IVP_REAL(0.0),
                                             object->dense_index, 0);
@@ -964,6 +1034,12 @@ void ivp_environment_simulate_one_psi(ivp_environment_t *env)
         ivp_environment_revive_cores_psi(env, unit_dt);
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_MANAGER_ACTIVE_VALUES, unit_dt);
+        /* Reference: l_active_value_manager->refresh_psi_active_values(time)
+         * Update the mod_current_time terminal value, which cascades to all
+         * time-dependent active float nodes (sine, square, pulse oscillators). */
+        if (env->mod_current_time) {
+            ivp_active_float_set(env->mod_current_time, env->current_time);
+        }
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_MANAGER_CONSTRAINTS, unit_dt);
 
         ivp_environment_emit_phase(env, IVP_PSI_PHASE_PRE_CONTROLLERS, unit_dt);

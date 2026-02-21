@@ -148,11 +148,11 @@ void ivp_controller_raycast_car(const ivp_event_sim_t *event_sim,
         ivp_real_t total_susp_force = spring_force + damp_force;
         if (total_susp_force < IVP_REAL(0.0)) total_susp_force = IVP_REAL(0.0);
 
-        /* Apply suspension force along -dir_ws (opposing compression) */
+        /* Apply suspension force along -dir_ws (sync push — car is constraint-class) */
         ivp_real_t susp_impulse = total_susp_force * dt;
-        core->speed_change.k[0] -= dir_ws.k[0] * susp_impulse * core->inv_mass;
-        core->speed_change.k[1] -= dir_ws.k[1] * susp_impulse * core->inv_mass;
-        core->speed_change.k[2] -= dir_ws.k[2] * susp_impulse * core->inv_mass;
+        core->speed.k[0] -= dir_ws.k[0] * susp_impulse * core->inv_mass;
+        core->speed.k[1] -= dir_ws.k[1] * susp_impulse * core->inv_mass;
+        core->speed.k[2] -= dir_ws.k[2] * susp_impulse * core->inv_mass;
 
         /* Compute forward and side directions at contact */
         /* Forward = chassis forward rotated by steering (for front wheels) */
@@ -202,9 +202,9 @@ void ivp_controller_raycast_car(const ivp_event_sim_t *event_sim,
         ivp_real_t lat_impulse = -v_side * core->mass * IVP_REAL(0.25); /* per-wheel share */
         if (lat_impulse > max_lat * dt) lat_impulse = max_lat * dt;
         if (lat_impulse < -max_lat * dt) lat_impulse = -max_lat * dt;
-        core->speed_change.k[0] += side_ws.k[0] * lat_impulse * core->inv_mass;
-        core->speed_change.k[1] += side_ws.k[1] * lat_impulse * core->inv_mass;
-        core->speed_change.k[2] += side_ws.k[2] * lat_impulse * core->inv_mass;
+        core->speed.k[0] += side_ws.k[0] * lat_impulse * core->inv_mass;
+        core->speed.k[1] += side_ws.k[1] * lat_impulse * core->inv_mass;
+        core->speed.k[2] += side_ws.k[2] * lat_impulse * core->inv_mass;
 
         /* Engine / brake force (longitudinal) */
         bool is_driven = (!is_front && car->drive_rear) ||
@@ -230,9 +230,9 @@ void ivp_controller_raycast_car(const ivp_event_sim_t *event_sim,
         }
 
         ivp_real_t fwd_impulse = long_force * dt / (ivp_real_t)car->n_wheels;
-        core->speed_change.k[0] += fwd_ws.k[0] * fwd_impulse * core->inv_mass;
-        core->speed_change.k[1] += fwd_ws.k[1] * fwd_impulse * core->inv_mass;
-        core->speed_change.k[2] += fwd_ws.k[2] * fwd_impulse * core->inv_mass;
+        core->speed.k[0] += fwd_ws.k[0] * fwd_impulse * core->inv_mass;
+        core->speed.k[1] += fwd_ws.k[1] * fwd_impulse * core->inv_mass;
+        core->speed.k[2] += fwd_ws.k[2] * fwd_impulse * core->inv_mass;
 
         /* Update wheel spin */
         if (w->radius > IVP_REAL_EPS) {

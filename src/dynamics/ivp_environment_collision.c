@@ -26,6 +26,7 @@
 #include <ivp/collision/ivp_range_manager.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/controllers/ivp_constraint.h>
+#include <ivp/dynamics/ivp_sim_unit.h>
 #include <string.h>
 #include <math.h>
 #include "dynamics/ivp_environment_events.h"
@@ -122,10 +123,45 @@ static void wake_objects_after_impulse(ivp_environment_t *env, ivp_real_t step_d
         if (!obj || obj->core.physical_unmoveable) continue;
         if (obj->core.movement_state != IVP_MT_NOT_SIM) continue;
 
-        obj->core.movement_state = IVP_MT_SLOW;
+        /* Revive: transfer core from still_slot to a new active sim unit
+         * so it participates in subsequent PSI steps (integration, etc.).
+         * Reference: frozen objects hit by impulses must be fully revived,
+         * not just have their state flag flipped. */
+        if (env->sim_units_manager &&
+            obj->core.sim_unit == &env->sim_units_manager->still_slot) {
+            ivp_sim_unit_revive_core(env->sim_units_manager, &obj->core);
+        } else {
+            obj->core.movement_state = IVP_MT_SLOW;
+        }
         obj->core.movement_check_counter = 0;
         ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_UNFROZEN,
                                             step_dt, obj->dense_index, 0);
+    }
+}
+
+/* Retrieve the per-entry collision distance using the progressive
+ * selector.  Reference: IVP_Mindist::get_coll_dist(). */
+static inline ivp_real_t get_entry_coll_dist(const ivp_mindist_entry_t *entry,
+                                              const ivp_collision_settings_t *settings)
+{
+    int sel = entry->coll_dist_selector;
+    if (sel < 0) sel = 0;
+    if (sel >= IVP_MAX_STEPS_FOR_COLLDIST_DECREASE)
+        sel = IVP_MAX_STEPS_FOR_COLLDIST_DECREASE - 1;
+    return settings->coll_dists[sel];
+}
+
+/* Progressive collision distance tightening.
+ * Reference: IVP_Mindist::update_exact_mindist_events — decrements
+ * coll_dist_selector every 3 event recalculations (ivp_mindist.cxx). */
+static void update_coll_dist_selector(ivp_mindist_entry_t *entry)
+{
+    if (entry->coll_dist_selector > 0) {
+        entry->coll_dist_recalc_count++;
+        if (entry->coll_dist_recalc_count > 2) {
+            entry->coll_dist_selector--;
+            entry->coll_dist_recalc_count = 0;
+        }
     }
 }
 
@@ -147,25 +183,75 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
         ivp_object_t *obj_b = ivp_environment_get_object_by_handle(env, event.obj_b);
         if (!obj_a || !obj_b) continue;
 
+        ivp_mindist_entry_t *entry =
+            ivp_mindist_manager_get_or_create(&env->mindist_manager, obj_a, obj_b);
+        if (entry) {
+            entry->event_registered = false;
+            entry->event_time = now;
+        }
+
+        /* ── RECALC events (sector-change / topology) ──
+         * Reference: IVP_Mindist::simulate_time_event — when
+         * (coll_type & 0x0f) != 0, just recalc and reschedule.
+         * No narrowphase, no impact resolution.
+         * Note: rescheduling is deferred to the broadphase in the next
+         * collision resolution call to avoid infinite dispatch loops. */
+        if (event.type == IVP_TIME_EVENT_MINDIST_RECALC) {
+            if (entry) {
+                ivp_mindist_entry_recompute(entry);
+                update_coll_dist_selector(entry);
+            }
+            continue;
+        }
+
+        /* ── IMPACT events ──
+         * Reference: IVP_Mindist::simulate_time_event — when
+         * (coll_type & 0x0f) == 0:
+         *   1. recalc_mindist() to get current distance
+         *   2. If distance < get_coll_dist() + mindist_change_force_dist → impact
+         *   3. Otherwise → false alarm, reschedule with big delay */
+
+        /* Step 1: recompute to get the actual current situation */
+        if (entry) {
+            ivp_mindist_entry_recompute(entry);
+            update_coll_dist_selector(entry);
+        }
+
+        /* Step 2: false-alarm check — if the recomputed distance is far
+         * beyond the maximum impact range, skip narrowphase entirely.
+         * The per-contact projected-gap check will handle the fine-grained
+         * discrimination inside the narrowphase loop below. */
+        if (entry && entry->last_distance > settings->max_distance_for_impact) {
+            /* Objects are well separated — clearly a false alarm. */
+            continue;
+        }
+
+        /* Step 3: full narrowphase + impact resolution */
         ivp_contact_point_t generated[IVP_MAX_CONTACTS_PER_PAIR];
         int n_generated = ivp_contact_compute_generic_multi(obj_a, obj_b,
                                                             generated,
                                                             IVP_MAX_CONTACTS_PER_PAIR);
-        if (n_generated <= 0) continue;
+        if (n_generated <= 0) {
+            continue;
+        }
 
         for (int ci = 0; ci < n_generated; ci++) {
             ivp_contact_point_t *cp = &generated[ci];
             ivp_real_t closing_speed = ivp_contact_closing_speed(cp);
             bool need_impact = false;
 
+            ivp_real_t coll_dist = entry
+                ? get_entry_coll_dist(entry, settings)
+                : settings->min_coll_dist;
+
             if (closing_speed > IVP_IMPACT_EPS &&
                 cp->gap_length <= settings->max_distance_for_impact) {
-                if (cp->gap_length <= settings->min_coll_dist) {
+                if (cp->gap_length <= coll_dist) {
                     need_impact = true;
                 } else {
                     const ivp_real_t projected_gap =
                         cp->gap_length - closing_speed * step_dt;
-                    need_impact = projected_gap <= settings->min_coll_dist;
+                    need_impact = projected_gap <= coll_dist;
                 }
             }
 
@@ -219,11 +305,8 @@ static int dispatch_due_mindist_events(ivp_environment_t *env,
             resolved++;
         }
 
-        ivp_mindist_entry_t *entry =
-            ivp_mindist_manager_get_or_create(&env->mindist_manager, obj_a, obj_b);
+        /* Recompute entry after impact for subsequent broadphase tracking */
         if (entry) {
-            entry->event_registered = false;
-            entry->event_time = now;
             ivp_mindist_entry_recompute(entry);
         }
     }

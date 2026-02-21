@@ -1,5 +1,7 @@
 /* ivp_core.c — Rigid body core implementation */
 #include <ivp/dynamics/ivp_core.h>
+#include <ivp/dynamics/ivp_sim_unit.h>
+#include <ivp/dynamics/ivp_environment.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/base/ivp_assert.h>
 #include <math.h>
@@ -329,6 +331,51 @@ void ivp_core_calc_next_psi_matrix(ivp_core_t *core, ivp_real_t delta_time) {
     if (core->physical_unmoveable) return;
     IVP_ASSERT(delta_time > IVP_REAL(0.0));
 
+    /* ── Velocity clipping (reference: IVP_Core::clip_velocity) ────────
+     * Must happen BEFORE integration to prevent a single PSI of unclamped
+     * velocity from causing tunneling or hull blowup. */
+    {
+        /* Get the environment through sim_unit -> manager -> env */
+        ivp_environment_t *env_clip = NULL;
+        if (core->sim_unit && core->sim_unit->manager) {
+            env_clip = core->sim_unit->manager->env;
+        }
+
+        /* 1. Spin clipping (per-object axis-wise angular velocity limit) */
+        if (core->spin_clipping_enabled) {
+            apply_spin_clipping_to_vec(&core->spin_clipping, &core->rot_speed);
+        } else if (env_clip) {
+            /* General angular velocity magnitude clipping.
+             * Reference: max_angular_velocity_per_psi * inv_delta_psi_time.
+             * C17: anomaly_config.max_angular_speed is already in rad/s. */
+            ivp_real_t max_w = env_clip->anomaly_manager.config.max_angular_speed;
+            ivp_real_t q_max_w = max_w * max_w;
+            ivp_real_t q_rot =
+                (ivp_real_t)core->rot_speed.k[0] * (ivp_real_t)core->rot_speed.k[0] +
+                (ivp_real_t)core->rot_speed.k[1] * (ivp_real_t)core->rot_speed.k[1] +
+                (ivp_real_t)core->rot_speed.k[2] * (ivp_real_t)core->rot_speed.k[2];
+            if (q_rot > q_max_w) {
+                /* Scale down to 0.9× max, matching reference */
+                ivp_real_t scale = IVP_REAL(0.9) * max_w / ivp_sqrt(q_rot);
+                core->rot_speed.k[0] *= (float)scale;
+                core->rot_speed.k[1] *= (float)scale;
+                core->rot_speed.k[2] *= (float)scale;
+            }
+        }
+
+        /* 2. Linear velocity magnitude clipping */
+        if (env_clip) {
+            ivp_real_t max_v = env_clip->anomaly_manager.config.max_speed;
+            ivp_real_t q_max_v = max_v * max_v;
+            ivp_real_t q_speed = ivp_vec3r_dot(&core->speed, &core->speed);
+            if (q_speed > q_max_v) {
+                /* Scale down to 0.99× max, matching reference */
+                ivp_real_t scale = IVP_REAL(0.99) * max_v / ivp_sqrt(q_speed);
+                ivp_vec3r_scale(&core->speed, &core->speed, scale);
+            }
+        }
+    }
+
     /* Cache speed magnitude */
     core->current_speed = ivp_vec3r_length(&core->speed);
 
@@ -361,10 +408,9 @@ void ivp_core_calc_next_psi_matrix(ivp_core_t *core, ivp_real_t delta_time) {
                   &q_core_f_core);
     ivp_quat_fast_normalize(&core->q_world_f_core_next_psi);
 
-    /* Spin clipping: scale rot_speed if it exceeds per-object limit */
+    /* Post-integration spin clipping on rot_speed_change only
+     * (rot_speed itself was already clipped before integration) */
     if (core->spin_clipping_enabled) {
-        apply_spin_clipping_to_vec(&core->spin_clipping, &core->rot_speed);
-        /* Also clamp rot_speed_change */
         ivp_vec3f_t rsc = {{
             (float)core->rot_speed_change.k[0],
             (float)core->rot_speed_change.k[1],

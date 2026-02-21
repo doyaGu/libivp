@@ -148,7 +148,8 @@ void ivp_controller_rot_mot(const ivp_event_sim_t *event_sim,
     d_omega_cs.k[2] = torque_cs.k[2] * cb->inv_rot_inertia.k[2] * dt;
 
     /* Apply */
-    cb->rot_speed.k[0] += (float)d_omega_cs.k[0];
-    cb->rot_speed.k[1] += (float)d_omega_cs.k[1];
-    cb->rot_speed.k[2] += (float)d_omega_cs.k[2];
+    /* Async push — priority 1500 (above gravity barrier at 1000) */
+    cb->rot_speed_change.k[0] += (float)d_omega_cs.k[0];
+    cb->rot_speed_change.k[1] += (float)d_omega_cs.k[1];
+    cb->rot_speed_change.k[2] += (float)d_omega_cs.k[2];
 }

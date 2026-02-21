@@ -240,11 +240,24 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
     }
 
     /* Rescue speed target for minimum separation velocity.
-     * Only active when objects are deeply penetrating (gap < real_coll_dist). */
+     * Reference: IVP_Impact::get_rescue_speed_impact (ivp_impact.cxx)
+     *   resc_val = (min_coll_dists - gap) * inv_delta_psi_time + rot_uncertainty
+     *   return 2.0 * resc_val
+     * Uses min_coll_dist (not real_coll_dist) as threshold. */
     ivp_real_t rescue_speed = IVP_REAL(0.0);
-    if (cp->gap_length < settings->real_coll_dist) {
-        ivp_real_t rescue_depth = settings->real_coll_dist - cp->gap_length;
-        rescue_speed = rescue_depth * IVP_SAFETY_FACTOR_FOR_DELAY;
+    if (cp->gap_length < settings->min_coll_dist) {
+        ivp_real_t rescue_depth = settings->min_coll_dist - cp->gap_length;
+        ivp_real_t resc_val = rescue_depth * settings->inv_delta_psi_time;
+        /* Rotational uncertainty estimate:
+         * max_surface_rot_speed from each core gives an upper bound on
+         * contact-velocity contribution from angular motion. */
+        ivp_real_t rot_uncertainty = IVP_REAL(0.0);
+        if (cp->obj_a && !cp->obj_a->core.physical_unmoveable)
+            rot_uncertainty += cp->obj_a->core.max_surface_rot_speed;
+        if (cp->obj_b && !cp->obj_b->core.physical_unmoveable)
+            rot_uncertainty += cp->obj_b->core.max_surface_rot_speed;
+        resc_val += rot_uncertainty;
+        rescue_speed = IVP_REAL(2.0) * resc_val;
     }
 
     /* ── Initial impulse estimate ──────────────────────────────────── */
@@ -328,6 +341,49 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
             w.integral_pushes.k[0] += cp->normal.k[0] * ri;
             w.integral_pushes.k[1] += cp->normal.k[1] * ri;
             w.integral_pushes.k[2] += cp->normal.k[2] * ri;
+        }
+    }
+
+    /* ── Phase 4: delay-of-impact for asymmetric mass ─────────────── */
+    /* Reference: IVP_Impact::delay_decision (ivp_impact.cxx ~891-960)
+     * When mass ratio is extreme, defer the heavy core's velocity delta
+     * to speed_change (applied next PSI) to improve numerical stability.
+     * The light core keeps the full immediate speed change.
+     *
+     * Criterion: if the heavy core's virtual mass is >> light core's,
+     * the heavy core gets a tiny velocity change that causes noise.
+     * Deferring it accumulates with other pushes for a cleaner result. */
+    {
+        ivp_core_t *ca = &cp->obj_a->core;
+        ivp_core_t *cb = &cp->obj_b->core;
+        if (!ca->physical_unmoveable && !cb->physical_unmoveable) {
+            ivp_real_t vm_a = ivp_calc_virtual_mass(ca, &cp->r_a, &cp->normal);
+            ivp_real_t vm_b = ivp_calc_virtual_mass(cb, &cp->r_b, &cp->normal);
+            /* Delay heavier core if mass ratio > ~10:1 */
+            ivp_core_t *delay_core = NULL;
+            if (vm_a > vm_b * IVP_REAL(10.0)) {
+                delay_core = ca;
+            } else if (vm_b > vm_a * IVP_REAL(10.0)) {
+                delay_core = cb;
+            }
+            if (delay_core) {
+                /* Move the velocity delta from speed → speed_change.
+                 * delta = current_speed - saved_speed_before_impact.
+                 * We stored the saved speeds in the work structure initially
+                 * but they were overwritten during fine-tuning.
+                 * Approximation: move a fraction of the impulse to speed_change. */
+                ivp_real_t total_impulse = ivp_vec3r_length(&w.integral_pushes);
+                if (total_impulse > IVP_REAL_EPS) {
+                    ivp_real_t frac = IVP_REAL(0.5); /* defer half */
+                    ivp_real_t sign = (delay_core == ca) ? IVP_REAL(-1.0) : IVP_REAL(1.0);
+                    for (int ax = 0; ax < 3; ax++) {
+                        ivp_real_t delta = w.integral_pushes.k[ax] *
+                                           delay_core->inv_mass * sign * frac;
+                        delay_core->speed.k[ax] -= delta;
+                        delay_core->speed_change.k[ax] += delta;
+                    }
+                }
+            }
         }
     }
 

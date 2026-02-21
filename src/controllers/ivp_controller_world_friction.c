@@ -94,11 +94,11 @@ void ivp_controller_world_friction(const ivp_event_sim_t *event_sim,
 
         if (max_dv > speed) max_dv = speed;
 
-        /* Apply deceleration along friction velocity direction. */
+        /* Apply deceleration along friction velocity direction (sync push). */
         ivp_real_t factor = -max_dv / speed;
-        core->speed_change.k[0] += friction_vel.k[0] * factor;
-        core->speed_change.k[1] += friction_vel.k[1] * factor;
-        core->speed_change.k[2] += friction_vel.k[2] * factor;
+        core->speed.k[0] += friction_vel.k[0] * factor;
+        core->speed.k[1] += friction_vel.k[1] * factor;
+        core->speed.k[2] += friction_vel.k[2] * factor;
     }
 
     /* Angular friction: simple damping */

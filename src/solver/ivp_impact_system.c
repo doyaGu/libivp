@@ -133,9 +133,17 @@ void ivp_impact_system_solve(ivp_impact_system_t *sys,
         int prev_pushed = ivp_array_len(&sys->pushed_cores);
 
         ivp_persistent_contact_t *worst_contact = NULL;
-        ivp_real_t worst_closing_speed = IVP_SPEED_ADDON_SYSTEM_IMPACT;
+        ivp_real_t smallest_distance = settings->minimum_friction_dist;
 
-        /* Legacy parity: select one worst impact candidate per iteration. */
+        /* Reference parity: select by smallest projected distance.
+         * distance_reached_in_time = gap - (closing_speed + rescue*0.5) * dt
+         * The contact with the smallest (most negative) projected distance
+         * is the most urgent.
+         * Reference: IVP_Impact_System::test_loop_all_pairs (ivp_impact.cxx) */
+        ivp_real_t step_dt = (settings->inv_delta_psi_time > IVP_REAL_EPS)
+                           ? (IVP_REAL(1.0) / settings->inv_delta_psi_time)
+                           : IVP_REAL(0.016);
+
         for (int pi = 0; pi < ivp_array_len(&sys->pairs); pi++) {
             ivp_friction_core_pair_t *pair =
                 (ivp_friction_core_pair_t *)ivp_array_get(&sys->pairs, pi);
@@ -147,8 +155,12 @@ void ivp_impact_system_solve(ivp_impact_system_t *sys,
 
                 /* Recompute closing speed with updated velocities */
                 ivp_real_t cs = ivp_contact_closing_speed(&pc->cp);
-                if (cs > worst_closing_speed) {
-                    worst_closing_speed = cs;
+
+                /* Projected distance: how deep the contact will be by end of step */
+                ivp_real_t projected_dist = pc->cp.gap_length - cs * step_dt;
+
+                if (projected_dist < smallest_distance) {
+                    smallest_distance = projected_dist;
                     worst_contact = pc;
                 }
             }

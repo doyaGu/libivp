@@ -597,7 +597,7 @@ if (IVP_BUILD_TESTS)
         target_link_libraries(test_scenarios PRIVATE m)
     endif ()
 
-    set(IVP_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    set(IVP_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
     set(IVP_COMPARE_SCRIPT ${IVP_REPO_ROOT}/tools/compare_jsonl.py)
     set(IVP_REFERENCE_JSONL ${IVP_REPO_ROOT}/tools/testdata/compare_smoke.jsonl)
     set(IVP_SCENARIO_REFDIR ${IVP_REPO_ROOT}/tools/testdata)

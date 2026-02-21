@@ -5,10 +5,12 @@
  */
 #include <ivp/dynamics/ivp_sim_unit.h>
 #include <ivp/dynamics/ivp_core.h>
+#include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/utility/ivp_union_find.h>
 #include "controllers/ivp_controller_system.h"
+#include "ivp_environment_events.h"
 #include <string.h>
 
 static int core_index_in_array(ivp_core_t **cores, int count, const ivp_core_t *core)
@@ -553,19 +555,6 @@ void ivp_sim_unit_remove_controller(ivp_controller_core_t *cc)
 
 /* ── PSI execution ─────────────────────────────────────────────────────── */
 
-/* Collect core pointers from the unit into a flat array for controller dispatch.
- * Returns count. Caller provides buffer. */
-static int collect_cores(ivp_sim_unit_t *su, ivp_core_t **buf, int buf_size)
-{
-    int n = 0;
-    ivp_sim_unit_core_entry_t *ce = su->core_list;
-    while (ce && n < buf_size) {
-        buf[n++] = ce->core;
-        ce = ce->next;
-    }
-    return n;
-}
-
 void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
                                 ivp_environment_t *env,
                                 ivp_real_t delta_time,
@@ -573,12 +562,18 @@ void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
 {
     if (!su || su->core_count == 0) return;
 
-    /* Step 1: Init all cores for PSI + reset cascade fields */
+    /* Step 1: Init all cores for PSI + reset cascade fields.
+     * Reference (ivp_sim_unit.cxx:844): uses per-core d_time =
+     * current_time - core->time_of_last_psi for forward projection.
+     * This handles revived cores whose time_of_last_psi may be stale. */
+    ivp_time_t current_time = step_end_time - (ivp_time_t)delta_time;
     for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
         ivp_core_t *core = ce->core;
         core->temporarily_unmovable = false;
         core->impacts_since_last_PSI = 0;
-        ivp_core_init_for_psi_ex(core, delta_time, env->use_forward_projection);
+        ivp_real_t d_time = (ivp_real_t)(current_time - core->time_of_last_psi);
+        if (d_time <= IVP_REAL(0.0)) d_time = delta_time;
+        ivp_core_init_for_psi_ex(core, d_time, env->use_forward_projection);
     }
 
     /* Step 2: Commit all async pushes BEFORE controllers run
@@ -587,48 +582,23 @@ void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
         ivp_core_commit_async_pushes(ce->core);
     }
 
-    /* Step 3: Run ALL controllers for this unit's cores.
+    /* Step 3: Run ALL controllers (global + per-unit) in unified ascending
+     * priority order via two-pointer merge.
      *
      * Reference ordering (ivp_sim_unit.cxx:907-952):
-     *   - Global controllers (from environment controller system) dispatch
-     *     only for cores in this unit, in ascending priority order.
-     *   - Per-unit controller_core entries dispatch after global controllers
-     *     (or interleaved by priority once all controllers are per-unit).
+     *   All controllers dispatch in ascending priority within one pass:
+     *   static_friction(0) → constraints(405) → motion(500) →
+     *   dynamic_friction(600) → gravity(1000) → spring(1400) →
+     *   actuator(1500) → forcefield(1600) → energy_friction(2000)
      */
     ivp_environment_run_controllers_for_unit(env, su, delta_time);
 
-    /* Per-unit controllers (registered directly on this sim unit) */
-    if (su->controller_count > 0) {
-        ivp_core_t *local_cores[64];
-        ivp_core_t **cores = local_cores;
-        bool cores_allocated = false;
-        if (su->core_count > 64) {
-            cores = (ivp_core_t **)ivp_alloc(
-                su->manager->allocator,
-                (size_t)su->core_count * sizeof(ivp_core_t *));
-            if (!cores) return;
-            cores_allocated = true;
-        }
-        int core_count = collect_cores(su, cores, su->core_count);
-
-        for (ivp_controller_core_t *cc = su->controller_list; cc; cc = cc->next_in_unit) {
-            if (cc->fn) {
-                cc->fn(cc->ctx, env, cores, core_count, delta_time);
-            }
-        }
-
-        if (cores_allocated) {
-            ivp_free(su->manager->allocator, cores,
-                     (size_t)su->core_count * sizeof(ivp_core_t *));
-        }
-    }
-
-    /* Step 3.5: Commit async pushes accumulated by controllers.
-     * C17 controllers write to speed_change; this merges them into speed
-     * before integration reads speed. */
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_commit_async_pushes(ce->core);
-    }
+    /* Note: post-controller commit is NOT done here.
+     * In the reference, the gravity controller (IVP_CP_GRAVITY=1000) calls
+     * commit_all_async_pushes() mid-execution, which commits impulses from
+     * higher-priority controllers (priority > 1000: springs, energy friction).
+     * Lower-priority controllers (< 1000: constraints, static friction) leave
+     * their async pushes to be committed at the start of the NEXT PSI. */
 
     /* Step 4: Integration — calc_next_PSI_matrix for all cores
      * (reference: ivp_sim_unit.cxx:953-961) */
@@ -640,6 +610,14 @@ void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
 
     /* Step 5: Movement state / freeze check */
     ivp_sim_unit_calc_movement_state(su, env);
+
+    /* If the unit was frozen (all cores moved to still_slot), destroy it
+     * and skip further processing.  simulate_all_psi already snapshots
+     * the next pointer, so removing from active_units is safe. */
+    if (su->core_count == 0) {
+        ivp_sim_unit_destroy(su->manager, su);
+        return;
+    }
 
     /* Step 6: Union find if needed (deferred split) */
     if (su->union_find_needed) {
@@ -665,6 +643,104 @@ void ivp_sim_units_manager_simulate_all_psi(ivp_sim_units_manager_t *mgr,
 }
 
 /* ── Freeze / wake ─────────────────────────────────────────────────────── */
+
+/* Check if any dependent controller connects a core in this sim unit
+ * to a core in a DIFFERENT active sim unit (or associated object that is
+ * active).  If so, the unit must not freeze because those controllers
+ * need the core to be simulated.
+ *
+ * Reference: In the original IVP, dependent controllers cause sim units
+ * to merge, so all connected cores share the same unit and freeze together.
+ * Our C17 architecture doesn't always merge eagerly, so we must prevent
+ * a unit from freezing while cross-unit dependencies exist. */
+static bool has_cross_unit_dependent_controllers(ivp_sim_unit_t *su,
+                                                  ivp_environment_t *env)
+{
+    ivp_controller_system_t *cs = controller_system_from_env(env);
+    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    const int sc = ivp_controller_system_count(cs);
+
+    for (int si = 0; si < sc; si++) {
+        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
+        if (!slot || !slot->enabled) continue;
+        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
+
+        int count = ivp_controller_slot_collect_associated_handles(
+            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        if (count <= 1) continue;
+
+        bool any_in_unit = false;
+        bool any_outside = false;
+        for (int ai = 0; ai < count; ai++) {
+            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, handles[ai]);
+            if (!obj) continue;
+            ivp_core_t *core = &obj->core;
+            if (core->physical_unmoveable) continue;
+            if (core->sim_unit == su) {
+                any_in_unit = true;
+            } else if (core->sim_unit != &su->manager->still_slot) {
+                /* Core is in another active unit */
+                any_outside = true;
+            }
+        }
+        if (any_in_unit && any_outside) return true;
+    }
+    return false;
+}
+
+/* Actually freeze a sim unit: zero velocities, set NOT_SIM, detach
+ * per-unit controllers, move all cores to still_slot, emit events.
+ * After this call the sim unit is empty (core_count == 0, controller_count == 0)
+ * and the caller should destroy it.
+ *
+ * Reference: IVP_Simulation_Unit::do_freeze_check_sim_unit()
+ * (ivp_sim_unit.cxx) — when all cores are CALM for sustained time,
+ * the unit freezes: velocities zeroed, cores move to still_slot,
+ * unit is deleted. */
+static void freeze_sim_unit(ivp_sim_unit_t *su, ivp_environment_t *env)
+{
+    ivp_sim_units_manager_t *mgr = su->manager;
+
+    /* 1. Zero velocities and set NOT_SIM for all moveable cores */
+    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
+        ivp_core_t *core = ce->core;
+        if (core->physical_unmoveable) continue;
+
+        ivp_vec3r_set(&core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        core->rot_speed = ivp_vec3f(0.0f, 0.0f, 0.0f);
+        ivp_vec3r_set(&core->speed_change, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_vec3r_set(&core->rot_speed_change, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        core->movement_state = IVP_MT_NOT_SIM;
+    }
+
+    /* 2. Detach all per-unit controllers (friction controller_cores etc.)
+     * They remain owned by their friction_system; we just unlink them from
+     * the unit's sorted controller list. They will be re-registered when
+     * cores revive and the friction system re-homes them. */
+    while (su->controller_list) {
+        ivp_sim_unit_remove_controller(su->controller_list);
+    }
+
+    /* 3. Emit freeze events BEFORE moving cores (so dense_index is still valid) */
+    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
+        ivp_core_t *core = ce->core;
+        if (core->physical_unmoveable) continue;
+        ivp_object_t *obj = (ivp_object_t *)core;
+        ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_FROZEN,
+                                            env->delta_psi_time,
+                                            obj->dense_index, 0);
+    }
+
+    /* 4. Move all cores to still_slot */
+    ivp_sim_unit_core_entry_t *ce = su->core_list;
+    while (ce) {
+        ivp_sim_unit_core_entry_t *next = ce->next;
+        move_core_entry_between_units(su, &mgr->still_slot, ce);
+        ce = next;
+    }
+
+    su->movement_type = IVP_SUM_STILL;
+}
 
 void ivp_sim_unit_calc_movement_state(ivp_sim_unit_t *su,
                                        ivp_environment_t *env)
@@ -697,15 +773,15 @@ void ivp_sim_unit_calc_movement_state(ivp_sim_unit_t *su,
     if (any_moving) {
         su->movement_type = IVP_SUM_MOVING;
     } else if (all_calm) {
-        /* All cores are calm — mark the unit as still.
-         * Note: We do NOT yet move cores to still_slot here.
-         * In the reference IVP, freezing requires sustained calm over multiple
-         * checks and integrates with the mindist/controller dependency graph.
-         * The still_slot migration will be implemented when the full freeze
-         * pipeline (including revive-on-proximity) is aligned.
-         * For now, cores remain in the active unit but with movement_type
-         * set to STILL, which prevents unnecessary controller work. */
-        su->movement_type = IVP_SUM_STILL;
+        /* All cores are calm — freeze the unit unless it has cross-unit
+         * dependent controller connections (springs, constraints etc.
+         * linking to other active sim units).
+         * Reference: IVP_Simulation_Unit::do_freeze_check_sim_unit() */
+        if (!has_cross_unit_dependent_controllers(su, env)) {
+            freeze_sim_unit(su, env);
+        } else {
+            su->movement_type = IVP_SUM_CALM;
+        }
     } else {
         su->movement_type = IVP_SUM_CALM;
     }
@@ -749,7 +825,22 @@ void ivp_sim_unit_revive_core(ivp_sim_units_manager_t *mgr, ivp_core_t *core)
     su->core_count++;
     core->sim_unit = su;
 
+    /* Reference: revive_core lifecycle (ivp_sim_unit.cxx)
+     * 1. Set MOVING
+     * 2. Update time_of_last_psi to current env time
+     * 3. Reset movement checkpoints so freeze detection starts fresh
+     * 4. Ensure async pushes are zeroed (they should be from freeze) */
     core->movement_state = IVP_MT_MOVING;
+    core->time_of_last_psi = mgr->env->current_time;
+    core->movement_check_counter = 0;
+
+    /* Reset freeze-detection checkpoints to current pose */
+    core->checkpoint_short.pos  = core->pos_world_f_core_last_psi;
+    core->checkpoint_short.quat = core->q_world_f_core_last_psi;
+    core->checkpoint_short.time = mgr->env->current_time;
+    core->checkpoint_long.pos   = core->pos_world_f_core_last_psi;
+    core->checkpoint_long.quat  = core->q_world_f_core_last_psi;
+    core->checkpoint_long.time  = mgr->env->current_time;
 }
 
 /* ── Queries ───────────────────────────────────────────────────────────── */

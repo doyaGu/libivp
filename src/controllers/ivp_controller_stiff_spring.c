@@ -57,9 +57,15 @@ void ivp_controller_stiff_spring(const ivp_event_sim_t *event_sim,
     ivp_stiff_spring_state_t *state = (ivp_stiff_spring_state_t *)ctx;
     if (!state || !state->active) return;
 
-    /* Only execute once per PSI step */
-    if (state->obj_a && obj != state->obj_a) return;
-    if (!state->obj_a && state->obj_b && obj != state->obj_b) return;
+    /* Only execute once per PSI step.
+     * Prefer obj_a as trigger; fall back to obj_b if obj_a is NULL
+     * (world anchor) or not currently simulated (frozen/NOT_SIM). */
+    ivp_object_t *trigger = state->obj_a;
+    if (trigger && !IVP_MTIS_SIMULATED(trigger->core.movement_state)) {
+        trigger = state->obj_b;
+    }
+    if (!trigger) trigger = state->obj_b;
+    if (trigger && obj != trigger) return;
 
     /* Get anchor world positions */
     ivp_vec3r_t pos_a_ws, pos_b_ws;
@@ -98,8 +104,10 @@ void ivp_controller_stiff_spring(const ivp_event_sim_t *event_sim,
 
     /* Effective inverse mass */
     ivp_real_t inv_m_eff = IVP_REAL(0.0);
-    bool a_moveable = state->obj_a && !state->obj_a->core.physical_unmoveable;
-    bool b_moveable = state->obj_b && !state->obj_b->core.physical_unmoveable;
+    bool a_moveable = state->obj_a && !state->obj_a->core.physical_unmoveable
+                      && IVP_MTIS_SIMULATED(state->obj_a->core.movement_state);
+    bool b_moveable = state->obj_b && !state->obj_b->core.physical_unmoveable
+                      && IVP_MTIS_SIMULATED(state->obj_b->core.movement_state);
 
     if (a_moveable) inv_m_eff += state->obj_a->core.inv_mass;
     if (b_moveable) inv_m_eff += state->obj_b->core.inv_mass;
@@ -132,22 +140,22 @@ void ivp_controller_stiff_spring(const ivp_event_sim_t *event_sim,
         if (impulse < -state->max_dv) impulse = -state->max_dv;
     }
 
-    /* Apply velocity changes directly (implicit integration = velocity level) */
+    /* Apply velocity changes directly (sync push — stiff spring is constraint-class) */
     if (a_moveable) {
         ivp_core_t *ca = &state->obj_a->core;
         ivp_real_t ratio_a = ca->inv_mass * (IVP_REAL(1.0) / inv_m_eff);
         ivp_real_t dva = -impulse * ratio_a;
-        ca->speed_change.k[0] += dir.k[0] * dva;
-        ca->speed_change.k[1] += dir.k[1] * dva;
-        ca->speed_change.k[2] += dir.k[2] * dva;
+        ca->speed.k[0] += dir.k[0] * dva;
+        ca->speed.k[1] += dir.k[1] * dva;
+        ca->speed.k[2] += dir.k[2] * dva;
     }
 
     if (b_moveable) {
         ivp_core_t *cb = &state->obj_b->core;
         ivp_real_t ratio_b = cb->inv_mass * (IVP_REAL(1.0) / inv_m_eff);
         ivp_real_t dvb = impulse * ratio_b;
-        cb->speed_change.k[0] += dir.k[0] * dvb;
-        cb->speed_change.k[1] += dir.k[1] * dvb;
-        cb->speed_change.k[2] += dir.k[2] * dvb;
+        cb->speed.k[0] += dir.k[0] * dvb;
+        cb->speed.k[1] += dir.k[1] * dvb;
+        cb->speed.k[2] += dir.k[2] * dvb;
     }
 }

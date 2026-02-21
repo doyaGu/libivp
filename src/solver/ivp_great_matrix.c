@@ -107,6 +107,52 @@ static int find_pivot(const ivp_great_matrix_t *m, int col, int start_row)
 
 /* ── Gauss elimination + back-substitution ──────────────────────────────── */
 
+/* Reference alignment: normize_constraint_equ (ivp_friction_gaps.cxx ~L93).
+ * Normalizes matrix by largest diagonal and RHS by largest element,
+ * storing a correction factor to rescale results afterward.
+ * This dramatically improves condition number for friction matrices. */
+static ivp_real_t normalize_matrix(ivp_great_matrix_t *m)
+{
+    int n = m->n;
+    int cols = m->capacity;
+
+    /* Find max diagonal */
+    ivp_real_t max_diag = IVP_REAL(0.0);
+    for (int i = 0; i < n; i++) {
+        ivp_real_t d = ivp_fabs(m->data[i * cols + i]);
+        if (d > max_diag) max_diag = d;
+    }
+
+    /* Find max |RHS| */
+    ivp_real_t max_rhs = IVP_REAL(0.0);
+    for (int i = 0; i < n; i++) {
+        ivp_real_t r = ivp_fabs(m->data[i * cols + n]);
+        if (r > max_rhs) max_rhs = r;
+    }
+
+    if (max_diag < IVP_REAL_EPS || max_rhs < IVP_REAL_EPS) {
+        return IVP_REAL(1.0);  /* nothing to normalize */
+    }
+
+    ivp_real_t a_norm = IVP_REAL(1.0) / max_diag;
+    ivp_real_t b_norm = IVP_REAL(1.0) / max_rhs;
+    ivp_real_t correct_x_factor = a_norm * max_rhs;  /* = max_rhs / max_diag */
+
+    /* Scale matrix elements by a_norm */
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            m->data[i * cols + j] *= a_norm;
+        }
+    }
+
+    /* Scale RHS by b_norm */
+    for (int i = 0; i < n; i++) {
+        m->data[i * cols + n] *= b_norm;
+    }
+
+    return correct_x_factor;
+}
+
 ivp_result_t ivp_great_matrix_solve(ivp_great_matrix_t *m, ivp_real_t *x)
 {
     return ivp_great_matrix_solve_det(m, x, NULL);
@@ -118,6 +164,10 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
 {
     int n = m->n;
     int cols = m->capacity;
+
+    /* Reference alignment: normalize matrix before solving */
+    ivp_real_t correct_x_factor = normalize_matrix(m);
+
     ivp_real_t det = IVP_REAL(1.0);
     int swaps = 0;
 
@@ -133,8 +183,18 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
         ivp_real_t diag = m->data[j * cols + j];
         det *= diag;
 
-        /* Check for singularity */
+        /* Reference alignment: graceful singular row handling
+         * (ivp_great_matrix.cxx solve_lower_null_matrix ~L619).
+         * If both diagonal and RHS are near-zero, set x[i] = 0
+         * instead of failing. Only fail if truly inconsistent. */
         if (ivp_fabs(diag) < IVP_SOLVER_MATRIX_EPS) {
+            ivp_real_t rhs = m->data[j * cols + n];
+            if (ivp_fabs(rhs) < IVP_SOLVER_MATRIX_EPS * IVP_REAL(1000.0)) {
+                /* Degenerate row: set result to 0 */
+                m->data[j * cols + n] = IVP_REAL(0.0);
+                m->data[j * cols + j] = IVP_REAL(1.0);  /* prevent div-by-zero */
+                continue;
+            }
             if (det_out) *det_out = IVP_REAL(0.0);
             return IVP_ERR_SINGULAR_MATRIX;
         }
@@ -157,6 +217,11 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
             sum -= m->data[i * cols + j] * x[j];
         }
         x[i] = sum / m->data[i * cols + i];
+    }
+
+    /* Reference alignment: rescale results by correct_x_factor */
+    for (int i = 0; i < n; i++) {
+        x[i] *= correct_x_factor;
     }
 
     if (det_out) {

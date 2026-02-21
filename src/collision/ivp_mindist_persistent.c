@@ -5,6 +5,7 @@
  * recomputation.
  */
 #include <ivp/collision/ivp_mindist_persistent.h>
+#include <ivp/collision/ivp_collision_tolerance.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/collision/ivp_mindist.h>
 #include <ivp/collision/ivp_narrowphase.h>
@@ -109,6 +110,8 @@ ivp_mindist_entry_t *ivp_mindist_manager_get_or_create(
             e->last_edge_a = NULL;
             e->last_edge_b = NULL;
             e->halfspace_hint = 0;
+            e->coll_dist_selector = IVP_MAX_STEPS_FOR_COLLDIST_DECREASE - 1;
+            e->coll_dist_recalc_count = 0;
             ivp_synapse_attach_mindist_entry(e);
             return e;
         }
@@ -132,6 +135,8 @@ ivp_mindist_entry_t *ivp_mindist_manager_get_or_create(
     e->last_edge_a = NULL;
     e->last_edge_b = NULL;
     e->halfspace_hint = 0;
+    e->coll_dist_selector = IVP_MAX_STEPS_FOR_COLLDIST_DECREASE - 1;
+    e->coll_dist_recalc_count = 0;
     ivp_synapse_attach_mindist_entry(e);
     return e;
 }

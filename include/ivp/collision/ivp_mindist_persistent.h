@@ -84,6 +84,14 @@ typedef struct ivp_mindist_entry {
     ivp_time_t event_time;                 /* predicted next event time  */
     bool event_registered;
     bool active;                           /* entry in use               */
+
+    /* Progressive collision distance tightening.
+     * Reference: IVP_Mindist::coll_dist_selector (ivp_mindist_intern.hxx)
+     * Starts at IVP_MAX_STEPS_FOR_COLLDIST_DECREASE-1 (largest shell),
+     * decrements every ~3 event recalculations toward 0 (tightest shell).
+     * get_coll_dist() returns coll_dists[coll_dist_selector]. */
+    uint8_t coll_dist_selector;
+    uint8_t coll_dist_recalc_count;
 } ivp_mindist_entry_t;
 
 /* ── Persistent mindist manager ────────────────────────────────────────── */

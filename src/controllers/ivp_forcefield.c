@@ -26,12 +26,12 @@ void ivp_controller_forcefield(const ivp_event_sim_t *event_sim,
 
     switch (state->mode) {
     case IVP_FORCEFIELD_CONSTANT: {
-        /* Constant acceleration: dv = accel * dt */
+        /* Constant acceleration: dv = accel * dt (async push, priority 1600) */
         ivp_vec3r_add_scaled(&core->speed_change, &state->value, dt);
         break;
     }
     case IVP_FORCEFIELD_FORCE: {
-        /* Constant force: dv = F/m * dt */
+        /* Constant force: dv = F/m * dt (async push, priority 1600) */
         ivp_vec3r_t dv;
         ivp_vec3r_scale(&dv, &state->value, core->inv_mass * dt);
         ivp_vec3r_add(&core->speed_change, &core->speed_change, &dv);
@@ -39,7 +39,7 @@ void ivp_controller_forcefield(const ivp_event_sim_t *event_sim,
     }
     case IVP_FORCEFIELD_DRAG: {
         /* Velocity-proportional drag: F = -drag * v
-         * dv = -drag * v / m * dt */
+         * dv = -drag * v / m * dt (async push, priority 1600) */
         ivp_vec3r_t drag;
         drag.k[0] = -state->value.k[0] * core->speed.k[0] * core->inv_mass * dt;
         drag.k[1] = -state->value.k[1] * core->speed.k[1] * core->inv_mass * dt;

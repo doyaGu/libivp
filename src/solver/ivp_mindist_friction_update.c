@@ -15,7 +15,8 @@ static ivp_synapse_status_t status_from_object(const ivp_object_t *obj)
 }
 
 bool ivp_mindist_friction_refresh_contact(ivp_persistent_contact_t *pc,
-                                          const ivp_collision_settings_t *settings)
+                                          const ivp_collision_settings_t *settings,
+                                          ivp_real_t dt)
 {
     if (!pc || !settings || !pc->cp.obj_a || !pc->cp.obj_b) return false;
 
@@ -46,6 +47,19 @@ bool ivp_mindist_friction_refresh_contact(ivp_persistent_contact_t *pc,
     pc->psi_scratch.inv_virtual_mass = refreshed.inv_virtual_mass;
     pc->psi_scratch.dist_len = refreshed.gap_length;
     pc->psi_scratch.has_negative_pull_since = pc->has_negative_pull_since;
+
+    /* Reference alignment: recalc_friction_s_vals velocity integration.
+     * The reference (ivp_mindist_friction.cxx:522-526) integrates relative
+     * surface velocity into span_friction_s each PSI:
+     *   span_friction_s[i] -= delta_velocity_ws.dot(span_friction_v[i]) * dt
+     * where delta_velocity_ws = v_surface_A - v_surface_B.
+     * In C17, v_rel = v_B - v_A, so we ADD v_rel.dot(span_v) * dt. */
+    if (dt > IVP_REAL(0.0)) {
+        ivp_vec3r_t v_rel;
+        ivp_contact_relative_velocity(&pc->cp, &v_rel);
+        pc->span_friction_s[0] += ivp_vec3r_dot(&v_rel, &refreshed.span_dirs[0]) * dt;
+        pc->span_friction_s[1] += ivp_vec3r_dot(&v_rel, &refreshed.span_dirs[1]) * dt;
+    }
 
     pc->friction_synapse[0].status = status_from_object(refreshed.obj_a);
     pc->friction_synapse[1].status = status_from_object(refreshed.obj_b);

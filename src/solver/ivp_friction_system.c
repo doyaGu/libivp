@@ -1101,10 +1101,11 @@ static void set_now_pressure_from_impulse(ivp_persistent_contact_t *pc,
                                           ivp_real_t impulse,
                                           ivp_real_t dt)
 {
+    /* Reference alignment: pressure is accumulated additively with the
+     * distance keeper's pressure, not replaced.
+     * (ivp_friction_gaps.cxx: now_friction_pressure += impulse * i_dt) */
     if (impulse > IVP_REAL_EPS) {
-        pc->now_friction_pressure = impulse / dt;
-    } else {
-        pc->now_friction_pressure = IVP_REAL(0.0);
+        pc->now_friction_pressure += impulse / dt;
     }
 }
 
@@ -1138,14 +1139,15 @@ static void unlink_contact_from_system(ivp_friction_system_t *sys,
 }
 
 static int refresh_and_prune_broken_contacts(ivp_friction_system_t *sys,
-                                             const ivp_collision_settings_t *settings)
+                                             const ivp_collision_settings_t *settings,
+                                             ivp_real_t dt)
 {
     if (!sys || !settings) return 0;
     int removed = 0;
     ivp_persistent_contact_t *pc = sys->first_contact;
     while (pc) {
         ivp_persistent_contact_t *next = pc->next;
-        if (!ivp_mindist_friction_refresh_contact(pc, settings)) {
+        if (!ivp_mindist_friction_refresh_contact(pc, settings, dt)) {
             unlink_contact_from_system(sys, pc);
             removed++;
         }
@@ -1625,9 +1627,8 @@ void ivp_friction_system_phase_energy(ivp_friction_system_t *sys,
                                       const ivp_collision_settings_t *settings,
                                       ivp_real_t dt)
 {
-    (void)dt;
     if (!sys || !settings) return;
-    refresh_and_prune_broken_contacts(sys, settings);
+    refresh_and_prune_broken_contacts(sys, settings, dt);
     if (sys->contact_count > 0) {
         ivp_friction_system_remove_gained_energy(sys);
     }
@@ -1696,6 +1697,12 @@ static void ease_friction_pair(ivp_friction_core_pair_t *pair)
             if (conn_len < IVP_REAL_EPS) continue;
             ivp_vec3r_scale(&conn, &conn, IVP_REAL(1.0) / conn_len);
 
+            /* Reference alignment: core reversal check (ivp_friction.cxx ~L860-L910).
+             * If two contacts have opposite synapse orderings (obj_a/obj_b swapped),
+             * spring_b must be negated for correct projection comparison. */
+            ivp_real_t reverse_factor = (&a->cp.obj_a->core == &b->cp.obj_a->core)
+                ? IVP_REAL(1.0) : IVP_REAL(-1.0);
+
             ivp_vec3r_t spring_a = ivp_vec3r(
                 a->span_friction_s[0] * a->cp.span_dirs[0].k[0] + a->span_friction_s[1] * a->cp.span_dirs[1].k[0],
                 a->span_friction_s[0] * a->cp.span_dirs[0].k[1] + a->span_friction_s[1] * a->cp.span_dirs[1].k[1],
@@ -1706,13 +1713,13 @@ static void ease_friction_pair(ivp_friction_core_pair_t *pair)
                 b->span_friction_s[0] * b->cp.span_dirs[0].k[2] + b->span_friction_s[1] * b->cp.span_dirs[1].k[2]);
 
             ivp_real_t proj_a = ivp_vec3r_dot(&spring_a, &conn);
-            ivp_real_t proj_b = ivp_vec3r_dot(&spring_b, &conn);
+            ivp_real_t proj_b = ivp_vec3r_dot(&spring_b, &conn) * reverse_factor;
             ivp_real_t optimal = (proj_a + proj_b) * IVP_REAL(0.5);
 
             ivp_vec3r_t diff_a = conn;
             ivp_vec3r_t diff_b = conn;
             ivp_vec3r_scale(&diff_a, &diff_a, (optimal - proj_a) * easing_factor);
-            ivp_vec3r_scale(&diff_b, &diff_b, (optimal - proj_b) * easing_factor);
+            ivp_vec3r_scale(&diff_b, &diff_b, (optimal - proj_b) * reverse_factor * easing_factor);
             ivp_vec3r_add(&ease_diff[i], &ease_diff[i], &diff_a);
             ivp_vec3r_add(&ease_diff[j], &ease_diff[j], &diff_b);
         }
@@ -1750,12 +1757,31 @@ static void destroy_mutual_energy(ivp_friction_core_pair_t *pair, ivp_real_t d_e
     if (!pair || d_e <= IVP_REAL_EPS) return;
     ivp_core_t *a = pair->cores[0];
     ivp_core_t *b = pair->cores[1];
-    if (!a || !b || a->physical_unmoveable || b->physical_unmoveable) return;
+    if (!a || !b) return;
+
+    /* Reference alignment: when one core is unmoveable, the reference treats it
+     * as having 10000× the other's mass/inertia instead of bailing out.
+     * (ivp_friction.cxx ~L1930: destroy_percent_energy unmoveable handling) */
+    ivp_real_t mass_a = a->mass;
+    ivp_real_t mass_b = b->mass;
+    ivp_real_t ia_val = average_inertia(a);
+    ivp_real_t ib_val = average_inertia(b);
+    bool a_unmov = a->physical_unmoveable;
+    bool b_unmov = b->physical_unmoveable;
+
+    if (a_unmov && b_unmov) return;
+    if (a_unmov) {
+        mass_a = mass_b * IVP_REAL(10000.0);
+        ia_val = ib_val * IVP_REAL(10000.0);
+    } else if (b_unmov) {
+        mass_b = mass_a * IVP_REAL(10000.0);
+        ib_val = ia_val * IVP_REAL(10000.0);
+    }
 
     ivp_vec3r_t v_rel;
     ivp_vec3r_sub(&v_rel, &b->speed, &a->speed);
     ivp_real_t v2 = ivp_vec3r_quad_length(&v_rel);
-    ivp_real_t mu = (a->mass * b->mass) / (a->mass + b->mass + IVP_REAL_EPS);
+    ivp_real_t mu = (mass_a * mass_b) / (mass_a + mass_b + IVP_REAL_EPS);
     ivp_real_t e_trans = IVP_REAL(0.5) * mu * v2;
 
     ivp_vec3r_t wa_cs = ivp_vec3r((ivp_real_t)a->rot_speed.k[0], (ivp_real_t)a->rot_speed.k[1], (ivp_real_t)a->rot_speed.k[2]);
@@ -1765,9 +1791,7 @@ static void destroy_mutual_energy(ivp_friction_core_pair_t *pair, ivp_real_t d_e
     ivp_mat3r_vmult(&wb_ws, &b->m_world_f_core_last_psi.rot, &wb_cs);
     ivp_vec3r_sub(&w_rel, &wb_ws, &wa_ws);
     ivp_real_t w2 = ivp_vec3r_quad_length(&w_rel);
-    ivp_real_t ia = average_inertia(a);
-    ivp_real_t ib = average_inertia(b);
-    ivp_real_t i_mu = (ia * ib) / (ia + ib + IVP_REAL_EPS);
+    ivp_real_t i_mu = (ia_val * ib_val) / (ia_val + ib_val + IVP_REAL_EPS);
     ivp_real_t e_rot = IVP_REAL(0.5) * i_mu * w2;
 
     ivp_real_t whole = e_trans + e_rot;
@@ -1777,27 +1801,39 @@ static void destroy_mutual_energy(ivp_friction_core_pair_t *pair, ivp_real_t d_e
     if (capped > max_d) capped = max_d;
     ivp_real_t percent = capped / whole;
 
+    /* Reference alignment: energy removal writes to speed_change/rot_speed_change
+     * (async buffers), not directly to speed/rot_speed.
+     * (ivp_friction.cxx ~L1950: destroy_percent_energy writes async) */
     if (v2 > IVP_REAL_EPS) {
         ivp_vec3r_t dv = v_rel;
         ivp_vec3r_scale(&dv, &dv, percent);
-        ivp_vec3r_add_scaled(&a->speed, &dv,  b->mass / (a->mass + b->mass + IVP_REAL_EPS));
-        ivp_vec3r_add_scaled(&b->speed, &dv, -a->mass / (a->mass + b->mass + IVP_REAL_EPS));
+        if (!a_unmov) {
+            ivp_vec3r_add_scaled(&a->speed_change, &dv,  mass_b / (mass_a + mass_b + IVP_REAL_EPS));
+        }
+        if (!b_unmov) {
+            ivp_vec3r_add_scaled(&b->speed_change, &dv, -mass_a / (mass_a + mass_b + IVP_REAL_EPS));
+        }
     }
     if (w2 > IVP_REAL_EPS) {
         ivp_vec3r_t dw = w_rel;
         ivp_vec3r_scale(&dw, &dw, percent);
         ivp_vec3r_t da_ws = dw, db_ws = dw;
-        ivp_vec3r_scale(&da_ws, &da_ws,  ib / (ia + ib + IVP_REAL_EPS));
-        ivp_vec3r_scale(&db_ws, &db_ws, -ia / (ia + ib + IVP_REAL_EPS));
-        ivp_vec3r_t da_cs, db_cs;
-        ivp_mat3r_vimult(&da_cs, &a->m_world_f_core_last_psi.rot, &da_ws);
-        ivp_mat3r_vimult(&db_cs, &b->m_world_f_core_last_psi.rot, &db_ws);
-        a->rot_speed.k[0] += (float)da_cs.k[0];
-        a->rot_speed.k[1] += (float)da_cs.k[1];
-        a->rot_speed.k[2] += (float)da_cs.k[2];
-        b->rot_speed.k[0] += (float)db_cs.k[0];
-        b->rot_speed.k[1] += (float)db_cs.k[1];
-        b->rot_speed.k[2] += (float)db_cs.k[2];
+        ivp_vec3r_scale(&da_ws, &da_ws,  ib_val / (ia_val + ib_val + IVP_REAL_EPS));
+        ivp_vec3r_scale(&db_ws, &db_ws, -ia_val / (ia_val + ib_val + IVP_REAL_EPS));
+        if (!a_unmov) {
+            ivp_vec3r_t da_cs;
+            ivp_mat3r_vimult(&da_cs, &a->m_world_f_core_last_psi.rot, &da_ws);
+            a->rot_speed_change.k[0] += da_cs.k[0];
+            a->rot_speed_change.k[1] += da_cs.k[1];
+            a->rot_speed_change.k[2] += da_cs.k[2];
+        }
+        if (!b_unmov) {
+            ivp_vec3r_t db_cs;
+            ivp_mat3r_vimult(&db_cs, &b->m_world_f_core_last_psi.rot, &db_ws);
+            b->rot_speed_change.k[0] += db_cs.k[0];
+            b->rot_speed_change.k[1] += db_cs.k[1];
+            b->rot_speed_change.k[2] += db_cs.k[2];
+        }
     }
 }
 

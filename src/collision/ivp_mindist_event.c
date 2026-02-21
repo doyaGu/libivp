@@ -44,13 +44,21 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
     if (!entry->obj_a || !entry->obj_b) return false;
     if (max_time <= now) return false;
 
+    /* Per-entry collision distance from progressive selector.
+     * Reference: IVP_Mindist::get_coll_dist(). */
+    int sel = entry->coll_dist_selector;
+    if (sel < 0) sel = 0;
+    if (sel >= IVP_MAX_STEPS_FOR_COLLDIST_DECREASE)
+        sel = IVP_MAX_STEPS_FOR_COLLDIST_DECREASE - 1;
+    ivp_real_t coll_dist = settings->coll_dists[sel];
+
     ivp_vec3r_t rel_speed;
     ivp_vec3r_sub(&rel_speed,
                   &entry->obj_b->core.speed,
                   &entry->obj_a->core.speed);
 
     ivp_real_t closing_speed = -ivp_vec3r_dot(&rel_speed, &entry->last_normal);
-    if (closing_speed <= IVP_IMPACT_EPS && entry->last_distance > settings->min_coll_dist) {
+    if (closing_speed <= IVP_IMPACT_EPS && entry->last_distance > coll_dist) {
         return false;
     }
 
@@ -72,7 +80,7 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
 
     ivp_time_t hit_time;
     if (!ivp_3d_solver_find_first_t(&solver,
-                                    settings->min_coll_dist,
+                                    coll_dist,
                                     now,
                                     max_time,
                                     &cache_a,
@@ -85,7 +93,7 @@ static bool predict_with_3d_solver(const ivp_mindist_entry_t *entry,
     out_prediction->event_time = hit_time;
     out_prediction->status_a = entry->synapse[0].status;
     out_prediction->status_b = entry->synapse[1].status;
-    out_prediction->expected_gap = settings->min_coll_dist;
+    out_prediction->expected_gap = coll_dist;
     return true;
 }
 

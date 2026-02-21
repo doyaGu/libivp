@@ -101,6 +101,9 @@ IVP_TEST(matrix_3x3_pivot) {
 IVP_TEST(matrix_singular) {
     ivp_great_matrix_t m;
     IVP_ASSERT_EQ(ivp_great_matrix_init(&m, 2, NULL), IVP_OK);
+    /* Rank-deficient system: row 2 = 2 × row 1. Consistent RHS (6 = 2×3).
+     * Reference alignment: solver sets degenerate row's x=0 instead of failing.
+     * This matches ivp_great_matrix.cxx solve_lower_null_matrix behavior. */
     ivp_great_matrix_set(&m, 0, 0, IVP_REAL(1.0));
     ivp_great_matrix_set(&m, 0, 1, IVP_REAL(2.0));
     ivp_great_matrix_set_rhs(&m, 0, IVP_REAL(3.0));
@@ -108,7 +111,25 @@ IVP_TEST(matrix_singular) {
     ivp_great_matrix_set(&m, 1, 1, IVP_REAL(4.0));
     ivp_great_matrix_set_rhs(&m, 1, IVP_REAL(6.0));
     ivp_real_t x[2];
-    IVP_ASSERT_EQ(ivp_great_matrix_solve(&m, x), IVP_ERR_SINGULAR_MATRIX);
+    ivp_result_t res = ivp_great_matrix_solve(&m, x);
+    IVP_ASSERT_EQ(res, IVP_OK);
+    /* Solution should satisfy both equations */
+    ivp_real_t r0 = IVP_REAL(1.0)*x[0] + IVP_REAL(2.0)*x[1] - IVP_REAL(3.0);
+    ivp_real_t r1 = IVP_REAL(2.0)*x[0] + IVP_REAL(4.0)*x[1] - IVP_REAL(6.0);
+    IVP_ASSERT_NEAR(r0, IVP_REAL(0.0), IVP_REAL(1e-3));
+    IVP_ASSERT_NEAR(r1, IVP_REAL(0.0), IVP_REAL(1e-3));
+
+    /* Test truly inconsistent: row 2 = 2 × row 1, but RHS inconsistent */
+    ivp_great_matrix_t m2;
+    IVP_ASSERT_EQ(ivp_great_matrix_init(&m2, 2, NULL), IVP_OK);
+    ivp_great_matrix_set(&m2, 0, 0, IVP_REAL(1.0));
+    ivp_great_matrix_set(&m2, 0, 1, IVP_REAL(2.0));
+    ivp_great_matrix_set_rhs(&m2, 0, IVP_REAL(3.0));
+    ivp_great_matrix_set(&m2, 1, 0, IVP_REAL(2.0));
+    ivp_great_matrix_set(&m2, 1, 1, IVP_REAL(4.0));
+    ivp_great_matrix_set_rhs(&m2, 1, IVP_REAL(99.0));  /* inconsistent */
+    IVP_ASSERT_EQ(ivp_great_matrix_solve(&m2, x), IVP_ERR_SINGULAR_MATRIX);
+    ivp_great_matrix_destroy(&m2, NULL);
     ivp_great_matrix_destroy(&m, NULL);
 }
 

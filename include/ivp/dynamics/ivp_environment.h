@@ -9,6 +9,7 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/utility/ivp_active_value.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_handle.h>
@@ -145,6 +146,11 @@ typedef struct ivp_environment {
 
     /* Anomaly manager */
     ivp_anomaly_manager_t    anomaly_manager;
+
+    /* Active value time source (reference: IVP_U_Active_Value_Manager::mod_current_time).
+     * Updated every PSI with the current simulation time. Drives time-dependent
+     * active value nodes (sine, square, pulse oscillators). */
+    ivp_active_float_t      *mod_current_time;
 
     /* Collision filter */
     ivp_collision_filter_t   collision_filter;
