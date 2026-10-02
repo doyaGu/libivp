@@ -27,7 +27,7 @@ typedef struct ivp_force_actuator_state {
     ivp_vec3r_t   anchor_b_os;      /* anchor in object B's body space */
 
     /* Force parameters */
-    ivp_real_t    force;            /* force magnitude (N, positive = attract) */
+    ivp_real_t    force;            /* force magnitude (N); positive pushes A away from B (reference IVP_Actuator_Force) */
     bool          push_first_object;  /* apply force to obj_a? */
     bool          push_second_object; /* apply force to obj_b? */
 

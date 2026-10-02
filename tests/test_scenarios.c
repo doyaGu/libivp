@@ -1814,7 +1814,8 @@ static int run_force_actuator(FILE *out, int steps, double dt, invariant_result_
 
     if (inv) {
         const double x1 = (double)box->core.pos_world_f_core_last_psi.k[0];
-        inv_check(inv, x1 > x0 + 0.05, "force_actuator box moves +X: x0=%.6f x=%.6f", x0, x1);
+        /* Anchors a=(0,0,0), b=(1,0,0): reference pushes A along (a - b) = -X. */
+        inv_check(inv, x1 < x0 - 0.05, "force_actuator box moves -X: x0=%.6f x=%.6f", x0, x1);
     }
 
     ivp_compact_surface_free(NULL, box_surf);
@@ -2215,11 +2216,21 @@ static int run_motion_controller(FILE *out, int steps, double dt, invariant_resu
         return 1;
     }
 
+    /* Reference runner: IVP_Controller_Motion target-position mode with
+     * force_factor 0.8, damp 1.2, torque 0.8, angular damp 1.2,
+     * max_translation_force 200, max_torque 80, target (6, -4, 0). */
     ivp_motion_state_t motion;
     ivp_motion_state_init(&motion);
-    ivp_vec3r_t target_vel = ivp_vec3r(IVP_REAL(3.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_motion_state_set_velocity(&motion, &target_vel);
-    motion.max_speed = IVP_REAL(6.0);
+    motion.force_factor = IVP_REAL(0.8);
+    motion.damp_factor = IVP_REAL(1.2);
+    motion.torque_factor = IVP_REAL(0.8);
+    motion.angular_damp_factor = IVP_REAL(1.2);
+    ivp_vec3r_set(&motion.max_translation_force, IVP_REAL(200.0), IVP_REAL(200.0), IVP_REAL(200.0));
+    ivp_vec3r_set(&motion.max_torque, IVP_REAL(80.0), IVP_REAL(80.0), IVP_REAL(80.0));
+    ivp_vec3r_t target_pos = ivp_vec3r(IVP_REAL(6.0), IVP_REAL(-4.0), IVP_REAL(0.0));
+    ivp_motion_state_set_target_position(&motion, &target_pos);
+    ivp_quatr_t target_q = ivp_quatr_identity();
+    ivp_motion_state_set_target_orientation(&motion, &target_q);
     ivp_environment_add_controller(env, 100, ivp_controller_motion, &motion);
 
     const double x0 = (double)box->core.pos_world_f_core_last_psi.k[0];

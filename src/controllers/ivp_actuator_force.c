@@ -81,9 +81,12 @@ void ivp_controller_force_actuator(const ivp_event_sim_t *event_sim,
     ivp_controller_get_anchor_ws(state->obj_a, &state->anchor_a_os, &pa_ws);
     ivp_controller_get_anchor_ws(state->obj_b, &state->anchor_b_os, &pb_ws);
 
-    /* Direction from A to B */
+    /* Reference IVP_Actuator_Force: dir_ws = pos0 - pos1, i.e. a positive
+     * force pushes the first object AWAY from the second anchor (and the
+     * second object away from the first).  The previous A->B direction was
+     * the mirror image of the reference behaviour. */
     ivp_vec3r_t dir;
-    ivp_vec3r_sub(&dir, &pb_ws, &pa_ws);
+    ivp_vec3r_sub(&dir, &pa_ws, &pb_ws);
     ivp_real_t dist = ivp_vec3r_length(&dir);
     state->current_distance = dist;
 
@@ -91,7 +94,7 @@ void ivp_controller_force_actuator(const ivp_event_sim_t *event_sim,
 
     ivp_vec3r_scale(&dir, &dir, IVP_REAL(1.0) / dist);
 
-    /* Positive force: attract (A pushed toward B, B pushed toward A).
+    /* Positive force: A pushed along (A - B), B pushed along (B - A).
      * Apply at anchor points for both linear + angular effects. */
 
     if (state->push_first_object && state->obj_a) {

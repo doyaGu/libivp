@@ -1334,8 +1334,10 @@ IVP_TEST(force_actuator_executes_once_per_psi) {
 
     ivp_environment_simulate_one_psi(env);
 
-    IVP_ASSERT_NEAR(obj_a->core.speed.k[0], 1.0, 1e-6);
-    IVP_ASSERT_NEAR(obj_b->core.speed.k[0], -1.0, 1e-6);
+    /* Reference IVP_Actuator_Force: a positive force pushes A away from B
+     * (dir = pos_a - pos_b) and B away from A. */
+    IVP_ASSERT_NEAR(obj_a->core.speed.k[0], -1.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->core.speed.k[0], 1.0, 1e-6);
     IVP_ASSERT_NEAR(obj_c->core.speed.k[0], 0.0, 1e-6);
 
     ivp_environment_destroy(env);

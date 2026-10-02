@@ -15,6 +15,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/math/ivp_quat.h>
 #include <ivp/controllers/ivp_controller.h>
 
 #ifdef __cplusplus
@@ -27,7 +28,10 @@ typedef enum ivp_motion_mode {
     IVP_MOTION_NONE       = 0,  /* no motion applied */
     IVP_MOTION_VELOCITY   = 1,  /* set target velocity directly */
     IVP_MOTION_FORCE      = 2,  /* apply force (velocity += F/m * dt) */
-    IVP_MOTION_IMPULSE    = 3   /* apply instantaneous impulse (one-shot) */
+    IVP_MOTION_IMPULSE    = 3,  /* apply instantaneous impulse (one-shot) */
+    IVP_MOTION_TARGET     = 4   /* reference IVP_Controller_Motion: drive toward a
+                                   target position / orientation with
+                                   force_factor, damp_factor and force clipping */
 } ivp_motion_mode_t;
 
 /* ── Motion state ───────────────────────────────────────────────────────── */
@@ -45,12 +49,38 @@ typedef struct ivp_motion_state {
     /* Speed limits */
     ivp_real_t        max_speed;       /* max linear speed (0 = unlimited) */
     ivp_real_t        max_angular_speed; /* max angular speed (0 = unlimited) */
+
+    /* IVP_MOTION_TARGET parameters (reference IVP_Template_Controller_Motion).
+     * Each PSI the controller computes the position error scaled by
+     * force_factor, subtracts speed * dt * damp_factor, converts that to a
+     * per-axis force and clips it to max_translation_force before applying it
+     * as a synchronous speed change.  The angular path does the same with the
+     * quaternion error, torque_factor, angular_damp_factor and max_torque. */
+    ivp_vec3r_t       target_pos_ws;
+    ivp_quatr_t       target_q_world_f_core;
+    ivp_real_t        force_factor;          /* default 0.8 */
+    ivp_real_t        damp_factor;           /* default 1.0 */
+    ivp_real_t        torque_factor;         /* default 0.8 */
+    ivp_real_t        angular_damp_factor;   /* default 1.0 */
+    ivp_vec3r_t       max_translation_force; /* per axis, default 1e6 */
+    ivp_vec3r_t       max_torque;            /* per axis, default 1e6 */
 } ivp_motion_state_t;
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
 /* Initialize a motion state to no motion. */
 void ivp_motion_state_init(ivp_motion_state_t *state);
+
+/* Drive toward a world-space target position (reference
+ * IVP_Controller_Motion::set_target_position_ws). Switches linear_mode to
+ * IVP_MOTION_TARGET. */
+void ivp_motion_state_set_target_position(ivp_motion_state_t *state,
+                                          const ivp_vec3r_t *target_ws);
+
+/* Drive toward a world-space target orientation (reference
+ * set_target_q_world_f_core). Switches angular_mode to IVP_MOTION_TARGET. */
+void ivp_motion_state_set_target_orientation(ivp_motion_state_t *state,
+                                             const ivp_quatr_t *q_world_f_core);
 
 /* Set target velocity (will apply force to reach it). */
 void ivp_motion_state_set_velocity(ivp_motion_state_t *state,
