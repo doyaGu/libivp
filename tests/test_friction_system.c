@@ -1,5 +1,6 @@
 /* test_friction_system.c — Tests for persistent friction system */
 #include "ivp_test.h"
+#include "ivp_test_controller_api.h"
 #include <ivp/solver/ivp_friction_system.h>
 #include <ivp/solver/ivp_contact.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -437,7 +438,7 @@ IVP_TEST(friction_phase_energy_runs_before_static) {
     /* Descending priority dispatch: choose <2000 so probe runs AFTER
      * energy_friction(2000). In this synthetic setup energy friction may
      * damp or leave relative speed unchanged, but should not amplify it. */
-    ivp_controller_handle_t h = ivp_environment_add_controller(
+    ivp_controller_handle_t h = ivp_test_environment_add_custom_controller(
         env, 1500, capture_rel_speed_controller, &probe);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
 

@@ -75,10 +75,11 @@ void ivp_motion_state_set_torque(ivp_motion_state_t *state,
 /* ── Controller callback ────────────────────────────────────────────────── */
 
 /* The controller callback. Pass an ivp_motion_state_t* as ctx.
- * Register with ivp_environment_add_controller(env, priority, fn, state). */
+ * Register with ivp_environment_add_controller(env, any_priority, fn, state).
+ * Built-in priorities are type-driven; the priority argument is ignored. */
 void ivp_controller_motion(const ivp_event_sim_t *event_sim,
-                            ivp_object_t *obj,
-                            void *ctx);
+                          ivp_object_t *obj,
+                          void *ctx);
 
 #ifdef __cplusplus
 }

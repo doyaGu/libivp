@@ -31,7 +31,8 @@ void ivp_vec3r_fast_normalize(ivp_vec3r_t *v) {
     ivp_real_t ql = ivp_vec3r_quad_length(v);
     IVP_ASSERT(ql > IVP_REAL_EPS);
 #ifdef IVP_REAL_DOUBLE
-    ivp_real_t inv_len = ivp_isqrt_double(ql, 0);
+    /* Reference IVP_Inline_Math::isqrt_double uses 3 resolution steps. */
+    ivp_real_t inv_len = ivp_isqrt_double(ql, 3);
 #else
     ivp_real_t inv_len = (ivp_real_t)ivp_isqrt_float((float)ql);
 #endif

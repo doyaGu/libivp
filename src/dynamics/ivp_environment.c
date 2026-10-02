@@ -6,12 +6,39 @@
 #include <ivp/collision/ivp_mindist_persistent.h>
 #include <ivp/collision/ivp_time_event_queue.h>
 #include <ivp/base/ivp_assert.h>
+#include <ivp/controllers/ivp_actuator_check_dist.h>
+#include <ivp/controllers/ivp_actuator_force.h>
+#include <ivp/controllers/ivp_actuator_rot_mot.h>
+#include <ivp/controllers/ivp_actuator_spring.h>
+#include <ivp/controllers/ivp_actuator_stabilizer.h>
+#include <ivp/controllers/ivp_actuator_suspension.h>
+#include <ivp/controllers/ivp_actuator_torque.h>
+#include <ivp/controllers/ivp_constraint.h>
+#include <ivp/controllers/ivp_constraint_fixed_keyed.h>
+#include <ivp/controllers/ivp_controller_airboat.h>
+#include <ivp/controllers/ivp_controller_buoyancy.h>
+#include <ivp/controllers/ivp_controller_fake_jetski.h>
+#include <ivp/controllers/ivp_controller_floating.h>
+#include <ivp/controllers/ivp_controller_golem.h>
+#include <ivp/controllers/ivp_controller_motion.h>
+#include <ivp/controllers/ivp_controller_phantom.h>
+#include <ivp/controllers/ivp_controller_raycast_car.h>
+#include <ivp/controllers/ivp_controller_stiff_spring.h>
+#include <ivp/controllers/ivp_controller_world_friction.h>
+#include <ivp/controllers/ivp_forcefield.h>
+#include <ivp/dynamics/ivp_object_attach.h>
 #include <string.h>
 
 #include "ivp_object_system.h"
 #include "dynamics/ivp_environment_events.h"
 #include "controllers/ivp_controller_system.h"
 #include "events/ivp_event_system.h"
+
+/* Avoid including ivp_constraint_local.h here because it redefines
+ * ivp_constraint_force_exceed_t from ivp_constraint.h. */
+void ivp_controller_constraint_local(const ivp_event_sim_t *event_sim,
+                                     ivp_object_t *obj,
+                                     void *ctx);
 
 static bool ivp_environment_core_has_pending_push(const ivp_core_t *core)
 {
@@ -423,7 +450,8 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
 static ivp_controller_handle_t ivp_environment_add_controller_internal(
     ivp_environment_t *env, int priority,
     ivp_controller_event_fn_t event_fn, void *ctx,
-    ivp_controller_mode_t mode, ivp_controller_discovery_fn_t discovery_fn);
+    ivp_controller_mode_t mode,
+    ivp_controller_discovery_fn_t discovery_fn);
 static ivp_controller_slot_t *ivp_environment_get_controller_slot(
     ivp_environment_t *env, ivp_controller_handle_t controller_handle);
 
@@ -606,15 +634,48 @@ static ivp_controller_handle_t ivp_environment_add_controller_internal(
     void *ctx,
     ivp_controller_mode_t mode,
     ivp_controller_discovery_fn_t discovery_fn);
+static int ivp_environment_normalize_priority(int priority);
+static bool ivp_environment_try_builtin_priority(ivp_controller_event_fn_t event_fn,
+                                                 int *out_priority);
+static void ivp_environment_ensure_handles_in_simulation(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count);
+static void ivp_environment_merge_active_units_for_handles(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count);
+static void ivp_environment_mark_union_find_for_handles(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count);
 
 ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env,
                                                int priority,
                                                ivp_controller_fn_t fn,
                                                void *ctx)
 {
-    return ivp_environment_add_controller_internal(env, priority, fn, ctx,
+    (void)priority;
+    ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
+    int mapped_priority = 0;
+    if (!ivp_environment_try_builtin_priority(fn, &mapped_priority)) {
+        return invalid;
+    }
+    return ivp_environment_add_controller_internal(env, mapped_priority, fn, ctx,
                                                    IVP_CONTROLLER_INDEPENDENT, NULL);
 }
+
+#ifdef IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API
+ivp_controller_handle_t ivp_test_environment_add_custom_controller(ivp_environment_t *env,
+                                                                   int priority,
+                                                                   ivp_controller_fn_t fn,
+                                                                   void *ctx)
+{
+    return ivp_environment_add_controller_internal(
+        env, ivp_environment_normalize_priority(priority), fn, ctx,
+        IVP_CONTROLLER_INDEPENDENT, NULL);
+}
+#endif
 
 static ivp_controller_slot_t *ivp_environment_get_controller_slot(
     ivp_environment_t *env, ivp_controller_handle_t controller_handle)
@@ -630,6 +691,133 @@ static int ivp_environment_normalize_priority(int priority)
     if (priority < IVP_CP_STATIC_FRICTION) return IVP_CP_STATIC_FRICTION;
     if (priority > IVP_CP_ENERGY_FRICTION) return IVP_CP_ENERGY_FRICTION;
     return priority;
+}
+
+static bool ivp_environment_try_builtin_priority(
+    ivp_controller_event_fn_t event_fn,
+    int *out_priority)
+{
+    if (!event_fn || !out_priority) return false;
+
+    if (event_fn == ivp_environment_default_gravity_controller) {
+        *out_priority = IVP_CP_GRAVITY;
+        return true;
+    }
+    if (event_fn == ivp_controller_forcefield) {
+        *out_priority = IVP_CP_ACTUATOR;
+        return true;
+    }
+    if (event_fn == ivp_controller_buoyancy) {
+        *out_priority = IVP_CP_FORCEFIELDS;
+        return true;
+    }
+    if (event_fn == ivp_controller_force_actuator ||
+        event_fn == ivp_controller_torque_actuator ||
+        event_fn == ivp_controller_rot_mot ||
+        event_fn == ivp_controller_check_dist ||
+        event_fn == ivp_controller_stabilizer) {
+        *out_priority = IVP_CP_ACTUATOR;
+        return true;
+    }
+    if (event_fn == ivp_controller_spring ||
+        event_fn == ivp_controller_suspension) {
+        *out_priority = IVP_CP_SPRING;
+        return true;
+    }
+    if (event_fn == ivp_controller_stiff_spring) {
+        *out_priority = IVP_CP_STIFF_SPRINGS;
+        return true;
+    }
+    if (event_fn == ivp_controller_floating) {
+        *out_priority = IVP_CP_FLOATING;
+        return true;
+    }
+    if (event_fn == ivp_controller_motion ||
+        event_fn == ivp_controller_golem) {
+        *out_priority = IVP_CP_MOTION;
+        return true;
+    }
+    if (event_fn == ivp_controller_constraint ||
+        event_fn == ivp_controller_constraint_local ||
+        event_fn == ivp_controller_fixed_keyed ||
+        event_fn == ivp_controller_attachment) {
+        *out_priority = IVP_CP_CONSTRAINTS;
+        return true;
+    }
+    if (event_fn == ivp_controller_world_friction ||
+        event_fn == ivp_controller_raycast_car ||
+        event_fn == ivp_controller_fake_jetski ||
+        event_fn == ivp_controller_airboat ||
+        event_fn == ivp_controller_phantom) {
+        *out_priority = IVP_CP_CONSTRAINTS_MAX;
+        return true;
+    }
+    return false;
+}
+
+static void ivp_environment_ensure_handles_in_simulation(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count)
+{
+    if (!env || !handles || handle_count <= 0) return;
+    ivp_object_system_t *os = ivp_environment_get_object_system(env);
+    for (int i = 0; i < handle_count; i++) {
+        ivp_object_t *obj = ivp_object_system_get_by_handle(os, handles[i]);
+        if (!obj || obj->core.physical_unmoveable) continue;
+        (void)ivp_environment_ensure_core_in_simulation(env, obj);
+    }
+}
+
+static void ivp_environment_merge_active_units_for_handles(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count)
+{
+    if (!env || !env->sim_units_manager || !handles || handle_count <= 1) return;
+
+    ivp_sim_units_manager_t *mgr = env->sim_units_manager;
+    ivp_object_system_t *os = ivp_environment_get_object_system(env);
+    ivp_sim_unit_t *base = NULL;
+
+    for (int i = 0; i < handle_count; i++) {
+        ivp_object_t *obj = ivp_object_system_get_by_handle(os, handles[i]);
+        if (!obj || obj->core.physical_unmoveable) continue;
+
+        ivp_sim_unit_t *su = obj->core.sim_unit;
+        if (!su || su == &mgr->still_slot) continue;
+
+        if (!base) {
+            base = su;
+            continue;
+        }
+        if (su == base) continue;
+
+        if (su->core_count > base->core_count) {
+            ivp_sim_unit_t *tmp = base;
+            base = su;
+            su = tmp;
+        }
+        base = ivp_sim_unit_merge(mgr, base, su);
+    }
+}
+
+static void ivp_environment_mark_union_find_for_handles(
+    ivp_environment_t *env,
+    const ivp_object_handle_t *handles,
+    int handle_count)
+{
+    if (!env || !env->sim_units_manager || !handles || handle_count <= 0) return;
+
+    ivp_sim_units_manager_t *mgr = env->sim_units_manager;
+    ivp_object_system_t *os = ivp_environment_get_object_system(env);
+    for (int i = 0; i < handle_count; i++) {
+        ivp_object_t *obj = ivp_object_system_get_by_handle(os, handles[i]);
+        if (!obj || obj->core.physical_unmoveable) continue;
+        ivp_sim_unit_t *su = obj->core.sim_unit;
+        if (!su || su == &mgr->still_slot) continue;
+        su->union_find_needed = true;
+    }
 }
 
 static ivp_controller_handle_t ivp_environment_add_controller_internal(
@@ -677,15 +865,74 @@ ivp_controller_handle_t ivp_environment_announce_dependent_controller(
     void *ctx,
     ivp_controller_discovery_fn_t discovery_fn)
 {
-    return ivp_environment_add_controller_internal(env, priority, fn, ctx,
-                                                   IVP_CONTROLLER_DEPENDENT, discovery_fn);
+    (void)priority;
+    ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
+    if (!discovery_fn) return invalid;
+    int mapped_priority = 0;
+    if (!ivp_environment_try_builtin_priority(fn, &mapped_priority)) {
+        return invalid;
+    }
+    ivp_controller_handle_t out = ivp_environment_add_controller_internal(
+        env, mapped_priority, fn, ctx, IVP_CONTROLLER_DEPENDENT, discovery_fn);
+    if (!ivp_controller_handle_is_valid(out)) {
+        return invalid;
+    }
+
+    ivp_controller_slot_t *slot = ivp_environment_get_controller_slot(env, out);
+    if (slot) {
+        ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+        int handle_count = ivp_controller_slot_collect_associated_handles(
+            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        ivp_environment_ensure_handles_in_simulation(env, handles, handle_count);
+        ivp_environment_merge_active_units_for_handles(env, handles, handle_count);
+    }
+    return out;
 }
+
+#ifdef IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API
+ivp_controller_handle_t ivp_test_environment_announce_custom_dependent_controller(
+    ivp_environment_t *env,
+    int priority,
+    ivp_controller_fn_t fn,
+    void *ctx,
+    ivp_controller_discovery_fn_t discovery_fn)
+{
+    if (!discovery_fn) {
+        return ivp_controller_handle_invalid();
+    }
+    ivp_controller_handle_t out = ivp_environment_add_controller_internal(
+        env, ivp_environment_normalize_priority(priority), fn, ctx,
+        IVP_CONTROLLER_DEPENDENT, discovery_fn);
+    if (!ivp_controller_handle_is_valid(out)) {
+        return out;
+    }
+
+    ivp_controller_slot_t *slot = ivp_environment_get_controller_slot(env, out);
+    if (slot) {
+        ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+        int handle_count = ivp_controller_slot_collect_associated_handles(
+            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        ivp_environment_ensure_handles_in_simulation(env, handles, handle_count);
+        ivp_environment_merge_active_units_for_handles(env, handles, handle_count);
+    }
+    return out;
+}
+#endif
 
 bool ivp_environment_remove_dependent_controller(ivp_environment_t *env,
                                                  ivp_controller_handle_t controller_handle,
                                                  bool silently)
 {
     if (!env || !ivp_controller_handle_is_valid(controller_handle)) return false;
+    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    int handle_count = 0;
+
+    ivp_controller_slot_t *slot = ivp_environment_get_controller_slot(env, controller_handle);
+    if (slot && slot->mode == IVP_CONTROLLER_DEPENDENT) {
+        handle_count = ivp_controller_slot_collect_associated_handles(
+            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+        ivp_environment_mark_union_find_for_handles(env, handles, handle_count);
+    }
 
     if (!ivp_controller_system_remove((ivp_controller_system_t *)env->controller_system,
                                       controller_handle,
@@ -694,6 +941,7 @@ bool ivp_environment_remove_dependent_controller(ivp_environment_t *env,
     }
 
     if (!silently) {
+        ivp_environment_ensure_handles_in_simulation(env, handles, handle_count);
         ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_REMOVED, IVP_REAL(0.0), -1, (int)controller_handle.slot);
     }
     return true;
@@ -714,6 +962,12 @@ bool ivp_environment_set_controller_discovery(ivp_environment_t *env,
     slot->mode = IVP_CONTROLLER_DEPENDENT;
     slot->run_for_all_cores = false;
     slot->discovery_fn = discovery_fn;
+
+    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
+    int handle_count = ivp_controller_slot_collect_associated_handles(
+        slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
+    ivp_environment_ensure_handles_in_simulation(env, handles, handle_count);
+    ivp_environment_merge_active_units_for_handles(env, handles, handle_count);
     return true;
 }
 
@@ -913,28 +1167,14 @@ ivp_object_handle_t ivp_environment_get_object_handle(const ivp_object_t *obj)
     return h;
 }
 
-bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle)
+/* Full teardown of an object that is about to be freed. Both deletion entry
+ * points funnel through here so that listeners, clusters, the universe manager,
+ * the collision managers and the simulation-unit manager all see the removal
+ * before the memory goes away. */
+static void ivp_environment_detach_object_for_destroy(ivp_environment_t *env,
+                                                      ivp_object_t *obj,
+                                                      ivp_object_handle_t handle)
 {
-    if (!env || !ivp_object_handle_is_valid(handle)) return false;
-
-    ivp_object_t *obj = ivp_object_system_get_by_handle(
-        (const ivp_object_system_t *)env->object_system, handle);
-    if (obj) {
-        ivp_hull_manager_remove_object(&env->hull_manager, obj);
-        ivp_mindist_manager_remove_object(&env->mindist_manager, obj);
-        ivp_time_event_queue_remove_object(&env->time_event_queue, handle);
-    }
-
-    return ivp_object_system_destroy_by_handle((ivp_object_system_t *)env->object_system,
-                                               handle,
-                                               env->allocator);
-}
-
-void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
-{
-    if (!env || !obj) return;
-    if (obj->owner != env) return;
-
     /* Fire object-deleted notification to collision listeners (reference parity) */
     ivp_collision_listeners_fire_object_deleted(obj);
 
@@ -956,10 +1196,36 @@ void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
         env->universe_manager->deleted_fn(env->universe_manager->ctx, obj);
     }
 
-    /* Remove from sim unit before destroying */
+    /* Remove from sim unit before destroying; the sim-unit manager keeps raw
+     * core pointers and would otherwise touch freed memory on teardown. */
     if (env->sim_units_manager && obj->core.sim_unit) {
         ivp_sim_unit_remove_core(env->sim_units_manager, &obj->core);
     }
+
+    ivp_hull_manager_remove_object(&env->hull_manager, obj);
+    ivp_mindist_manager_remove_object(&env->mindist_manager, obj);
+    ivp_time_event_queue_remove_object(&env->time_event_queue, handle);
+}
+
+bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle)
+{
+    if (!env || !ivp_object_handle_is_valid(handle)) return false;
+
+    ivp_object_t *obj = ivp_object_system_get_by_handle(
+        (const ivp_object_system_t *)env->object_system, handle);
+    if (obj) {
+        ivp_environment_detach_object_for_destroy(env, obj, handle);
+    }
+
+    return ivp_object_system_destroy_by_handle((ivp_object_system_t *)env->object_system,
+                                               handle,
+                                               env->allocator);
+}
+
+void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
+{
+    if (!env || !obj) return;
+    if (obj->owner != env) return;
 
     (void)ivp_environment_destroy_object_by_handle(env, ivp_environment_get_object_handle(obj));
 }

@@ -1,5 +1,6 @@
 /* test_dynamics.c �?Tests for M4: core, object, environment, PSI loop */
 #include "ivp_test.h"
+#include "ivp_test_controller_api.h"
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -1045,12 +1046,12 @@ IVP_TEST(controller_self_remove_does_not_break_iteration) {
     memset(&count_ctx, 0, sizeof(count_ctx));
 
     ivp_controller_handle_t h_self =
-        ivp_environment_add_controller(env, 400, controller_remove_self, &self_ctx);
+        ivp_test_environment_add_custom_controller(env, 400, controller_remove_self, &self_ctx);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h_self));
     self_ctx.self = h_self;
 
     ivp_controller_handle_t h_count =
-        ivp_environment_add_controller(env, 500, controller_count_only, &count_ctx);
+        ivp_test_environment_add_custom_controller(env, 500, controller_count_only, &count_ctx);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h_count));
 
     ivp_environment_simulate_one_psi(env);
@@ -1082,7 +1083,7 @@ IVP_TEST(controller_dependent_rejects_foreign_targets) {
     memset(&probe, 0, sizeof(probe));
 
     ivp_controller_handle_t ctrl =
-        ivp_environment_add_controller(env_a, 500, controller_dependent_probe, &probe);
+        ivp_test_environment_add_custom_controller(env_a, 500, controller_dependent_probe, &probe);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
     IVP_ASSERT_FALSE(ivp_environment_add_controller_to_core(env_a, ctrl, obj_b));
@@ -1102,8 +1103,8 @@ IVP_TEST(controller_priority_sync_async) {
     IVP_ASSERT_NOT_NULL(obj);
 
     s_controller_sync_seen = 0;
-    ivp_controller_handle_t id_low = ivp_environment_add_controller(env, 400, controller_low_sync, NULL);
-    ivp_controller_handle_t id_high = ivp_environment_add_controller(env, 1400, controller_high_async, NULL);
+    ivp_controller_handle_t id_low = ivp_test_environment_add_custom_controller(env, 400, controller_low_sync, NULL);
+    ivp_controller_handle_t id_high = ivp_test_environment_add_custom_controller(env, 1400, controller_high_async, NULL);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(id_low));
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(id_high));
 
@@ -1138,11 +1139,11 @@ IVP_TEST(controller_dependent_zero_targets_invokes_none) {
     probe.target_b = h1;
 
     ivp_controller_handle_t ctrl =
-        ivp_environment_announce_dependent_controller(env,
-                                                      500,
-                                                      controller_dependent_probe,
-                                                      &probe,
-                                                      dependent_discovery_fn);
+        ivp_test_environment_announce_custom_dependent_controller(env,
+                                                             500,
+                                                             controller_dependent_probe,
+                                                             &probe,
+                                                             dependent_discovery_fn);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
     ivp_environment_simulate_one_psi(env);
@@ -1151,6 +1152,21 @@ IVP_TEST(controller_dependent_zero_targets_invokes_none) {
     IVP_ASSERT_EQ(probe.hits_b, 0);
     IVP_ASSERT_EQ(probe.hits_other, 0);
     IVP_ASSERT_EQ(probe.calls, 0);
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(controller_dependent_requires_discovery_callback) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    ivp_environment_clear_controllers(env);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+
+    ivp_controller_handle_t ctrl =
+        ivp_test_environment_announce_custom_dependent_controller(
+            env, 500, controller_dependent_probe, &probe, NULL);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(ctrl));
 
     ivp_environment_destroy(env);
 }
@@ -1178,11 +1194,11 @@ IVP_TEST(controller_dependent_ignores_destroyed_targets) {
     probe.discovery_count = 2;
 
     ivp_controller_handle_t ctrl =
-        ivp_environment_announce_dependent_controller(env,
-                                                      500,
-                                                      controller_dependent_probe,
-                                                      &probe,
-                                                      dependent_discovery_fn);
+        ivp_test_environment_announce_custom_dependent_controller(env,
+                                                             500,
+                                                             controller_dependent_probe,
+                                                             &probe,
+                                                             dependent_discovery_fn);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
     IVP_ASSERT_TRUE(ivp_environment_destroy_object_by_handle(env, h_a));
@@ -1218,11 +1234,11 @@ IVP_TEST(controller_dependent_dynamic_discovery_unions_island) {
     probe.discovery_count = 2;
 
     ivp_controller_handle_t ctrl =
-        ivp_environment_announce_dependent_controller(env,
-                                                      IVP_CP_CONSTRAINTS,
-                                                      controller_dependent_probe,
-                                                      &probe,
-                                                      dependent_discovery_fn);
+        ivp_test_environment_announce_custom_dependent_controller(env,
+                                                             IVP_CP_CONSTRAINTS,
+                                                             controller_dependent_probe,
+                                                             &probe,
+                                                             dependent_discovery_fn);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
     ivp_environment_simulate_one_psi(env);
@@ -1252,7 +1268,7 @@ IVP_TEST(controller_attach_to_core_limits_dispatch_scope) {
 
     controller_count_ctx_t count_ctx;
     memset(&count_ctx, 0, sizeof(count_ctx));
-    ivp_controller_handle_t ctrl = ivp_environment_add_controller(
+    ivp_controller_handle_t ctrl = ivp_test_environment_add_custom_controller(
         env, IVP_CP_MOTION, controller_count_only, &count_ctx);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
@@ -1332,8 +1348,9 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_environment_t *env = ivp_environment_create(&cfg);
-    /* Descending dispatch parity: gravity(1000) runs before rot_mot(500),
-     * so rot_mot async push is committed at the next PSI's gravity barrier. */
+    /* Type-driven priority mapping: rot_mot is forced to actuator(1500),
+     * which runs before gravity(1000), so async push is committed in-step
+     * at the gravity barrier. */
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -1356,10 +1373,10 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
 
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.5, 1e-6);
 
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.5, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 1.0, 1e-3);
     IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[0], 0.0, 1e-6);
     IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[1], 0.0, 1e-6);
     IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[2], 0.0, 1e-6);
@@ -1533,6 +1550,7 @@ int main(void) {
     IVP_REGISTER(controller_priority_sync_async);
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);
+    IVP_REGISTER(controller_dependent_requires_discovery_callback);
     IVP_REGISTER(controller_dependent_ignores_destroyed_targets);
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);

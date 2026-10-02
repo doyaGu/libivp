@@ -63,6 +63,9 @@ static ivp_controller_system_t *controller_system_from_env(ivp_environment_t *en
     return (ivp_controller_system_t *)env->controller_system;
 }
 
+/* Until all built-in controllers are migrated to exact per-core association
+ * semantics, keep this guard to avoid false-positive island splits caused by
+ * global low-priority sync controllers. */
 static bool has_sync_all_cores_controller_below_gravity(ivp_environment_t *env)
 {
     ivp_controller_system_t *cs = controller_system_from_env(env);

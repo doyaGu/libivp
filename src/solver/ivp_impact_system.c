@@ -165,9 +165,10 @@ void ivp_impact_system_solve(ivp_impact_system_t *sys,
 
     /* Fallback for standalone calls without pair graph. */
     if (ivp_array_len(&sys->pairs) == 0) {
-        start_contact->impacts_while_system++;
+        int pushes_before = start_contact->impacts_while_system;
         ivp_real_t imp0 = ivp_impact_resolve_system(&start_contact->cp, settings,
-                                                    start_contact->impacts_while_system);
+                                                    pushes_before);
+        start_contact->impacts_while_system = pushes_before + 1;
         sys->sum_of_pushes++;
         if (imp0 > IVP_IMPACT_EPS) sys->start_contact_impulse_sum += imp0;
         goto done;
@@ -237,9 +238,17 @@ void ivp_impact_system_solve(ivp_impact_system_t *sys,
         /* Resolve selected impact with system-aware conservation.
          * More cascading pushes → higher effective elasticity
          * to prevent accumulated energy drain. */
-        worst_contact->impacts_while_system++;
+        /* A contact that already penetrates can only be rescued by velocity
+         * at depth/dt, which explodes stacks; fix the position first. */
+        if (worst_contact->cp.gap_length < settings->min_coll_dist) {
+            ivp_contact_project_out_of_penetration(&worst_contact->cp,
+                                                   settings->min_coll_dist);
+        }
+
+        int pushes_before = worst_contact->impacts_while_system;
         ivp_real_t imp2 = ivp_impact_resolve_system(
-            &worst_contact->cp, settings, worst_contact->impacts_while_system);
+            &worst_contact->cp, settings, pushes_before);
+        worst_contact->impacts_while_system = pushes_before + 1;
         sys->sum_of_pushes++;
         if (worst_contact == start_contact && imp2 > IVP_IMPACT_EPS) {
             sys->start_contact_impulse_sum += imp2;

@@ -252,17 +252,17 @@ void ivp_environment_simulate_one_psi(ivp_environment_t *env);
 
 /* ── Controller API ────────────────────────────────────────────────────── */
 
-/* Add a controller. Returns controller id (>0) on success, -1 on failure.
- * Priority follows original IVP semantics:
- *   - priority < IVP_CP_GRAVITY: synchronous push stage
- *   - priority > IVP_CP_GRAVITY: asynchronous push stage
- *   - priority == IVP_CP_GRAVITY: explicit gravity-divider stage */
+/* Add a built-in controller. Returns a valid handle on success.
+ * Registration is strict: callback must be a known built-in controller type.
+ * Priority is derived from controller type; the priority argument is ignored. */
 ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env,
                                                int priority,
                                                ivp_controller_fn_t fn,
                                                void *ctx);
 
-/* Announce a dependent controller with dynamic associated-core discovery. */
+/* Announce a built-in dependent controller with dynamic associated-core
+ * discovery. Callback must be a known built-in type and discovery_fn must be non-NULL.
+ * Priority is derived from controller type; the priority argument is ignored. */
 ivp_controller_handle_t ivp_environment_announce_dependent_controller(
     ivp_environment_t *env,
     int priority,

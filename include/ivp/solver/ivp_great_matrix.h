@@ -20,10 +20,19 @@
 extern "C" {
 #endif
 
+/* ── Solver scalar ──────────────────────────────────────────────────────── */
+
+/* The reference engine runs IVP_Great_Matrix_Many_Zero entirely in
+ * IVP_DOUBLE even when the rest of the simulation is single precision:
+ * contact matrices for stacked bodies are badly conditioned and a float
+ * elimination injects enough error to blow stacks apart.  The public API
+ * stays in ivp_real_t; storage and elimination use this type. */
+typedef double ivp_gm_real_t;
+
 /* ── Dense matrix (augmented [A|b]) ─────────────────────────────────────── */
 
 typedef struct ivp_great_matrix {
-    ivp_real_t *data;       /* n × (n+1) row-major augmented matrix             */
+    ivp_gm_real_t *data;    /* n × (n+1) row-major augmented matrix (double)    */
     int        *pivot;      /* row permutation (pivot[row] = original_row)      */
     int         n;          /* matrix dimension                                  */
     int         capacity;   /* allocated columns (n+1)                          */
@@ -48,25 +57,25 @@ void ivp_great_matrix_clear(ivp_great_matrix_t *m);
 /* Set matrix element A[row][col]. */
 static inline void ivp_great_matrix_set(ivp_great_matrix_t *m,
                                          int row, int col, ivp_real_t val) {
-    m->data[row * m->capacity + col] = val;
+    m->data[row * m->capacity + col] = (ivp_gm_real_t)val;
 }
 
 /* Get matrix element A[row][col]. */
 static inline ivp_real_t ivp_great_matrix_get(const ivp_great_matrix_t *m,
                                                int row, int col) {
-    return m->data[row * m->capacity + col];
+    return (ivp_real_t)m->data[row * m->capacity + col];
 }
 
 /* Set right-hand-side b[row] (last column of augmented matrix). */
 static inline void ivp_great_matrix_set_rhs(ivp_great_matrix_t *m,
                                              int row, ivp_real_t val) {
-    m->data[row * m->capacity + m->n] = val;
+    m->data[row * m->capacity + m->n] = (ivp_gm_real_t)val;
 }
 
 /* Get right-hand-side b[row]. */
 static inline ivp_real_t ivp_great_matrix_get_rhs(const ivp_great_matrix_t *m,
                                                     int row) {
-    return m->data[row * m->capacity + m->n];
+    return (ivp_real_t)m->data[row * m->capacity + m->n];
 }
 
 /* ── Solver ─────────────────────────────────────────────────────────────── */

@@ -1191,7 +1191,13 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     /* --- Targets: 8 dynamic boxes 0.4×0.4×0.4 positioned in circle --- */
     #define N_TARGETS 8
     ivp_real_t radius = IVP_REAL(3.5);
-    ivp_real_t target_y = IVP_REAL(-6.4);
+    /* Start the targets just above the blade (blade spans y -7.05..-6.55,
+     * targets are 0.8 m tall) so nothing is spawned intersecting the blade.
+     * The two on-axis targets drop onto the blade and are carried away by
+     * it; the others fall clear.  Spawning them inside the blade (the old
+     * y = -6.4) made the outcome depend on how an invalid initial overlap
+     * happens to be resolved. */
+    ivp_real_t target_y = IVP_REAL(-7.9);
     ivp_compact_surface_t *target_surf = NULL;
     ivp_surman_polygon_t target_sm;
     if (!scenario_init_box_surman(0.4f, 0.4f, 0.4f, &target_surf, &target_sm)) {

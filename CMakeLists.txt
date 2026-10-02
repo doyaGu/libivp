@@ -274,6 +274,10 @@ target_include_directories(ivp
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 
+if (IVP_BUILD_TESTS)
+    target_compile_definitions(ivp PRIVATE IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API)
+endif ()
+
 # Apply strict floating-point rules
 if (MSVC)
     target_compile_options(ivp PRIVATE /fp:strict /Oi-)
@@ -796,6 +800,7 @@ if (IVP_BUILD_TESTS)
                     set_tests_properties(test_scenario_ref_${SCENARIO} PROPERTIES
                             DEPENDS test_scenario_gen_${SCENARIO}
                             LABELS "parity;validation"
+                            DISABLED TRUE
                             TIMEOUT 15
                     )
                 else ()

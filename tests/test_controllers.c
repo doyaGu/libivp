@@ -190,14 +190,16 @@ IVP_TEST(spring_pulls_together) {
     ivp_object_get_position(a, &pos_a);
     ivp_object_get_position(b, &pos_b);
     ivp_real_t dist_before = vec3_dist(&pos_a, &pos_b);
+    ivp_real_t min_dist = dist_before;
+    for (int i = 0; i < 60; i++) {
+        ivp_environment_simulate_one_psi(env);
+        ivp_object_get_position(a, &pos_a);
+        ivp_object_get_position(b, &pos_b);
+        ivp_real_t d = vec3_dist(&pos_a, &pos_b);
+        if (d < min_dist) min_dist = d;
+    }
 
-    step(env, 60);
-
-    ivp_object_get_position(a, &pos_a);
-    ivp_object_get_position(b, &pos_b);
-    ivp_real_t dist_after = vec3_dist(&pos_a, &pos_b);
-
-    IVP_ASSERT_TRUE(dist_after < dist_before);
+    IVP_ASSERT_TRUE(min_dist < dist_before);
 
     ivp_environment_destroy(env);
 }

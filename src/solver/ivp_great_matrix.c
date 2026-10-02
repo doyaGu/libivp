@@ -11,6 +11,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <string.h>
+#include <math.h>
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
@@ -22,11 +23,11 @@ ivp_result_t ivp_great_matrix_init(ivp_great_matrix_t *m, int n,
     }
 
     int cols = n + 1; /* augmented [A|b] */
-    size_t data_size = (size_t)n * (size_t)cols * sizeof(ivp_real_t);
+    size_t data_size = (size_t)n * (size_t)cols * sizeof(ivp_gm_real_t);
     size_t pivot_size = (size_t)n * sizeof(int);
 
     const ivp_allocator_t *a = alloc ? alloc : ivp_default_allocator();
-    m->data = (ivp_real_t *)ivp_alloc(a, data_size);
+    m->data = (ivp_gm_real_t *)ivp_alloc(a, data_size);
     if (!m->data) return IVP_ERR_OUT_OF_MEMORY;
 
     m->pivot = (int *)ivp_alloc(a, pivot_size);
@@ -48,7 +49,7 @@ void ivp_great_matrix_destroy(ivp_great_matrix_t *m, const ivp_allocator_t *allo
     if (!m) return;
     const ivp_allocator_t *a = alloc ? alloc : ivp_default_allocator();
     if (m->data) {
-        size_t data_size = (size_t)m->n * (size_t)m->capacity * sizeof(ivp_real_t);
+        size_t data_size = (size_t)m->n * (size_t)m->capacity * sizeof(ivp_gm_real_t);
         ivp_free(a, m->data, data_size);
         m->data = NULL;
     }
@@ -62,7 +63,7 @@ void ivp_great_matrix_destroy(ivp_great_matrix_t *m, const ivp_allocator_t *allo
 
 void ivp_great_matrix_clear(ivp_great_matrix_t *m)
 {
-    memset(m->data, 0, (size_t)m->n * (size_t)m->capacity * sizeof(ivp_real_t));
+    memset(m->data, 0, (size_t)m->n * (size_t)m->capacity * sizeof(ivp_gm_real_t));
     for (int i = 0; i < m->n; i++) {
         m->pivot[i] = i;
     }
@@ -74,10 +75,10 @@ static void swap_rows(ivp_great_matrix_t *m, int a, int b)
 {
     if (a == b) return;
     int cols = m->capacity;
-    ivp_real_t *row_a = m->data + a * cols;
-    ivp_real_t *row_b = m->data + b * cols;
+    ivp_gm_real_t *row_a = m->data + a * cols;
+    ivp_gm_real_t *row_b = m->data + b * cols;
     for (int j = 0; j < cols; j++) {
-        ivp_real_t tmp = row_a[j];
+        ivp_gm_real_t tmp = row_a[j];
         row_a[j] = row_b[j];
         row_b[j] = tmp;
     }
@@ -93,10 +94,10 @@ static void swap_rows(ivp_great_matrix_t *m, int a, int b)
 static int find_pivot(const ivp_great_matrix_t *m, int col, int start_row)
 {
     int best = start_row;
-    ivp_real_t best_val = ivp_fabs(m->data[start_row * m->capacity + col]);
+    ivp_gm_real_t best_val = fabs(m->data[start_row * m->capacity + col]);
 
     for (int i = start_row + 1; i < m->n; i++) {
-        ivp_real_t val = ivp_fabs(m->data[i * m->capacity + col]);
+        ivp_gm_real_t val = fabs(m->data[i * m->capacity + col]);
         if (val > best_val) {
             best_val = val;
             best = i;
@@ -111,32 +112,32 @@ static int find_pivot(const ivp_great_matrix_t *m, int col, int start_row)
  * Normalizes matrix by largest diagonal and RHS by largest element,
  * storing a correction factor to rescale results afterward.
  * This dramatically improves condition number for friction matrices. */
-static ivp_real_t normalize_matrix(ivp_great_matrix_t *m)
+static ivp_gm_real_t normalize_matrix(ivp_great_matrix_t *m)
 {
     int n = m->n;
     int cols = m->capacity;
 
     /* Find max diagonal */
-    ivp_real_t max_diag = IVP_REAL(0.0);
+    ivp_gm_real_t max_diag = 0.0;
     for (int i = 0; i < n; i++) {
-        ivp_real_t d = ivp_fabs(m->data[i * cols + i]);
+        ivp_gm_real_t d = fabs(m->data[i * cols + i]);
         if (d > max_diag) max_diag = d;
     }
 
     /* Find max |RHS| */
-    ivp_real_t max_rhs = IVP_REAL(0.0);
+    ivp_gm_real_t max_rhs = 0.0;
     for (int i = 0; i < n; i++) {
-        ivp_real_t r = ivp_fabs(m->data[i * cols + n]);
+        ivp_gm_real_t r = fabs(m->data[i * cols + n]);
         if (r > max_rhs) max_rhs = r;
     }
 
-    if (max_diag < IVP_REAL_EPS || max_rhs < IVP_REAL_EPS) {
-        return IVP_REAL(1.0);  /* nothing to normalize */
+    if (max_diag < (ivp_gm_real_t)IVP_REAL_EPS || max_rhs < (ivp_gm_real_t)IVP_REAL_EPS) {
+        return 1.0;  /* nothing to normalize */
     }
 
-    ivp_real_t a_norm = IVP_REAL(1.0) / max_diag;
-    ivp_real_t b_norm = IVP_REAL(1.0) / max_rhs;
-    ivp_real_t correct_x_factor = a_norm * max_rhs;  /* = max_rhs / max_diag */
+    ivp_gm_real_t a_norm = 1.0 / max_diag;
+    ivp_gm_real_t b_norm = 1.0 / max_rhs;
+    ivp_gm_real_t correct_x_factor = a_norm * max_rhs;  /* = max_rhs / max_diag */
 
     /* Scale matrix elements by a_norm */
     for (int i = 0; i < n; i++) {
@@ -166,9 +167,9 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
     int cols = m->capacity;
 
     /* Reference alignment: normalize matrix before solving */
-    ivp_real_t correct_x_factor = normalize_matrix(m);
+    ivp_gm_real_t correct_x_factor = normalize_matrix(m);
 
-    ivp_real_t det = IVP_REAL(1.0);
+    ivp_gm_real_t det = 1.0;
     int swaps = 0;
 
     /* Forward elimination with partial pivoting */
@@ -180,52 +181,53 @@ ivp_result_t ivp_great_matrix_solve_det(ivp_great_matrix_t *m,
             swaps++;
         }
 
-        ivp_real_t diag = m->data[j * cols + j];
+        ivp_gm_real_t diag = m->data[j * cols + j];
         det *= diag;
 
         /* Reference alignment: graceful singular row handling
          * (ivp_great_matrix.cxx solve_lower_null_matrix ~L619).
          * If both diagonal and RHS are near-zero, set x[i] = 0
          * instead of failing. Only fail if truly inconsistent. */
-        if (ivp_fabs(diag) < IVP_SOLVER_MATRIX_EPS) {
-            ivp_real_t rhs = m->data[j * cols + n];
-            if (ivp_fabs(rhs) < IVP_SOLVER_MATRIX_EPS * IVP_REAL(1000.0)) {
+        if (fabs(diag) < (ivp_gm_real_t)IVP_SOLVER_MATRIX_EPS) {
+            ivp_gm_real_t rhs = m->data[j * cols + n];
+            if (fabs(rhs) < (ivp_gm_real_t)IVP_SOLVER_MATRIX_EPS * 1000.0) {
                 /* Degenerate row: set result to 0 */
-                m->data[j * cols + n] = IVP_REAL(0.0);
-                m->data[j * cols + j] = IVP_REAL(1.0);  /* prevent div-by-zero */
+                m->data[j * cols + n] = 0.0;
+                m->data[j * cols + j] = 1.0;  /* prevent div-by-zero */
                 continue;
             }
-            if (det_out) *det_out = IVP_REAL(0.0);
+            if (det_out) *det_out = (ivp_real_t)0.0;
             return IVP_ERR_SINGULAR_MATRIX;
         }
 
         /* Eliminate below */
-        ivp_real_t inv_diag = IVP_REAL(1.0) / diag;
+        ivp_gm_real_t inv_diag = 1.0 / diag;
         for (int i = j + 1; i < n; i++) {
-            ivp_real_t factor = m->data[i * cols + j] * inv_diag;
-            m->data[i * cols + j] = IVP_REAL(0.0);
+            ivp_gm_real_t factor = m->data[i * cols + j] * inv_diag;
+            m->data[i * cols + j] = 0.0;
             for (int k = j + 1; k < cols; k++) {
                 m->data[i * cols + k] -= factor * m->data[j * cols + k];
             }
         }
     }
 
-    /* Back substitution */
+    /* Back substitution, kept in solver precision until the final store */
+    ivp_gm_real_t xd[IVP_MAX_GREAT_MATRIX_SIZE];
     for (int i = n - 1; i >= 0; i--) {
-        ivp_real_t sum = m->data[i * cols + n]; /* RHS */
+        ivp_gm_real_t sum = m->data[i * cols + n]; /* RHS */
         for (int j = i + 1; j < n; j++) {
-            sum -= m->data[i * cols + j] * x[j];
+            sum -= m->data[i * cols + j] * xd[j];
         }
-        x[i] = sum / m->data[i * cols + i];
+        xd[i] = sum / m->data[i * cols + i];
     }
 
     /* Reference alignment: rescale results by correct_x_factor */
     for (int i = 0; i < n; i++) {
-        x[i] *= correct_x_factor;
+        x[i] = (ivp_real_t)(xd[i] * correct_x_factor);
     }
 
     if (det_out) {
-        *det_out = (swaps & 1) ? -det : det;
+        *det_out = (ivp_real_t)((swaps & 1) ? -det : det);
     }
     return IVP_OK;
 }
@@ -254,8 +256,8 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
 
     /* We need a working copy of the original matrix since Gauss elimination
      * is destructive.  Store the original in a flat buffer. */
-    size_t orig_size = (size_t)n * (size_t)m->capacity * sizeof(ivp_real_t);
-    ivp_real_t *orig_data = (ivp_real_t *)ivp_alloc(a, orig_size);
+    size_t orig_size = (size_t)n * (size_t)m->capacity * sizeof(ivp_gm_real_t);
+    ivp_gm_real_t *orig_data = (ivp_gm_real_t *)ivp_alloc(a, orig_size);
     if (!orig_data) {
         ivp_free(a, active, bool_size);
         return IVP_ERR_OUT_OF_MEMORY;
@@ -272,7 +274,7 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
 
         if (n_active == 0) {
             /* All deactivated */
-            for (int i = 0; i < n; i++) x[i] = IVP_REAL(0.0);
+            for (int i = 0; i < n; i++) x[i] = (ivp_real_t)0.0;
             break;
         }
 
@@ -315,12 +317,12 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
             int fi = reduced_to_full[ri2];
             for (int rj = 0; rj < n_active; rj++) {
                 int fj = reduced_to_full[rj];
-                ivp_real_t val = orig_data[fi * m->capacity + fj];
-                ivp_great_matrix_set(&rm, ri2, rj, val);
+                ivp_gm_real_t val = orig_data[fi * m->capacity + fj];
+                rm.data[ri2 * rm.capacity + rj] = val; /* keep solver precision */
             }
             /* RHS from original (last column) */
-            ivp_real_t rhs = orig_data[fi * m->capacity + n];
-            ivp_great_matrix_set_rhs(&rm, ri2, rhs);
+            ivp_gm_real_t rhs = orig_data[fi * m->capacity + n];
+            rm.data[ri2 * rm.capacity + rm.n] = rhs;
         }
 
         /* Solve reduced system */
@@ -340,7 +342,7 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
 
         if (res != IVP_OK) {
             /* Singular: fall back to all zeros for active set */
-            for (int i = 0; i < n; i++) x[i] = IVP_REAL(0.0);
+            for (int i = 0; i < n; i++) x[i] = (ivp_real_t)0.0;
             ivp_free(a, x_reduced, xr_size);
             ivp_free(a, full_to_reduced, map_size);
             ivp_free(a, reduced_to_full, map_size);
@@ -350,7 +352,7 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
         }
 
         /* Map back to full-size result */
-        for (int i = 0; i < n; i++) x[i] = IVP_REAL(0.0);
+        for (int i = 0; i < n; i++) x[i] = (ivp_real_t)0.0;
         for (int ri2 = 0; ri2 < n_active; ri2++) {
             x[reduced_to_full[ri2]] = x_reduced[ri2];
         }
@@ -361,7 +363,7 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
 
         /* Check for negative impulses */
         int worst_idx = -1;
-        ivp_real_t worst_val = IVP_REAL(0.0);
+        ivp_real_t worst_val = (ivp_real_t)0.0;
         for (int i = 0; i < n; i++) {
             if (active[i] && x[i] < -IVP_SOLVER_STATIC_FRICTION_EPS) {
                 if (x[i] < worst_val) {
@@ -378,7 +380,7 @@ ivp_result_t ivp_great_matrix_solve_unilateral(ivp_great_matrix_t *m,
 
         /* Deactivate the most negative contact and re-solve */
         active[worst_idx] = 0;
-        x[worst_idx] = IVP_REAL(0.0);
+        x[worst_idx] = (ivp_real_t)0.0;
     }
 
     /* Record metrics if active */
@@ -412,7 +414,7 @@ ivp_result_t ivp_great_matrix_solve_active_subset(const ivp_great_matrix_t *m,
     int n_active = 0;
     for (int i = 0; i < n; i++) {
         if (active_mask[i]) n_active++;
-        x[i] = IVP_REAL(0.0);
+        x[i] = (ivp_real_t)0.0;
     }
     if (n_active <= 0) return IVP_OK;
 
@@ -448,9 +450,9 @@ ivp_result_t ivp_great_matrix_solve_active_subset(const ivp_great_matrix_t *m,
         int fi = reduced_to_full[i];
         for (int j = 0; j < n_active; j++) {
             int fj = reduced_to_full[j];
-            ivp_great_matrix_set(&rm, i, j, m->data[fi * m->capacity + fj]);
+            rm.data[i * rm.capacity + j] = m->data[fi * m->capacity + fj]; /* keep solver precision */
         }
-        ivp_great_matrix_set_rhs(&rm, i, m->data[fi * m->capacity + n]);
+        rm.data[i * rm.capacity + rm.n] = m->data[fi * m->capacity + n];
     }
 
     size_t x_sub_size = (size_t)n_active * sizeof(ivp_real_t);
@@ -483,7 +485,7 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
 {
     int n = m->n;
     int cols = m->capacity;
-    ivp_real_t det = IVP_REAL(1.0);
+    ivp_gm_real_t det = 1.0;
     int swaps = 0;
 
     for (int j = 0; j < n; j++) {
@@ -493,24 +495,24 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
             swaps++;
         }
 
-        ivp_real_t diag = m->data[j * cols + j];
+        ivp_gm_real_t diag = m->data[j * cols + j];
         det *= diag;
 
-        if (ivp_fabs(diag) < IVP_SOLVER_MATRIX_EPS) {
-            *det_out = IVP_REAL(0.0);
+        if (fabs(diag) < (ivp_gm_real_t)IVP_SOLVER_MATRIX_EPS) {
+            *det_out = (ivp_real_t)0.0;
             return IVP_OK; /* singular but determinant is valid (= 0) */
         }
 
-        ivp_real_t inv_diag = IVP_REAL(1.0) / diag;
+        ivp_gm_real_t inv_diag = 1.0 / diag;
         for (int i = j + 1; i < n; i++) {
-            ivp_real_t factor = m->data[i * cols + j] * inv_diag;
-            m->data[i * cols + j] = IVP_REAL(0.0);
+            ivp_gm_real_t factor = m->data[i * cols + j] * inv_diag;
+            m->data[i * cols + j] = 0.0;
             for (int k = j + 1; k < cols; k++) {
                 m->data[i * cols + k] -= factor * m->data[j * cols + k];
             }
         }
     }
 
-    *det_out = (swaps & 1) ? -det : det;
+    *det_out = (ivp_real_t)((swaps & 1) ? -det : det);
     return IVP_OK;
 }

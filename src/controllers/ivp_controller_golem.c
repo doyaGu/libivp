@@ -62,7 +62,7 @@ void ivp_controller_golem(const ivp_event_sim_t *event_sim,
         ivp_core_get_position(core, &cur_pos);
 
         ivp_vec3r_t diff;
-        ivp_vec3r_sub(&state->target_position, &cur_pos, &diff);
+        ivp_vec3r_sub(&diff, &state->target_position, &cur_pos);
         pos_error = (ivp_real_t)sqrt((double)ivp_vec3r_quad_length(&diff));
 
         /* Compute desired velocity = gain * (target - current) / dt */
@@ -89,7 +89,7 @@ void ivp_controller_golem(const ivp_event_sim_t *event_sim,
         ivp_core_get_speed(core, &cur_speed);
 
         ivp_vec3r_t impulse;
-        ivp_vec3r_sub(&desired_speed, &cur_speed, &impulse);
+        ivp_vec3r_sub(&impulse, &desired_speed, &cur_speed);
         impulse.k[0] *= core->mass;
         impulse.k[1] *= core->mass;
         impulse.k[2] *= core->mass;

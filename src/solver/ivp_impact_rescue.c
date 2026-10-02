@@ -33,8 +33,13 @@ ivp_real_t ivp_impact_rot_speed_uncertainty(const ivp_contact_point_t *cp,
             alpha = IVP_ROT_MAX_UNCERTAINTY;
         }
 
+        /* Reference: IVP_Inline_Math::cosd(alpha) -- alpha is treated as
+         * DEGREES there (IVP_ROT_MAX_UNCERTAINTY is "max rot degree").  Using
+         * radians here inflated the uncertainty ~3000x and turned the rescue
+         * speed into tens of m/s for any rotating body. */
+        ivp_real_t alpha_rad = alpha * (ivp_real_t)(3.14159265358979323846 / 180.0);
         ivp_real_t uncertain_way =
-            (IVP_REAL(1.0) - ivp_cos(alpha)) * obj->core.upper_limit_radius;
+            (IVP_REAL(1.0) - ivp_cos(alpha_rad)) * obj->core.upper_limit_radius;
         rot_uncertainty += uncertain_way * settings->inv_delta_psi_time;
     }
     return rot_uncertainty;

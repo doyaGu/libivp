@@ -7,6 +7,7 @@
  */
 
 #include "ivp_test.h"
+#include "ivp_test_controller_api.h"
 #include <ivp/base/ivp_types.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_environment_collision.h>
@@ -212,7 +213,7 @@ IVP_TEST(event_controller_added) {
     IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(handle));
 
     /* Now add a controller, which should trigger CONTROLLER_ADDED event */
-    ivp_controller_handle_t ctrl_handle = ivp_environment_add_controller(env, 0, dummy_controller, NULL);
+    ivp_controller_handle_t ctrl_handle = ivp_test_environment_add_custom_controller(env, 0, dummy_controller, NULL);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl_handle));
 
     /* Verify we received CONTROLLER_ADDED event */
@@ -248,7 +249,7 @@ IVP_TEST(event_controller_removed) {
     IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(handle));
 
     /* Add a controller */
-    ivp_controller_handle_t ctrl_handle = ivp_environment_add_controller(env, 0, dummy_controller, NULL);
+    ivp_controller_handle_t ctrl_handle = ivp_test_environment_add_custom_controller(env, 0, dummy_controller, NULL);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl_handle));
 
     /* Clear tracker to focus on removal event */

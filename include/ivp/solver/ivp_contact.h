@@ -136,6 +136,13 @@ void ivp_contact_relative_velocity(const ivp_contact_point_t *cp,
 void ivp_contact_apply_impulse(ivp_contact_point_t *cp, ivp_real_t impulse);
 
 /* Apply impulse in an arbitrary world-space direction. */
+/* Move the two bodies apart along the contact normal (split by inverse mass)
+ * until gap_length == coll_dist.  Used before resolving an impact on a contact
+ * that already penetrates but is no longer closing: the velocity-based rescue
+ * term would otherwise demand depth/dt of separation speed. */
+void ivp_contact_project_out_of_penetration(ivp_contact_point_t *cp,
+                                            ivp_real_t coll_dist);
+
 void ivp_contact_apply_impulse_dir(ivp_contact_point_t *cp,
                                     const ivp_vec3r_t *direction,
                                     ivp_real_t impulse);

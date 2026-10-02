@@ -372,6 +372,210 @@ static bool compute_triangle_normal_world(const ivp_core_t *core,
 
 /* ── Polygon vs polygon contact ─────────────────────────────────────────── */
 
+/* ── Separating-axis minimum translation for two convex ledges ─────────── */
+
+/* Both ledges must be expressed in the same object space.  Tests every face
+ * normal of A and B plus (for small ledges) every edge-edge cross product,
+ * and returns the axis with the smallest projection overlap.  Used when the
+ * closest-feature pair cannot define a direction: touching or overlapping
+ * shapes.  Example: two identical cubes stacked flush have closest-pair
+ * distance 0 on *every* shared edge, and the feature pair the hill climber
+ * lands on may be a side face, which would push the stack apart sideways. */
+
+static void sat_load_triangle(const ivp_compact_ledge_t *ledge,
+                              const ivp_compact_triangle_t *tri,
+                              ivp_vec3r_t v[3])
+{
+    for (int e = 0; e < 3; e++) {
+        const ivp_compact_edge_t *edge = ivp_tri_get_edge(tri, e);
+        const ivp_compact_poly_point_t *pp = ivp_edge_get_start_point(edge, ledge);
+        v[e] = ivp_vec3r((ivp_real_t)pp->k[0], (ivp_real_t)pp->k[1], (ivp_real_t)pp->k[2]);
+    }
+}
+
+static void sat_project(const ivp_compact_ledge_t *ledge,
+                        const ivp_vec3r_t *axis,
+                        ivp_real_t *lo_out, ivp_real_t *hi_out)
+{
+    int n = ivp_ledge_get_n_points(ledge);
+    const ivp_compact_poly_point_t *pts = ivp_ledge_get_point_array(ledge);
+    ivp_real_t lo = IVP_REAL_MAX;
+    ivp_real_t hi = -IVP_REAL_MAX;
+    for (int i = 0; i < n; i++) {
+        ivp_real_t d = axis->k[0] * (ivp_real_t)pts[i].k[0]
+                     + axis->k[1] * (ivp_real_t)pts[i].k[1]
+                     + axis->k[2] * (ivp_real_t)pts[i].k[2];
+        if (d < lo) lo = d;
+        if (d > hi) hi = d;
+    }
+    *lo_out = lo;
+    *hi_out = hi;
+}
+
+typedef struct sat_best {
+    ivp_vec3r_t axis;
+    ivp_real_t  overlap;
+    bool        valid;
+} sat_best_t;
+
+static void sat_test_axis(const ivp_compact_ledge_t *la,
+                          const ivp_compact_ledge_t *lb,
+                          const ivp_vec3r_t *axis_raw,
+                          sat_best_t *best)
+{
+    ivp_real_t ql = ivp_vec3r_quad_length(axis_raw);
+    if (ql < IVP_REAL(1e-12)) return;
+    ivp_real_t inv = IVP_REAL(1.0) / ivp_sqrt(ql);
+    ivp_vec3r_t axis;
+    ivp_vec3r_scale(&axis, axis_raw, inv);
+
+    ivp_real_t lo_a, hi_a, lo_b, hi_b;
+    sat_project(la, &axis, &lo_a, &hi_a);
+    sat_project(lb, &axis, &lo_b, &hi_b);
+    ivp_real_t hi = hi_a < hi_b ? hi_a : hi_b;
+    ivp_real_t lo = lo_a > lo_b ? lo_a : lo_b;
+    ivp_real_t overlap = hi - lo;
+    if (!best->valid || overlap < best->overlap) {
+        best->overlap = overlap;
+        best->axis = axis;
+        best->valid = true;
+    }
+}
+
+/* Returns false when no axis could be evaluated.  axis_out points from A
+ * toward B (judged by B's center in A space); depth_out is the overlap along
+ * it, negative when a separating axis exists. */
+static bool compute_sat_mtd(const ivp_compact_ledge_t *la,
+                            const ivp_compact_ledge_t *lb,
+                            const ivp_vec3r_t *center_b_in_a,
+                            ivp_vec3r_t *axis_out,
+                            ivp_real_t *depth_out)
+{
+    sat_best_t best;
+    memset(&best, 0, sizeof(best));
+
+    int n_tri_a = ivp_ledge_get_n_triangles(la);
+    int n_tri_b = ivp_ledge_get_n_triangles(lb);
+    const ivp_compact_triangle_t *tri_a = ivp_ledge_get_first_triangle(la);
+    const ivp_compact_triangle_t *tri_b = ivp_ledge_get_first_triangle(lb);
+    if (n_tri_a <= 0 || n_tri_b <= 0 || !tri_a || !tri_b) return false;
+
+    ivp_vec3r_t v[3], e0, e1, n;
+    for (int t = 0; t < n_tri_a; t++) {
+        sat_load_triangle(la, &tri_a[t], v);
+        ivp_vec3r_sub(&e0, &v[1], &v[0]);
+        ivp_vec3r_sub(&e1, &v[2], &v[0]);
+        ivp_vec3r_cross(&n, &e0, &e1);
+        sat_test_axis(la, lb, &n, &best);
+    }
+    for (int t = 0; t < n_tri_b; t++) {
+        sat_load_triangle(lb, &tri_b[t], v);
+        ivp_vec3r_sub(&e0, &v[1], &v[0]);
+        ivp_vec3r_sub(&e1, &v[2], &v[0]);
+        ivp_vec3r_cross(&n, &e0, &e1);
+        sat_test_axis(la, lb, &n, &best);
+    }
+
+    /* Edge-edge axes: O(Ea * Eb); only for small ledges. */
+    if (n_tri_a * n_tri_b <= 256) {
+        ivp_vec3r_t va[3], vb[3], ea, eb, cx;
+        for (int ta = 0; ta < n_tri_a; ta++) {
+            sat_load_triangle(la, &tri_a[ta], va);
+            for (int ia = 0; ia < 3; ia++) {
+                ivp_vec3r_sub(&ea, &va[(ia + 1) % 3], &va[ia]);
+                for (int tb = 0; tb < n_tri_b; tb++) {
+                    sat_load_triangle(lb, &tri_b[tb], vb);
+                    for (int ib = 0; ib < 3; ib++) {
+                        ivp_vec3r_sub(&eb, &vb[(ib + 1) % 3], &vb[ib]);
+                        ivp_vec3r_cross(&cx, &ea, &eb);
+                        sat_test_axis(la, lb, &cx, &best);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!best.valid) return false;
+    if (ivp_vec3r_dot(&best.axis, center_b_in_a) < IVP_REAL(0.0)) {
+        ivp_vec3r_scale(&best.axis, &best.axis, IVP_REAL(-1.0));
+    }
+    *axis_out = best.axis;
+    *depth_out = best.overlap;
+    return true;
+}
+
+/* Contact patch centre for a SAT (face-type) contact.  Vertices of each ledge
+ * lying on its support plane along `axis` form the touching set; the side with
+ * the smaller patch defines the centre, the other point is that centre moved
+ * along the axis onto the partner's support plane.  This keeps the lever arms
+ * of a small box resting on a large plate correct (box bottom centre, under the
+ * box) instead of a random corner from the closest-pair search. */
+static void sat_touching_centroid(const ivp_compact_ledge_t *ledge,
+                                  const ivp_vec3r_t *axis,
+                                  ivp_real_t plane,
+                                  bool take_above,
+                                  ivp_real_t tol,
+                                  ivp_vec3r_t *centroid_out,
+                                  ivp_real_t *extent_out)
+{
+    int n = ivp_ledge_get_n_points(ledge);
+    const ivp_compact_poly_point_t *pts = ivp_ledge_get_point_array(ledge);
+    ivp_vec3r_t sum = {{IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0)}};
+    ivp_vec3r_t lo = {{IVP_REAL_MAX, IVP_REAL_MAX, IVP_REAL_MAX}};
+    ivp_vec3r_t hi = {{-IVP_REAL_MAX, -IVP_REAL_MAX, -IVP_REAL_MAX}};
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        ivp_vec3r_t v = ivp_vec3r((ivp_real_t)pts[i].k[0], (ivp_real_t)pts[i].k[1], (ivp_real_t)pts[i].k[2]);
+        ivp_real_t d = ivp_vec3r_dot(axis, &v);
+        bool touching = take_above ? (d >= plane - tol) : (d <= plane + tol);
+        if (!touching) continue;
+        ivp_vec3r_add(&sum, &sum, &v);
+        for (int k = 0; k < 3; k++) {
+            if (v.k[k] < lo.k[k]) lo.k[k] = v.k[k];
+            if (v.k[k] > hi.k[k]) hi.k[k] = v.k[k];
+        }
+        count++;
+    }
+    if (count == 0) {
+        ivp_vec3r_set_zero(centroid_out);
+        *extent_out = IVP_REAL_MAX;
+        return;
+    }
+    ivp_vec3r_scale(centroid_out, &sum, IVP_REAL(1.0) / (ivp_real_t)count);
+    ivp_vec3r_t diag;
+    ivp_vec3r_sub(&diag, &hi, &lo);
+    *extent_out = ivp_vec3r_length(&diag);
+}
+
+static void sat_contact_patch(const ivp_compact_ledge_t *la,
+                              const ivp_compact_ledge_t *lb,
+                              const ivp_vec3r_t *axis,
+                              ivp_vec3r_t *point_a_out,
+                              ivp_vec3r_t *point_b_out)
+{
+    ivp_real_t lo_a, hi_a, lo_b, hi_b;
+    sat_project(la, axis, &lo_a, &hi_a);
+    sat_project(lb, axis, &lo_b, &hi_b);
+    /* axis points A -> B: A's support plane is hi_a, B's is lo_b. */
+    ivp_real_t overlap = hi_a - lo_b;
+    ivp_real_t tol = IVP_REAL(2e-3) + (overlap > IVP_REAL(0.0) ? overlap : IVP_REAL(0.0));
+
+    ivp_vec3r_t ca, cb;
+    ivp_real_t ext_a, ext_b;
+    sat_touching_centroid(la, axis, hi_a, true, tol, &ca, &ext_a);
+    sat_touching_centroid(lb, axis, lo_b, false, tol, &cb, &ext_b);
+
+    if (ext_b <= ext_a) {
+        *point_b_out = cb;
+        *point_a_out = cb;
+        ivp_vec3r_add_scaled(point_a_out, axis, hi_a - ivp_vec3r_dot(axis, &cb));
+    } else {
+        *point_a_out = ca;
+        *point_b_out = ca;
+        ivp_vec3r_add_scaled(point_b_out, axis, lo_b - ivp_vec3r_dot(axis, &ca));
+    }
+}
+
 void ivp_contact_compute_polygon_polygon(ivp_contact_point_t *cp)
 {
     const ivp_core_t *ca = &cp->obj_a->core;
@@ -617,6 +821,41 @@ void ivp_contact_compute_polygon_polygon(ivp_contact_point_t *cp)
         }
     }
 
+    /* Degenerate-direction rescue: when the closest pair is (nearly) touching
+     * or the shapes overlap, the pair direction is meaningless.  Compute the
+     * separating-axis minimum translation while B is still in A's space. */
+    bool sat_ok = false;
+    ivp_vec3r_t sat_axis_os;
+    ivp_vec3r_t sat_point_a_os;
+    ivp_vec3r_t sat_point_b_os;
+    ivp_real_t sat_depth = IVP_REAL(0.0);
+    if (res == IVP_OK) {
+        ivp_vec3r_t pair_diff;
+        ivp_vec3r_sub(&pair_diff, &pair.point_b, &pair.point_a);
+        ivp_real_t pair_agreement = ivp_vec3r_dot(&pair_diff, &b_in_a.pos);
+        ivp_real_t pair_qdist = ivp_vec3r_quad_length(&pair_diff);
+        /* Try SAT for touching/overlapping pairs and for small gaps.  For a
+         * small positive gap the pair direction is unreliable whenever the
+         * closest points lie on coplanar side faces (flush stacked boxes), so
+         * take the SAT axis when it explains most of the pair distance; a
+         * genuine vertex-vertex closest pair keeps the pair direction. */
+        if (pair_qdist <= IVP_REAL(1e-6) || pair_agreement < IVP_REAL(0.0) ||
+            pair_qdist <= IVP_REAL(0.01)) {   /* within 10 cm */
+            sat_ok = compute_sat_mtd(ledge_a, ledge_b_tx, &b_in_a.pos,
+                                     &sat_axis_os, &sat_depth);
+            if (sat_ok && pair_qdist > IVP_REAL(1e-6) && pair_agreement >= IVP_REAL(0.0)) {
+                ivp_real_t pair_dist = ivp_sqrt(pair_qdist);
+                if (-sat_depth < IVP_REAL(0.5) * pair_dist) {
+                    sat_ok = false;
+                }
+            }
+            if (sat_ok) {
+                sat_contact_patch(ledge_a, ledge_b_tx, &sat_axis_os,
+                                  &sat_point_a_os, &sat_point_b_os);
+            }
+        }
+    }
+
     if (buf != stack_buf) ivp_free(alloc, buf, (size_t)ledge_b_size);
 
     if (res != IVP_OK) {
@@ -625,10 +864,17 @@ void ivp_contact_compute_polygon_polygon(ivp_contact_point_t *cp)
     }
 
     /* Transform results from A's object space to world space */
-    ivp_transform_point(&cp->point_a,
-                         &ca->m_world_f_core_last_psi, &pair.point_a);
-    ivp_transform_point(&cp->point_b,
-                         &ca->m_world_f_core_last_psi, &pair.point_b);
+    if (sat_ok) {
+        ivp_transform_point(&cp->point_a,
+                             &ca->m_world_f_core_last_psi, &sat_point_a_os);
+        ivp_transform_point(&cp->point_b,
+                             &ca->m_world_f_core_last_psi, &sat_point_b_os);
+    } else {
+        ivp_transform_point(&cp->point_a,
+                             &ca->m_world_f_core_last_psi, &pair.point_a);
+        ivp_transform_point(&cp->point_b,
+                             &ca->m_world_f_core_last_psi, &pair.point_b);
+    }
 
     /* Compute contact normal from the closest surface pair.
      *
@@ -650,7 +896,12 @@ void ivp_contact_compute_polygon_polygon(ivp_contact_point_t *cp)
     /* Check if surface direction agrees with center-to-center */
     ivp_real_t agreement = ivp_vec3r_dot(&surf_diff, &center_diff);
     ivp_real_t surf_dist = ivp_vec3r_length(&surf_diff);
-    if (surf_dist > IVP_REAL_EPS) {
+    if (sat_ok) {
+        /* Minimum-translation axis from SAT: normal A→B in world space,
+         * gap = -overlap (0 when exactly touching, negative when inside). */
+        ivp_mat3r_vmult(&cp->normal, &ca->m_world_f_core_last_psi.rot, &sat_axis_os);
+        (void)ivp_vec3r_normalize(&cp->normal);
+    } else if (surf_dist > IVP_REAL_EPS) {
         ivp_real_t inv_sd = IVP_REAL(1.0) / surf_dist;
         cp->normal.k[0] = surf_diff.k[0] * inv_sd;
         cp->normal.k[1] = surf_diff.k[1] * inv_sd;
@@ -693,42 +944,19 @@ void ivp_contact_compute_polygon_polygon(ivp_contact_point_t *cp)
     }
 
     /* Signed gap: positive when separated, negative when overlapping */
-    if (surf_dist > IVP_REAL_EPS) {
+    if (sat_ok) {
+        cp->gap_length = -sat_depth;
+    } else if (surf_dist > IVP_REAL_EPS) {
         cp->gap_length = (agreement >= IVP_REAL(0.0)) ? surf_dist : -surf_dist;
     } else {
         cp->gap_length = IVP_REAL(0.0);
     }
 
-    /* Project contact points onto the normal axis through each center.
-     *
-     * The closest-pair algorithm returns the closest POINT pair, which for
-     * overlapping boxes is often a corner (e.g., r_b = (0.5, 0.5, 0.5) for a
-     * unit box).  The large tangential component of r causes cross(r, n) ≠ 0,
-     * inflating the angular term in virtual mass so that the impulse is far too
-     * weak for face-to-face contacts.
-     *
-     * By projecting r onto the normal, the tangential component is removed:
-     *   r' = (r · n) * n   →   cross(r', n) = 0   →   angular_term = 0
-     *   →   vm = mass (correct for face contacts).
-     *
-     * The gap_length is already computed from the original surface pair and is
-     * unaffected. */
-    {
-        ivp_vec3r_t ra_raw, rb_raw;
-        ivp_vec3r_sub(&ra_raw, &cp->point_a, &ca->pos_world_f_core_last_psi);
-        ivp_vec3r_sub(&rb_raw, &cp->point_b, &cb->pos_world_f_core_last_psi);
-
-        ivp_real_t proj_a = ivp_vec3r_dot(&ra_raw, &cp->normal);
-        ivp_real_t proj_b = ivp_vec3r_dot(&rb_raw, &cp->normal);
-
-        for (int i = 0; i < 3; i++) {
-            cp->point_a.k[i] = ca->pos_world_f_core_last_psi.k[i]
-                              + proj_a * cp->normal.k[i];
-            cp->point_b.k[i] = cb->pos_world_f_core_last_psi.k[i]
-                              + proj_b * cp->normal.k[i];
-        }
-    }
-
+    /* Contact points keep their real lever arms: a face contact uses the
+     * patch centre from sat_contact_patch(), other contacts the closest pair.
+     * Projecting r onto the normal (an earlier workaround) removed every
+     * tangential lever arm, so rotating supports produced no relative surface
+     * velocity, no friction and no impact torque. */
     finalize_contact_geometry(cp);
 }
 
@@ -1252,6 +1480,36 @@ ivp_real_t ivp_contact_closing_speed(const ivp_contact_point_t *cp)
 void ivp_contact_apply_impulse(ivp_contact_point_t *cp, ivp_real_t impulse)
 {
     ivp_contact_apply_impulse_dir(cp, &cp->normal, impulse);
+}
+
+void ivp_contact_project_out_of_penetration(ivp_contact_point_t *cp,
+                                            ivp_real_t coll_dist)
+{
+    if (!cp || !cp->obj_a || !cp->obj_b) return;
+    ivp_real_t depth = coll_dist - cp->gap_length;
+    if (depth <= IVP_REAL(0.0)) return;
+
+    ivp_core_t *ca = &cp->obj_a->core;
+    ivp_core_t *cb = &cp->obj_b->core;
+    ivp_real_t inv_a = ca->physical_unmoveable ? IVP_REAL(0.0) : ca->inv_mass;
+    ivp_real_t inv_b = cb->physical_unmoveable ? IVP_REAL(0.0) : cb->inv_mass;
+    ivp_real_t inv_sum = inv_a + inv_b;
+    if (inv_sum <= IVP_REAL_EPS) return;
+
+    /* normal points A -> B: move A against it, B along it. */
+    ivp_real_t shift_a = -depth * inv_a / inv_sum;
+    ivp_real_t shift_b = depth * inv_b / inv_sum;
+    if (shift_a != IVP_REAL(0.0)) {
+        ivp_vec3r_add_scaled(&ca->pos_world_f_core_last_psi, &cp->normal, shift_a);
+        ivp_vec3r_add_scaled(&ca->m_world_f_core_last_psi.pos, &cp->normal, shift_a);
+        ivp_vec3r_add_scaled(&cp->point_a, &cp->normal, shift_a);
+    }
+    if (shift_b != IVP_REAL(0.0)) {
+        ivp_vec3r_add_scaled(&cb->pos_world_f_core_last_psi, &cp->normal, shift_b);
+        ivp_vec3r_add_scaled(&cb->m_world_f_core_last_psi.pos, &cp->normal, shift_b);
+        ivp_vec3r_add_scaled(&cp->point_b, &cp->normal, shift_b);
+    }
+    cp->gap_length = coll_dist;
 }
 
 void ivp_contact_apply_impulse_dir(ivp_contact_point_t *cp,

@@ -6,7 +6,7 @@
  *
  * If deviation exceeds thresholds, calls a user-provided problem_fn.
  *
- * Registered as a standard controller via ivp_environment_add_controller().
+ * Registered as a built-in controller via ivp_environment_add_controller().
  *
  * Ported from ivp_controller/ivp_controller_golem.hxx.
  */
@@ -79,7 +79,8 @@ void ivp_golem_set_target_orientation(ivp_golem_state_t *state,
 /* ── Controller callback ───────────────────────────────────────────────── */
 
 /* The controller callback. Pass an ivp_golem_state_t* as ctx.
- * Register with ivp_environment_add_controller(env, priority, fn, state). */
+ * Register with ivp_environment_add_controller(env, any_priority, fn, state).
+ * Built-in priorities are type-driven; the priority argument is ignored. */
 void ivp_controller_golem(const ivp_event_sim_t *event_sim,
                           ivp_object_t *obj,
                           void *ctx);

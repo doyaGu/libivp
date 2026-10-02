@@ -368,6 +368,22 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
     ivp_real_t virtual_speed   = closing_speed;
     ivp_real_t give_back_speed = virtual_speed * effective_e;
 
+    /* Fast path for inelastic single-contact impacts.
+     * Resolve normal closing speed analytically and skip iterative cone
+     * steering, which is the main source of lateral energy bursts in stacks. */
+    if (pushes_while_system == 0 && cp->elasticity <= IVP_REAL_EPS) {
+        if (closing_speed > IVP_IMPACT_EPS) {
+            ivp_real_t impulse = cp->virtual_mass * closing_speed;
+            if (impulse > IVP_REAL_EPS) {
+                ivp_contact_apply_impulse(cp, impulse);
+                w.integral_pushes.k[0] = cp->normal.k[0] * impulse;
+                w.integral_pushes.k[1] = cp->normal.k[1] * impulse;
+                w.integral_pushes.k[2] = cp->normal.k[2] * impulse;
+            }
+        }
+        goto delay_test;
+    }
+
     /* System addon for cascaded impacts */
     if (pushes_while_system > 0) {
         give_back_speed += IVP_SPEED_ADDON_SYSTEM_IMPACT
@@ -406,8 +422,14 @@ static ivp_real_t ivp_impact_resolve_iterative(ivp_contact_point_t *cp,
         /* Recompute closing speed along contact normal */
         virtual_speed = ivp_contact_closing_speed(cp);
 
-        /* Update push direction (friction-cone clip + turnaround) */
-        update_push_direction(&w);
+        /* For near-inelastic contacts keep the push on the contact normal
+         * to avoid converting normal impact energy into lateral bursts. */
+        if (cp->elasticity <= IVP_REAL_EPS) {
+            w.push_dir = cp->normal;
+        } else {
+            /* Update push direction (friction-cone clip + turnaround) */
+            update_push_direction(&w);
+        }
     }
 
     /* ── Phase 2: fine-tuning for energy conservation ──────────────── */

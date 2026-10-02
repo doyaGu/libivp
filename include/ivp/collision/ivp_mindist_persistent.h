@@ -113,6 +113,13 @@ void ivp_mindist_manager_destroy(ivp_mindist_manager_t *mgr);
 /* ── Operations ────────────────────────────────────────────────────────── */
 
 /* Find or create a persistent entry for an object pair. */
+/* True when (obj_a, obj_b) is not in the canonical entry order, i.e. an
+ * entry for this pair stores obj_b as its obj_a.  Callers that copy contact
+ * data computed for (obj_a, obj_b) into an entry must swap sides when this
+ * returns true.  Ordering is by object handle, never by address. */
+bool ivp_mindist_pair_is_swapped(const ivp_object_t *obj_a,
+                                 const ivp_object_t *obj_b);
+
 ivp_mindist_entry_t *ivp_mindist_manager_get_or_create(
     ivp_mindist_manager_t *mgr,
     ivp_object_t *obj_a,

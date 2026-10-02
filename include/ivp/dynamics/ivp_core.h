@@ -232,6 +232,17 @@ void ivp_core_init_for_psi_ex(ivp_core_t *core, ivp_real_t delta_time,
  *   4. fast_normize_quat */
 void ivp_core_calc_next_psi_matrix(ivp_core_t *core, ivp_real_t delta_time);
 
+/* Re-synchronize the per-PSI prediction after a synchronous impulse that was
+ * applied AFTER this PSI's calc_next_psi_matrix (impact resolution).
+ *
+ * Reference: IVP_Impact_System::recalc_all_affected_cores re-runs
+ * calc_next_PSI_matrix for every pushed core, so the position delta and the
+ * predicted orientation used by the next PSI reflect the post-impact velocity.
+ * Without this the next position advance still uses the pre-impact velocity,
+ * which drives a bouncing body back into the surface it just left and makes
+ * the following impact see a penetration. */
+void ivp_core_resync_after_impulse(ivp_core_t *core);
+
 /* Evaluate movement state (MOVING/SLOW/CALM).
  * Called periodically (every IVP_MOVEMENT_CHECK_COUNT PSIs).
  * freeze_params may be NULL to use defaults. */

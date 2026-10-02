@@ -43,7 +43,6 @@ float ivp_isqrt_float(float x) {
 /* ── Double inverse square root (matching original IVP_Fast_Math::isqrt) ── */
 
 double ivp_isqrt_double(double x, int resolution_steps) {
-    IVP_ASSERT(x > 0.0);
     if (x == 0.0) return HUGE_VAL;
     if (x < 0.0) return nan("");
 

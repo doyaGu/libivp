@@ -499,6 +499,33 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
     world_dir_to_object_space(core_a, &new_cp->normal, &new_normal_os_a);
     world_dir_to_object_space(core_b, &new_cp->normal, &new_normal_os_b);
 
+    /* Matching tolerance must follow the contact's motion.  A sliding or
+     * rolling contact moves across the partner surface by |v_rel| * dt per
+     * PSI, so the object-space anchor on that side legitimately drifts by
+     * that much.  Reference IVP keeps the contact alive through the mindist
+     * (feature pair) identity, so a sliding contact never loses its age; we
+     * emulate that by widening the positional tolerance with the relative
+     * surface speed.  Without this, every sliding contact is re-created each
+     * PSI with age 1, never becomes eligible for the normal/friction solve,
+     * and slides forever without friction. */
+    ivp_real_t match_tol_sq = IVP_FRICTION_MATCH_DIST_SQ;
+    {
+        ivp_real_t inv_dt = core_a->i_delta_time;
+        if (!(inv_dt > IVP_REAL(0.0))) inv_dt = core_b->i_delta_time;
+        if (inv_dt > IVP_REAL(0.0)) {
+            ivp_real_t dt = IVP_REAL(1.0) / inv_dt;
+            ivp_vec3r_t rel_v;
+            ivp_vec3r_sub(&rel_v, &core_b->speed, &core_a->speed);
+            ivp_vec3r_t rot_a = {{ (ivp_real_t)core_a->rot_speed.k[0], (ivp_real_t)core_a->rot_speed.k[1], (ivp_real_t)core_a->rot_speed.k[2] }};
+            ivp_vec3r_t rot_b = {{ (ivp_real_t)core_b->rot_speed.k[0], (ivp_real_t)core_b->rot_speed.k[1], (ivp_real_t)core_b->rot_speed.k[2] }};
+            ivp_real_t surf_speed = ivp_vec3r_length(&rel_v)
+                + ivp_vec3r_length(&rot_a) * ivp_vec3r_length(&new_cp->r_a)
+                + ivp_vec3r_length(&rot_b) * ivp_vec3r_length(&new_cp->r_b);
+            ivp_real_t tol = IVP_REAL(0.01) + surf_speed * dt * IVP_REAL(1.5);
+            match_tol_sq = tol * tol;
+        }
+    }
+
     ivp_persistent_contact_t *best_match = NULL;
     ivp_real_t best_score = IVP_REAL(1e30);
 
@@ -508,10 +535,16 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
         ivp_persistent_contact_t *pc = sys->first_contact;
 
         while (pc) {
-            if (pc->seen_this_psi) {
-                pc = pc->next;
-                continue;
-            }
+            /* A contact may legitimately be observed twice in one PSI (once by
+             * the broadphase pass, once by the impact dispatch).  Skipping
+             * already-seen contacts created a duplicate persistent contact for
+             * the same geometric point, and the duplicate carried stale
+             * penetration data into the impact system.  Re-observations within
+             * a PSI land on (almost) the same point, so seen contacts only match
+             * within a tight tolerance; distinct manifold points stay apart. */
+            const ivp_real_t tol_sq = pc->seen_this_psi
+                ? IVP_REAL(1e-6)
+                : match_tol_sq;
 
             bool same_order = (pc->cp.obj_a == obj_a && pc->cp.obj_b == obj_b);
             bool reverse_order = (pc->cp.obj_a == obj_b && pc->cp.obj_b == obj_a);
@@ -525,8 +558,8 @@ ivp_persistent_contact_t *ivp_friction_manager_match_or_create(
                 ivp_real_t dist_sq_a = ivp_vec3r_quad_distance(&pc->contact_point_os[0], match_os0);
                 ivp_real_t dist_sq_b = ivp_vec3r_quad_distance(&pc->contact_point_os[1], match_os1);
 
-                if (dist_sq_a < IVP_FRICTION_MATCH_DIST_SQ &&
-                    dist_sq_b < IVP_FRICTION_MATCH_DIST_SQ) {
+                if (dist_sq_a < tol_sq &&
+                    dist_sq_b < tol_sq) {
                     ivp_real_t local_normal_dot_a;
                     ivp_real_t local_normal_dot_b;
                     if (same_order) {

@@ -70,13 +70,26 @@ static bool ensure_capacity(ivp_mindist_manager_t *mgr, int needed)
 
 /* ── Operations ────────────────────────────────────────────────────────── */
 
+bool ivp_mindist_pair_is_swapped(const ivp_object_t *obj_a,
+                                 const ivp_object_t *obj_b)
+{
+    if (!obj_a || !obj_b) return false;
+    if (obj_a->handle.slot != obj_b->handle.slot) {
+        return obj_a->handle.slot > obj_b->handle.slot;
+    }
+    return obj_a->handle.generation > obj_b->handle.generation;
+}
+
 ivp_mindist_entry_t *ivp_mindist_manager_get_or_create(
     ivp_mindist_manager_t *mgr,
     ivp_object_t *obj_a,
     ivp_object_t *obj_b)
 {
-    /* Canonical ordering: smaller pointer first */
-    if ((uintptr_t)obj_a > (uintptr_t)obj_b) {
+    /* Canonical ordering by object handle (slot, then generation).
+     * The pair order must not depend on heap addresses: callers store
+     * contact data relative to (obj_a, obj_b), so an address-dependent order
+     * would make the simulation result depend on allocation history. */
+    if (ivp_mindist_pair_is_swapped(obj_a, obj_b)) {
         ivp_object_t *tmp = obj_a;
         obj_a = obj_b;
         obj_b = tmp;

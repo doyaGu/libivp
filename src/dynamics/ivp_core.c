@@ -264,6 +264,32 @@ void ivp_core_init_for_psi(ivp_core_t *core, ivp_real_t delta_time) {
     ivp_core_init_for_psi_ex(core, delta_time, true);
 }
 
+/* ── Post-impulse resync ────────────────────────────────────────────────── */
+
+void ivp_core_resync_after_impulse(ivp_core_t *core) {
+    if (!core || core->physical_unmoveable) return;
+
+    /* Position: the next PSI advances pos by delta * dt, so the delta must
+     * carry the post-impact velocity (legacy: delta_world_f_core_psis.set(&speed)
+     * inside the re-run of calc_next_PSI_matrix). */
+    core->delta_world_f_core_psis = core->speed;
+    core->current_speed = ivp_vec3r_length(&core->speed);
+
+    /* Orientation: rebuild the predicted next-PSI quaternion from the last
+     * committed orientation and the post-impact angular velocity.  The plain
+     * (non-gyroscopic) step is used here because the gyroscopic correction was
+     * already folded into rot_speed by this PSI's calc_next_psi_matrix. */
+    if (core->i_delta_time > IVP_REAL(0.0)) {
+        ivp_real_t dt = IVP_REAL(1.0) / core->i_delta_time;
+        ivp_quatr_t q_core_f_core;
+        ivp_quat_set_fast_multiple_with_clip(&q_core_f_core, &core->rot_speed, dt);
+        ivp_quat_mult(&core->q_world_f_core_next_psi,
+                      &core->q_world_f_core_last_psi,
+                      &q_core_f_core);
+        ivp_quat_fast_normalize(&core->q_world_f_core_next_psi);
+    }
+}
+
 /* ── Rotation integration (gyroscopic correction) ───────────────────────── */
 
 static void calc_rotation_matrix(ivp_core_t *core, ivp_real_t delta_time,
