@@ -1,10 +1,30 @@
-/* ivp_build_surface.h — Minimal surface builder API
+/* ivp_build_surface.h — Basic surface builder API
  *
- * M2 builders:
- *   ivp_build_box_surface()      — hardcoded box topology
- *   ivp_build_convex_surface()   — convex hull from points (QHull)
+ *   ivp_build_box_surface()      — axis aligned box
+ *   ivp_build_convex_surface()   — convex hull from points (QHull,
+ *                                  IVP_SurfaceBuilder_Pointsoup)
  *
- * All returned surfaces must be freed with ivp_free_aligned().
+ * Every surface is produced the reference way: a convex compact ledge is
+ * wrapped by the ledge soup builder, which computes the surface header
+ * (IVP_SurfaceBuilder_Ledge_Soup::insert_radius_in_compact_surface):
+ *   mass_center         — volume centroid (IVP_Rot_Inertia_Solver)
+ *   rotation_inertia    — unit mass inertia of the reference solver.  NOTE:
+ *                         the reference converts the 2D second moments
+ *                         a,b,c to I_x = sqrt(b^2 + c^2) (cyclic), so a cube
+ *                         of half size h gets 0.4714 h^2, not 2/3 h^2.
+ *   upper_limit_radius  — max vertex distance from mass_center
+ *   max deviation       — int(1 + dev / (radius / 250)), dev = max in-plane
+ *                         distance |p x n| of a vertex from mass_center
+ *
+ * All returned surfaces must be freed with ivp_compact_surface_free() /
+ * ivp_free_aligned().  Returned ledges must be freed with
+ * ivp_compact_ledge_free().
+ *
+ * The convex hull builders (and everything built on them: boxes, point
+ * soups, half space soups, convex decomposition pieces, ledge tree hulls)
+ * use the reference's qhull 2.6, whose state is global: they produce the
+ * reference ledge layout bit for bit but are NOT reentrant -- do not call
+ * them from several threads at once.
  */
 #ifndef IVP_BUILD_SURFACE_H
 #define IVP_BUILD_SURFACE_H
@@ -17,44 +37,41 @@
 extern "C" {
 #endif
 
-/* Build a compact surface for an axis-aligned box centered at the origin.
- *
- * Parameters:
- *   alloc  — allocator (NULL for default)
- *   half_x — half-extent along X axis
- *   half_y — half-extent along Y axis
- *   half_z — half-extent along Z axis
- *
- * Returns:
- *   Pointer to a newly allocated compact surface, or NULL on failure.
- *   The caller must free with ivp_free_aligned(alloc, result).
- *
- * The box has:
- *   - 8 vertices
- *   - 12 triangles (6 faces × 2 triangles each)
- *   - 1 terminal ledgetree node
- *   - mass_center at origin
- *   - rotation_inertia for unit mass
- */
+/* Build a compact surface for an axis-aligned box centered at the origin
+ * (8 vertices, 12 triangles): the convex hull of the 8 corners given in
+ * the order sx, sy, sz = -1, +1 (the reference runner's
+ * build_box_compact_surface), so ledge layout and surface header are the
+ * reference ones. */
 ivp_compact_surface_t *ivp_build_box_surface(const ivp_allocator_t *alloc,
                                                float half_x,
                                                float half_y,
                                                float half_z);
 
-/* Build a compact convex surface from an input point cloud (3D).
- *
- * Parameters:
- *   alloc    — allocator (NULL for default)
- *   points   — input point array
- *   n_points — number of points (must be >= 4)
- *
- * Returns:
- *   Pointer to a newly allocated compact surface, or NULL on failure/degeneracy.
- *   The caller must free with ivp_free_aligned(alloc, result).
- */
+/* Build a compact convex surface from an input point cloud
+ * (IVP_SurfaceBuilder_Pointsoup::convert_pointsoup_to_compact_surface).
+ * n_points must be >= 3; exactly 3 points give a two sided triangle.
+ * Points are used as given (never re-centered). */
 ivp_compact_surface_t *ivp_build_convex_surface(const ivp_allocator_t *alloc,
                                                  const ivp_vec3f_t *points,
                                                  int n_points);
+
+/* Same with double input (coords = [x0,y0,z0, x1,...]). */
+ivp_compact_surface_t *ivp_build_convex_surface_d(const ivp_allocator_t *alloc,
+                                                  const double *coords,
+                                                  int n_points);
+
+/* Convex hull ledge only (convert_pointsoup_to_compact_ledge). */
+ivp_compact_ledge_t *ivp_build_convex_ledge(const ivp_allocator_t *alloc,
+                                            const ivp_vec3f_t *points,
+                                            int n_points);
+ivp_compact_ledge_t *ivp_build_convex_ledge_d(const ivp_allocator_t *alloc,
+                                              const double *coords,
+                                              int n_points);
+
+/* Wrap one convex ledge into a compact surface through the ledge soup
+ * (the ledge is copied, not freed). */
+ivp_compact_surface_t *ivp_build_surface_from_ledge(const ivp_allocator_t *alloc,
+                                                    const ivp_compact_ledge_t *ledge);
 
 #ifdef __cplusplus
 }

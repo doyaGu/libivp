@@ -43,6 +43,23 @@ ivp_compact_surface_t *ivp_build_polygon_surface(
     const int *indices,         /* [n_triangles][3] */
     int n_triangles);
 
+/* Build a compact surface from convex n-gon faces (reference
+ * IVP_Template_Polygon surfaces -> IVP_SurfaceBuilder_Polygon_Convex).
+ *
+ *   face_indices -- concatenated vertex indices of all faces (CCW seen
+ *                   from outside)
+ *   face_sizes   -- vertex count of each face (>= 3)
+ *
+ * The faces are triangulated and the ledge is wrapped by the ledge soup
+ * (reference mass properties).  Returns NULL on invalid input. */
+ivp_compact_surface_t *ivp_build_polygon_convex_surface(
+    const ivp_allocator_t *alloc,
+    const float *vertices,
+    int n_vertices,
+    const int *face_indices,
+    const int *face_sizes,
+    int n_faces);
+
 /* ── Compact surface vertex modification ────────────────────────────────── */
 
 /* Modify a single vertex position in a compact surface.

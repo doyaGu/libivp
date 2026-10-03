@@ -37,6 +37,23 @@ ivp_result_t ivp_calc_mass_center_and_rot_inertia(
     float mass_center_out[3],
     float rot_inertia_out[3]);
 
+/* Double precision variant (the reference IVP_Rot_Inertia_Solver returns
+ * IVP_U_Point = double; IVP_SurfaceBuilder_Ledge_Soup feeds this unrounded
+ * mass center into calc_radius_to_given_center). */
+ivp_result_t ivp_calc_mass_center_and_rot_inertia_d(
+    const ivp_compact_surface_t *surface,
+    double mass_center_out[3],
+    double rot_inertia_out[3]);
+
+/* Same for an explicit list of (terminal) ledges, integrated in reverse
+ * list order like localCalcMassCenterAndRotInertia
+ * (ivp_rot_inertia_solver.cxx:211). */
+ivp_result_t ivp_calc_mass_center_and_rot_inertia_ledges(
+    const ivp_compact_ledge_t *const *ledges,
+    int n_ledges,
+    double mass_center_out[3],
+    double rot_inertia_out[3]);
+
 /* Compute bounding box of a compact ledge in object coordinates.
  *
  * Parameters:
