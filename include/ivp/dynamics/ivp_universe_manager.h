@@ -1,11 +1,18 @@
-/* ivp_universe_manager.h — LOD/streaming callback interface
+/* ivp_universe_manager.h — IVP_Universe_Manager (ivp_universe_manager.hxx)
  *
- * Callback-based interface for managing large scenes with LOD streaming.
- * The environment calls ensure_fn for each moving object during broadphase
- * and evict_fn for objects with zero collision references at configurable
- * intervals.
- *
- * Ported from ivp_collision/ivp_universe_manager.hxx.
+ * Callback-based interface for managing large scenes:
+ *   ensure_fn  - IVP_Universe_Manager::ensure_objects_in_environment, called
+ *                when an object that can collide (re)enters the OV tree
+ *                (IVP_Mindist_Manager::recheck_ov_element) with the sphere
+ *                inside which all objects should be in the environment;
+ *   evict_fn   - IVP_Universe_Manager::object_no_longer_needed, called at the
+ *                start of each PSI (IVP_Cluster_Manager::check_for_unused_objects)
+ *                for objects nobody checks for collision
+ *                (ivp_object_get_collision_check_reference_count() == 0, or
+ *                == 1 above the second object count threshold);
+ *   deleted_fn - IVP_Universe_Manager::event_object_deleted.
+ * The settings are IVP_Universe_Manager_Settings
+ * (provide_universe_settings()).
  */
 #ifndef IVP_UNIVERSE_MANAGER_H
 #define IVP_UNIVERSE_MANAGER_H
@@ -19,16 +26,21 @@ extern "C" {
 
 /* ── Callback types ────────────────────────────────────────────────────── */
 
-/* Called for each moving object during broadphase.
- * Use to ensure detail geometry is loaded for nearby objects.
- * sphere_center/radius describe the object's bounding sphere. */
+/* IVP_Universe_Manager::ensure_objects_in_environment: called when an object
+ * that can collide (re)enters the OV tree, with the sphere (float center,
+ * IVP_DOUBLE radius) inside which all objects it may collide with should be
+ * in the environment.  Objects created here are inserted with a minimal
+ * radius and rechecked as soon as possible (no recursive calls). */
 typedef void (*ivp_universe_ensure_fn_t)(void *ctx,
                                          ivp_object_t *object,
                                          const float *sphere_center,
-                                         float sphere_radius);
+                                         double sphere_radius);
 
-/* Called periodically for objects with zero collision references.
- * Use to evict/unload detail geometry for distant objects. */
+/* IVP_Universe_Manager::object_no_longer_needed: called at the start of a
+ * PSI for objects nobody checks for collision; the objects are visited in
+ * cluster tree order (ivp_environment_get_root_cluster), a limited number
+ * per PSI, resuming where the previous PSI stopped.  The callback may
+ * delete the object. */
 typedef void (*ivp_universe_evict_fn_t)(void *ctx,
                                         ivp_object_t *object);
 
@@ -45,18 +57,19 @@ typedef struct ivp_universe_manager {
     ivp_universe_deleted_fn_t deleted_fn;
     void                     *ctx;
 
-    /* Eviction timing: evict_fn is called for eligible objects every
-     * evict_interval PSI steps. Two tiers allow different rates for
-     * near vs. far objects. */
-    int   evict_interval;         /* PSI steps between eviction sweeps, default: 60 */
-    float evict_near_threshold;   /* objects closer than this are never evicted */
-    float evict_far_threshold;    /* objects farther than this are evicted first */
-
-    /* Internal counter */
-    int   psi_counter;
+    /* IVP_Universe_Manager_Settings */
+    int num_objects_in_environment_threshold_0; /* default 1: fewer objects -> no evict_fn calls       */
+    int check_objects_per_second_threshold_0;   /* default 1: objects checked per second (ref count 0) */
+    int num_objects_in_environment_threshold_1; /* default 1000000: above, also check ref count 1      */
+    int check_objects_per_second_threshold_1;   /* default 10                                          */
+    bool provide_settings;                      /* default true; false = provide_universe_settings() returns NULL */
 } ivp_universe_manager_t;
 
-/* Fill with defaults (all callbacks NULL, interval 60). */
+/* IVP_Real_Object::get_collision_check_reference_count: number of objects
+ * checking this object for collision, -1 when collision detection is off. */
+int ivp_object_get_collision_check_reference_count(const ivp_object_t *obj);
+
+/* Fill with defaults (all callbacks NULL, IVP_Universe_Manager_Settings defaults). */
 void ivp_universe_manager_init(ivp_universe_manager_t *mgr);
 
 /* Check if any callbacks are installed. */

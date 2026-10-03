@@ -39,7 +39,7 @@ int ivp_anomaly_check_object(ivp_anomaly_manager_t *mgr,
 {
     if (!mgr || !mgr->active || !obj) return 0;
 
-    ivp_core_t *core = &obj->core;
+    ivp_core_t *core = obj->physical_core;
     if (core->physical_unmoveable) return 0;
 
     int detected = 0;
@@ -130,7 +130,7 @@ bool ivp_anomaly_manager_count_collision(ivp_anomaly_manager_t *mgr,
     if (!mgr || !mgr->active) return true;
     if (!obj) return true;
 
-    ivp_core_t *core = &obj->core;
+    ivp_core_t *core = obj->physical_core;
     if (core->physical_unmoveable) return true;
 
     core->impacts_since_last_PSI++;
@@ -142,12 +142,11 @@ bool ivp_anomaly_manager_count_collision(ivp_anomaly_manager_t *mgr,
             fire_callback(mgr, obj, IVP_ANOMALY_MAX_COLLISIONS,
                           "Max collisions per PSI exceeded");
         }
-        if (mgr->config.freeze_on_max_collisions) {
-            if (core->movement_state != IVP_MT_NOT_SIM) {
-                core->movement_state = IVP_MT_NOT_SIM;
-                mgr->anomalies_corrected++;
-            }
-        }
+        /* The simulation itself handles the limit (IVP_Anomaly_Manager::
+         * max_collisions_exceeded_check_freezing -> the core becomes
+         * temporarily unmovable for the rest of the PSI); this helper only
+         * counts and reports, it must not touch the movement state (the sim
+         * unit manager owns it). */
         return false;
     }
     return true;
