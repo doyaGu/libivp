@@ -337,11 +337,8 @@ static double core_float_point_real_length(const ivp_vec3r_t *v)
 /* IVP_Core::calc_calc */
 void ivp_core_calc_calc(ivp_core_t *core)
 {
-    /* get_rot_inertia()->real_length().  Nonfatal: libivp objects without
-     * a surface manager (the unit tests' default objects) are zero radius
-     * balls with zero inertia, which the reference debug build asserts on as
-     * well; the clamp below handles them */
-    IVP_ASSERT_NONFATAL(core_float_point_real_length(&core->rot_inertia) > (double)P_DOUBLE_EPS);
+    /* clamp inertia and mass to a finite, positive range first, then check
+     * the length (reference 1587518): zero inertia input is valid */
     const float min_inertia = P_FLOAT_EPS;
     const float max_inertia = P_FLOAT_MAX;
     for (int i = 0; i < 3; i++) {
@@ -352,6 +349,7 @@ void ivp_core_calc_calc(ivp_core_t *core)
     }
     float m = (float)core->mass;
     if (!((double)m >= P_RES_EPS && (double)m <= P_DOUBLE_MAX)) core->mass = (ivp_real_t)(float)P_RES_EPS;
+    IVP_ASSERT(core_float_point_real_length(&core->rot_inertia) > (double)P_DOUBLE_EPS);
     core->inv_rot_inertia.k[0] = (ivp_real_t)(1.0f / (float)core->rot_inertia.k[0]);
     core->inv_rot_inertia.k[1] = (ivp_real_t)(1.0f / (float)core->rot_inertia.k[1]);
     core->inv_rot_inertia.k[2] = (ivp_real_t)(1.0f / (float)core->rot_inertia.k[2]);

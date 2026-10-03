@@ -1,6 +1,7 @@
 /* test_dynamics.c �?Tests for M4: core, object, environment, PSI loop */
 #include "ivp_test.h"
 #include "ivp_test_controller_api.h"
+#include <ivp/base/ivp_assert.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -55,6 +56,33 @@ IVP_TEST(core_init_equal_inertias) {
     ivp_core_init(&core, IVP_REAL(1.0), &inertia);
 
     IVP_ASSERT_TRUE(core.rot_inertias_are_equal);
+}
+
+/* Reference 1587518: calc_calc clamps zero or invalid inertia to a finite
+ * positive value before it asserts the inertia length, so zero inertia
+ * input is accepted without an assertion failure. */
+static int g_core_assert_count;
+
+static void core_count_assert(const char *expr, const char *file, int line,
+                              const char *func, const char *msg, void *userdata)
+{
+    (void)expr; (void)file; (void)line; (void)func; (void)msg; (void)userdata;
+    g_core_assert_count++;
+}
+
+IVP_TEST(core_zero_inertia_is_clamped_without_assert) {
+    ivp_core_t core;
+    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    g_core_assert_count = 0;
+    ivp_set_assert_handler(core_count_assert, NULL);
+    ivp_core_init(&core, IVP_REAL(1.0), &inertia);
+    ivp_set_assert_handler(NULL, NULL);
+
+    IVP_ASSERT_EQ(g_core_assert_count, 0);
+    for (int i = 0; i < 3; i++) {
+        IVP_ASSERT_TRUE(core.rot_inertia.k[i] > 0.0);
+        IVP_ASSERT_TRUE(isfinite((double)core.inv_rot_inertia.k[i]));
+    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════�?
@@ -1470,6 +1498,7 @@ int main(void) {
     /* Core */
     IVP_REGISTER(core_init_basic);
     IVP_REGISTER(core_init_equal_inertias);
+    IVP_REGISTER(core_zero_inertia_is_clamped_without_assert);
     IVP_REGISTER(core_set_pose);
     IVP_REGISTER(core_beam_to);
 
