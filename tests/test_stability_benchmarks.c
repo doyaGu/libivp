@@ -4,10 +4,9 @@
  *   C1. Ball pile          - 3 balls dropped onto static polygon ground
  *   C2. Slope friction     - ball on 25-degree incline (stability check)
  *   C3. Chain constraint   - 4 balls connected by stiff springs
- *   E2. Ball pile (enhanced preset)
  *
  * Each scenario runs for a fixed number of steps and checks quantitative
- * pass criteria. Optionally collects solver metrics when active.
+ * pass criteria.
  *
  * Design notes:
  * - Ball objects use ivp_surman_ball_t, matching the proven pattern in
@@ -29,13 +28,10 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
-#include <ivp/dynamics/ivp_environment_collision.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/controllers/ivp_controller_stiff_spring.h>
-#include <ivp/solver/ivp_solver_config.h>
-#include <ivp/solver/ivp_solver_metrics.h>
 #include <ivp/solver/ivp_solver_constants.h>
 
 #include <string.h>
@@ -50,7 +46,7 @@ static bool has_nan_vec3(const ivp_vec3r_t *v) {
 }
 
 static const ivp_vec3r_t *obj_pos(const ivp_object_t *obj) {
-    return &obj->core.pos_world_f_core_last_psi;
+    return &obj->physical_core->pos_world_f_core_last_psi;
 }
 
 static ivp_quatr_t quat_from_axis_angle(ivp_real_t ax, ivp_real_t ay,
@@ -68,11 +64,15 @@ static ivp_environment_t *make_env(void) {
     return ivp_environment_create(&cfg);
 }
 
-static ivp_environment_t *make_env_stacking(void) {
-    ivp_environment_config_t cfg;
-    ivp_environment_config_init(&cfg);
-    ivp_solver_config_init_stacking(&cfg.solver_config);
-    return ivp_environment_create(&cfg);
+/* Sum of the kinetic energies of all objects (IVP_Core::get_energy_on_test). */
+static ivp_real_t total_kinetic_energy(const ivp_environment_t *env) {
+    ivp_real_t ke = IVP_REAL(0.0);
+    int n = ivp_environment_get_object_count(env);
+    for (int i = 0; i < n; i++) {
+        ivp_object_t *obj = ivp_environment_get_object(env, i);
+        if (obj && !obj->physical_core->physical_unmoveable) ke += ivp_object_get_energy(obj);
+    }
+    return ke;
 }
 
 static void step(ivp_environment_t *env, int n) {
@@ -98,8 +98,8 @@ static void step(ivp_environment_t *env, int n) {
 #define PILE_STEPS      500
 #define BALL_RADIUS     0.5f
 
-static void ball_pile_common(ivp_environment_t *env, bool enhanced,
-                             int *_fail_count) {
+IVP_TEST(stacking_tower_baseline) {
+    ivp_environment_t *env = make_env();
     IVP_ASSERT_NOT_NULL(env);
 
     /* --- Ground: large static polygon box (matching test_polygon_collision_debug) --- */
@@ -127,6 +127,7 @@ static void ball_pile_common(ivp_environment_t *env, bool enhanced,
     /* I = (2/5) * m * r^2 = 0.4 * 1.0 * 0.25 = 0.1 */
     ivp_real_t I = IVP_REAL(0.4) * IVP_REAL(1.0) * IVP_REAL(0.25);
     ivp_vec3r_set(&bt.rot_inertia, I, I, I);
+    bt.rot_inertia_is_factor = false; /* absolute inertia */
     bt.material.friction = IVP_REAL(0.8);
     bt.material.elasticity = IVP_REAL(0.0);
     /* Extra damping to help balls settle quickly */
@@ -150,15 +151,8 @@ static void ball_pile_common(ivp_environment_t *env, bool enhanced,
         IVP_ASSERT_NOT_NULL(balls[i]);
     }
 
-    /* --- Metrics --- */
-    ivp_solver_metrics_t metrics;
-    ivp_solver_metrics_init(&metrics);
-    ivp_solver_metrics_set_active(&metrics);
-
     /* --- Simulate --- */
     step(env, PILE_STEPS);
-
-    ivp_solver_metrics_set_active(NULL);
 
     /* --- Check: no NaN --- */
     for (int i = 0; i < PILE_COUNT; i++) {
@@ -176,16 +170,13 @@ static void ball_pile_common(ivp_environment_t *env, bool enhanced,
         IVP_ASSERT_TRUE(ivp_fabs(pos->k[1]) < IVP_REAL(100.0));
     }
 
-    ivp_real_t total_ke = ivp_environment_get_total_kinetic_energy(env);
+    ivp_real_t total_ke = total_kinetic_energy(env);
 
-    fprintf(stderr, "  [ball_pile%s] total_ke=%.6g, y=[%.4g, %.4g, %.4g], "
-            "contacts=%d\n",
-            enhanced ? "_enhanced" : "",
+    fprintf(stderr, "  [ball_pile] total_ke=%.6g, y=[%.4g, %.4g, %.4g]\n",
             (double)total_ke,
             (double)obj_pos(balls[0])->k[1],
             (double)obj_pos(balls[1])->k[1],
-            (double)obj_pos(balls[2])->k[1],
-            metrics.contact_count);
+            (double)obj_pos(balls[2])->k[1]);
 
     /* Balls should remain bounded and finite under parity ordering.
      * Reference-priority dispatch changes settling profile; enforce a
@@ -195,11 +186,6 @@ static void ball_pile_common(ivp_environment_t *env, bool enhanced,
     /* --- Cleanup --- */
     ivp_environment_destroy(env);
     ivp_compact_surface_free(NULL, ground_surf);
-}
-
-IVP_TEST(stacking_tower_baseline) {
-    ivp_environment_t *env = make_env();
-    ball_pile_common(env, false, _fail_count);
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -238,6 +224,7 @@ IVP_TEST(slope_static_friction) {
     tmpl.type = IVP_OBJECT_POLYGON;
     tmpl.mass = IVP_REAL(1e6);
     ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(1e6), IVP_REAL(1e6), IVP_REAL(1e6));
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
     tmpl.material.friction = SLOPE_FRICTION;
     tmpl.material.elasticity = IVP_REAL(0.0);
     tmpl.physical_unmoveable = true;
@@ -259,6 +246,7 @@ IVP_TEST(slope_static_friction) {
     tmpl.mass = IVP_REAL(1.0);
     ivp_real_t ball_I = IVP_REAL(0.4) * IVP_REAL(1.0) * IVP_REAL(0.25);
     ivp_vec3r_set(&tmpl.rot_inertia, ball_I, ball_I, ball_I);
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
     tmpl.material.friction = SLOPE_FRICTION;
     tmpl.material.elasticity = IVP_REAL(0.0);
     /* Ball above the ramp center */
@@ -277,7 +265,7 @@ IVP_TEST(slope_static_friction) {
     const ivp_vec3r_t *final_pos = obj_pos(ball);
     IVP_ASSERT_FALSE(has_nan_vec3(final_pos));
 
-    ivp_real_t total_ke = ivp_environment_get_total_kinetic_energy(env);
+    ivp_real_t total_ke = total_kinetic_energy(env);
 
     /* Displacement from initial position */
     ivp_vec3r_t disp;
@@ -321,8 +309,10 @@ IVP_TEST(slope_static_friction) {
 #define CHAIN_COUNT     4
 #define CHAIN_STEPS     2000
 #define CHAIN_SPACING   IVP_REAL(1.0)
-#define CHAIN_STIFFNESS IVP_REAL(200.0)
-#define CHAIN_DAMPING   IVP_REAL(30.0)
+/* Reference IVP_Controller_Stiff_Spring constants are dimensionless [0..1]
+ * (ivp_controller_stiff_spring.hxx:9-17). */
+#define CHAIN_STIFFNESS IVP_REAL(0.5)
+#define CHAIN_DAMPING   IVP_REAL(0.5)
 
 IVP_TEST(chain_constraint) {
     ivp_environment_t *env = make_env();
@@ -331,15 +321,17 @@ IVP_TEST(chain_constraint) {
     /* Tag for no_collision_group — any non-NULL pointer works */
     static const char chain_group_tag[] = "chain";
 
-    /* --- Chain balls (no surman needed, no collision geometry) --- */
+    /* --- Chain balls (no surman; tiny IVP_Template_Ball radius) --- */
     ivp_object_t *balls[CHAIN_COUNT];
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_BALL;
+    tmpl.ball_radius = IVP_REAL(0.01);
     tmpl.mass = IVP_REAL(1.0);
     /* I = (2/5)*m*r^2 = 0.4 * 1.0 * 0.25 = 0.1 for r=0.5 */
     ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
     tmpl.material.friction = IVP_REAL(0.5);
     tmpl.material.elasticity = IVP_REAL(0.0);
     tmpl.speed_damp_factor = IVP_REAL(0.05);
@@ -355,8 +347,6 @@ IVP_TEST(chain_constraint) {
         ivp_vec3r_set(&tmpl.position, IVP_REAL(0.0), y, IVP_REAL(0.0));
         balls[i] = ivp_environment_create_object(env, &tmpl, NULL);
         IVP_ASSERT_NOT_NULL(balls[i]);
-        /* Tiny bounding radius (no collision geometry needed) */
-        balls[i]->core.upper_limit_radius = IVP_REAL(0.01);
     }
 
     /* --- Connect with stiff springs --- */
@@ -370,7 +360,10 @@ IVP_TEST(chain_constraint) {
                                   NULL, &zero_anchor,
                                   balls[0], &zero_anchor,
                                   CHAIN_STIFFNESS, CHAIN_DAMPING, CHAIN_SPACING);
-    ivp_environment_add_controller(env, 100, ivp_controller_stiff_spring, &springs[0]);
+    /* Reference IVP_Controller_Stiff_Spring is an IVP_Controller_Dependent
+     * (both endpoints share one simulation unit). */
+    ivp_environment_announce_dependent_controller(env, 100, ivp_controller_stiff_spring,
+                                                  &springs[0], ivp_stiff_spring_discovery);
 
     /* Ball-to-ball springs */
     for (int i = 1; i < CHAIN_COUNT; i++) {
@@ -379,14 +372,11 @@ IVP_TEST(chain_constraint) {
                                       balls[i - 1], &zero_anchor,
                                       balls[i], &zero_anchor,
                                       CHAIN_STIFFNESS, CHAIN_DAMPING, CHAIN_SPACING);
-        ivp_environment_add_controller(env, 100, ivp_controller_stiff_spring, &springs[i]);
+        ivp_environment_announce_dependent_controller(env, 100, ivp_controller_stiff_spring,
+                                                      &springs[i], ivp_stiff_spring_discovery);
     }
 
     /* --- Simulate and track tip --- */
-    ivp_solver_metrics_t metrics;
-    ivp_solver_metrics_init(&metrics);
-    ivp_solver_metrics_set_active(&metrics);
-
     ivp_vec3r_t tip_positions[200];
     int tip_idx = 0;
     bool nan_detected = false;
@@ -410,7 +400,6 @@ IVP_TEST(chain_constraint) {
             tip_positions[tip_idx++] = *obj_pos(balls[CHAIN_COUNT - 1]);
         }
     }
-    ivp_solver_metrics_set_active(NULL);
 
     /* --- Check: No NaN --- */
     IVP_ASSERT_FALSE(nan_detected);
@@ -483,23 +472,12 @@ IVP_TEST(chain_constraint) {
     ivp_environment_destroy(env);
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
- * E2. Ball Pile with Stacking Preset
- * ════════════════════════════════════════════════════════════════════════════ */
-
-IVP_TEST(stacking_tower_enhanced) {
-    ivp_environment_t *env = make_env_stacking();
-    ball_pile_common(env, true, _fail_count);
-}
-
 /* ── Registration ──────────────────────────────────────────────────────── */
 
 #define IVP_TEST_LIST \
     IVP_REGISTER(stacking_tower_baseline); \
     IVP_REGISTER(slope_static_friction); \
-    IVP_REGISTER(chain_constraint); \
-    /* TODO: re-enable after friction system rework */
-    /* IVP_REGISTER(stacking_tower_enhanced); */
+    IVP_REGISTER(chain_constraint);
 
 int main(void) {
     IVP_TEST_LIST

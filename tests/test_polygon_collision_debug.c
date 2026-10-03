@@ -43,6 +43,7 @@ IVP_TEST(polygon_box_falls_on_ground) {
     bt.type = IVP_OBJECT_POLYGON;
     bt.mass = IVP_REAL(1.0);
     ivp_vec3r_set(&bt.rot_inertia, IVP_REAL(0.083), IVP_REAL(0.083), IVP_REAL(0.083));
+    bt.rot_inertia_is_factor = false; /* absolute inertia */
     bt.material.friction   = IVP_REAL(0.5);
     bt.material.elasticity = IVP_REAL(0.3);
     ivp_vec3r_set(&bt.position, IVP_REAL(0.0), IVP_REAL(-3.0), IVP_REAL(0.0));
@@ -93,6 +94,7 @@ IVP_TEST(polygon_box_hits_static_box) {
     ta.type = IVP_OBJECT_POLYGON;
     ta.mass = IVP_REAL(1.0);
     ivp_vec3r_set(&ta.rot_inertia, IVP_REAL(0.083), IVP_REAL(0.083), IVP_REAL(0.083));
+    ta.rot_inertia_is_factor = false; /* absolute inertia */
     ta.material.friction   = IVP_REAL(0.5);
     ta.material.elasticity = IVP_REAL(0.2);
     ivp_vec3r_set(&ta.position, IVP_REAL(0.0), IVP_REAL(-3.0), IVP_REAL(0.0));
@@ -138,6 +140,7 @@ IVP_TEST(ball_falls_on_polygon_ground) {
     bt.mass = IVP_REAL(1.0);
     ivp_real_t I = IVP_REAL(0.4) * IVP_REAL(1.0) * IVP_REAL(0.25);
     ivp_vec3r_set(&bt.rot_inertia, I, I, I);
+    bt.rot_inertia_is_factor = false; /* absolute inertia */
     bt.material.friction   = IVP_REAL(0.5);
     bt.material.elasticity = IVP_REAL(0.3);
     ivp_vec3r_set(&bt.position, IVP_REAL(0.0), IVP_REAL(-3.0), IVP_REAL(0.0));

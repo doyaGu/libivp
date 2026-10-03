@@ -4,6 +4,7 @@
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/utility/ivp_hash.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_assert.h>
 #include <stdlib.h>
 
 /* Vhash comparison function for pointer equality */
@@ -305,6 +306,13 @@ IVP_TEST(vhash_store_add_find_remove) {
     ivp_vhash_store_destroy(&store);
 }
 
+static int g_store_assert_count = 0;
+static void store_count_assert(const char *expr, const char *file, int line,
+                               const char *func, const char *msg, void *userdata) {
+    (void)expr; (void)file; (void)line; (void)func; (void)msg; (void)userdata;
+    g_store_assert_count++;
+}
+
 IVP_TEST(vhash_store_null_value_collision_path) {
     ivp_vhash_store_t store;
     ivp_vhash_store_init(&store, ivp_default_allocator(), 16);
@@ -317,7 +325,14 @@ IVP_TEST(vhash_store_null_value_collision_path) {
     IVP_ASSERT_NOT_NULL(found_b);
     IVP_ASSERT_TRUE(found_b == &dummy_c);
 
+    /* IVP_VHash_Store::remove_elem asserts e->elem (a NULL value) */
+    g_store_assert_count = 0;
+    ivp_set_assert_handler(store_count_assert, NULL);
     void *removed_null = ivp_vhash_store_remove_hash(&store, &dummy_a, shared_hash);
+    ivp_set_assert_handler(NULL, NULL);
+#ifdef IVP_ENABLE_ASSERTS
+    IVP_ASSERT_EQ(g_store_assert_count, 1);
+#endif
     IVP_ASSERT_NULL(removed_null);
     IVP_ASSERT_EQ(ivp_vhash_store_count(&store), 1);
 

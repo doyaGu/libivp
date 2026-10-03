@@ -3,7 +3,6 @@
 #include <ivp/collision/ivp_range_manager.h>
 #include <ivp/collision/ivp_collision_filter.h>
 #include <ivp/collision/ivp_compact_ledge_solver.h>
-#include <ivp/collision/ivp_mindist.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -13,6 +12,8 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/geometry/ivp_surman.h>
+#include <stdint.h>
 
 #ifdef IVP_REAL_DOUBLE
   #define TOL 1e-6
@@ -161,6 +162,7 @@ IVP_TEST(collision_filter_no_collision_group) {
     t.type = IVP_OBJECT_BALL;
     t.mass = IVP_REAL(1.0);
     ivp_vec3r_set(&t.rot_inertia, IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    t.rot_inertia_is_factor = false; /* absolute inertia */
     t.speed_damp_factor = IVP_REAL(0.0);
     ivp_vec3r_set(&t.rot_speed_damp_factor, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
@@ -182,6 +184,92 @@ IVP_TEST(collision_filter_no_collision_group) {
 
     /* Cleanup */
     ivp_environment_destroy(env);
+}
+
+/* ========================================================================
+ * Surface manager ledge references (IVP_SurfaceManager::add_reference_to_ledge
+ * / remove_reference_to_ledge)
+ * ======================================================================== */
+
+typedef struct counting_surman {
+    ivp_surman_polygon_t poly;           /* must be first: polygon vtable casts */
+    ivp_surman_vtable_t  vt;
+    const ivp_compact_ledge_t *ledge;    /* the single convex ledge */
+    int adds, removes, foreign;
+} counting_surman_t;
+
+static void cnt_add(const ivp_surman_t *sm, const ivp_compact_ledge_t *ledge)
+{
+    counting_surman_t *c = (counting_surman_t *)(uintptr_t)sm;
+    if (ledge == c->ledge) c->adds++;
+    else c->foreign++;
+}
+
+static void cnt_remove(const ivp_surman_t *sm, const ivp_compact_ledge_t *ledge)
+{
+    counting_surman_t *c = (counting_surman_t *)(uintptr_t)sm;
+    if (ledge == c->ledge) c->removes++;
+    else c->foreign++;
+}
+
+static void counting_surman_init(counting_surman_t *c, const ivp_compact_surface_t *surf)
+{
+    memset(c, 0, sizeof(*c));
+    ivp_surman_polygon_init(&c->poly, surf);
+    c->vt = *c->poly.base.vtable;
+    c->vt.add_reference_to_ledge = cnt_add;
+    c->vt.remove_reference_to_ledge = cnt_remove;
+    c->poly.base.vtable = &c->vt;
+    c->ledge = ivp_surface_get_single_convex(surf);
+}
+
+IVP_TEST(surman_ledge_references_balanced) {
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_compact_surface_t *ground_surf = ivp_build_box_surface(NULL, IVP_REAL(5.0), IVP_REAL(0.5), IVP_REAL(5.0));
+    ivp_compact_surface_t *box_surf = ivp_build_box_surface(NULL, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(0.5));
+    counting_surman_t ground_sm, box_sm;
+    counting_surman_init(&ground_sm, ground_surf);
+    counting_surman_init(&box_sm, box_surf);
+
+    ivp_object_template_t t;
+    ivp_object_template_init(&t);
+    t.type = IVP_OBJECT_POLYGON;
+    t.physical_unmoveable = true;
+    t.orientation = ivp_quatr_identity();
+    ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *ground = ivp_environment_create_object(env, &t, &ground_sm.poly.base);
+    IVP_ASSERT_NOT_NULL(ground);
+    ivp_object_template_init(&t);
+    t.type = IVP_OBJECT_POLYGON;
+    t.mass = IVP_REAL(1.0);
+    t.orientation = ivp_quatr_identity();
+    ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(-1.5), IVP_REAL(0.0)); /* y down is +gravity */
+    ivp_object_t *box = ivp_environment_create_object(env, &t, &box_sm.poly.base);
+    IVP_ASSERT_NOT_NULL(box);
+
+    int max_live = 0;
+    for (int i = 0; i < 120; i++) {
+        ivp_environment_simulate_one_psi(env);
+        IVP_ASSERT_TRUE(box_sm.adds >= box_sm.removes);
+        /* every synapse pair uses one ledge of each object */
+        IVP_ASSERT_EQ(box_sm.adds - box_sm.removes, ground_sm.adds - ground_sm.removes);
+        if (box_sm.adds - box_sm.removes > max_live) max_live = box_sm.adds - box_sm.removes;
+    }
+    /* the falling / resting box had mindists (and contact points) to the ground */
+    IVP_ASSERT_TRUE(max_live > 0);
+
+    /* deleting the box drops every synapse that used its ledge */
+    ivp_environment_destroy_object(env, box);
+    IVP_ASSERT_EQ(box_sm.adds, box_sm.removes);
+    IVP_ASSERT_EQ(ground_sm.adds, ground_sm.removes);
+    IVP_ASSERT_EQ(box_sm.foreign, 0);
+    IVP_ASSERT_EQ(ground_sm.foreign, 0);
+
+    ivp_environment_destroy(env);
+    ivp_compact_surface_free(NULL, box_surf);
+    ivp_compact_surface_free(NULL, ground_surf);
 }
 
 /* ========================================================================
@@ -276,6 +364,7 @@ int main(void) {
     /* Compact Ledge Solver Tests */
     IVP_REGISTER(compact_ledge_solver_point_to_ledge);
     IVP_REGISTER(compact_ledge_solver_box_box);
+    IVP_REGISTER(surman_ledge_references_balanced);
 
     IVP_RUN_ALL();
 }

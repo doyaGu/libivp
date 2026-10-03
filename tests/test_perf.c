@@ -68,9 +68,11 @@ static ivp_object_t *make_ball(ivp_environment_t *env,
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_BALL;
+    tmpl.ball_radius = radius; /* IVP_Template_Ball::radius */
     tmpl.mass = mass;
     ivp_real_t inertia = IVP_REAL(0.4) * mass * radius * radius;
     ivp_vec3r_set(&tmpl.rot_inertia, inertia, inertia, inertia);
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
     tmpl.material.friction   = friction;
     tmpl.material.elasticity = elasticity;
     tmpl.speed_damp_factor   = IVP_REAL(0.0);
@@ -81,12 +83,11 @@ static ivp_object_t *make_ball(ivp_environment_t *env,
 
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     if (obj) {
-        obj->core.upper_limit_radius = radius;
-        ivp_vec3r_set(&obj->core.speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        obj->core.rot_speed.k[0] = 0.0f;
-        obj->core.rot_speed.k[1] = 0.0f;
-        obj->core.rot_speed.k[2] = 0.0f;
-        obj->core.delta_world_f_core_psis = obj->core.speed;
+        ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        obj->physical_core->rot_speed.k[0] = 0.0f;
+        obj->physical_core->rot_speed.k[1] = 0.0f;
+        obj->physical_core->rot_speed.k[2] = 0.0f;
+        obj->physical_core->delta_world_f_core_psis = obj->physical_core->speed;
     }
     return obj;
 }
@@ -137,10 +138,10 @@ IVP_TEST(perf_two_balls) {
     IVP_ASSERT_NOT_NULL(b);
 
     /* Initial velocities: approaching */
-    ivp_vec3r_set(&a->core.speed, IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    a->core.delta_world_f_core_psis = a->core.speed;
-    ivp_vec3r_set(&b->core.speed, IVP_REAL(-2.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    b->core.delta_world_f_core_psis = b->core.speed;
+    ivp_vec3r_set(&a->physical_core->speed, IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    a->physical_core->delta_world_f_core_psis = a->physical_core->speed;
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(-2.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    b->physical_core->delta_world_f_core_psis = b->physical_core->speed;
 
     double t0 = perf_now_us();
     for (int i = 0; i < PERF_STEPS; i++) {
@@ -177,6 +178,7 @@ IVP_TEST(perf_slope_friction) {
     tmpl_ramp.type = IVP_OBJECT_POLYGON;
     tmpl_ramp.mass = IVP_REAL(1e6);
     ivp_vec3r_set(&tmpl_ramp.rot_inertia, IVP_REAL(1e6), IVP_REAL(1e6), IVP_REAL(1e6));
+    tmpl_ramp.rot_inertia_is_factor = false; /* absolute inertia */
     tmpl_ramp.material.friction   = IVP_REAL(0.8);
     tmpl_ramp.material.elasticity = IVP_REAL(0.0);
     tmpl_ramp.speed_damp_factor   = IVP_REAL(0.0);
@@ -189,8 +191,7 @@ IVP_TEST(perf_slope_friction) {
 
     ivp_object_t *ramp = ivp_environment_create_object(
         env, &tmpl_ramp, &ramp_surman.base);
-    IVP_ASSERT_NOT_NULL(ramp);
-    ramp->core.upper_limit_radius = IVP_REAL(5.0);
+    IVP_ASSERT_NOT_NULL(ramp); /* radius comes from the surface manager */
 
     /* Ball above ramp */
     ivp_object_t *ball = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.5),

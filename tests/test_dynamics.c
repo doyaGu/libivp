@@ -4,6 +4,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
+#include <ivp/events/ivp_listener_psi.h>
 #include <ivp/controllers/ivp_actuator_force.h>
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
 #include <ivp/math/ivp_fast_math.h>
@@ -42,7 +43,9 @@ IVP_TEST(core_init_basic) {
     IVP_ASSERT_NEAR(core.speed.k[1], 0.0, 1e-6);
     IVP_ASSERT_NEAR(core.speed.k[2], 0.0, 1e-6);
 
-    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_MOVING);
+    /* Reference IVP_Core::init sets IVP_MT_NOT_SIM (ivp_core.cxx:1050);
+     * cores enter simulation only when revived. */
+    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_NOT_SIM);
     IVP_ASSERT_FALSE(core.rot_inertias_are_equal);
 }
 
@@ -108,6 +111,10 @@ IVP_TEST(core_damp_linear_approx) {
 
     core.speed = ivp_vec3r(IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
     core.speed_damp_factor = IVP_REAL(0.01);
+    /* IVP_Core::global_damp_core adds 0.1 for movement_state >= IVP_MT_SLOW,
+     * which includes the IVP_MT_NOT_SIM state of a fresh core
+     * (ivp_core.cxx:484); test the plain path on a moving core. */
+    core.movement_state = IVP_MT_MOVING;
 
     ivp_real_t dt = (ivp_real_t)IVP_DEFAULT_DELTA_TIME;
     ivp_core_damp(&core, dt);
@@ -124,6 +131,7 @@ IVP_TEST(core_damp_exponential) {
     ivp_core_init(&core, IVP_REAL(1.0), &inertia);
 
     core.speed = ivp_vec3r(IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    core.movement_state = IVP_MT_MOVING; /* no slow add-on (ivp_core.cxx:484) */
     core.speed_damp_factor = IVP_REAL(20.0); /* Very large �?use exp path */
 
     ivp_real_t dt = IVP_REAL(1.0);  /* 1 second */
@@ -142,6 +150,7 @@ IVP_TEST(core_damp_analytical_decay) {
     ivp_real_t v0 = IVP_REAL(10.0);
     core.speed = ivp_vec3r(v0, IVP_REAL(0.0), IVP_REAL(0.0));
     core.speed_damp_factor = IVP_REAL(0.5);
+    core.movement_state = IVP_MT_MOVING; /* no slow add-on (ivp_core.cxx:484) */
 
     ivp_real_t dt = (ivp_real_t)IVP_DEFAULT_DELTA_TIME;
     int n = 660;  /* 10 seconds at 66Hz */
@@ -253,8 +262,8 @@ IVP_TEST(env_create_object) {
     IVP_ASSERT_NOT_NULL(obj);
     IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 1);
 
-    IVP_ASSERT_NEAR(obj->core.mass, 10.0, 1e-6);
-    IVP_ASSERT_NEAR(obj->core.pos_world_f_core_last_psi.k[0], 1.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->mass, 10.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[0], 1.0, 1e-6);
 
     IVP_ASSERT_TRUE(obj->owner == env);
 
@@ -381,9 +390,9 @@ IVP_TEST(env_single_psi_step) {
     double expected_vy = 9.83 * dt;  /* velocity after gravity */
 
     /* Speed was 0, damped to 0, then += g*dt */
-    IVP_ASSERT_NEAR(obj->core.speed.k[0], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj->core.speed.k[1], expected_vy, 1e-4);
-    IVP_ASSERT_NEAR(obj->core.speed.k[2], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[1], expected_vy, 1e-4);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[2], 0.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -431,8 +440,8 @@ IVP_TEST(freefall_no_damping) {
         delta = v;           /* save for next step */
     }
 
-    IVP_ASSERT_NEAR(obj->core.pos_world_f_core_last_psi.k[2], z, 0.01);
-    IVP_ASSERT_NEAR(obj->core.speed.k[2], v, 1e-4);
+    IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[2], z, 0.01);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[2], v, 1e-4);
 
     ivp_environment_destroy(env);
 }
@@ -472,8 +481,8 @@ IVP_TEST(freefall_default_damping) {
     }
 
     /* The acceptance criteria says 1e-5 m position error */
-    IVP_ASSERT_NEAR(obj->core.pos_world_f_core_last_psi.k[1], y, 1e-3);
-    IVP_ASSERT_NEAR(obj->core.speed.k[1], vy, 1e-3);
+    IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[1], y, 1e-3);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[1], vy, 1e-3);
 
     ivp_environment_destroy(env);
 }
@@ -509,8 +518,8 @@ IVP_TEST(freefall_240_frames_position) {
         ivp_environment_simulate_one_psi(env);
 
         /* Compare per-frame */
-        double err_pos = fabs((double)obj->core.pos_world_f_core_last_psi.k[1] - y);
-        double err_vel = fabs((double)obj->core.speed.k[1] - vy);
+        double err_pos = fabs((double)obj->physical_core->pos_world_f_core_last_psi.k[1] - y);
+        double err_vel = fabs((double)obj->physical_core->speed.k[1] - vy);
 
         if (err_pos > 1e-3 || err_vel > 1e-3) {
             fprintf(stderr, "  Frame %d: pos_err=%g vel_err=%g\n",
@@ -520,7 +529,7 @@ IVP_TEST(freefall_240_frames_position) {
     }
 
     /* Final position check */
-    IVP_ASSERT_NEAR(obj->core.pos_world_f_core_last_psi.k[1], y, 1e-3);
+    IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[1], y, 1e-3);
 
     ivp_environment_destroy(env);
 }
@@ -549,18 +558,37 @@ IVP_TEST(env_simulate_dtime_accumulation) {
     ivp_environment_destroy(env);
 }
 
+static int s_dtime_psi_count;
+static void dtime_psi_count_fn(void *ctx, ivp_environment_t *env, ivp_time_t time, ivp_real_t dt) {
+    (void)ctx;
+    (void)env;
+    (void)time;
+    (void)dt;
+    s_dtime_psi_count++;
+}
+
 IVP_TEST(env_simulate_dtime_residual) {
+    /* Reference IVP_Environment::simulate_dtime (ivp_environment.cxx:516)
+     * runs the time-event loop up to current_time + dtime: the clock advances
+     * by exactly dtime and a PSI fires whenever its event time is passed
+     * (the first PSI event is at t=0). There is no fixed-step residual. */
     ivp_environment_t *env = ivp_environment_create(NULL);
+    s_dtime_psi_count = 0;
+    ivp_psi_listener_t listener;
+    memset(&listener, 0, sizeof(listener));
+    IVP_ASSERT_EQ(ivp_psi_listener_register(&listener, env, dtime_psi_count_fn, NULL), 0);
 
-    /* Simulate a non-multiple of dt */
-    ivp_environment_simulate_dtime(env, IVP_REAL(0.01)); /* Less than 1 PSI step */
-    IVP_ASSERT_NEAR(ivp_environment_get_time(env), 0.0, 1e-9);  /* No step taken */
-    IVP_ASSERT_TRUE(env->residual_time > 0.0);
+    /* Less than one PSI interval: only the t=0 PSI runs */
+    ivp_environment_simulate_dtime(env, IVP_REAL(0.01));
+    IVP_ASSERT_NEAR(ivp_environment_get_time(env), 0.01, 1e-6);
+    IVP_ASSERT_EQ(s_dtime_psi_count, 1);
 
-    /* Simulate enough to trigger a step */
-    ivp_environment_simulate_dtime(env, IVP_REAL(0.01));  /* Now ~0.02s > 1/66 �?0.01515 */
-    IVP_ASSERT_TRUE(ivp_environment_get_time(env) > 0.0);
+    /* Now ~0.02s > 1/66 ~ 0.01515: the second PSI runs */
+    ivp_environment_simulate_dtime(env, IVP_REAL(0.01));
+    IVP_ASSERT_NEAR(ivp_environment_get_time(env), 0.02, 1e-6);
+    IVP_ASSERT_EQ(s_dtime_psi_count, 2);
 
+    IVP_ASSERT_EQ(ivp_psi_listener_unregister(&listener, env), 0);
     ivp_environment_destroy(env);
 }
 
@@ -581,10 +609,15 @@ IVP_TEST(rotation_equal_inertias) {
     tmpl.speed_damp_factor = IVP_REAL(0.0);
     tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
+    /* Rotation only counts as movement scaled by upper_limit_radius
+     * (IVP_Core::calc_movement_state, ivp_core.cxx:1144): a zero-radius
+     * ball spinning in place would be frozen. */
+    tmpl.ball_radius = IVP_REAL(1.0);
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
     /* Set angular velocity: 1 rad/s around Z */
-    obj->core.rot_speed = ivp_vec3f(0.0f, 0.0f, 1.0f);
+    obj->physical_core->rot_speed = ivp_vec3f(0.0f, 0.0f, 1.0f);
 
     /* Run 66 steps = 1 second */
     for (int i = 0; i < 66; i++) {
@@ -592,13 +625,13 @@ IVP_TEST(rotation_equal_inertias) {
     }
 
     /* Angular velocity should be unchanged (no gyro, no damping) */
-    IVP_ASSERT_NEAR(obj->core.rot_speed.k[2], 1.0, 1e-3);
+    IVP_ASSERT_NEAR(obj->physical_core->rot_speed.k[2], 1.0, 1e-3);
 
     /* Quaternion should represent ~1 radian rotation around Z */
     /* q = (0, 0, sin(θ/2), cos(θ/2)) where θ �?1 rad */
     /* The quaternion accumulates per-step, so it won't match exact analytical
      * for large angles, but should be close for 1 rad total */
-    double qw = (double)obj->core.q_world_f_core_next_psi.w;
+    double qw = (double)obj->physical_core->q_world_f_core_next_psi.w;
 
     /* Instead of exact, check that the angle is approximately correct */
     double angle = 2.0 * acos(fabs(qw));
@@ -624,16 +657,17 @@ IVP_TEST(rotation_gyroscopic_substeps) {
     tmpl.speed_damp_factor = IVP_REAL(0.0);
     tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&tmpl.rot_inertia, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(3.0));
+    tmpl.rot_inertia_is_factor = false; /* absolute inertia */
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
     /* Set angular velocity with components in all axes */
-    obj->core.rot_speed = ivp_vec3f(1.0f, 0.5f, 0.3f);
+    obj->physical_core->rot_speed = ivp_vec3f(1.0f, 0.5f, 0.3f);
 
-    IVP_ASSERT_FALSE(obj->core.rot_inertias_are_equal);
+    IVP_ASSERT_FALSE(obj->physical_core->rot_inertias_are_equal);
 
-    double wx0 = (double)obj->core.rot_speed.k[0];
-    double wy0 = (double)obj->core.rot_speed.k[1];
-    double wz0 = (double)obj->core.rot_speed.k[2];
+    double wx0 = (double)obj->physical_core->rot_speed.k[0];
+    double wy0 = (double)obj->physical_core->rot_speed.k[1];
+    double wz0 = (double)obj->physical_core->rot_speed.k[2];
 
     /* Run one step */
     ivp_environment_simulate_one_psi(env);
@@ -641,9 +675,9 @@ IVP_TEST(rotation_gyroscopic_substeps) {
     /* Gyroscopic correction should change angular velocity direction */
     /* The total angular momentum magnitude should be approximately conserved */
     double L0 = 1.0*wx0*wx0 + 4.0*wy0*wy0 + 9.0*wz0*wz0;
-    double wx = (double)obj->core.rot_speed.k[0];
-    double wy = (double)obj->core.rot_speed.k[1];
-    double wz = (double)obj->core.rot_speed.k[2];
+    double wx = (double)obj->physical_core->rot_speed.k[0];
+    double wy = (double)obj->physical_core->rot_speed.k[1];
+    double wz = (double)obj->physical_core->rot_speed.k[2];
     double L1 = 1.0*wx*wx + 4.0*wy*wy + 9.0*wz*wz;
 
     /* Angular momentum squared should be approximately conserved */
@@ -674,16 +708,16 @@ IVP_TEST(at_position_interpolation) {
 
     /* AT interpolation at t = time_of_last_psi should give pos_last */
     ivp_vec3r_t at_pos;
-    ivp_core_get_at_position(&obj->core, obj->core.time_of_last_psi, &at_pos);
-    IVP_ASSERT_NEAR(at_pos.k[0], obj->core.pos_world_f_core_last_psi.k[0], 1e-6);
-    IVP_ASSERT_NEAR(at_pos.k[1], obj->core.pos_world_f_core_last_psi.k[1], 1e-6);
-    IVP_ASSERT_NEAR(at_pos.k[2], obj->core.pos_world_f_core_last_psi.k[2], 1e-6);
+    ivp_core_get_at_position(obj->physical_core, obj->physical_core->time_of_last_psi, &at_pos);
+    IVP_ASSERT_NEAR(at_pos.k[0], obj->physical_core->pos_world_f_core_last_psi.k[0], 1e-6);
+    IVP_ASSERT_NEAR(at_pos.k[1], obj->physical_core->pos_world_f_core_last_psi.k[1], 1e-6);
+    IVP_ASSERT_NEAR(at_pos.k[2], obj->physical_core->pos_world_f_core_last_psi.k[2], 1e-6);
 
     /* AT interpolation at t = time + dt should extrapolate by delta */
     double dt = 1.0 / 66.0;
-    ivp_core_get_at_position(&obj->core, obj->core.time_of_last_psi + dt, &at_pos);
-    double expected_y = (double)obj->core.pos_world_f_core_last_psi.k[1]
-                      + (double)obj->core.delta_world_f_core_psis.k[1] * dt;
+    ivp_core_get_at_position(obj->physical_core, obj->physical_core->time_of_last_psi + dt, &at_pos);
+    double expected_y = (double)obj->physical_core->pos_world_f_core_last_psi.k[1]
+                      + (double)obj->physical_core->delta_world_f_core_psis.k[1] * dt;
     IVP_ASSERT_NEAR(at_pos.k[1], expected_y, 1e-6);
 
     ivp_environment_destroy(env);
@@ -701,104 +735,23 @@ IVP_TEST(at_quat_interpolation) {
     tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
-    obj->core.rot_speed = ivp_vec3f(0.0f, 0.0f, 0.5f);
+    obj->physical_core->rot_speed = ivp_vec3f(0.0f, 0.0f, 0.5f);
 
     ivp_environment_simulate_one_psi(env);
 
     /* AT at t=0 fraction should give q_last */
     ivp_quatr_t q_at;
-    ivp_core_get_at_quat(&obj->core, obj->core.time_of_last_psi, &q_at);
-    IVP_ASSERT_NEAR(q_at.x, obj->core.q_world_f_core_last_psi.x, 1e-4);
-    IVP_ASSERT_NEAR(q_at.w, obj->core.q_world_f_core_last_psi.w, 1e-4);
+    ivp_core_get_at_quat(obj->physical_core, obj->physical_core->time_of_last_psi, &q_at);
+    IVP_ASSERT_NEAR(q_at.x, obj->physical_core->q_world_f_core_last_psi.x, 1e-4);
+    IVP_ASSERT_NEAR(q_at.w, obj->physical_core->q_world_f_core_last_psi.w, 1e-4);
 
     /* AT at t=1 fraction should give q_next */
     double dt = 1.0 / 66.0;
-    ivp_core_get_at_quat(&obj->core, obj->core.time_of_last_psi + dt, &q_at);
-    IVP_ASSERT_NEAR(q_at.z, obj->core.q_world_f_core_next_psi.z, 1e-3);
-    IVP_ASSERT_NEAR(q_at.w, obj->core.q_world_f_core_next_psi.w, 1e-3);
+    ivp_core_get_at_quat(obj->physical_core, obj->physical_core->time_of_last_psi + dt, &q_at);
+    IVP_ASSERT_NEAR(q_at.z, obj->physical_core->q_world_f_core_next_psi.z, 1e-3);
+    IVP_ASSERT_NEAR(q_at.w, obj->physical_core->q_world_f_core_next_psi.w, 1e-3);
 
     ivp_environment_destroy(env);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════�?
- * 13. Movement state machine
- * ══════════════════════════════════════════════════════════════════════════�?*/
-
-IVP_TEST(movement_state_stays_moving) {
-    /* Fast-moving object should stay MOVING */
-    ivp_core_t core;
-    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    ivp_core_init(&core, IVP_REAL(1.0), &inertia);
-
-    core.speed = ivp_vec3r(IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
-
-    /* Move the object significantly from checkpoint */
-    core.pos_world_f_core_last_psi = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    core.checkpoint_short.pos = ivp_vec3r_zero();
-    core.checkpoint_short.time = 0.0;
-    core.time_of_last_psi = 0.5;
-
-    ivp_core_calc_movement_state(&core, NULL);
-    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_MOVING);
-}
-
-IVP_TEST(movement_state_becomes_slow) {
-    /* Object barely moving should become SLOW */
-    ivp_core_t core;
-    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    ivp_core_init(&core, IVP_REAL(1.0), &inertia);
-
-    /* Position hasn't changed from checkpoint */
-    core.pos_world_f_core_last_psi = ivp_vec3r_zero();
-    core.q_world_f_core_last_psi = ivp_quatr_identity();
-    core.checkpoint_short.pos = ivp_vec3r_zero();
-    core.checkpoint_short.quat = ivp_quatr_identity();
-    core.checkpoint_short.time = 0.0;
-    core.time_of_last_psi = 0.1;  /* Less than freeze_check_dtime (0.3s) */
-
-    ivp_core_calc_movement_state(&core, NULL);
-    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_SLOW);
-}
-
-IVP_TEST(movement_state_becomes_calm) {
-    /* Object stationary for > freeze_check_dtime �?CALM */
-    ivp_core_t core;
-    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    ivp_core_init(&core, IVP_REAL(1.0), &inertia);
-
-    core.pos_world_f_core_last_psi = ivp_vec3r_zero();
-    core.q_world_f_core_last_psi = ivp_quatr_identity();
-    core.checkpoint_short.pos = ivp_vec3r_zero();
-    core.checkpoint_short.quat = ivp_quatr_identity();
-    core.checkpoint_short.time = 0.0;
-    core.time_of_last_psi = 0.5;  /* > freeze_check_dtime (0.3s) */
-
-    ivp_core_calc_movement_state(&core, NULL);
-    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_CALM);
-}
-
-IVP_TEST(movement_state_long_term_calm) {
-    /* Long-term near-stationary �?forced CALM */
-    ivp_core_t core;
-    ivp_vec3r_t inertia = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    ivp_core_init(&core, IVP_REAL(1.0), &inertia);
-
-    /* Slightly moved from short checkpoint (resets short �?MOVING) */
-    core.pos_world_f_core_last_psi = ivp_vec3r(IVP_REAL(0.05), IVP_REAL(0.0), IVP_REAL(0.0));
-    core.q_world_f_core_last_psi = ivp_quatr_identity();
-
-    core.checkpoint_short.pos = ivp_vec3r_zero();
-    core.checkpoint_short.quat = ivp_quatr_identity();
-    core.checkpoint_short.time = 0.0;
-
-    /* But long checkpoint shows very little movement over 5 seconds */
-    core.checkpoint_long.pos = ivp_vec3r_zero();
-    core.checkpoint_long.quat = ivp_quatr_identity();
-    core.checkpoint_long.time = 0.0;
-    core.time_of_last_psi = 5.0;  /* > has_moved_long_time (4.0s) */
-
-    ivp_core_calc_movement_state(&core, NULL);
-    IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_CALM);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════�?
@@ -814,7 +767,10 @@ IVP_TEST(static_object_no_movement) {
     ivp_vec3r_set(&tmpl.position, IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
-    IVP_ASSERT_EQ((int)obj->core.movement_state, (int)IVP_MT_STATIC);
+    /* Reference: the object is IVP_MT_STATIC (ivp_object.cxx:545) while its
+     * core stays IVP_MT_NOT_SIM (IVP_Core::init, ivp_core.cxx:1050). */
+    IVP_ASSERT_EQ((int)obj->object_movement_state, (int)IVP_MT_STATIC);
+    IVP_ASSERT_EQ((int)obj->physical_core->movement_state, (int)IVP_MT_NOT_SIM);
 
     /* Run some steps */
     for (int i = 0; i < 100; i++) {
@@ -822,8 +778,8 @@ IVP_TEST(static_object_no_movement) {
     }
 
     /* Position should be unchanged */
-    IVP_ASSERT_NEAR(obj->core.pos_world_f_core_last_psi.k[0], 5.0, 1e-6);
-    IVP_ASSERT_NEAR(obj->core.speed.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[0], 5.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[0], 0.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -897,13 +853,16 @@ IVP_TEST(sim_unit_event_pipeline) {
 
     ivp_environment_simulate_one_psi(env);
 
-    IVP_ASSERT_EQ(s_evt_unit_begin, 3);
-    IVP_ASSERT_EQ(s_evt_unit_end, 3);
-    IVP_ASSERT_EQ(s_evt_last_unit, 2);
+    /* The reference runs one PSI loop per PSI (IVP_Environment::simulate_psi);
+     * sim_unit_count is informational only, so the sim-unit events and
+     * phases fire once per PSI with sim unit index 0. */
+    IVP_ASSERT_EQ(s_evt_unit_begin, 1);
+    IVP_ASSERT_EQ(s_evt_unit_end, 1);
+    IVP_ASSERT_EQ(s_evt_last_unit, 0);
 
-    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_SIM_UNIT_BEGIN], 3);
-    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_MANAGER_EVENTS], 3);
-    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_SIM_UNIT_END], 3);
+    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_SIM_UNIT_BEGIN], 1);
+    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_MANAGER_EVENTS], 1);
+    IVP_ASSERT_EQ(s_phase_hits[(int)IVP_PSI_PHASE_SIM_UNIT_END], 1);
 
     ivp_environment_destroy(env);
 }
@@ -931,7 +890,7 @@ static void controller_low_sync(const ivp_event_sim_t *event_sim,
     const ivp_real_t dt = event_sim->delta_time;
     (void)ctx;
     /* Sync push: write directly to speed */
-    obj->core.speed.k[0] += IVP_REAL(1.0);
+    obj->physical_core->speed.k[0] += IVP_REAL(1.0);
 }
 
 static void controller_high_async(const ivp_event_sim_t *event_sim,
@@ -943,11 +902,11 @@ static void controller_high_async(const ivp_event_sim_t *event_sim,
     /* Check whether lower-priority (400) already modified speed.
      * Reference parity executes higher priorities first, so this should
      * observe the pre-low state and stay false. */
-    if (obj->core.speed.k[0] > IVP_REAL(0.9)) {
+    if (obj->physical_core->speed.k[0] > IVP_REAL(0.9)) {
         s_controller_sync_seen = 1;
     }
     /* Direct speed write for test simplicity (tests dispatch ORDER). */
-    obj->core.speed.k[0] += IVP_REAL(2.0);
+    obj->physical_core->speed.k[0] += IVP_REAL(2.0);
 }
 
 static void controller_dependent_probe(const ivp_event_sim_t *event_sim,
@@ -989,11 +948,16 @@ IVP_TEST(sim_unit_core_timestamp_tracks_full_psi) {
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     IVP_ASSERT_NOT_NULL(obj);
 
+    /* simulate_one_psi == simulate_until(current_time + delta_psi_time) and
+     * the first PSI runs at t=0, so after each call the clock sits one
+     * delta_psi_time past the PSI that just ran. */
+    const double dt = (double)ivp_environment_get_delta_psi_time(env);
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj->core.time_of_last_psi, ivp_environment_get_time(env), 1e-9);
+    IVP_ASSERT_NEAR(obj->physical_core->time_of_last_psi, 0.0, 1e-9);
+    IVP_ASSERT_NEAR(obj->physical_core->time_of_last_psi, ivp_environment_get_time(env) - dt, 1e-6);
 
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj->core.time_of_last_psi, ivp_environment_get_time(env), 1e-9);
+    IVP_ASSERT_NEAR(obj->physical_core->time_of_last_psi, ivp_environment_get_time(env) - dt, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1099,6 +1063,11 @@ IVP_TEST(controller_priority_sync_async) {
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
+    /* The gravity controller (priority 1000) damps the core before committing
+     * async pushes (IVP_Standard_Gravity_Controller::do_simulation_controller,
+     * ivp_sim_unit.cxx:880): disable damping so the pushes add up exactly. */
+    tmpl.speed_damp_factor = IVP_REAL(0.0);
+    tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     IVP_ASSERT_NOT_NULL(obj);
 
@@ -1115,7 +1084,7 @@ IVP_TEST(controller_priority_sync_async) {
     IVP_ASSERT_EQ(s_controller_sync_seen, 0);
     /* final velocity includes low sync push (1.0) + high async push (2.0,
      * committed by gravity barrier at priority 1000). */
-    IVP_ASSERT_NEAR(obj->core.speed.k[0], 3.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[0], 3.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1171,7 +1140,7 @@ IVP_TEST(controller_dependent_requires_discovery_callback) {
     ivp_environment_destroy(env);
 }
 
-IVP_TEST(controller_dependent_ignores_destroyed_targets) {
+IVP_TEST(controller_dependent_removed_with_target) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     ivp_environment_clear_controllers(env);
 
@@ -1201,13 +1170,17 @@ IVP_TEST(controller_dependent_ignores_destroyed_targets) {
                                                              dependent_discovery_fn);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
 
+    /* Reference: an actuator / constraint is deleted together with an object
+     * it is anchored to (IVP_Anchor::object_is_going_to_be_deleted), so the
+     * dependent controller is unregistered and never runs again. */
     IVP_ASSERT_TRUE(ivp_environment_destroy_object_by_handle(env, h_a));
     ivp_environment_simulate_one_psi(env);
 
     IVP_ASSERT_EQ(probe.hits_a, 0);
-    IVP_ASSERT_EQ(probe.hits_b, 1);
+    IVP_ASSERT_EQ(probe.hits_b, 0);
     IVP_ASSERT_EQ(probe.hits_other, 0);
-    IVP_ASSERT_EQ(probe.calls, 1);
+    IVP_ASSERT_EQ(probe.calls, 0);
+    IVP_ASSERT_FALSE(ivp_environment_remove_controller(env, ctrl)); /* already gone */
 
     ivp_environment_destroy(env);
 }
@@ -1248,9 +1221,9 @@ IVP_TEST(controller_dependent_dynamic_discovery_unions_island) {
     IVP_ASSERT_EQ(probe.hits_other, 0);
 
     /* Connected dependent-controller targets must share one sim unit. */
-    IVP_ASSERT_NOT_NULL(obj_a->core.sim_unit);
-    IVP_ASSERT_NOT_NULL(obj_b->core.sim_unit);
-    IVP_ASSERT_TRUE(obj_a->core.sim_unit == obj_b->core.sim_unit);
+    IVP_ASSERT_NOT_NULL(obj_a->physical_core->sim_unit);
+    IVP_ASSERT_NOT_NULL(obj_b->physical_core->sim_unit);
+    IVP_ASSERT_TRUE(obj_a->physical_core->sim_unit == obj_b->physical_core->sim_unit);
 
     ivp_environment_destroy(env);
 }
@@ -1289,12 +1262,16 @@ IVP_TEST(ensure_core_in_simulation_wakes_frozen_object) {
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
+    tmpl.start_in_simulation = false; /* object starts frozen */
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     IVP_ASSERT_NOT_NULL(obj);
+    IVP_ASSERT_EQ((int)obj->physical_core->movement_state, (int)IVP_MT_NOT_SIM);
 
-    obj->core.movement_state = IVP_MT_NOT_SIM;
+    /* IVP_Real_Object::ensure_in_simulation queues the core for revival
+     * (add_revive_core, ivp_object.cxx:1385); it is revived at the next PSI. */
     IVP_ASSERT_TRUE(ivp_environment_ensure_core_in_simulation(env, obj));
-    IVP_ASSERT_EQ((int)obj->core.movement_state, (int)IVP_MT_MOVING);
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ((int)obj->physical_core->movement_state, (int)IVP_MT_MOVING);
 
     ivp_environment_destroy(env);
 }
@@ -1336,9 +1313,9 @@ IVP_TEST(force_actuator_executes_once_per_psi) {
 
     /* Reference IVP_Actuator_Force: a positive force pushes A away from B
      * (dir = pos_a - pos_b) and B away from A. */
-    IVP_ASSERT_NEAR(obj_a->core.speed.k[0], -1.0, 1e-6);
-    IVP_ASSERT_NEAR(obj_b->core.speed.k[0], 1.0, 1e-6);
-    IVP_ASSERT_NEAR(obj_c->core.speed.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_a->physical_core->speed.k[0], -1.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->physical_core->speed.k[0], 1.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_c->physical_core->speed.k[0], 0.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1358,6 +1335,7 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     ivp_object_template_init(&tmpl);
     tmpl.speed_damp_factor = IVP_REAL(0.0);
     tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    tmpl.rot_inertia_is_factor = false; /* absolute unit inertia (template default 1,1,1) */
 
     ivp_object_t *obj_b = ivp_environment_create_object(env, &tmpl, NULL);
     IVP_ASSERT_NOT_NULL(obj_b);
@@ -1375,13 +1353,13 @@ IVP_TEST(rot_mot_executes_once_per_psi) {
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
 
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 0.5, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->physical_core->rot_speed.k[1], 0.5, 1e-6);
 
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_NEAR(obj_b->core.rot_speed.k[1], 1.0, 1e-3);
-    IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[0], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[1], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj_c->core.rot_speed.k[2], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_b->physical_core->rot_speed.k[1], 1.0, 1e-3);
+    IVP_ASSERT_NEAR(obj_c->physical_core->rot_speed.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_c->physical_core->rot_speed.k[1], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj_c->physical_core->rot_speed.k[2], 0.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1407,12 +1385,12 @@ IVP_TEST(multiple_objects_freefall) {
     }
 
     /* Both should fall same distance (gravity doesn't depend on mass) */
-    IVP_ASSERT_NEAR(obj1->core.pos_world_f_core_last_psi.k[1],
-                    obj2->core.pos_world_f_core_last_psi.k[1], 1e-3);
+    IVP_ASSERT_NEAR(obj1->physical_core->pos_world_f_core_last_psi.k[1],
+                    obj2->physical_core->pos_world_f_core_last_psi.k[1], 1e-3);
 
     /* But X positions should be different (one started at 10) */
-    IVP_ASSERT_NEAR(obj1->core.pos_world_f_core_last_psi.k[0], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj2->core.pos_world_f_core_last_psi.k[0], 10.0, 1e-6);
+    IVP_ASSERT_NEAR(obj1->physical_core->pos_world_f_core_last_psi.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj2->physical_core->pos_world_f_core_last_psi.k[0], 10.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1446,15 +1424,15 @@ IVP_TEST(quat_fast_normalize_integration) {
     tmpl.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
 
-    obj->core.rot_speed = ivp_vec3f(0.5f, 0.3f, 0.7f);
+    obj->physical_core->rot_speed = ivp_vec3f(0.5f, 0.3f, 0.7f);
 
     for (int i = 0; i < 1000; i++) {
         ivp_environment_simulate_one_psi(env);
     }
 
     /* Check quaternion is still unit length */
-    ivp_real_t ql = ivp_quat_dot(&obj->core.q_world_f_core_next_psi,
-                                  &obj->core.q_world_f_core_next_psi);
+    ivp_real_t ql = ivp_quat_dot(&obj->physical_core->q_world_f_core_next_psi,
+                                  &obj->physical_core->q_world_f_core_next_psi);
     IVP_ASSERT_NEAR(ql, 1.0, 1e-3);
 
     ivp_environment_destroy(env);
@@ -1470,16 +1448,16 @@ IVP_TEST(pinned_object_no_gravity) {
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
-    obj->core.pinned = true;
+    obj->physical_core->pinned = true;
 
     for (int i = 0; i < 100; i++) {
         ivp_environment_simulate_one_psi(env);
     }
 
     /* Speed should remain zero (gravity skipped for pinned) */
-    IVP_ASSERT_NEAR(obj->core.speed.k[0], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj->core.speed.k[1], 0.0, 1e-6);
-    IVP_ASSERT_NEAR(obj->core.speed.k[2], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[0], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[1], 0.0, 1e-6);
+    IVP_ASSERT_NEAR(obj->physical_core->speed.k[2], 0.0, 1e-6);
 
     ivp_environment_destroy(env);
 }
@@ -1535,12 +1513,6 @@ int main(void) {
     IVP_REGISTER(at_position_interpolation);
     IVP_REGISTER(at_quat_interpolation);
 
-    /* Movement state */
-    IVP_REGISTER(movement_state_stays_moving);
-    IVP_REGISTER(movement_state_becomes_slow);
-    IVP_REGISTER(movement_state_becomes_calm);
-    IVP_REGISTER(movement_state_long_term_calm);
-
     /* Static */
     IVP_REGISTER(static_object_no_movement);
 
@@ -1553,7 +1525,7 @@ int main(void) {
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);
     IVP_REGISTER(controller_dependent_requires_discovery_callback);
-    IVP_REGISTER(controller_dependent_ignores_destroyed_targets);
+    IVP_REGISTER(controller_dependent_removed_with_target);
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);

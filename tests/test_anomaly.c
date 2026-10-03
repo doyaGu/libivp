@@ -32,15 +32,15 @@ static ivp_object_t *create_test_object(ivp_environment_t *env) {
     ivp_object_template_t t;
     ivp_object_template_init(&t);
     t.type = IVP_OBJECT_BALL;
+    t.ball_radius = IVP_REAL(0.5); /* IVP_Template_Ball::radius */
     t.mass = IVP_REAL(1.0);
     ivp_vec3r_set(&t.rot_inertia, IVP_REAL(0.1), IVP_REAL(0.1), IVP_REAL(0.1));
+    t.rot_inertia_is_factor = false; /* absolute inertia */
     t.speed_damp_factor = IVP_REAL(0.0);
     ivp_vec3r_set(&t.rot_speed_damp_factor, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     t.orientation = ivp_quatr_identity();
-    ivp_object_t *obj = ivp_environment_create_object(env, &t, NULL);
-    obj->core.upper_limit_radius = IVP_REAL(0.5);
-    return obj;
+    return ivp_environment_create_object(env, &t, NULL);
 }
 
 IVP_TEST(anomaly_detect_nan_velocity) {
@@ -54,7 +54,7 @@ IVP_TEST(anomaly_detect_nan_velocity) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Inject NaN into velocity */
-    obj->core.speed.k[0] = NAN;
+    obj->physical_core->speed.k[0] = NAN;
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
@@ -75,7 +75,7 @@ IVP_TEST(anomaly_detect_nan_position) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Inject NaN into position */
-    obj->core.pos_world_f_core_last_psi.k[1] = NAN;
+    obj->physical_core->pos_world_f_core_last_psi.k[1] = NAN;
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
@@ -96,7 +96,7 @@ IVP_TEST(anomaly_detect_nan_angular) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Inject NaN into angular velocity */
-    obj->core.rot_speed.k[2] = NAN;
+    obj->physical_core->rot_speed.k[2] = NAN;
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
@@ -118,7 +118,7 @@ IVP_TEST(anomaly_detect_excessive_speed) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Set excessive linear speed */
-    obj->core.speed.k[0] = IVP_REAL(5000.0);
+    obj->physical_core->speed.k[0] = IVP_REAL(5000.0);
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
@@ -140,9 +140,9 @@ IVP_TEST(anomaly_detect_excessive_angular) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Set excessive angular speed */
-    obj->core.rot_speed.k[0] = IVP_REAL(500.0);
-    obj->core.rot_speed.k[1] = IVP_REAL(500.0);
-    obj->core.rot_speed.k[2] = IVP_REAL(500.0);
+    obj->physical_core->rot_speed.k[0] = IVP_REAL(500.0);
+    obj->physical_core->rot_speed.k[1] = IVP_REAL(500.0);
+    obj->physical_core->rot_speed.k[2] = IVP_REAL(500.0);
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
@@ -169,7 +169,7 @@ IVP_TEST(anomaly_callback_fires) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Inject NaN to trigger callback */
-    obj->core.speed.k[0] = NAN;
+    obj->physical_core->speed.k[0] = NAN;
 
     ivp_anomaly_check_object(&mgr, obj);
 
@@ -190,12 +190,12 @@ IVP_TEST(anomaly_auto_correct_zeros_nan) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Inject NaN into velocity */
-    obj->core.speed.k[0] = NAN;
+    obj->physical_core->speed.k[0] = NAN;
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
     IVP_ASSERT(result & IVP_ANOMALY_NAN_VELOCITY);
-    IVP_ASSERT(!isnan(obj->core.speed.k[0]));
+    IVP_ASSERT(!isnan(obj->physical_core->speed.k[0]));
     IVP_ASSERT(mgr.anomalies_corrected > 0);
 
     ivp_environment_destroy(env);
@@ -213,16 +213,16 @@ IVP_TEST(anomaly_auto_correct_clamps_speed) {
     ivp_anomaly_manager_init(&mgr, &cfg);
 
     /* Set excessive speed */
-    obj->core.speed.k[0] = IVP_REAL(5000.0);
-    obj->core.speed.k[1] = IVP_REAL(0.0);
-    obj->core.speed.k[2] = IVP_REAL(0.0);
+    obj->physical_core->speed.k[0] = IVP_REAL(5000.0);
+    obj->physical_core->speed.k[1] = IVP_REAL(0.0);
+    obj->physical_core->speed.k[2] = IVP_REAL(0.0);
 
     int result = ivp_anomaly_check_object(&mgr, obj);
 
     IVP_ASSERT(result & IVP_ANOMALY_EXCESSIVE_SPEED);
 
     /* Verify speed was clamped */
-    ivp_real_t speed_mag = ivp_vec3r_length(&obj->core.speed);
+    ivp_real_t speed_mag = ivp_vec3r_length(&obj->physical_core->speed);
     IVP_ASSERT(speed_mag <= cfg.max_speed + IVP_REAL(0.1));
     IVP_ASSERT(mgr.anomalies_corrected > 0);
 
@@ -244,18 +244,20 @@ IVP_TEST(anomaly_collision_cap_per_object) {
     ivp_anomaly_manager_begin_psi(&mgr);
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_a));
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_b));
-    IVP_ASSERT_TRUE(obj_a->core.movement_state != IVP_MT_NOT_SIM);
-    IVP_ASSERT_TRUE(obj_b->core.movement_state != IVP_MT_NOT_SIM);
+    IVP_ASSERT_TRUE(obj_a->physical_core->movement_state != IVP_MT_NOT_SIM);
+    IVP_ASSERT_TRUE(obj_b->physical_core->movement_state != IVP_MT_NOT_SIM);
 
+    /* over the limit: reported, but the movement state is owned by the sim
+     * unit manager and is not touched */
+    ivp_movement_type_t before = obj_a->physical_core->movement_state;
     IVP_ASSERT_FALSE(ivp_anomaly_manager_count_collision(&mgr, obj_a));
-    IVP_ASSERT_TRUE(obj_a->core.movement_state == IVP_MT_NOT_SIM);
-    IVP_ASSERT_TRUE(obj_b->core.movement_state != IVP_MT_NOT_SIM);
+    IVP_ASSERT_EQ((int)obj_a->physical_core->movement_state, (int)before);
+    IVP_ASSERT_TRUE(mgr.anomalies_detected > 0);
 
-    obj_a->core.movement_state = IVP_MT_MOVING;
     /* In the real simulation, impacts_since_last_PSI is reset at the
      * start of each sim unit PSI.  Simulate that here. */
-    obj_a->core.impacts_since_last_PSI = 0;
-    obj_b->core.impacts_since_last_PSI = 0;
+    obj_a->physical_core->impacts_since_last_PSI = 0;
+    obj_b->physical_core->impacts_since_last_PSI = 0;
     ivp_anomaly_manager_begin_psi(&mgr);
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_a));
     IVP_ASSERT_TRUE(ivp_anomaly_manager_count_collision(&mgr, obj_b));

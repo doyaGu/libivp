@@ -48,19 +48,23 @@ static const float l_verts[] = {
     0,0,1, 3,0,1, 3,1,1, 1,1,1, 1,3,1, 0,3,1   /* back face */
 };
 
+/* Triangles are CCW seen from outside (outward normals), as required by
+ * the reference GEOMPACK decomposition (ivp_convex_decompositor.hxx:52:
+ * "Always supply them counter-clockwise").  The previous table was wound
+ * inside-out, which only worked with the old normal-clustering heuristic. */
 static const int l_indices[] = {
-    /* Front face (L shape) */
-    0,1,2, 0,2,3, 0,3,4, 0,4,5,
-    /* Back face (L shape) */
-    6,8,7, 6,9,8, 6,10,9, 6,11,10,
+    /* Front face z=0 (normal -z) */
+    0,2,1, 0,3,2, 0,4,3, 0,5,4,
+    /* Back face z=1 (normal +z) */
+    6,7,8, 6,8,9, 6,9,10, 6,10,11,
     /* Bottom horizontal bar */
-    0,7,1, 0,6,7,
-    1,7,8, 1,8,2,
-    2,8,9, 2,9,3,
+    0,1,7, 0,7,6,
+    1,8,7, 1,2,8,
+    2,9,8, 2,3,9,
     /* Vertical bar */
-    0,5,11, 0,11,6,
-    5,4,10, 5,10,11,
-    3,9,10, 3,10,4
+    0,11,5, 0,6,11,
+    5,10,4, 5,11,10,
+    3,10,9, 3,4,10
 };
 
 /*
@@ -91,7 +95,7 @@ IVP_TEST(ledge_soup_add_single) {
     ivp_compact_surface_t *result = ivp_ledge_soup_compile(&soup);
     IVP_ASSERT_NOT_NULL(result);
 
-    ivp_free_aligned(NULL, result);
+    ivp_compact_surface_free(NULL, result);
     ivp_ledge_soup_destroy(&soup);
     ivp_compact_surface_free(NULL, box);
 }
@@ -121,7 +125,7 @@ IVP_TEST(ledge_soup_add_multiple) {
     int ledge_count = ivp_ledgetree_count_terminal_ledges(root);
     IVP_ASSERT_EQ(ledge_count, 3);
 
-    ivp_free_aligned(NULL, result);
+    ivp_compact_surface_free(NULL, result);
     ivp_ledge_soup_destroy(&soup);
     ivp_compact_surface_free(NULL, box1);
     ivp_compact_surface_free(NULL, box2);
@@ -158,7 +162,7 @@ IVP_TEST(ledge_soup_capacity_growth) {
     ivp_compact_surface_t *result = ivp_ledge_soup_compile(&soup);
     IVP_ASSERT_NOT_NULL(result);
 
-    ivp_free_aligned(NULL, result);
+    ivp_compact_surface_free(NULL, result);
     ivp_ledge_soup_destroy(&soup);
 
     for (int i = 0; i < 20; i++) {
@@ -214,15 +218,34 @@ IVP_TEST(pointsoup_too_few_points) {
         0, 1, 0
     };
 
+    /* Fewer than 3 points: no surface. */
+    IVP_ASSERT_NULL(ivp_build_pointsoup_surface(NULL, points, 2, NULL));
+
+    /* Exactly 3 points: the reference builds a two sided triangle ledge
+     * (ivp_surbuild_pointsoup.cxx:765 convert_triangle_to_compace_ledge);
+     * the volume is zero, so the ledge soup takes the bounding box center
+     * and radius^2/2 inertia (ivp_rot_inertia_solver.cxx:251). Legacy
+     * engine: mc=(0.5 0.5 0) ri=0.25 r=0.707106769 dev=250. */
     ivp_compact_surface_t *surface = ivp_build_pointsoup_surface(
         NULL, points, 3, NULL
     );
-
-    IVP_ASSERT_NULL(surface);
+    IVP_ASSERT_NOT_NULL(surface);
+    const ivp_compact_ledge_t *l = ivp_surface_get_single_convex(surface);
+    IVP_ASSERT_NOT_NULL(l);
+    IVP_ASSERT_EQ(ivp_ledge_get_n_triangles(l), 2);
+    IVP_ASSERT_NEAR(surface->mass_center[0], 0.5f, 1e-6f);
+    IVP_ASSERT_NEAR(surface->mass_center[1], 0.5f, 1e-6f);
+    IVP_ASSERT_NEAR(surface->rotation_inertia[0], 0.25f, 1e-6f);
+    IVP_ASSERT_NEAR(surface->upper_limit_radius, 0.707106769f, 1e-6f);
+    IVP_ASSERT_EQ(ivp_surface_get_max_deviation(surface), 250);
+    ivp_compact_surface_free(NULL, surface);
 }
 
 IVP_TEST(pointsoup_weld_duplicates) {
-    /* 8 points but with 4 pairs of duplicates */
+    /* 8 points but with 4 pairs of near duplicates.  Default options only
+     * merge exact duplicates (reference IVP_I_Point_VHash); the near
+     * duplicates are removed by the reference degenerate-facet point removal
+     * (ivp_surbuild_pointsoup.cxx:433) and the hull is still a tetrahedron. */
     float points[] = {
         0, 0, 0,  0.0001f, 0, 0,        /* duplicate pair */
         1, 0, 0,  1.0001f, 0, 0,        /* duplicate pair */
@@ -354,11 +377,10 @@ IVP_TEST(decompose_box) {
         NULL, box_verts, 8, box_indices, 12, NULL, &result
     );
 
-    /* qhull may fail with axis-aligned boxes (coplanar face groups) */
-    if (res == IVP_OK) {
-        IVP_ASSERT_TRUE(result.n_parts >= 1);
-        IVP_ASSERT_NOT_NULL(result.parts);
-    }
+    /* a convex input has no reflex edge: one part */
+    IVP_ASSERT_EQ(res, IVP_OK);
+    IVP_ASSERT_EQ(result.n_parts, 1);
+    IVP_ASSERT_NOT_NULL(result.parts);
 
     ivp_decompose_result_free(&result);
 }
@@ -372,11 +394,11 @@ IVP_TEST(decompose_l_shape) {
         NULL, l_verts, 12, l_indices, n_l_tris, NULL, &result
     );
 
-    /* qhull may fail with axis-aligned geometry (coplanar face groups) */
-    if (res == IVP_OK) {
-        IVP_ASSERT_TRUE(result.n_parts >= 2);
-        IVP_ASSERT_NOT_NULL(result.parts);
-    }
+    /* Reference GEOMPACK cvdec3 cuts the L along its single reflex edge:
+     * exactly 2 convex parts (legacy engine prints parts=2 for this L). */
+    IVP_ASSERT_EQ(res, IVP_OK);
+    IVP_ASSERT_EQ(result.n_parts, 2);
+    IVP_ASSERT_NOT_NULL(result.parts);
 
     ivp_decompose_result_free(&result);
 }

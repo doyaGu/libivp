@@ -86,21 +86,22 @@ static ivp_object_t *make_ball(ivp_environment_t *env, ivp_real_t mass,
     ivp_object_template_t t;
     ivp_object_template_init(&t);
     t.type = IVP_OBJECT_BALL;
+    t.ball_radius = IVP_REAL(0.5); /* IVP_Template_Ball::radius */
     t.mass = mass;
     ivp_real_t I = IVP_REAL(0.4) * mass * IVP_REAL(0.25); /* r=0.5 */
     ivp_vec3r_set(&t.rot_inertia, I, I, I);
+    t.rot_inertia_is_factor = false; /* absolute inertia */
     t.speed_damp_factor = IVP_REAL(0.0);
     ivp_vec3r_set(&t.rot_speed_damp_factor, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&t.position, x, y, z);
     t.orientation = ivp_quatr_identity();
     ivp_object_t *obj = ivp_environment_create_object(env, &t, NULL);
     if (obj) {
-        obj->core.upper_limit_radius = IVP_REAL(0.5);
-        ivp_vec3r_set(&obj->core.speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        obj->core.rot_speed.k[0] = IVP_REAL(0.0);
-        obj->core.rot_speed.k[1] = IVP_REAL(0.0);
-        obj->core.rot_speed.k[2] = IVP_REAL(0.0);
-        obj->core.delta_world_f_core_psis = obj->core.speed;
+        ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        obj->physical_core->rot_speed.k[0] = IVP_REAL(0.0);
+        obj->physical_core->rot_speed.k[1] = IVP_REAL(0.0);
+        obj->physical_core->rot_speed.k[2] = IVP_REAL(0.0);
+        obj->physical_core->delta_world_f_core_psis = obj->physical_core->speed;
     }
     return obj;
 }
@@ -138,9 +139,17 @@ IVP_TEST(spring_init_defaults) {
     ivp_spring_state_t state;
     ivp_spring_state_init(&state);
 
-    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(100.0), TOL);
-    IVP_ASSERT_NEAR(state.damping, IVP_REAL(1.0), TOL);
-    IVP_ASSERT_NEAR(state.rest_length, IVP_REAL(1.0), TOL);
+    /* Reference IVP_Template_Spring (ivp_actuator_spring.cxx:15-27):
+     * spring_len = spring_constant = spring_damp = rel_pos_damp = 0,
+     * break_max_len = P_FLOAT_MAX, max_len_exceed_type = IVP_SFE_NONE. */
+    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.damping, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.rest_length, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.rel_pos_damp, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.spring_values_factor, IVP_REAL(1.0), TOL);
+    IVP_ASSERT_TRUE(state.break_max_len >= (ivp_real_t)IVP_FLOAT_MAX);
+    IVP_ASSERT_EQ((int)state.max_len_exceed_type, (int)IVP_SFE_NONE);
+    IVP_ASSERT_FALSE(state.spring_force_only_on_stretch);
     IVP_ASSERT_NEAR(state.current_force, IVP_REAL(0.0), TOL);
 }
 
@@ -380,8 +389,13 @@ IVP_TEST(stiff_spring_init_defaults) {
     ivp_stiff_spring_state_t state;
     ivp_stiff_spring_state_init(&state);
 
-    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(1000.0), TOL);
-    IVP_ASSERT_NEAR(state.damping, IVP_REAL(10.0), TOL);
+    /* Reference IVP_Template_Stiff_Spring (ivp_controller_stiff_spring.cxx:16-23):
+     * spring_len = spring_constant = spring_damp = 0 (constants are
+     * dimensionless in [0..1]), break_max_len = P_FLOAT_MAX. */
+    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.damping, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.rest_length, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_TRUE(state.break_max_len >= (ivp_real_t)IVP_FLOAT_MAX);
 }
 
 IVP_TEST(stiff_spring_high_stiffness_stable) {
@@ -396,8 +410,10 @@ IVP_TEST(stiff_spring_high_stiffness_stable) {
     ivp_vec3r_set(&anchor_a, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&anchor_b, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
+    /* Reference stiff-spring constants are dimensionless [0..1]
+     * (ivp_controller_stiff_spring.hxx:9-17); 1.0 is the stiffest setting. */
     ivp_stiff_spring_state_setup(&state, a, &anchor_a, b, &anchor_b,
-                                IVP_REAL(100.0), IVP_REAL(10.0), IVP_REAL(2.0));
+                                IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(2.0));
 
     ivp_environment_add_controller(env, 0, ivp_controller_stiff_spring, &state);
 
@@ -427,7 +443,7 @@ IVP_TEST(stiff_spring_converges_to_rest) {
     ivp_vec3r_set(&anchor_b, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_stiff_spring_state_setup(&state, a, &anchor_a, b, &anchor_b,
-                                IVP_REAL(500.0), IVP_REAL(20.0), IVP_REAL(2.0));
+                                IVP_REAL(0.3), IVP_REAL(0.3), IVP_REAL(2.0));
 
     ivp_environment_add_controller(env, 0, ivp_controller_stiff_spring, &state);
 
@@ -456,7 +472,7 @@ IVP_TEST(stiff_spring_max_dv) {
     ivp_vec3r_set(&anchor_b, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_stiff_spring_state_setup(&state, a, &anchor_a, b, &anchor_b,
-                                IVP_REAL(10000.0), IVP_REAL(0.0), IVP_REAL(1.0));
+                                IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(1.0));
 
     ivp_environment_add_controller(env, 0, ivp_controller_stiff_spring, &state);
 
@@ -509,7 +525,7 @@ IVP_TEST(constraint_ball_socket_holds) {
     ivp_object_t *a = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *b = make_ball(env, IVP_REAL(1.0), IVP_REAL(3.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&b->core.speed, IVP_REAL(5.0), IVP_REAL(5.0), IVP_REAL(5.0));
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(5.0), IVP_REAL(5.0), IVP_REAL(5.0));
 
     ivp_constraint_state_t state;
 
@@ -600,14 +616,14 @@ IVP_TEST(constraint_hinge_rotation_axis) {
     ivp_environment_add_controller(env, 0, ivp_controller_constraint, &state);
 
     /* Apply angular velocity perpendicular to hinge axis */
-    b->core.rot_speed.k[0] = IVP_REAL(2.0);
-    b->core.rot_speed.k[1] = IVP_REAL(0.0);
-    b->core.rot_speed.k[2] = IVP_REAL(2.0);
+    b->physical_core->rot_speed.k[0] = IVP_REAL(2.0);
+    b->physical_core->rot_speed.k[1] = IVP_REAL(0.0);
+    b->physical_core->rot_speed.k[2] = IVP_REAL(2.0);
 
     step(env, 10);
 
     /* Verify simulation ran without crash and object has some rotation */
-    ivp_real_t total_rot = ivp_fabs(b->core.rot_speed.k[0]) + ivp_fabs(b->core.rot_speed.k[1]) + ivp_fabs(b->core.rot_speed.k[2]);
+    ivp_real_t total_rot = ivp_fabs(b->physical_core->rot_speed.k[0]) + ivp_fabs(b->physical_core->rot_speed.k[1]) + ivp_fabs(b->physical_core->rot_speed.k[2]);
     IVP_ASSERT_FALSE(isnan(total_rot));
 
     ivp_environment_destroy(env);
@@ -699,7 +715,7 @@ IVP_TEST(constraint_fixed_no_relative_motion) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_constraint, &state);
 
-    ivp_vec3r_set(&b->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     step(env, 120);
 
@@ -732,7 +748,7 @@ IVP_TEST(constraint_solver_iterations) {
 
     ivp_environment_add_controller(env1, 0, ivp_controller_constraint, &state1);
 
-    ivp_vec3r_set(&b1->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b1->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
     step(env1, 60);
 
     ivp_vec3r_t pos_a1, pos_b1;
@@ -756,7 +772,7 @@ IVP_TEST(constraint_solver_iterations) {
 
     ivp_environment_add_controller(env2, 0, ivp_controller_constraint, &state2);
 
-    ivp_vec3r_set(&b2->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b2->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
     step(env2, 60);
 
     ivp_vec3r_t pos_a2, pos_b2;
@@ -785,7 +801,7 @@ IVP_TEST(constraint_accumulated_impulse) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_constraint, &state);
 
-    ivp_vec3r_set(&b->core.speed, IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     step(env, 1);
 
@@ -813,7 +829,7 @@ IVP_TEST(constraint_active_toggle) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_constraint, &state);
 
-    ivp_vec3r_set(&b->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     step(env, 60);
 
@@ -840,7 +856,12 @@ IVP_TEST(motion_init_defaults) {
     ivp_motion_state_t state;
     ivp_motion_state_init(&state);
 
-    IVP_ASSERT_EQ(state.linear_mode, IVP_MOTION_NONE);
+    /* reference IVP_Controller_Motion: drives toward the origin / identity
+     * orientation until a target is set */
+    IVP_ASSERT_EQ(state.linear_mode, IVP_MOTION_TARGET);
+    IVP_ASSERT_EQ(state.angular_mode, IVP_MOTION_TARGET);
+    IVP_ASSERT_NEAR(state.target_pos_ws.k[0], IVP_REAL(0.0), 0.0);
+    IVP_ASSERT_NEAR(state.target_q_world_f_core.w, IVP_REAL(1.0), 0.0);
     IVP_ASSERT_NEAR(state.linear_value.k[0], IVP_REAL(0.0), TOL);
 
     ivp_environment_add_controller(env, 0, ivp_controller_motion, &state);
@@ -940,7 +961,7 @@ IVP_TEST(motion_set_angular_velocity) {
 
     step(env, 10);
 
-    ivp_real_t ang_vel_y = obj->core.rot_speed.k[1];
+    ivp_real_t ang_vel_y = obj->physical_core->rot_speed.k[1];
 
     IVP_ASSERT_TRUE(ivp_fabs(ang_vel_y) > IVP_REAL(0.5));
 
@@ -962,7 +983,7 @@ IVP_TEST(motion_set_torque) {
 
     step(env, 10);
 
-    ivp_real_t ang_vel_y = obj->core.rot_speed.k[1];
+    ivp_real_t ang_vel_y = obj->physical_core->rot_speed.k[1];
 
     IVP_ASSERT_TRUE(ivp_fabs(ang_vel_y) > IVP_REAL(0.1));
 
@@ -1011,7 +1032,7 @@ IVP_TEST(motion_max_angular_speed) {
 
     step(env, 60);
 
-    ivp_real_t ang_speed = ivp_fabs(obj->core.rot_speed.k[1]);
+    ivp_real_t ang_speed = ivp_fabs(obj->physical_core->rot_speed.k[1]);
 
     IVP_ASSERT_TRUE(ang_speed > IVP_REAL(0.0));
     IVP_ASSERT_FALSE(isnan(ang_speed));
@@ -1089,7 +1110,10 @@ IVP_TEST(buoyancy_submerged_rises) {
     ivp_buoyancy_state_t state;
     ivp_vec3r_t normal;
     ivp_vec3r_set(&normal, IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(1000.0));
+    /* Moderate fluid: with density 1000 and linear_drag 0.5 the reference's
+     * explicit damping makes a 1 kg ball overshoot by orders of magnitude,
+     * which the reference debug check core_plausible_check rejects. */
+    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(3.0));
     state.linear_drag = IVP_REAL(0.5);
 
     ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
@@ -1134,12 +1158,16 @@ IVP_TEST(buoyancy_drag_slows) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(10.0), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_buoyancy_state_t state;
     ivp_vec3r_t normal;
     ivp_vec3r_set(&normal, IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(1000.0));
+    /* The reference pressure drag is explicit and quadratic in speed
+     * (impulse = area * v^2 * pressure_damp_factor * 0.5 * density * dt,
+     * ivp_buoyancy_solver.cxx:71,859): with density 1000 a 1 kg ball at
+     * 10 m/s overshoots by hundreds of m/s per PSI. Use a light fluid. */
+    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(1.0));
     state.linear_drag = IVP_REAL(1.0);
 
     ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
@@ -1166,7 +1194,9 @@ IVP_TEST(buoyancy_flow_velocity) {
     ivp_buoyancy_state_t state;
     ivp_vec3r_t normal;
     ivp_vec3r_set(&normal, IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(1000.0));
+    /* Light fluid (see buoyancy_drag_slows): the reference drag is explicit,
+     * density 1000 makes the ball overshoot and trips core_plausible_check. */
+    ivp_buoyancy_init_plane(&state, &normal, IVP_REAL(5.0), IVP_REAL(1.0));
     ivp_vec3r_set(&state.flow_velocity, IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
     state.linear_drag = IVP_REAL(1.0);
 
@@ -1250,7 +1280,7 @@ IVP_TEST(forcefield_drag_mode) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_forcefield_state_t state;
     ivp_vec3r_t drag_value;
@@ -1305,7 +1335,7 @@ IVP_TEST(world_friction_ground_mode) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.6), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_world_friction_state_t state;
     ivp_vec3r_t ground_normal;
@@ -1335,7 +1365,7 @@ IVP_TEST(world_friction_ground_preserves_normal_velocity) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.6), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(0.0));
 
     ivp_world_friction_state_t state;
     ivp_vec3r_t ground_normal;
@@ -1364,7 +1394,7 @@ IVP_TEST(world_friction_ground_off_plane) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(10.0), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_world_friction_state_t state;
     ivp_vec3r_t ground_normal;
@@ -1393,7 +1423,7 @@ IVP_TEST(world_friction_global_mode) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(10.0), IVP_REAL(0.0));
 
-    ivp_vec3r_set(&obj->core.speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_world_friction_state_t state;
     ivp_world_friction_init_global(&state, IVP_REAL(0.5));
@@ -1420,7 +1450,7 @@ IVP_TEST(world_friction_angular) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *obj = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
-    obj->core.rot_speed.k[1] = IVP_REAL(5.0);
+    obj->physical_core->rot_speed.k[1] = IVP_REAL(5.0);
 
     ivp_world_friction_state_t state;
     ivp_world_friction_init_global(&state, IVP_REAL(0.5));
@@ -1431,7 +1461,7 @@ IVP_TEST(world_friction_angular) {
 
     step(env, 30);
 
-    ivp_real_t ang_after = ivp_fabs(obj->core.rot_speed.k[1]);
+    ivp_real_t ang_after = ivp_fabs(obj->physical_core->rot_speed.k[1]);
 
     IVP_ASSERT_FALSE(isnan(ang_after));
 
@@ -1489,9 +1519,9 @@ IVP_TEST(phantom_sphere_enter_exit) {
     ivp_environment_add_controller(env, 0, ivp_controller_phantom, &state);
 
     /* Move object into sphere */
-    obj->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(1.0);
-    obj->core.pos_world_f_core_last_psi.k[1] = IVP_REAL(0.0);
-    obj->core.pos_world_f_core_last_psi.k[2] = IVP_REAL(0.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[0] = IVP_REAL(1.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[1] = IVP_REAL(0.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[2] = IVP_REAL(0.0);
 
     step(env, 1);
 
@@ -1499,7 +1529,7 @@ IVP_TEST(phantom_sphere_enter_exit) {
     IVP_ASSERT_TRUE(g_phantom_last_entered);
 
     /* Move object out */
-    obj->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(10.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[0] = IVP_REAL(10.0);
 
     int prev_count = g_phantom_event_count;
     step(env, 1);
@@ -1526,9 +1556,9 @@ IVP_TEST(phantom_aabb_detection) {
     ivp_environment_add_controller(env, 0, ivp_controller_phantom, &state);
 
     /* Move object into AABB */
-    obj->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(0.0);
-    obj->core.pos_world_f_core_last_psi.k[1] = IVP_REAL(0.0);
-    obj->core.pos_world_f_core_last_psi.k[2] = IVP_REAL(0.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[0] = IVP_REAL(0.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[1] = IVP_REAL(0.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[2] = IVP_REAL(0.0);
 
     step(env, 1);
 
@@ -1552,7 +1582,7 @@ IVP_TEST(phantom_attach_to_object) {
     ivp_environment_add_controller(env, 0, ivp_controller_phantom, &state);
 
     /* Move object */
-    obj->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(5.0);
+    obj->physical_core->pos_world_f_core_last_psi.k[0] = IVP_REAL(5.0);
 
     step(env, 1);
 
@@ -1601,47 +1631,57 @@ IVP_TEST(car_init_4wheel) {
     ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_car_state_t state;
-    ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
-                       IVP_REAL(0.4), IVP_REAL(0.5));
-
-    ivp_environment_add_controller(env, 0, ivp_controller_raycast_car, &state);
+    IVP_ASSERT_TRUE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                        IVP_REAL(0.4), IVP_REAL(0.5)));
 
     IVP_ASSERT_EQ(state.n_wheels, 4);
+    IVP_ASSERT_EQ(state.n_axis, 2);
+    IVP_ASSERT_EQ(state.wheels_per_axis, 2);
+    /* spring length = -pre_tension, ray direction = gravity side of index_y */
+    IVP_ASSERT_NEAR(state.wheels[0].spring_len, 0.5f, 1e-6f);
+    IVP_ASSERT_NEAR(state.wheels[0].spring_direction_cs.k[1], 1.0f, 1e-6f);
+    IVP_ASSERT_NEAR(state.wheels[0].inv_wheel_radius, 2.5f, 1e-5f);
 
+    ivp_car_destroy(&state);
     ivp_environment_destroy(env);
 }
 
-IVP_TEST(car_add_wheel) {
+IVP_TEST(car_template_axes) {
     ivp_environment_t *env = make_env(DT60, true);
     ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
-    ivp_car_state_t state;
-    memset(&state, 0, sizeof(state));
-    state.chassis = chassis;
-    state.n_wheels = 0;
-    state.active = true;
-
-    ivp_car_wheel_t wheel;
-    memset(&wheel, 0, sizeof(wheel));
-    wheel.radius = IVP_REAL(0.4);
-    wheel.suspension_length = IVP_REAL(0.5);
-    wheel.spring_constant = IVP_REAL(50.0);
-    wheel.damping = IVP_REAL(2.0);
-    ivp_vec3r_set(&wheel.hardpoint_cs, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_vec3r_set(&wheel.direction_cs, IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0));
-
-    int idx = ivp_car_add_wheel(&state, &wheel);
-    IVP_ASSERT_EQ(idx, 0);
-
-    /* Add up to max */
-    for (int i = 1; i < IVP_CAR_MAX_WHEELS; i++) {
-        ivp_car_add_wheel(&state, &wheel);
+    /* 6 wheels / 3 axes: wheel i on axis (i * 3) / 6, axis 0 steered */
+    ivp_car_system_template_t t;
+    ivp_car_system_template_init(&t, 6, 3);
+    t.car_body = chassis;
+    for (int i = 0; i < 6; i++) {
+        t.wheel_pos_Bos[i] = ivp_vec3f((i & 1) ? 0.8f : -0.8f, 0.0f, 1.5f - 1.5f * (float)(i >> 1));
+        t.wheel_radius[i] = IVP_REAL(0.4);
+        t.spring_constant[i] = IVP_REAL(20000.0);
+        t.spring_pre_tension[i] = IVP_REAL(-0.5);
     }
+    ivp_car_state_t state;
+    IVP_ASSERT_TRUE(ivp_car_init(&state, &t));
+    IVP_ASSERT_EQ(state.n_wheels, 6);
+    IVP_ASSERT_EQ(state.n_axis, 3);
 
-    /* Try to add one more (should fail) */
-    int overflow = ivp_car_add_wheel(&state, &wheel);
-    IVP_ASSERT_EQ(overflow, -1);
+    ivp_car_do_steering(&state, 0.3f);
+    for (int i = 0; i < 6; i++) {
+        const float z = state.wheels[i].axis_direction_cs.k[2];
+        if (i < 2) IVP_ASSERT_TRUE(fabsf(z) > 0.1f);
+        else IVP_ASSERT_NEAR(z, 0.0f, 1e-7f);
+    }
+    IVP_ASSERT_NEAR(ivp_car_get_orig_front_wheel_distance(&state), 1.6, 1e-6);
+    IVP_ASSERT_NEAR(ivp_car_get_orig_axles_distance(&state), 3.0, 1e-6);
 
+    /* booster: a second ignition is refused until the delay ran out */
+    ivp_car_activate_booster(&state, 5.0f, 0.5f, 1.0f);
+    IVP_ASSERT_NEAR(state.booster_force, 5.0f, 1e-6f);
+    IVP_ASSERT_NEAR(ivp_car_get_booster_delay(&state), 1.5f, 1e-6f);
+    ivp_car_activate_booster(&state, 9.0f, 0.5f, 1.0f);
+    IVP_ASSERT_NEAR(state.booster_force, 5.0f, 1e-6f);
+
+    ivp_car_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1650,10 +1690,8 @@ IVP_TEST(car_steering_engine_brake) {
     ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
     ivp_car_state_t state;
-    ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
-                       IVP_REAL(0.4), IVP_REAL(0.5));
-
-    ivp_environment_add_controller(env, 0, ivp_controller_raycast_car, &state);
+    IVP_ASSERT_TRUE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                        IVP_REAL(0.4), IVP_REAL(0.5)));
 
     ivp_car_set_steering(&state, IVP_REAL(0.5));
     ivp_car_set_engine(&state, IVP_REAL(1000.0));
@@ -1662,7 +1700,12 @@ IVP_TEST(car_steering_engine_brake) {
     IVP_ASSERT_NEAR(state.steering_angle, IVP_REAL(0.5), TOL);
     IVP_ASSERT_NEAR(state.engine_force, IVP_REAL(1000.0), TOL);
     IVP_ASSERT_NEAR(state.brake_force, IVP_REAL(50.0), TOL);
+    /* engine: force * radius / 2 on the rear axis, brake: all wheels fixed */
+    IVP_ASSERT_NEAR(state.wheels[0].torque, 0.0f, 1e-6f);
+    IVP_ASSERT_NEAR(state.wheels[3].torque, 200.0f, 1e-3f);
+    IVP_ASSERT_TRUE(state.wheels[0].wheel_is_fixed && state.wheels[3].wheel_is_fixed);
 
+    ivp_car_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1671,17 +1714,14 @@ IVP_TEST(car_suspension_grounded) {
     ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(2.0), IVP_REAL(0.0));
 
     ivp_car_state_t state;
-    ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
-                       IVP_REAL(0.4), IVP_REAL(2.0));
-    state.ground_height = IVP_REAL(0.0);
+    IVP_ASSERT_TRUE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                        IVP_REAL(0.4), IVP_REAL(2.0)));
 
     /* Increase spring constants for more support */
     for (int i = 0; i < 4; i++) {
-        state.wheels[i].spring_constant = IVP_REAL(100.0);
-        state.wheels[i].damping = IVP_REAL(5.0);
+        state.wheels[i].spring_constant = 100.0f;
+        state.wheels[i].spring_damp_relax = 5.0f;
     }
-
-    ivp_environment_add_controller(env, 0, ivp_controller_raycast_car, &state);
 
     step(env, 60);
 
@@ -1691,6 +1731,7 @@ IVP_TEST(car_suspension_grounded) {
     ivp_object_get_position(chassis, &pos);
     IVP_ASSERT_FALSE(isnan(pos.k[0]));
 
+    ivp_car_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1742,10 +1783,12 @@ IVP_TEST(check_dist_callback_fires) {
     /* Step once to establish initial state */
     step(env, 1);
 
-    /* Move b far away */
-    b->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(20.0);
+    /* Move b out of range. The reference check-dist anchors are evaluated
+     * with the core's PSI matrix (m_world_f_core_last_psi), so b is moved by
+     * simulation (10 m/s for 40 PSIs) instead of by writing its position. */
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
 
-    step(env, 1);
+    step(env, 40);
 
     IVP_ASSERT_TRUE(g_check_dist_callback_count > 0);
     IVP_ASSERT_FALSE(g_check_dist_last_inside);
@@ -1774,7 +1817,7 @@ IVP_TEST(check_dist_active_toggle) {
     ivp_environment_add_controller(env, 0, ivp_controller_check_dist, &state);
 
     /* Move b far away */
-    b->core.pos_world_f_core_last_psi.k[0] = IVP_REAL(20.0);
+    b->physical_core->pos_world_f_core_last_psi.k[0] = IVP_REAL(20.0);
 
     step(env, 1);
 
@@ -1896,7 +1939,7 @@ IVP_TEST(rot_mot_applies_torque) {
 
     step(env, 20);
 
-    ivp_real_t ang_vel_y = obj->core.rot_speed.k[1];
+    ivp_real_t ang_vel_y = obj->physical_core->rot_speed.k[1];
 
     IVP_ASSERT_TRUE(ivp_fabs(ang_vel_y) > IVP_REAL(1.0));
 
@@ -1929,12 +1972,18 @@ IVP_TEST(force_actuator_offcenter_produces_torque) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_force_actuator, &state);
 
-    step(env, 10);
-
-    /* Object A should have gained angular velocity from the off-center force.
-     * Force is along X (toward B), lever arm is in Y => torque around Z. */
-    ivp_real_t rot_z = (ivp_real_t)a->core.rot_speed.k[2];
-    IVP_ASSERT_TRUE(ivp_fabs(rot_z) > IVP_REAL(0.1));
+    /* Object A should gain angular velocity from the off-center force.
+     * The reference pushes object 0 along pos0 - pos1 (away from B,
+     * ivp_actuator.cxx:853) with a lever arm in Y => torque around Z. The
+     * anchor then swings like a pendulum, so the spin oscillates: check the
+     * peak over the run rather than the final value. */
+    ivp_real_t max_rot_z = IVP_REAL(0.0);
+    for (int i = 0; i < 10; i++) {
+        step(env, 1);
+        ivp_real_t rot_z = ivp_fabs((ivp_real_t)a->physical_core->rot_speed.k[2]);
+        if (rot_z > max_rot_z) max_rot_z = rot_z;
+    }
+    IVP_ASSERT_TRUE(max_rot_z > IVP_REAL(0.1));
 
     ivp_environment_destroy(env);
 }
@@ -1972,12 +2021,12 @@ IVP_TEST(torque_actuator_applies_constant_torque) {
     step(env, 20);
 
     /* Object should be spinning around Y axis */
-    ivp_real_t rot_y = (ivp_real_t)obj->core.rot_speed.k[1];
+    ivp_real_t rot_y = (ivp_real_t)obj->physical_core->rot_speed.k[1];
     IVP_ASSERT_TRUE(rot_y > IVP_REAL(1.0));
 
     /* X and Z angular velocity should be near zero */
-    ivp_real_t rot_x = (ivp_real_t)obj->core.rot_speed.k[0];
-    ivp_real_t rot_z = (ivp_real_t)obj->core.rot_speed.k[2];
+    ivp_real_t rot_x = (ivp_real_t)obj->physical_core->rot_speed.k[0];
+    ivp_real_t rot_z = (ivp_real_t)obj->physical_core->rot_speed.k[2];
     IVP_ASSERT_NEAR(rot_x, IVP_REAL(0.0), LTOL);
     IVP_ASSERT_NEAR(rot_z, IVP_REAL(0.0), LTOL);
 
@@ -2008,7 +2057,7 @@ IVP_TEST(torque_actuator_respects_speed_limit) {
 
     /* Angular speed on Y axis should be limited.
      * Allow one step's overshoot (~0.17 rad/s) beyond the limit. */
-    ivp_real_t rot_y = (ivp_real_t)obj->core.rot_speed.k[1];
+    ivp_real_t rot_y = (ivp_real_t)obj->physical_core->rot_speed.k[1];
     IVP_ASSERT_TRUE(rot_y <= IVP_REAL(5.0) + IVP_REAL(0.5));
     /* Should have reached a speed near the limit */
     IVP_ASSERT_TRUE(rot_y > IVP_REAL(4.0));
@@ -2064,13 +2113,13 @@ IVP_TEST(rot_mot_setters_affect_behaviour) {
     ivp_environment_add_controller(env, 0, ivp_controller_rot_mot, &state);
 
     step(env, 10);
-    ivp_real_t speed1 = ivp_fabs((ivp_real_t)obj->core.rot_speed.k[1]);
+    ivp_real_t speed1 = ivp_fabs((ivp_real_t)obj->physical_core->rot_speed.k[1]);
 
     /* Reduce max speed to current level to effectively stop acceleration */
     ivp_rot_mot_set_max_rotation_speed(&state, speed1);
 
     step(env, 50);
-    ivp_real_t speed2 = ivp_fabs((ivp_real_t)obj->core.rot_speed.k[1]);
+    ivp_real_t speed2 = ivp_fabs((ivp_real_t)obj->physical_core->rot_speed.k[1]);
 
     /* Speed should not have increased much beyond the new limit */
     IVP_ASSERT_TRUE(speed2 < speed1 + IVP_REAL(1.0));
@@ -2157,7 +2206,7 @@ int main(void) {
 
     /* Raycast car tests (4) */
     IVP_REGISTER(car_init_4wheel);
-    IVP_REGISTER(car_add_wheel);
+    IVP_REGISTER(car_template_axes);
     IVP_REGISTER(car_steering_engine_brake);
     IVP_REGISTER(car_suspension_grounded);
 

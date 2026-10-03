@@ -4,6 +4,7 @@
 #include <ivp/base/ivp_result.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_arena.h>
+#include <ivp/base/ivp_u_memory.h>
 #include <ivp/base/ivp_time.h>
 #include <stdint.h>
 #include <limits.h>
@@ -217,6 +218,93 @@ IVP_TEST(arena_stats_smoke) {
     ivp_arena_destroy(arena);
 }
 
+/* ── IVP_U_Memory port (ivp_u_memory) ───────────────────────────────────── */
+
+static ptrdiff_t u_off(const ivp_u_memory_t *m, const void *p) {
+    return (const char *)p - m->block_start;
+}
+
+IVP_TEST(u_memory_layout) {
+    ivp_u_memory_t m;
+    IVP_ASSERT_EQ(ivp_u_memory_init(&m, NULL), IVP_OK);
+    /* neuer_sp_block(0): the pointer starts 64 bytes into the first block */
+    char *p0 = (char *)ivp_u_memory_get_mem(&m, 8);
+    IVP_ASSERT_EQ(u_off(&m, p0), 64);
+    IVP_ASSERT_EQ(((uintptr_t)p0 & 31u), 0u);
+    /* next = (start + size + 0x4f) & ~0x1f */
+    char *p1 = (char *)ivp_u_memory_get_mem(&m, 40);
+    IVP_ASSERT_EQ(p1 - p0, 64);
+    char *p2 = (char *)ivp_u_memory_get_mem(&m, 0);
+    IVP_ASSERT_EQ(p2 - p1, 96);
+    char *p3 = (char *)ivp_u_memory_get_mem(&m, 33);
+    IVP_ASSERT_EQ(p3 - p2, 64);
+    char *p4 = (char *)ivp_u_memory_get_mem(&m, 1);
+    IVP_ASSERT_EQ(p4 - p3, 96);
+    /* end of transaction: back to the block start, contents kept */
+    memset(p0, 0x5a, 8);
+    ivp_u_memory_start_transaction(&m);
+    ivp_u_memory_end_transaction(&m);
+    char *q0 = (char *)ivp_u_memory_get_mem(&m, 8);
+    IVP_ASSERT_EQ(u_off(&m, q0), 0);
+    IVP_ASSERT_EQ(p0 - q0, 64);
+    IVP_ASSERT_EQ((int)(unsigned char)p0[7], 0x5a);
+    IVP_ASSERT_EQ((int)(unsigned char)q0[0], 0); /* fresh first block is zero */
+    ivp_u_memory_destroy(&m);
+}
+
+IVP_TEST(u_memory_overflow_blocks) {
+    ivp_u_memory_t m;
+    IVP_ASSERT_EQ(ivp_u_memory_init(&m, NULL), IVP_OK);
+    ivp_u_memory_start_transaction(&m);
+    ivp_u_memory_end_transaction(&m);
+    /* after the first reset the block holds IVU_MEMORY_BLOCK_SIZE bytes:
+     * an allocation whose rounded end is still below 0x7fe0 fits */
+    char *a = (char *)ivp_u_memory_get_mem(&m, 0x7fe0 - 0x50 - 0x20);
+    IVP_ASSERT_EQ(u_off(&m, a), 0);
+    char *first_start = m.block_start;
+    /* the next one does not fit: a new block, request at its start */
+    char *b = (char *)ivp_u_memory_get_mem(&m, 100);
+    IVP_ASSERT_TRUE(m.block_start != first_start);
+    IVP_ASSERT_EQ(u_off(&m, b), 0);
+    IVP_ASSERT_EQ(((uintptr_t)b & 31u), 0u);
+    char *c = (char *)ivp_u_memory_get_mem(&m, 8);
+    IVP_ASSERT_EQ(c - b, 160);
+    memset(b, 0x77, 100);
+    /* a request larger than a block gets a block of its own size */
+    char *big = (char *)ivp_u_memory_get_mem(&m, 100000);
+    IVP_ASSERT_NOT_NULL(big);
+    IVP_ASSERT_EQ(u_off(&m, big), 0);
+    big[99999] = 1;
+    ivp_u_memory_end_transaction(&m);
+    IVP_ASSERT_TRUE(m.block_start == first_start);
+    /* the freed standard block comes back with its old contents (the
+     * reference allocator reuses the slot without clearing it) */
+    ivp_u_memory_start_transaction(&m);
+    (void)ivp_u_memory_get_mem(&m, 0x7fe0 - 0x50 - 0x20);
+    char *b2 = (char *)ivp_u_memory_get_mem(&m, 100);
+    IVP_ASSERT_EQ((int)(unsigned char)b2[0], 0x77);
+    IVP_ASSERT_EQ((int)(unsigned char)b2[99], 0x77);
+    ivp_u_memory_end_transaction(&m);
+    ivp_u_memory_destroy(&m);
+}
+
+IVP_TEST(u_memory_counting_allocator) {
+    ivp_allocator_t ca = ivp_counting_allocator_create(NULL);
+    ivp_u_memory_t m;
+    IVP_ASSERT_EQ(ivp_u_memory_init(&m, &ca), IVP_OK);
+    for (int t = 0; t < 3; t++) {
+        ivp_u_memory_start_transaction(&m);
+        for (int i = 0; i < 10; i++) IVP_ASSERT_NOT_NULL(ivp_u_memory_get_mem(&m, 20000));
+        ivp_u_memory_end_transaction(&m);
+    }
+    ivp_u_memory_destroy(&m);
+    ivp_alloc_stats_t st;
+    ivp_counting_allocator_get_stats(&ca, &st);
+    IVP_ASSERT_EQ(st.current_bytes, 0);
+    IVP_ASSERT_EQ(st.alloc_count, st.free_count);
+    ivp_counting_allocator_destroy(&ca);
+}
+
 /* ── Time tests ─────────────────────────────────────────────────────────── */
 
 IVP_TEST(time_calc_steps_basic) {
@@ -284,6 +372,9 @@ int main(void) {
     IVP_REGISTER(arena_save_restore);
     IVP_REGISTER(arena_reset);
     IVP_REGISTER(arena_stats_smoke);
+    IVP_REGISTER(u_memory_layout);
+    IVP_REGISTER(u_memory_overflow_blocks);
+    IVP_REGISTER(u_memory_counting_allocator);
     IVP_REGISTER(time_calc_steps_basic);
     IVP_REGISTER(time_calc_steps_zero_dt);
     IVP_REGISTER(time_calc_steps_exact);

@@ -60,21 +60,22 @@ static ivp_object_t *make_ball(ivp_environment_t *env, ivp_real_t mass,
     ivp_object_template_t t;
     ivp_object_template_init(&t);
     t.type = IVP_OBJECT_BALL;
+    t.ball_radius = IVP_REAL(0.5); /* IVP_Template_Ball::radius */
     t.mass = mass;
     ivp_real_t I = IVP_REAL(0.4) * mass * IVP_REAL(0.25);
     ivp_vec3r_set(&t.rot_inertia, I, I, I);
+    t.rot_inertia_is_factor = false; /* absolute inertia */
     t.speed_damp_factor = IVP_REAL(0.0);
     ivp_vec3r_set(&t.rot_speed_damp_factor, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&t.position, x, y, z);
     t.orientation = ivp_quatr_identity();
     ivp_object_t *obj = ivp_environment_create_object(env, &t, NULL);
     if (obj) {
-        obj->core.upper_limit_radius = IVP_REAL(0.5);
-        ivp_vec3r_set(&obj->core.speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        obj->core.rot_speed.k[0] = IVP_REAL(0.0);
-        obj->core.rot_speed.k[1] = IVP_REAL(0.0);
-        obj->core.rot_speed.k[2] = IVP_REAL(0.0);
-        obj->core.delta_world_f_core_psis = obj->core.speed;
+        ivp_vec3r_set(&obj->physical_core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        obj->physical_core->rot_speed.k[0] = IVP_REAL(0.0);
+        obj->physical_core->rot_speed.k[1] = IVP_REAL(0.0);
+        obj->physical_core->rot_speed.k[2] = IVP_REAL(0.0);
+        obj->physical_core->delta_world_f_core_psis = obj->physical_core->speed;
     }
     return obj;
 }
@@ -280,10 +281,12 @@ IVP_TEST(suspension_init_defaults) {
     ivp_suspension_state_t state;
     ivp_suspension_state_init(&state);
 
-    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(100.0), TOL);
-    IVP_ASSERT_NEAR(state.damping, IVP_REAL(1.0), TOL);
-    IVP_ASSERT_NEAR(state.damping_compression, IVP_REAL(1.0), TOL);
-    IVP_ASSERT_NEAR(state.rest_length, IVP_REAL(1.0), TOL);
+    /* Reference IVP_Template_Suspension (ivp_actuator_spring.cxx:31-35) on
+     * top of IVP_Template_Spring: all spring constants and max_body_force 0. */
+    IVP_ASSERT_NEAR(state.stiffness, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.damping, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.damping_compression, IVP_REAL(0.0), TOL);
+    IVP_ASSERT_NEAR(state.rest_length, IVP_REAL(0.0), TOL);
     IVP_ASSERT_NEAR(state.max_body_force, IVP_REAL(0.0), TOL);
     IVP_ASSERT_NULL(state.obj_a);
     IVP_ASSERT_NULL(state.obj_b);
@@ -439,7 +442,7 @@ IVP_TEST(suspension_set_damping_runtime) {
     ivp_suspension_state_t state;
     ivp_suspension_state_init(&state);
 
-    IVP_ASSERT_NEAR(state.damping_compression, IVP_REAL(1.0), TOL);
+    IVP_ASSERT_NEAR(state.damping_compression, IVP_REAL(0.0), TOL);
 
     ivp_suspension_set_damping_compression(&state, IVP_REAL(15.0));
     IVP_ASSERT_NEAR(state.damping_compression, IVP_REAL(15.0), TOL);
@@ -471,7 +474,7 @@ IVP_TEST(constraint_local_enable_disable) {
     IVP_ASSERT_FALSE(ivp_constraint_local_is_active(&state));
 
     /* Give b a velocity and simulate -- constraint should not hold */
-    b->core.speed.k[0] = IVP_REAL(5.0);
+    b->physical_core->speed.k[0] = IVP_REAL(5.0);
     ivp_environment_add_controller(env, 0, ivp_controller_constraint_local, &state);
     step(env, 10);
 
@@ -508,7 +511,7 @@ IVP_TEST(constraint_local_broken_query_reset) {
     ivp_environment_add_controller(env, 0, ivp_controller_constraint_local, &state);
 
     /* Give b a large velocity to exceed the break threshold */
-    b->core.speed.k[0] = IVP_REAL(100.0);
+    b->physical_core->speed.k[0] = IVP_REAL(100.0);
     step(env, 1);
 
     /* Constraint should be broken */
@@ -596,7 +599,7 @@ IVP_TEST(constraint_local_rebind_reference) {
     rot.y = IVP_REAL(0.3826834); /* ~45 degrees around Y */
     rot.z = IVP_REAL(0.0);
     rot.w = IVP_REAL(0.9238795);
-    b->core.q_world_f_core_last_psi = rot;
+    b->physical_core->q_world_f_core_last_psi = rot;
 
     /* Rebind reference */
     ivp_constraint_local_rebind_reference(&state);
@@ -631,7 +634,7 @@ IVP_TEST(constraint_local_bend_mode) {
     ivp_environment_add_controller(env, 0, ivp_controller_constraint_local, &state);
 
     /* Give b a large velocity */
-    b->core.speed.k[0] = IVP_REAL(50.0);
+    b->physical_core->speed.k[0] = IVP_REAL(50.0);
     step(env, 5);
 
     /* Constraint should NOT be broken (BEND doesn't break) */
@@ -642,7 +645,10 @@ IVP_TEST(constraint_local_bend_mode) {
 }
 
 IVP_TEST(constraint_local_bend_vs_clip) {
-    /* BEND should produce less accumulated impulse than CLIP under the same conditions */
+    /* Reference IVP_Constraint_Local (ivp_constraint_local.cxx:982-1003):
+     * IVP_CFE_BEND is "NOT implemented" (the impulse is applied unchanged),
+     * while IVP_CFE_CLIP scales the translation impulses by
+     * dt * maximpulse / |impulse|.  So CLIP must yield the smaller impulse. */
     ivp_environment_t *env_bend = make_env(DT60, false);
     ivp_environment_t *env_clip = make_env(DT60, false);
     IVP_ASSERT_NOT_NULL(env_bend);
@@ -670,14 +676,13 @@ IVP_TEST(constraint_local_bend_vs_clip) {
     ivp_environment_add_controller(env_clip, 0, ivp_controller_constraint_local, &state_clip);
 
     /* Give b objects the same large velocity */
-    b_bend->core.speed.k[0] = IVP_REAL(50.0);
-    b_clip->core.speed.k[0] = IVP_REAL(50.0);
+    b_bend->physical_core->speed.k[0] = IVP_REAL(50.0);
+    b_clip->physical_core->speed.k[0] = IVP_REAL(50.0);
 
     step(env_bend, 1);
     step(env_clip, 1);
 
-    /* BEND accumulated impulse should be less than CLIP */
-    IVP_ASSERT_TRUE(state_bend.accumulated_impulse[0] < state_clip.accumulated_impulse[0]);
+    IVP_ASSERT_TRUE(state_clip.accumulated_impulse[0] < state_bend.accumulated_impulse[0]);
 
     ivp_environment_destroy(env_bend);
     ivp_environment_destroy(env_clip);

@@ -13,9 +13,10 @@ IVP_TEST(sine_at_known_phases) {
     ivp_active_float_t *time_src = ivp_active_float_terminal_create(NULL, "t", 0.0);
     IVP_ASSERT_NOT_NULL(time_src);
 
-    /* freq=1, amp=2, null=0, shift=0 → 2*sin(2*PI*t) */
+    /* Reference IVP_U_Active_Sine: sin(t*freq + shift)*amp + null (no 2*PI
+     * factor), so freq=2*PI, amp=2, null=0, shift=0 → 2*sin(2*PI*t) */
     ivp_active_float_t *sine = ivp_active_float_sine_create(NULL, "sine", time_src,
-        1.0, 2.0, 0.0, 0.0);
+        2.0 * M_PI, 2.0, 0.0, 0.0);
     IVP_ASSERT_NOT_NULL(sine);
 
     /* t=0: sin(0) = 0 → value = 0 */
@@ -39,12 +40,13 @@ IVP_TEST(sine_at_known_phases) {
 
 IVP_TEST(sine_with_offset_and_shift) {
     ivp_active_float_t *time_src = ivp_active_float_terminal_create(NULL, "t", 0.0);
-    /* freq=1, amp=1, null=5, shift=0.25 → sin(2*PI*(t+0.25)) + 5 */
+    /* reference: sin(t*freq + shift)*amp + null; freq=1, amp=1, null=5,
+     * shift=PI/2 (the shift is a phase in radians, added after t*freq) */
     ivp_active_float_t *sine = ivp_active_float_sine_create(NULL, "sine", time_src,
-        1.0, 1.0, 5.0, 0.25);
+        1.0, 1.0, 5.0, M_PI / 2.0);
     IVP_ASSERT_NOT_NULL(sine);
 
-    /* t=0: sin(2*PI*0.25) + 5 = sin(PI/2) + 5 = 1 + 5 = 6 */
+    /* t=0: sin(PI/2) + 5 = 1 + 5 = 6 */
     IVP_ASSERT_NEAR(ivp_active_float_get(sine), 6.0, 1e-6);
 
     ivp_active_float_remove_ref(sine);
@@ -55,22 +57,23 @@ IVP_TEST(sine_with_offset_and_shift) {
 
 IVP_TEST(square_wave_transition) {
     ivp_active_float_t *time_src = ivp_active_float_terminal_create(NULL, "t", 0.0);
-    /* freq=1, low=0, high=10 → fmod(t,1) < 0.5 ? high : low */
+    /* Reference IVP_U_Active_Square: ((int)(t*freq) & 1) ? high : low,
+     * i.e. period 2/freq starting low.  freq=2, low=0, high=10 */
     ivp_active_float_t *sq = ivp_active_float_square_create(NULL, "sq", time_src,
-        1.0, 0.0, 10.0);
+        2.0, 0.0, 10.0);
     IVP_ASSERT_NOT_NULL(sq);
 
-    /* t=0.1: phase=0.1 < 0.5 → high=10 */
+    /* t=0.1: (int)0.2 = 0 → low=0 */
     ivp_active_float_set(time_src, 0.1);
-    IVP_ASSERT_NEAR(ivp_active_float_get(sq), 10.0, 1e-6);
-
-    /* t=0.6: phase=0.6 >= 0.5 → low=0 */
-    ivp_active_float_set(time_src, 0.6);
     IVP_ASSERT_NEAR(ivp_active_float_get(sq), 0.0, 1e-6);
 
-    /* t=1.2: phase=0.2 < 0.5 → high=10 */
-    ivp_active_float_set(time_src, 1.2);
+    /* t=0.6: (int)1.2 = 1 → high=10 */
+    ivp_active_float_set(time_src, 0.6);
     IVP_ASSERT_NEAR(ivp_active_float_get(sq), 10.0, 1e-6);
+
+    /* t=1.2: (int)2.4 = 2 → low=0 */
+    ivp_active_float_set(time_src, 1.2);
+    IVP_ASSERT_NEAR(ivp_active_float_get(sq), 0.0, 1e-6);
 
     ivp_active_float_remove_ref(sq);
     ivp_active_float_remove_ref(time_src);
@@ -80,7 +83,8 @@ IVP_TEST(square_wave_transition) {
 
 IVP_TEST(pulse_duty_cycle) {
     ivp_active_float_t *time_src = ivp_active_float_terminal_create(NULL, "t", 0.0);
-    /* freq=1, m1=1, m2=3, low=0, high=100 → duty = 1/3 ≈ 33% high */
+    /* reference: ((int)(t*freq*m2) % m2 < m1) ? high : low;
+     * freq=1, m1=1, m2=3, low=0, high=100 → duty = 1/3 high */
     ivp_active_float_t *pulse = ivp_active_float_pulse_create(NULL, "pulse", time_src,
         1.0, 1, 3, 0.0, 100.0);
     IVP_ASSERT_NOT_NULL(pulse);
@@ -142,7 +146,7 @@ IVP_TEST(sine_propagation_chain) {
     /* terminal time → sine → add (with constant) */
     ivp_active_float_t *time_src = ivp_active_float_terminal_create(NULL, "t", 0.0);
     ivp_active_float_t *sine = ivp_active_float_sine_create(NULL, "sine", time_src,
-        1.0, 1.0, 0.0, 0.0);
+        2.0 * M_PI, 1.0, 0.0, 0.0); /* reference sin(t*freq): freq = 2*PI */
     ivp_active_float_t *offset = ivp_active_float_terminal_create(NULL, "off", 100.0);
     ivp_active_float_t *result = ivp_active_float_add_create(NULL, "result", sine, offset);
 

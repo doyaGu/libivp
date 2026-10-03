@@ -10,7 +10,6 @@
 #include "ivp_test_controller_api.h"
 #include <ivp/base/ivp_types.h>
 #include <ivp/dynamics/ivp_environment.h>
-#include <ivp/dynamics/ivp_environment_collision.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_handle.h>
 #include <ivp/events/ivp_listener_collision.h>
@@ -67,13 +66,21 @@ static ivp_object_t *make_ball(ivp_environment_t *env, ivp_real_t x, ivp_real_t 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_BALL;
+    tmpl.ball_radius = IVP_REAL(1.0); /* IVP_Template_Ball::radius */
     tmpl.mass = IVP_REAL(1.0);
     ivp_vec3r_set(&tmpl.position, x, IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     if (obj) {
-        ivp_vec3r_set(&obj->core.speed, vx, IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_vec3r_set(&obj->physical_core->speed, vx, IVP_REAL(0.0), IVP_REAL(0.0));
     }
     return obj;
+}
+
+/* The event-driven pipeline resolves collisions inside the PSI loop. */
+static void simulate_psis(ivp_environment_t *env, int n) {
+    for (int i = 0; i < n; i++) {
+        ivp_environment_simulate_one_psi(env);
+    }
 }
 
 typedef struct {
@@ -402,6 +409,7 @@ IVP_TEST(event_object_create_destroy) {
 
     ivp_object_t *obj = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
     IVP_ASSERT_NOT_NULL(obj);
+    const int obj_index = obj->dense_index;
 
     bool found_created = false;
     for (int i = 0; i < tracker.count; i++) {
@@ -425,7 +433,7 @@ IVP_TEST(event_object_create_destroy) {
         }
     }
     IVP_ASSERT_TRUE(found_destroyed);
-    IVP_ASSERT_EQ(destroyed_object_index, -1);
+    IVP_ASSERT_EQ(destroyed_object_index, obj_index); /* index before removal */
 
     ivp_environment_remove_event_listener(env, handle);
     ivp_environment_destroy(env);
@@ -453,7 +461,7 @@ IVP_TEST(event_collision_detected) {
     IVP_ASSERT_NOT_NULL(a);
     IVP_ASSERT_NOT_NULL(b);
 
-    (void)ivp_environment_resolve_collisions(env);
+    simulate_psis(env, 10);
 
     bool found_collision = false;
     for (int i = 0; i < tracker.count; i++) {
@@ -472,6 +480,18 @@ IVP_TEST(event_collision_detected) {
  * Test 11: Frozen/Unfrozen Events
  * ======================================================================== */
 
+typedef struct {
+    int frozen;
+    int unfrozen;
+} freeze_event_counter_t;
+
+static void freeze_event_count_fn(void *ctx, ivp_environment_t *env, const ivp_event_t *ev) {
+    (void)env;
+    freeze_event_counter_t *c = (freeze_event_counter_t *)ctx;
+    if (ev->type == IVP_EVENT_OBJECT_FROZEN) c->frozen++;
+    if (ev->type == IVP_EVENT_OBJECT_UNFROZEN) c->unfrozen++;
+}
+
 IVP_TEST(event_object_frozen_unfrozen) {
     ivp_environment_config_t cfg;
     ivp_environment_config_init(&cfg);
@@ -479,60 +499,33 @@ IVP_TEST(event_object_frozen_unfrozen) {
     ivp_environment_t *env = ivp_environment_create(&cfg);
     IVP_ASSERT_NOT_NULL(env);
 
-    event_tracker_t tracker;
-    event_tracker_init(&tracker);
-    ivp_event_listener_handle_t handle = ivp_environment_add_event_listener(env, event_track_fn, &tracker);
+    freeze_event_counter_t counter;
+    memset(&counter, 0, sizeof(counter));
+    ivp_event_listener_handle_t handle = ivp_environment_add_event_listener(env, freeze_event_count_fn, &counter);
     IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(handle));
 
-    /* Frozen via anomaly collision cap. */
-    env->anomaly_manager.config.max_collisions_per_psi = 1;
-    env->anomaly_manager.config.freeze_on_max_collisions = true;
-
+    /* Frozen via the calm/freeze movement check of a resting object.
+     * (The anomaly collision cap does not freeze in the reference: the
+     * default IVP_Anomaly_Manager::max_collisions_exceeded_check_freezing
+     * only makes the core temporarily unmovable, ivp_anomaly_manager.cxx.) */
     ivp_object_t *f0 = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_object_t *f1 = make_ball(env, IVP_REAL(0.2), IVP_REAL(0.0));
-    ivp_object_t *f2 = make_ball(env, IVP_REAL(0.4), IVP_REAL(0.0));
     IVP_ASSERT_NOT_NULL(f0);
-    IVP_ASSERT_NOT_NULL(f1);
-    IVP_ASSERT_NOT_NULL(f2);
+    IVP_ASSERT_TRUE(IVP_MTIS_SIMULATED(f0->physical_core->movement_state));
 
-    for (int step = 0; step < 4; step++) {
+    for (int step = 0; step < 200; step++) {
         ivp_environment_simulate_one_psi(env);
     }
 
-    bool found_frozen = false;
-    for (int i = 0; i < tracker.count; i++) {
-        if (tracker.types[i] == IVP_EVENT_OBJECT_FROZEN) {
-            found_frozen = true;
-            break;
-        }
-    }
-    {
-        int frozen_state_count = 0;
-        if (f0->core.movement_state == IVP_MT_NOT_SIM) frozen_state_count++;
-        if (f1->core.movement_state == IVP_MT_NOT_SIM) frozen_state_count++;
-        if (f2->core.movement_state == IVP_MT_NOT_SIM) frozen_state_count++;
-        IVP_ASSERT_TRUE(found_frozen || frozen_state_count >= 1);
-    }
+    IVP_ASSERT_TRUE(counter.frozen > 0);
+    IVP_ASSERT_EQ((int)f0->physical_core->movement_state, (int)IVP_MT_NOT_SIM);
 
-    /* Unfrozen via revive path (pending async push on NOT_SIM object). */
-    event_tracker_init(&tracker);
-    f0->core.movement_state = IVP_MT_NOT_SIM;
-    ivp_vec3r_set(&f0->core.speed_change, IVP_REAL(0.2), IVP_REAL(0.0), IVP_REAL(0.0));
-    env->anomaly_manager.config.max_collisions_per_psi = 0;
-    env->anomaly_manager.config.freeze_on_max_collisions = false;
+    /* Unfrozen via the revive path (IVP_Real_Object::ensure_in_simulation). */
+    memset(&counter, 0, sizeof(counter));
+    IVP_ASSERT_TRUE(ivp_environment_ensure_core_in_simulation(env, f0));
+    ivp_environment_simulate_one_psi(env);
 
-    for (int step = 0; step < 4; step++) {
-        ivp_environment_simulate_one_psi(env);
-    }
-
-    bool found_unfrozen = false;
-    for (int i = 0; i < tracker.count; i++) {
-        if (tracker.types[i] == IVP_EVENT_OBJECT_UNFROZEN) {
-            found_unfrozen = true;
-            break;
-        }
-    }
-    IVP_ASSERT_TRUE(found_unfrozen);
+    IVP_ASSERT_TRUE(counter.unfrozen > 0);
+    IVP_ASSERT_TRUE(IVP_MTIS_SIMULATED(f0->physical_core->movement_state));
 
     ivp_environment_remove_event_listener(env, handle);
     ivp_environment_destroy(env);
@@ -566,7 +559,7 @@ IVP_TEST(collision_listener_pre_post) {
 
     IVP_ASSERT_EQ(ivp_object_add_collision_listener(a, &listener), 0);
 
-    (void)ivp_environment_resolve_collisions(env);
+    simulate_psis(env, 10);
 
     IVP_ASSERT_TRUE(listener_tracker.pre_count > 0);
     IVP_ASSERT_TRUE(listener_tracker.post_count > 0);
@@ -720,7 +713,7 @@ IVP_TEST(event_collision_detected_via_mindist_time_events) {
     IVP_ASSERT_NOT_NULL(a);
     IVP_ASSERT_NOT_NULL(b);
 
-    (void)ivp_environment_resolve_collisions(env);
+    simulate_psis(env, 10);
 
     bool found_collision = false;
     for (int i = 0; i < tracker.count; i++) {

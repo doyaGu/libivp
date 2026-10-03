@@ -6,6 +6,7 @@
 #include <ivp/math/ivp_quat.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_fast_math.h>
+#include <ivp/base/ivp_assert.h>
 
 /* Tolerance for float/double comparisons */
 #ifdef IVP_REAL_DOUBLE
@@ -219,8 +220,10 @@ IVP_TEST(mat3_rotation_x) {
     ivp_vec3r_t v = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0));
     ivp_vec3r_t out;
     ivp_mat3r_vmult(&out, &m, &v);
+    /* The reference IVP_U_Matrix3::init_rotated3 takes an IVP_FLOAT angle:
+     * cos((float)(PI/2)) = -4.37e-8 even in the double build, hence LTOL. */
     IVP_ASSERT_NEAR(out.k[0], 0.0, TOL);
-    IVP_ASSERT_NEAR(out.k[1], 0.0, TOL);
+    IVP_ASSERT_NEAR(out.k[1], 0.0, LTOL);
     IVP_ASSERT_NEAR(out.k[2], 1.0, TOL);
 }
 
@@ -433,7 +436,10 @@ IVP_TEST(transform_interpolate_halfturn) {
     t2.pos = ivp_vec3r(IVP_REAL(10.0), IVP_REAL(20.0), IVP_REAL(30.0));
     ivp_mat3r_init_rotation(&t2.rot, IVP_INDEX_X, IVP_PI);
 
-    ivp_transform_interpolate(&out, &t1, &t2, IVP_REAL(0.5));
+    /* Reference IVP_U_Matrix::interpolate (ivu_linear.cxx) is element-wise
+     * and degenerates here; the quaternion variant keeps the rotation
+     * orthonormal (libivp helper, see ivp_transform_interpolate_quat). */
+    ivp_transform_interpolate_quat(&out, &t1, &t2, IVP_REAL(0.5));
 
     /* Position should be linearly interpolated. */
     IVP_ASSERT_NEAR(out.pos.k[0], 5.0, TOL);
@@ -500,13 +506,33 @@ IVP_TEST(isqrt_various_values) {
     }
 }
 
-IVP_TEST(isqrt_double_domain) {
-    double z = ivp_isqrt_double(0.0, 0);
-    IVP_ASSERT_TRUE(isinf(z));
-    IVP_ASSERT_TRUE(z > 0.0);
+static int g_isqrt_assert_count = 0;
+static void isqrt_count_assert(const char *expr, const char *file, int line,
+                               const char *func, const char *msg, void *userdata) {
+    (void)expr; (void)file; (void)line; (void)func; (void)msg; (void)userdata;
+    g_isqrt_assert_count++;
+}
 
+IVP_TEST(isqrt_double_domain) {
+    IVP_ASSERT_TRUE(ivp_isqrt_double(4.0, 3) == 0.5);
+
+    /* No domain guard, like the reference release build (checked against
+     * IVP_Fast_Math::isqrt): 0 gives NaN (inf * 0 in the Newton step) and a
+     * negative input wraps the exponent hack to -inf.  The reference debug
+     * build asserts square > 0 (ivu_float.hxx): counted, not trapped. */
+    g_isqrt_assert_count = 0;
+    ivp_set_assert_handler(isqrt_count_assert, NULL);
+    bool all_nan = true;
+    for (int steps = 0; steps <= 3; steps++) {
+        if (!isnan(ivp_isqrt_double(0.0, steps))) all_nan = false;
+    }
     double n = ivp_isqrt_double(-4.0, 0);
-    IVP_ASSERT_TRUE(isnan(n));
+    ivp_set_assert_handler(NULL, NULL);
+    IVP_ASSERT_TRUE(all_nan);
+    IVP_ASSERT_TRUE(isinf(n) && n < 0.0);
+#ifdef IVP_ENABLE_ASSERTS
+    IVP_ASSERT_TRUE(g_isqrt_assert_count > 0);
+#endif
 }
 
 IVP_TEST(sqrt_wrapper) {

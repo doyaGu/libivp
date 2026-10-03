@@ -142,10 +142,19 @@ IVP_TEST(box_builder_basic) {
     IVP_ASSERT_NEAR(surface->mass_center[2], 0.0f, 1e-6f);
     IVP_ASSERT_NEAR(surface->upper_limit_radius, sqrtf(1.0f + 4.0f + 9.0f), 1e-5f);
 
-    /* Rotation inertia for unit mass: Ixx = (hy²+hz²)/3 = (4+9)/3 */
-    IVP_ASSERT_NEAR(surface->rotation_inertia[0], 13.0f / 3.0f, 1e-5f);
-    IVP_ASSERT_NEAR(surface->rotation_inertia[1], 10.0f / 3.0f, 1e-5f);
-    IVP_ASSERT_NEAR(surface->rotation_inertia[2],  5.0f / 3.0f, 1e-5f);
+    /* Rotation inertia for unit mass, reference IVP_Rot_Inertia_Solver
+     * (ivp_rot_inertia_solver.cxx:236-248): 2D moments a=hx²/3, b=hy²/3,
+     * c=hz²/3 and I_x = sqrt(b²+c²) (cyclic) — not the physical (b+c). */
+    {
+        float a = 1.0f / 3.0f, b = 4.0f / 3.0f, c = 9.0f / 3.0f;
+        IVP_ASSERT_NEAR(surface->rotation_inertia[0], sqrtf(b * b + c * c), 1e-5f);
+        IVP_ASSERT_NEAR(surface->rotation_inertia[1], sqrtf(a * a + c * c), 1e-5f);
+        IVP_ASSERT_NEAR(surface->rotation_inertia[2], sqrtf(a * a + b * b), 1e-5f);
+    }
+    /* deviation factor (ivp_surbuild_ledge_soup.cxx:1719): every vertex is
+     * sqrt(14) from the center, in-plane distance of the face corners
+     * |p x n| max = sqrt(13) -> int(1 + sqrt(13)/(sqrt(14)/250)) = 241 */
+    IVP_ASSERT_EQ(ivp_surface_get_max_deviation(surface), 241);
 
     /* Ledgetree root */
     const ivp_compact_ledgetree_node_t *root =
@@ -177,18 +186,18 @@ IVP_TEST(box_builder_vertices) {
     int np = ivp_ledge_get_n_points(ledge);
     IVP_ASSERT_EQ(np, 8);
 
-    /* Verify all 8 vertices exist with correct coordinates.
-     * Order: for sx in {-1,+1} for sy in {-1,+1} for sz in {-1,+1} */
-    int idx = 0;
-    for (int sx = -1; sx <= 1; sx += 2) {
-        for (int sy = -1; sy <= 1; sy += 2) {
-            for (int sz = -1; sz <= 1; sz += 2) {
-                IVP_ASSERT_NEAR(pts[idx].k[0], (float)sx * 1.0f, 1e-6f);
-                IVP_ASSERT_NEAR(pts[idx].k[1], (float)sy * 2.0f, 1e-6f);
-                IVP_ASSERT_NEAR(pts[idx].k[2], (float)sz * 3.0f, 1e-6f);
-                idx++;
-            }
-        }
+    /* Verify all 8 vertices exist with correct coordinates, in the
+     * reference compact point order (pointsoup of the corners
+     * for sx, sy, sz in {-1,+1}: qhull 2.6 + IVP_SurfaceBuilder_Polygon_Convex,
+     * points ordered by first use in the generated triangles). */
+    static const int sign[8][3] = {
+        { -1, +1, +1 }, { +1, -1, +1 }, { +1, +1, +1 }, { -1, -1, +1 },
+        { -1, +1, -1 }, { +1, +1, -1 }, { -1, -1, -1 }, { +1, -1, -1 },
+    };
+    for (int idx = 0; idx < 8; idx++) {
+        IVP_ASSERT_NEAR(pts[idx].k[0], (float)sign[idx][0] * 1.0f, 1e-6f);
+        IVP_ASSERT_NEAR(pts[idx].k[1], (float)sign[idx][1] * 2.0f, 1e-6f);
+        IVP_ASSERT_NEAR(pts[idx].k[2], (float)sign[idx][2] * 3.0f, 1e-6f);
     }
 
     ivp_compact_surface_free(NULL, surface);
@@ -391,11 +400,25 @@ IVP_TEST(surman_polygon) {
     IVP_ASSERT_NEAR(surface->mass_center[1], 0.0f, 1e-6f);
     IVP_ASSERT_NEAR(surface->mass_center[2], 0.0f, 1e-6f);
 
-    /* Rotation inertia */
-    /* For unit cube: Ixx = (1+1)/3 = 2/3 */
-    IVP_ASSERT_NEAR(surface->rotation_inertia[0], 2.0f / 3.0f, 1e-5f);
-    IVP_ASSERT_NEAR(surface->rotation_inertia[1], 2.0f / 3.0f, 1e-5f);
-    IVP_ASSERT_NEAR(surface->rotation_inertia[2], 2.0f / 3.0f, 1e-5f);
+    /* Rotation inertia, reference value for a cube of half size h:
+     * sqrt(2)/3 h² = 0.4714 h² (ivp_rot_inertia_solver.cxx:236-248;
+     * legacy engine prints 0.471404523 for h = 1). */
+    IVP_ASSERT_NEAR(surface->rotation_inertia[0], 0.471404523f, 1e-6f);
+    IVP_ASSERT_NEAR(surface->rotation_inertia[1], 0.471404523f, 1e-6f);
+    IVP_ASSERT_NEAR(surface->rotation_inertia[2], 0.471404523f, 1e-6f);
+
+    /* vtable mass properties (ivp_surman_polygon.cxx:204-226) */
+    float mc[3], ri[3];
+    ivp_surman_get_mass_center(&sm.base, mc);
+    ivp_surman_get_rotation_inertia(&sm.base, ri);
+    IVP_ASSERT_NEAR(mc[0], 0.0f, 1e-6f);
+    IVP_ASSERT_NEAR(ri[1], 0.471404523f, 1e-6f);
+    float center[3] = { 0.0f, 0.0f, 0.0f };
+    float rad = 0.0f, dev = 0.0f;
+    ivp_surman_get_radius_and_deviation(&sm.base, center, &rad, &dev);
+    IVP_ASSERT_NEAR(rad, 1.73205078f, 1e-6f);
+    /* 205 * (1/250) * radius */
+    IVP_ASSERT_NEAR(dev, 205.0f * (1.0f / 250.0f) * 1.73205078f, 1e-5f);
 
     ivp_surman_destroy(&sm.base);
     ivp_compact_surface_free(NULL, surface);

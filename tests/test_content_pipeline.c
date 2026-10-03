@@ -390,7 +390,7 @@ IVP_TEST(universe_manager_init) {
     IVP_ASSERT_TRUE(mgr.ensure_fn == NULL);
     IVP_ASSERT_TRUE(mgr.evict_fn == NULL);
     IVP_ASSERT_TRUE(mgr.deleted_fn == NULL);
-    IVP_ASSERT_EQ(mgr.evict_interval, 60);
+    IVP_ASSERT_EQ(mgr.check_objects_per_second_threshold_1, 10);
     IVP_ASSERT_FALSE(ivp_universe_manager_is_active(&mgr));
 }
 
@@ -419,6 +419,100 @@ IVP_TEST(universe_manager_deleted_callback) {
     ivp_environment_destroy(env);
 }
 
+/* IVP_Cluster_Manager::check_for_unused_objects walks the cluster tree:
+ * newest object first (IVP_Cluster::add_object inserts at the head), down
+ * into sub-clusters, the static object last (reference count -1: never
+ * reported). */
+typedef struct um_visit_log {
+    ivp_object_t *visited[32];
+    int n;
+    ivp_environment_t *env;
+    ivp_object_t *delete_on_visit;
+} um_visit_log_t;
+
+static void um_log_evict(void *ctx, ivp_object_t *obj)
+{
+    um_visit_log_t *log = (um_visit_log_t *)ctx;
+    if (log->n < 32) log->visited[log->n++] = obj;
+    if (obj == log->delete_on_visit) {
+        log->delete_on_visit = NULL;
+        ivp_environment_destroy_object(log->env, obj);
+    }
+}
+
+static ivp_object_t *um_ball(ivp_environment_t *env, double x)
+{
+    ivp_object_template_t t;
+    ivp_object_template_init(&t);
+    t.type = IVP_OBJECT_BALL;
+    t.ball_radius = IVP_REAL(0.5);
+    t.mass = IVP_REAL(1.0);
+    t.physical_unmoveable = true; /* stays where it is, no collision partner */
+    ivp_vec3r_set(&t.position, (ivp_real_t)x, IVP_REAL(0.0), IVP_REAL(0.0));
+    t.orientation = ivp_quatr_identity();
+    return ivp_environment_create_object(env, &t, NULL);
+}
+
+IVP_TEST(universe_manager_visits_cluster_tree_order) {
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    cfg.delta_psi_time = IVP_REAL(0.01);
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_object_t *a = um_ball(env, 0.0);
+    ivp_object_t *b = um_ball(env, 10.0);
+    ivp_object_t *c = um_ball(env, 20.0);
+    ivp_object_t *d = um_ball(env, 30.0);
+    IVP_ASSERT_TRUE(a && b && c && d);
+    ivp_cluster_t *root = ivp_environment_get_root_cluster(env);
+    IVP_ASSERT_NOT_NULL(root);
+    IVP_ASSERT_TRUE(ivp_cluster_get_first_child(root) == d);
+    IVP_ASSERT_EQ(ivp_cluster_get_child_count(root), 5); /* + the static object */
+
+    /* a sub-cluster (inserted at the head of the root) holding a */
+    ivp_cluster_t *k = ivp_environment_create_cluster(env, NULL, NULL);
+    IVP_ASSERT_NOT_NULL(k);
+    ivp_cluster_add_child(k, a);
+    IVP_ASSERT_TRUE(a->parent_cluster == k);
+
+    /* tree: k{a}, d, c, b, static */
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, NULL) == a);
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, a) == d);
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, d) == c);
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, c) == b);
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, b) == ivp_environment_get_static_object(env));
+    IVP_ASSERT_TRUE(ivp_cluster_get_next_real_object_in_tree(root, ivp_environment_get_static_object(env)) == NULL);
+
+    um_visit_log_t log;
+    memset(&log, 0, sizeof(log));
+    log.env = env;
+    log.delete_on_visit = d; /* deleted while it is the visited object */
+    ivp_universe_manager_t mgr;
+    ivp_universe_manager_init(&mgr);
+    mgr.evict_fn = um_log_evict;
+    mgr.ctx = &log;
+    mgr.check_objects_per_second_threshold_0 = 250; /* int(250 * 0.01) + 1 = 3 objects per PSI */
+    ivp_environment_set_universe_manager(env, &mgr);
+    for (int i = 0; i < 4; i++) ivp_environment_simulate_one_psi(env);
+    /* PSI 1: the cursor moves to the first object; PSI 2: a, d (deleted),
+     * c; PSI 3: b, static (not reported), end; PSI 4: a, c, b */
+    IVP_ASSERT_EQ(log.n, 7);
+    IVP_ASSERT_TRUE(log.visited[0] == a);
+    IVP_ASSERT_TRUE(log.visited[1] == d);
+    IVP_ASSERT_TRUE(log.visited[2] == c);
+    IVP_ASSERT_TRUE(log.visited[3] == b);
+    IVP_ASSERT_TRUE(log.visited[4] == a);
+    IVP_ASSERT_TRUE(log.visited[5] == c);
+    IVP_ASSERT_TRUE(log.visited[6] == b);
+
+    /* destroying the cluster moves a back to the root (head) */
+    ivp_environment_destroy_cluster(env, k);
+    IVP_ASSERT_TRUE(a->parent_cluster == root);
+    IVP_ASSERT_TRUE(ivp_cluster_get_first_child(root) == a);
+    ivp_environment_set_universe_manager(env, NULL);
+    ivp_environment_destroy(env);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Liquid Surface Tests
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -427,7 +521,9 @@ IVP_TEST(liquid_surface_simple) {
     ivp_liquid_surface_simple_t ls;
     ivp_liquid_surface_simple_init(&ls, IVP_REAL(5.0), IVP_REAL(1000.0));
 
-    IVP_ASSERT_NEAR(ls.surface_height, 5.0, 1e-6);
+    /* plane -y = -5 (normal out of the liquid, Y-down), consistent with
+     * ivp_buoyancy_init and the reference IVP_U_Float_Hesse convention */
+    IVP_ASSERT_NEAR(ls.surface_height, -5.0, 1e-6);
     IVP_ASSERT_NEAR(ls.fluid_density, 1000.0, 1e-6);
     IVP_ASSERT_NOT_NULL(ls.base.eval_fn);
 
@@ -438,8 +534,11 @@ IVP_TEST(liquid_surface_simple) {
     ivp_vec3r_t velocity;
     bool submerged = ls.base.eval_fn(ls.base.ctx, &query, &normal, &height, &velocity);
     /* Y-down: normal is (0,-1,0), surface at Y=5.
-     * Point at Y=3 is above the surface in Y-down. */
-    IVP_ASSERT_NEAR(height, 5.0, 1e-6);
+     * Point at Y=3 is above the surface in Y-down -> not in the liquid. */
+    IVP_ASSERT_FALSE(submerged);
+    IVP_ASSERT_NEAR(height, -5.0, 1e-6);
+    query.k[1] = IVP_REAL(7.0);
+    IVP_ASSERT_TRUE(ls.base.eval_fn(ls.base.ctx, &query, &normal, &height, &velocity));
 }
 
 IVP_TEST(liquid_surface_plane) {
@@ -514,9 +613,14 @@ IVP_TEST(radar_config_defaults) {
 IVP_TEST(golem_init) {
     ivp_golem_state_t state;
     ivp_golem_state_init(&state);
-    IVP_ASSERT_NEAR(state.position_gain, 0.5, 1e-6);
-    IVP_ASSERT_NEAR(state.rotation_gain, 0.5, 1e-6);
-    IVP_ASSERT_NEAR(state.max_linear_speed, 100.0, 1e-6);
+    /* Reference IVP_Template_Controller_Golem / _Motion defaults
+     * (ivp_controller_motion.cxx:13-22, 206-213). */
+    IVP_ASSERT_NEAR(state.force_factor, 0.8, 1e-6);
+    IVP_ASSERT_NEAR(state.damp_factor, 1.0, 1e-6);
+    IVP_ASSERT_NEAR(state.torque_factor, 0.8, 1e-6);
+    IVP_ASSERT_NEAR(state.max_delta_position, 10.0, 1e-6);
+    IVP_ASSERT_NEAR(state.max_delta_orientation, 0.5 * 3.14159265358979, 1e-5);
+    IVP_ASSERT_NEAR(state.max_translation_force.k[0], 1e6, 1e-1);
     IVP_ASSERT_FALSE(state.target_position_set);
     IVP_ASSERT_FALSE(state.target_orientation_set);
 }
@@ -644,6 +748,7 @@ int main(void) {
     /* Universe manager */
     IVP_REGISTER(universe_manager_init);
     IVP_REGISTER(universe_manager_deleted_callback);
+    IVP_REGISTER(universe_manager_visits_cluster_tree_order);
 
     /* Liquid surface */
     IVP_REGISTER(liquid_surface_simple);

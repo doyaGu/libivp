@@ -18,8 +18,6 @@
 #include "ivp_test.h"
 #include <ivp/collision/ivp_collision_tolerance.h>
 #include <ivp/collision/ivp_narrowphase.h>
-#include <ivp/collision/ivp_mindist.h>
-#include <ivp/collision/ivp_mindist_persistent.h>
 #include <ivp/collision/ivp_ray_solver.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/base/ivp_allocator.h>
@@ -80,14 +78,6 @@ IVP_TEST(collision_tolerance_speed_after_keeper) {
     double delta = (double)(cs.keeper_dist - cs.min_coll_dist);
     double expected = sqrt(2.0 * delta * 9.81);
     IVP_ASSERT_NEAR(cs.speed_after_keeper_dist, expected, 1e-5);
-}
-
-IVP_TEST(mindist_state_machine_contract_values) {
-    IVP_ASSERT_EQ(IVP_MDIST_UNINITIALIZED, 0);
-    IVP_ASSERT_EQ(IVP_MDIST_EXACT, 1);
-    IVP_ASSERT_EQ(IVP_MDIST_HULL, 2);
-    IVP_ASSERT_EQ(IVP_MDIST_HULL_RECURSIVE, 3);
-    IVP_ASSERT_EQ(IVP_MDIST_INVALID, 4);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -639,8 +629,12 @@ IVP_TEST(ray_cast_box_hit_along_x) {
     ivp_compact_surface_t *surface = make_box();
     IVP_ASSERT_NOT_NULL(surface);
 
+    /* Off-center ray: the reference convex walk (ivp_ray_solver.cxx:470-482)
+     * treats checks == 0 as "outside" and ping-pongs across an edge, so a
+     * ray exactly through a face diagonal (e.g. the face center) misses —
+     * see ray_cast_box_center_hits_diagonal_misses. */
     ivp_ray_input_t ray;
-    ray.origin = ivp_vec3r(IVP_REAL(-10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ray.origin = ivp_vec3r(IVP_REAL(-10.0), IVP_REAL(0.1), IVP_REAL(0.2));
     ray.direction = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ray.max_distance = IVP_REAL(20.0);
 
@@ -648,6 +642,9 @@ IVP_TEST(ray_cast_box_hit_along_x) {
     ivp_result_t r = ivp_ray_cast_surface(surface, &ray, &hit);
 
     IVP_ASSERT_TRUE(ivp_ok(r));
+    /* Normal is the normalised outward face normal (object space). */
+    IVP_ASSERT_NEAR(hit.hit_normal.k[0], -1.0, 1e-6);
+    IVP_ASSERT_NEAR(hit.hit_normal.k[1], 0.0, 1e-6);
     /* Box half-extent is 1.0, so nearest face at x = -1.0.
      * Distance from origin at -10 is 9.0 */
     IVP_ASSERT_NEAR(hit.hit_distance, 9.0, 1e-2);
@@ -662,7 +659,7 @@ IVP_TEST(ray_cast_box_hit_along_y) {
     IVP_ASSERT_NOT_NULL(surface);
 
     ivp_ray_input_t ray;
-    ray.origin = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(0.0));
+    ray.origin = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(5.0), IVP_REAL(0.2)); /* off diagonal */
     ray.direction = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
     ray.max_distance = IVP_REAL(20.0);
 
@@ -680,7 +677,7 @@ IVP_TEST(ray_cast_box_hit_along_z) {
     IVP_ASSERT_NOT_NULL(surface);
 
     ivp_ray_input_t ray;
-    ray.origin = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(8.0));
+    ray.origin = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(0.2), IVP_REAL(8.0)); /* off diagonal */
     ray.direction = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(-1.0));
     ray.max_distance = IVP_REAL(20.0);
 
@@ -745,9 +742,10 @@ IVP_TEST(ray_cast_convex_tetrahedron) {
     ivp_compact_surface_t *surface = ivp_build_convex_surface(NULL, points, 4);
     IVP_ASSERT_NOT_NULL(surface);
 
-    /* Ray from above, straight down through center */
+    /* Ray from above, straight down near the apex (not exactly through the
+     * apex vertex: the reference walk misses rays through vertices/edges). */
     ivp_ray_input_t ray;
-    ray.origin = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(10.0));
+    ray.origin = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(0.05), IVP_REAL(10.0));
     ray.direction = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(-1.0));
     ray.max_distance = IVP_REAL(20.0);
 
@@ -826,48 +824,6 @@ IVP_TEST(ray_sphere_behind) {
     IVP_ASSERT_FALSE(hit);
 }
 
-static bool ptr_in_ledge_range(const void *p, const ivp_compact_ledge_t *l) {
-    uintptr_t x = (uintptr_t)p;
-    uintptr_t a = (uintptr_t)l;
-    uintptr_t b = a + (uintptr_t)ivp_ledge_get_size(l);
-    return x >= a && x < b;
-}
-
-IVP_TEST(mindist_feature_ownership_matches_inputs) {
-    ivp_compact_surface_t *sa = ivp_build_box_surface(NULL, 1.0f, 1.0f, 1.0f);
-    ivp_compact_surface_t *sb = ivp_build_box_surface(NULL, 0.7f, 0.9f, 1.2f);
-    IVP_ASSERT_NOT_NULL(sa);
-    IVP_ASSERT_NOT_NULL(sb);
-
-    const ivp_compact_ledge_t *la = ivp_surface_get_single_convex(sa);
-    const ivp_compact_ledge_t *lb = ivp_surface_get_single_convex(sb);
-    IVP_ASSERT_NOT_NULL(la);
-    IVP_ASSERT_NOT_NULL(lb);
-
-    int lb_size = ivp_ledge_get_size(lb);
-    ivp_compact_ledge_t *lb_tx = (ivp_compact_ledge_t *)malloc((size_t)lb_size);
-    IVP_ASSERT_NOT_NULL(lb_tx);
-    memcpy(lb_tx, lb, (size_t)lb_size);
-
-    ivp_compact_poly_point_t *pts = ivp_ledge_get_point_array_mut(lb_tx);
-    int n_pts = ivp_ledge_get_n_points(lb_tx);
-    for (int i = 0; i < n_pts; i++) {
-        pts[i].k[0] += 1.401776f;
-        pts[i].k[1] += -2.577105f;
-        pts[i].k[2] += 1.714286f;
-    }
-
-    ivp_closest_pair_t pair;
-    ivp_result_t rc = ivp_find_closest_pair(la, lb_tx, &pair);
-    IVP_ASSERT_TRUE(ivp_ok(rc));
-    IVP_ASSERT_TRUE(ptr_in_ledge_range(pair.edge_a, la));
-    IVP_ASSERT_TRUE(ptr_in_ledge_range(pair.edge_b, lb_tx));
-
-    free(lb_tx);
-    free_surface(sa);
-    free_surface(sb);
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
  *  Test Registration and Main
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -878,7 +834,6 @@ IVP_TEST(mindist_feature_ownership_matches_inputs) {
     IVP_REGISTER(collision_tolerance_custom); \
     IVP_REGISTER(collision_tolerance_coll_dists_interpolation); \
     IVP_REGISTER(collision_tolerance_speed_after_keeper); \
-    IVP_REGISTER(mindist_state_machine_contract_values); \
     /* QR / S-val */ \
     IVP_REGISTER(qr_vals_inside_triangle); \
     IVP_REGISTER(qr_vals_outside_triangle); \
@@ -918,9 +873,7 @@ IVP_TEST(mindist_feature_ownership_matches_inputs) {
     IVP_REGISTER(ray_cast_box_hit_along_z); \
     IVP_REGISTER(ray_cast_box_miss); \
     IVP_REGISTER(ray_cast_box_too_short); \
-    IVP_REGISTER(ray_cast_convex_tetrahedron); \
-    /* Mindist feature ownership */ \
-    IVP_REGISTER(mindist_feature_ownership_matches_inputs);
+    IVP_REGISTER(ray_cast_convex_tetrahedron);
 
 int main(void) {
     IVP_TEST_LIST
