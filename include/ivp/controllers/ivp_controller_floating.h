@@ -4,9 +4,14 @@
  * a 1D impulse along a configurable ray direction. The user provides
  * a ray-cast callback to determine the current distance to the surface.
  *
- * The controller clamps the applied force between max_repulsive_force
- * (pushing away from surface) and max_adhesive_force (pulling toward
- * surface).
+ * Port of IVP_Controller_Floating (ivp_controller_floating.cxx:84-117): each
+ * PSI the impulse that makes the anchor reach target_distance within one PSI
+ * is solved through the core reaction matrix (linear + angular response of
+ * the anchor point):
+ *   a   = (current_distance - target_distance) / dt - v_anchor . ray_dir
+ *   imp = a / tpm00, clipped to max_adhesive_force * dt (pull, imp > 0) and
+ *         -max_repulsive_force * dt (push), applied at the anchor.
+ * Reference template defaults: max forces P_FLOAT_MAX, ray (0,1,0), distances 0.
  *
  * Ported from ivp_controller_floating.hxx.
  */
@@ -44,6 +49,9 @@ typedef bool (*ivp_floating_raycast_fn_t)(void *ctx,
 /* ── Floating state ────────────────────────────────────────────────────── */
 
 typedef struct ivp_floating_state {
+    /* Controlled object (NULL = any core the controller is dispatched for) */
+    ivp_object_t *object;
+
     /* Attachment point in object space */
     ivp_vec3r_t  position_os;
 
@@ -58,8 +66,8 @@ typedef struct ivp_floating_state {
     ivp_real_t   max_repulsive_force;   /* max push-away force (positive) */
     ivp_real_t   max_adhesive_force;    /* max pull-toward force (positive) */
 
-    /* Damping */
-    ivp_real_t   damping;               /* velocity damping along ray (0-1) */
+    /* Deprecated (unused): the reference law has no separate damping term. */
+    ivp_real_t   damping;
 
     /* Ray-cast callback */
     ivp_floating_raycast_fn_t raycast_fn;
@@ -80,7 +88,20 @@ void ivp_floating_init(ivp_floating_state_t *state,
                        ivp_real_t max_repulsive,
                        ivp_real_t max_adhesive);
 
-/* Set the ray-cast callback. Must be called before the controller runs. */
+/* Reference IVP_Template_Controller_Floating defaults: max forces
+ * IVP_FLOAT_MAX, ray (0,1,0), target = current = 0. */
+void ivp_floating_init_defaults(ivp_floating_state_t *state);
+
+/* Bind the controller to one object. */
+void ivp_floating_set_object(ivp_floating_state_t *state, ivp_object_t *object);
+
+/* Reference set_current_distance / set_target_distance. */
+void ivp_floating_set_current_distance(ivp_floating_state_t *state, ivp_real_t d);
+void ivp_floating_set_target_distance(ivp_floating_state_t *state, ivp_real_t d);
+
+/* Set the ray-cast callback (reference do_ray_casting); when it returns
+ * false the controller does nothing this PSI.  Without a callback the last
+ * current_distance is used. */
 void ivp_floating_set_raycast(ivp_floating_state_t *state,
                               ivp_floating_raycast_fn_t fn,
                               void *ctx);

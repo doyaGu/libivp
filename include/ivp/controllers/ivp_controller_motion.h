@@ -24,6 +24,12 @@ extern "C" {
 
 /* ── Motion mode ────────────────────────────────────────────────────────── */
 
+/* Each channel (linear / angular) runs in one mode.  A new state is in
+ * IVP_MOTION_TARGET mode on both channels with the reference constructor's
+ * target (origin, identity orientation): like IVP_Controller_Motion the
+ * controller pulls its object toward that target until set_target_* moves
+ * it.  The other modes are libivp extras that replace a channel's target
+ * drive (IVP_MOTION_NONE disables a channel). */
 typedef enum ivp_motion_mode {
     IVP_MOTION_NONE       = 0,  /* no motion applied */
     IVP_MOTION_VELOCITY   = 1,  /* set target velocity directly */
@@ -64,21 +70,46 @@ typedef struct ivp_motion_state {
     ivp_real_t        angular_damp_factor;   /* default 1.0 */
     ivp_vec3r_t       max_translation_force; /* per axis, default 1e6 */
     ivp_vec3r_t       max_torque;            /* per axis, default 1e6 */
+
+    /* Reference IVP_Controller_Motion::real_object: the controlled object
+     * (ivp_motion_state_setup).  The target setters wake it
+     * (ensure_core_in_simulation) as the reference does.  libivp extra:
+     * NULL acts on every core the controller is dispatched for. */
+    ivp_object_t     *object;
 } ivp_motion_state_t;
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
-/* Initialize a motion state to no motion. */
+/* Initialize a motion state: reference IVP_Template_Controller_Motion
+ * defaults and the IVP_Controller_Motion constructor's target (origin,
+ * identity orientation) in IVP_MOTION_TARGET mode on both channels, i.e. the
+ * controller drives toward the origin until a target is set. */
 void ivp_motion_state_init(ivp_motion_state_t *state);
 
-/* Drive toward a world-space target position (reference
- * IVP_Controller_Motion::set_target_position_ws). Switches linear_mode to
- * IVP_MOTION_TARGET. */
+/* Bind the state to one object (reference IVP_Controller_Motion
+ * constructor; the targets keep their values). */
+void ivp_motion_state_setup(ivp_motion_state_t *state, ivp_object_t *object);
+
+/* Drive toward a world-space target position of the mass center (reference
+ * IVP_Controller_Motion::set_target_position_ws): returns early when the
+ * channel already targets this position (e.g. the initial origin), else
+ * wakes the bound object. Switches linear_mode to IVP_MOTION_TARGET. */
 void ivp_motion_state_set_target_position(ivp_motion_state_t *state,
                                           const ivp_vec3r_t *target_ws);
 
+/* Reference set_target_object_position_ws: target given for the object
+ * space origin with the desired orientation (the core/object shift is
+ * removed when it is not zero). */
+void ivp_motion_state_set_target_object_position(ivp_motion_state_t *state,
+                                                 const ivp_object_t *obj,
+                                                 const ivp_quatr_t *desired_orientation,
+                                                 const ivp_vec3r_t *position_of_object_space_center_ws);
+
 /* Drive toward a world-space target orientation (reference
- * set_target_q_world_f_core). Switches angular_mode to IVP_MOTION_TARGET. */
+ * set_target_q_world_f_core): invalid quaternions (NaN, |q|^2 <= eps or
+ * > max) are ignored, the quaternion is normalized, an unchanged target
+ * returns early, else the bound object is woken. Switches angular_mode to
+ * IVP_MOTION_TARGET. */
 void ivp_motion_state_set_target_orientation(ivp_motion_state_t *state,
                                              const ivp_quatr_t *q_world_f_core);
 

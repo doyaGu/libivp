@@ -1,30 +1,35 @@
 /* ivp_controller_stiff_spring.c -- Stiff spring controller implementation
  *
- * Uses implicit (backward) Euler to solve the spring equation:
- *   m * dv/dt = -k * x - c * v
- *
- * Implicit Euler rearranges to:
- *   dv = -(k * x * dt + c * v_rel) / (m_eff + c * dt + k * dt^2)
- *
- * This is unconditionally stable for any stiffness k.
+ * Port of IVP_Controller_Stiff_Spring::do_simulation_controller
+ * (ivp_controller/ivp_controller_stiff_spring.cxx:166-226).
  */
-
 #include <ivp/controllers/ivp_controller_stiff_spring.h>
 #include <ivp/controllers/ivp_controller_util.h>
+#include <ivp/solver/ivp_solver_core_reaction.h>
+#include "solver/ivp_scr_internal.h"
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_environment.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_transform.h>
+
+#include <ivp/base/ivp_assert.h>
+
 #include <string.h>
+#include "controllers/ivp_controller_ref.h"
+
+/* reference IVP_FLOAT members */
+static inline ivp_real_t stiff_fl(double v) { return (ivp_real_t)(float)v; }
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
 void ivp_stiff_spring_state_init(ivp_stiff_spring_state_t *state)
 {
+    /* Reference IVP_Template_Stiff_Spring (ivp_controller_stiff_spring.cxx:16-23):
+     * spring_len = spring_constant = spring_damp = 0, break_max_len = P_FLOAT_MAX. */
     memset(state, 0, sizeof(*state));
-    state->stiffness   = IVP_REAL(1000.0);
-    state->damping     = IVP_REAL(10.0);
-    state->rest_length = IVP_REAL(1.0);
-    state->active      = true;
+    state->break_max_len = (ivp_real_t)IVP_FLOAT_MAX;
+    state->max_len_exceed_type = IVP_SFE_NONE;
+    state->active = true;
 }
 
 void ivp_stiff_spring_state_setup(ivp_stiff_spring_state_t *state,
@@ -36,126 +41,218 @@ void ivp_stiff_spring_state_setup(ivp_stiff_spring_state_t *state,
                                     ivp_real_t damping,
                                     ivp_real_t rest_length)
 {
-    state->obj_a       = obj_a;
-    state->obj_b       = obj_b;
-    state->anchor_a_os = *anchor_a_os;
-    state->anchor_b_os = *anchor_b_os;
-    state->stiffness   = stiffness;
-    state->damping     = damping;
-    state->rest_length = rest_length;
-    state->max_dv      = IVP_REAL(0.0);
-    state->active      = true;
+    ivp_stiff_spring_state_init(state);
+    state->obj_a = obj_a;
+    state->obj_b = obj_b;
+    /* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor */
+    ivp_environment_t *env = ivp_ctl_env_of2(obj_a, obj_b);
+    ivp_ctl_anchor_setup_os(obj_a, env, anchor_a_os, &state->anchor_a_os);
+    ivp_ctl_anchor_setup_os(obj_b, env, anchor_b_os, &state->anchor_b_os);
+    /* IVP_FLOAT members */
+    state->stiffness = stiff_fl(stiffness);
+    state->damping = stiff_fl(damping);
+    state->rest_length = stiff_fl(rest_length);
+}
+
+static void stiff_spring_wake(ivp_stiff_spring_state_t *state)
+{
+    ivp_controller_wake_actuator(state->obj_a, state->obj_b);
+}
+
+/* Reference setters: IVP_DOUBLE argument, IVP_FLOAT members. */
+void ivp_stiff_spring_set_constant(ivp_stiff_spring_state_t *state, ivp_real_t value)
+{
+    state->stiffness = stiff_fl(value);
+    stiff_spring_wake(state);
+}
+
+void ivp_stiff_spring_set_damp(ivp_stiff_spring_state_t *state, ivp_real_t value)
+{
+    state->damping = stiff_fl(value);
+    stiff_spring_wake(state);
+}
+
+void ivp_stiff_spring_set_len(ivp_stiff_spring_state_t *state, ivp_real_t value)
+{
+    if ((double)(float)state->rest_length == (double)value) return;
+    state->rest_length = stiff_fl(value);
+    stiff_spring_wake(state);
+}
+
+void ivp_stiff_spring_set_break_max_len(ivp_stiff_spring_state_t *state, ivp_real_t value)
+{
+    if ((double)(float)state->break_max_len == (double)value) return;
+    state->break_max_len = stiff_fl(value);
+    stiff_spring_wake(state);
+}
+
+void ivp_stiff_spring_set_broken_listener(ivp_stiff_spring_state_t *state,
+                                          ivp_stiff_spring_broken_fn_t fn, void *ctx)
+{
+    state->broken_fn = fn;
+    state->broken_ctx = ctx;
+}
+
+/* ── IVP_Controller_Stiff_Spring_Active ─────────────────────────────────── */
+
+/* Reference IVP_Controller_Stiff_Spring_Active::active_float_changed
+ * (ivp_controller_stiff_spring.cxx:102-120). */
+static void stiff_spring_active_float_changed(void *ctx, ivp_active_float_t *af,
+                                              double old_value, double new_value)
+{
+    (void)old_value;
+    (void)new_value;
+    ivp_stiff_spring_state_t *state = (ivp_stiff_spring_state_t *)ctx;
+    if (af == state->active_float_spring_len) {
+        ivp_stiff_spring_set_len(state, (ivp_real_t)ivp_active_float_get_float(af));
+        return;
+    }
+    if (af == state->active_float_spring_constant) {
+        ivp_stiff_spring_set_constant(state, (ivp_real_t)ivp_active_float_get_float(af));
+        return;
+    }
+    if (af == state->active_float_spring_damp) {
+        ivp_stiff_spring_set_damp(state, (ivp_real_t)ivp_active_float_get_float(af));
+        return;
+    }
+    IVP_CORE(); /* ivp_controller_stiff_spring.cxx:118 */
+}
+
+static void stiff_spring_release(ivp_stiff_spring_state_t *state, ivp_active_float_t **slot)
+{
+    ivp_active_float_t *af = *slot;
+    if (!af) return;
+    *slot = NULL;
+    (void)ivp_active_float_remove_listener(af, stiff_spring_active_float_changed, state);
+}
+
+static bool stiff_spring_add(ivp_stiff_spring_state_t *state, ivp_active_float_t **slot,
+                             ivp_active_float_t *af)
+{
+    if (!af) return false;
+    if (!ivp_active_float_add_listener(af, stiff_spring_active_float_changed, state)) return false;
+    *slot = af;
+    return true;
+}
+
+void ivp_stiff_spring_unbind_active(ivp_stiff_spring_state_t *state)
+{
+    if (!state) return;
+    stiff_spring_release(state, &state->active_float_spring_len);
+    stiff_spring_release(state, &state->active_float_spring_constant);
+    stiff_spring_release(state, &state->active_float_spring_damp);
+}
+
+void ivp_stiff_spring_bind_active(ivp_stiff_spring_state_t *state,
+                                  ivp_active_float_t *active_float_spring_len,
+                                  ivp_active_float_t *active_float_spring_constant,
+                                  ivp_active_float_t *active_float_spring_damp)
+{
+    if (!state) return;
+    ivp_stiff_spring_unbind_active(state);
+    /* constructor (ivp_controller_stiff_spring.cxx:122-145): values copied
+     * directly, no ensure_actuator_in_simulation */
+    if (stiff_spring_add(state, &state->active_float_spring_len, active_float_spring_len)) {
+        state->rest_length = stiff_fl(ivp_active_float_get_float(active_float_spring_len));
+    }
+    if (stiff_spring_add(state, &state->active_float_spring_constant, active_float_spring_constant)) {
+        state->stiffness = stiff_fl(ivp_active_float_get_float(active_float_spring_constant));
+    }
+    if (stiff_spring_add(state, &state->active_float_spring_damp, active_float_spring_damp)) {
+        state->damping = stiff_fl(ivp_active_float_get_float(active_float_spring_damp));
+    }
 }
 
 /* ── Controller callback ────────────────────────────────────────────────── */
+
+/* Reference (ivp_controller_stiff_spring.cxx:200-203):
+ *   if (pc->movement_state >= IVP_MT_NOT_SIM || pc->pinned) pc = NULL;
+ * Static cores (IVP_MT_STATIC, also the static object of a world anchor),
+ * frozen and pinned cores receive no impulse.  The spring is a dependent
+ * controller, so a movable partner shares the simulation unit and is
+ * simulated whenever the spring runs. */
+static ivp_core_t *stiff_spring_core(ivp_core_t *c)
+{
+    if (!c) return NULL;
+    if (c->movement_state >= IVP_MT_NOT_SIM || c->pinned) return NULL;
+    return c;
+}
 
 void ivp_controller_stiff_spring(const ivp_event_sim_t *event_sim,
                                    ivp_object_t *obj,
                                    void *ctx)
 {
-    const ivp_real_t dt = event_sim->delta_time;
     ivp_stiff_spring_state_t *state = (ivp_stiff_spring_state_t *)ctx;
-    if (!state || !state->active) return;
+    if (!state || !state->active || state->broken) return;
 
-    /* Only execute once per PSI step.
-     * Prefer obj_a as trigger; fall back to obj_b if obj_a is NULL
-     * (world anchor) or not currently simulated (frozen/NOT_SIM). */
-    ivp_object_t *trigger = state->obj_a;
-    if (trigger && !IVP_MTIS_SIMULATED(trigger->core.movement_state)) {
-        trigger = state->obj_b;
-    }
-    if (!trigger) trigger = state->obj_b;
-    if (trigger && obj != trigger) return;
+    ivp_object_t *ends[2] = { state->obj_a, state->obj_b };
+    if (obj != ivp_controller_pick_exec_object(ends, 2)) return;
 
-    /* Get anchor world positions */
-    ivp_vec3r_t pos_a_ws, pos_b_ws;
-    ivp_controller_get_anchor_ws(state->obj_a, &state->anchor_a_os, &pos_a_ws);
-    ivp_controller_get_anchor_ws(state->obj_b, &state->anchor_b_os, &pos_b_ws);
+    /* Reference IVP_Controller_Stiff_Spring::do_simulation_controller
+     * (ivp_controller_stiff_spring.cxx:166-226). */
+    /* first step: collect all data */
+    ivp_environment_t *env = event_sim->environment;
+    ivp_core_t *pc0 = ivp_ctl_anchor_core(state->obj_a, env);
+    ivp_core_t *pc1 = ivp_ctl_anchor_core(state->obj_b, env);
+    const ivp_vec3f_t core_pos0 = ivp_ctl_f(&state->anchor_a_os);
+    const ivp_vec3f_t core_pos1 = ivp_ctl_f(&state->anchor_b_os);
+    ivp_vec3r_t pos0_ws, pos1_ws;
+    ivp_ctl_anchor_pos_ws(pc0, &core_pos0, &pos0_ws);
+    ivp_ctl_anchor_pos_ws(pc1, &core_pos1, &pos1_ws);
 
-    /* Spring vector: A → B */
-    ivp_vec3r_t diff;
-    ivp_vec3r_sub(&diff, &pos_b_ws, &pos_a_ws);
+    ivp_vec3f_t dir_ws;
+    lvf_subtract2_p(&dir_ws, &pos0_ws, &pos1_ws); /* force direction world coords */
+    const double dlen = (double)lvf_real_length_plus_normize(&dir_ws);
+    state->current_length = (ivp_real_t)dlen;
+    state->last_impulse = IVP_REAL(0.0);
+    if (dlen < P_FLOAT_EPS) return;
 
-    ivp_real_t length = ivp_vec3r_length(&diff);
-    state->current_length = length;
-
-    if (length < IVP_REAL_EPS) return;
-
-    /* Normalized direction */
-    ivp_vec3r_t dir;
-    ivp_real_t inv_len = IVP_REAL(1.0) / length;
-    ivp_vec3r_scale(&dir, &diff, inv_len);
-
-    /* Displacement from rest length */
-    ivp_real_t x = length - state->rest_length;
-
-    /* Relative velocity along spring direction */
-    ivp_real_t v_rel = IVP_REAL(0.0);
-    if (state->obj_a && state->obj_b) {
-        ivp_vec3r_t dv;
-        ivp_vec3r_sub(&dv, &state->obj_b->core.speed,
-                      &state->obj_a->core.speed);
-        v_rel = ivp_vec3r_dot(&dv, &dir);
-    } else if (state->obj_a) {
-        v_rel = -ivp_vec3r_dot(&state->obj_a->core.speed, &dir);
-    } else if (state->obj_b) {
-        v_rel = ivp_vec3r_dot(&state->obj_b->core.speed, &dir);
+    if (dlen > (double)(float)state->break_max_len && state->max_len_exceed_type == IVP_SFE_BREAK) {
+        state->broken = true;
+        if (state->broken_fn) state->broken_fn(state->broken_ctx, state);
+        return;
     }
 
-    /* Effective inverse mass */
-    ivp_real_t inv_m_eff = IVP_REAL(0.0);
-    bool a_moveable = state->obj_a && !state->obj_a->core.physical_unmoveable
-                      && IVP_MTIS_SIMULATED(state->obj_a->core.movement_state);
-    bool b_moveable = state->obj_b && !state->obj_b->core.physical_unmoveable
-                      && IVP_MTIS_SIMULATED(state->obj_b->core.movement_state);
+    pc0 = stiff_spring_core(pc0);
+    pc1 = stiff_spring_core(pc1);
+    if (!pc0 && !pc1) return;
 
-    if (a_moveable) inv_m_eff += state->obj_a->core.inv_mass;
-    if (b_moveable) inv_m_eff += state->obj_b->core.inv_mass;
+    /* second step: calc and apply forces */
+    ivp_scr_f_t scr;
+    ivp_scr_f_init_translation_ws(&scr, pc0, pc1, &pos0_ws, &dir_ws, NULL, NULL);
 
-    if (inv_m_eff < IVP_REAL_EPS) return;
+    const float spring_constant = (float)state->stiffness;
+    const float spring_damp = (float)state->damping;
+    /* IVP_FLOAT arithmetic for the damping factor and its product with the
+     * IVP_U_Float_Point delta_velocity_ds */
+    const float damp_factor = spring_constant + spring_damp * (1.0f - spring_constant);
+    const float dv_term = scr.delta_velocity_ds.k[0] * damp_factor;
+    double a = ((double)(float)state->rest_length - dlen) * (double)event_sim->inverse_delta_time *
+                   (double)spring_constant -
+               (double)dv_term;
+    const double tpm00 = scr.m[0][0];
+    if (tpm00 < P_FLOAT_EPS && tpm00 > -P_FLOAT_EPS) return;
 
-    /* Implicit (backward) Euler velocity update:
-     *
-     *   v' = v + (dt/m) * (-k*(x + dt*v') - c*v')
-     *
-     * Solving for dv = v' - v:
-     *   dv = -(k*x*dt + (c + k*dt)*dt*v) * inv_m / (1 + (c + k*dt)*dt*inv_m)
-     *
-     * Let gamma = (c + k*dt)*dt, then:
-     *   softness = 1 / (1 + gamma * inv_m_eff)
-     *   dv = -(k*x*dt + gamma*v_rel) * inv_m_eff * softness
-     */
-    ivp_real_t gamma = (state->damping + state->stiffness * dt) * dt;
-    ivp_real_t denom = IVP_REAL(1.0) + gamma * inv_m_eff;
-
-    ivp_real_t softness = IVP_REAL(1.0) / denom;
-
-    /* Total velocity change along spring direction (for the effective mass) */
-    ivp_real_t impulse = -(state->stiffness * x * dt + gamma * v_rel)
-                         * inv_m_eff * softness;
-
-    /* Clamp velocity change */
     if (state->max_dv > IVP_REAL(0.0)) {
-        if (impulse >  state->max_dv) impulse =  state->max_dv;
-        if (impulse < -state->max_dv) impulse = -state->max_dv;
+        /* libivp extra: clamp the resulting relative velocity change. */
+        const double lim = (double)state->max_dv;
+        if (a > lim) a = lim;
+        if (a < -lim) a = -lim;
     }
+    ivp_vec3f_t impulses; /* IVP_U_Float_Point */
+    lvf_zero(&impulses);
+    impulses.k[0] = (float)(a / tpm00);
+    state->last_impulse = (ivp_real_t)impulses.k[0];
 
-    /* Apply velocity changes directly (sync push — stiff spring is constraint-class) */
-    if (a_moveable) {
-        ivp_core_t *ca = &state->obj_a->core;
-        ivp_real_t ratio_a = ca->inv_mass * (IVP_REAL(1.0) / inv_m_eff);
-        ivp_real_t dva = -impulse * ratio_a;
-        ca->speed.k[0] += dir.k[0] * dva;
-        ca->speed.k[1] += dir.k[1] * dva;
-        ca->speed.k[2] += dir.k[2] * dva;
-    }
+    ivp_scr_f_exert_impulse_dim1(&scr, pc0, pc1, &impulses);
+}
 
-    if (b_moveable) {
-        ivp_core_t *cb = &state->obj_b->core;
-        ivp_real_t ratio_b = cb->inv_mass * (IVP_REAL(1.0) / inv_m_eff);
-        ivp_real_t dvb = impulse * ratio_b;
-        cb->speed.k[0] += dir.k[0] * dvb;
-        cb->speed.k[1] += dir.k[1] * dvb;
-        cb->speed.k[2] += dir.k[2] * dvb;
-    }
+int ivp_stiff_spring_discovery(void *ctx, ivp_environment_t *env,
+               ivp_object_handle_t *out_handles, int max_handles)
+{
+    (void)env;
+    const ivp_stiff_spring_state_t *s = (const ivp_stiff_spring_state_t *)ctx;
+    if (!s) return 0;
+    ivp_object_t *objs[2] = { s->obj_a, s->obj_b };
+    return ivp_controller_discover_objects(objs, 2, out_handles, max_handles);
 }
