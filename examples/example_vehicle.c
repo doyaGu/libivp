@@ -1,374 +1,277 @@
 /* example_vehicle.c -- Raycast vehicle demo
  *
  * A four-wheel raycast car drives on a flat ground with ramps.
- * Arrow keys steer and accelerate, Space brakes.  Wheel contact
- * points are drawn as small spheres.  Suspension compression is
- * visualized as coloured lines.
+ * Arrow keys steer and accelerate, B brakes (Space resets the scene in
+ * all examples).  Wheel contact points are drawn as small spheres.
+ * Suspension compression is visualized as coloured lines.
  *
  * Demonstrates: ivp_controller_raycast_car, 4-wheel init, steering,
  *               engine, brake, wheel contact visualization, ramps.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/controllers/ivp_controller_raycast_car.h>
 #include <ivp/math/ivp_fast_math.h>
 
-#include <SDL3/SDL.h>
-#include <stdio.h>
+#define ENGINE_FWD   200.0    /* N, balanced for the 20 kg chassis */
+#define ENGINE_REV  -100.0
+#define BRAKE_FORCE  200.0    /* ~1 g deceleration */
+#define STEER_ANGLE  0.4      /* rad */
 
-int main(void)
+typedef struct vehicle_demo {
+    ivp_object_t   *ground, *ramp1, *ramp2, *chassis;
+    ivp_object_t   *obs[4];
+    ivp_car_state_t car;
+    /* headless measurements */
+    int             grounded_settled;    /* wheels on the ground after settling */
+    float           start_pos[3];
+    float           drive_speed;         /* speed after 2 s of throttle */
+    float           drive_dist;
+    float           heading0, heading1;  /* yaw before / after steering */
+    float           brake_v0, brake_v1;  /* speed when braking starts / 1.5 s later */
+    float           max_tilt;
+} vehicle_demo_t;
+
+static int wheels_grounded(const vehicle_demo_t *s)
 {
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Vehicle -- Raycast Car", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    int n = 0;
+    for (int i = 0; i < s->car.n_wheels; i++)
+        if (s->car.wheels[i].grounded) n++;
+    return n;
+}
 
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -2.0f;
-    cam.orbit_distance  = 20.0f;
-    cam.orbit_yaw       = 30.0f;
-    cam.orbit_pitch     = -25.0f;
+/* yaw of the car's forward (+z core) axis in the ground plane, degrees */
+static float heading_deg(const vehicle_demo_t *s)
+{
+    float rot[9];
+    quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
+    return atan2f(rot[6], rot[8]) * (180.0f / 3.14159265f);   /* column 2 = local z */
+}
 
-    /* ── Physics ────────────────────────────────────────────────────────── */
+static void apply_input(vehicle_demo_t *s, float steer, float engine, float brake)
+{
+    ivp_car_set_steering(&s->car, (ivp_real_t)steer);
+    ivp_car_set_engine(&s->car, (ivp_real_t)engine);
+    ivp_car_set_brake(&s->car, (ivp_real_t)brake);
+}
+
+static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    float tilt = demo_object_tilt_deg(s->chassis);
+    if (tilt > s->max_tilt) s->max_tilt = tilt;
+    if (v) {
+        const bool *keys = SDL_GetKeyboardState(NULL);
+        float steer = 0.0f, engine = 0.0f, brake = 0.0f;
+        if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
+        if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
+        if (keys[SDL_SCANCODE_UP])    engine = (float)ENGINE_FWD;
+        if (keys[SDL_SCANCODE_DOWN])  engine = (float)ENGINE_REV;
+        if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
+        apply_input(s, steer, engine, brake);
+        /* follow camera: track the chassis */
+        float target[3];
+        demo_object_center(s->chassis, target);
+        for (int k = 0; k < 3; k++) v->cam.target[k] += (target[k] - v->cam.target[k]) * 0.05f;
+        return;
+    }
+    /* scripted: settle 1 s, throttle 2 s, throttle + steer left 1.5 s, brake */
+    float steer = 0.0f, engine = 0.0f, brake = 0.0f;
+    if (frame == 60) {
+        s->grounded_settled = wheels_grounded(s);
+        demo_object_center(s->chassis, s->start_pos);
+    }
+    if (frame >= 60 && frame < 240) engine = (float)ENGINE_FWD;
+    if (frame == 180) {
+        float p[3];
+        demo_object_center(s->chassis, p);
+        s->drive_speed = demo_object_speed(s->chassis);
+        s->drive_dist = demo_distance(p, s->start_pos);
+        s->heading0 = heading_deg(s);
+    }
+    if (frame >= 180 && frame < 240) steer = (float)STEER_ANGLE;
+    if (frame == 240) { s->heading1 = heading_deg(s); s->brake_v0 = demo_object_speed(s->chassis); }
+    if (frame >= 240) brake = (float)BRAKE_FORCE;
+    if (frame == 330) s->brake_v1 = demo_object_speed(s->chassis);
+    apply_input(s, steer, engine, brake);
+}
+
+static void vehicle_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    const float c_ground[]  = {0.22f, 0.24f, 0.30f};
+    const float c_chassis[] = {0.2f, 0.6f, 1.0f};
+    const float c_ramp[]    = {0.6f, 0.5f, 0.3f};
+    const float c_obs[]     = {0.9f, 0.5f, 0.2f};
+    const float c_wheel_g[] = {0.2f, 1.0f, 0.3f};  /* grounded */
+    const float c_wheel_a[] = {1.0f, 0.3f, 0.2f};  /* airborne */
+    const float c_susp[]    = {1.0f, 1.0f, 0.2f};
+    const float c_vel[]     = {0.2f, 1.0f, 0.4f};
+
+    demo_draw_object(v, s->ground, c_ground);
+    demo_draw_object(v, s->ramp1, c_ramp);
+    demo_draw_object(v, s->ramp2, c_ramp);
+    for (int i = 0; i < 4; i++) demo_draw_object(v, s->obs[i], c_obs);
+    demo_draw_object(v, s->chassis, c_chassis);
+    if (demo_object_speed(s->chassis) > 0.5f) demo_draw_velocity(v, s->chassis, c_vel);
+
+    /* Wheel contact points + suspension visualization (hard points are in
+     * the chassis core system) */
+    for (int i = 0; i < s->car.n_wheels; i++) {
+        const ivp_car_wheel_t *wh = &s->car.wheels[i];
+        ivp_vec3r_t hp_cs = ivp_vec3r(wh->hp_cs.k[0], wh->hp_cs.k[1], wh->hp_cs.k[2]);
+        float hp[3];
+        demo_core_point_ws(s->chassis, &hp_cs, hp);
+        if (wh->grounded) {
+            float cp[3];
+            vec3r_to_float3(&wh->contact_point_ws, cp);
+            demo_sphere(v, cp, wh->wheel_radius, c_wheel_g);
+            demo_line(v, hp, cp, c_susp);
+        } else {
+            demo_sphere(v, hp, wh->wheel_radius, c_wheel_a);
+        }
+    }
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 2.0f);
+    }
+    demo_hud(v, DEMO_COL_INFO, "Speed: %.1f m/s  Grounded: %d/%d", (double)demo_object_speed(s->chassis),
+             wheels_grounded(s), s->car.n_wheels);
+    demo_hud(v, c_susp, "Steer: %.2f  Engine: %.0f N  Brake: %.0f N",
+             (double)s->car.steering_angle, (double)s->car.engine_force, (double)s->car.brake_force);
+}
+
+static void vehicle_stats(demo_app_t *app, char *buf, size_t size)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    float p[3];
+    demo_object_center(s->chassis, p);
+    snprintf(buf, size, "pos=(%.2f,%.2f,%.2f) speed=%.3f heading=%.1f tilt=%.1f steer=%.2f engine=%.0f brake=%.0f grounded=%d/%d",
+             (double)p[0], (double)p[1], (double)p[2], (double)demo_object_speed(s->chassis),
+             (double)heading_deg(s), (double)demo_object_tilt_deg(s->chassis), (double)s->car.steering_angle,
+             (double)s->car.engine_force, (double)s->car.brake_force, wheels_grounded(s), s->car.n_wheels);
+}
+
+static bool vehicle_check(demo_app_t *app)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    ok &= demo_check(tag, s->grounded_settled == 4, "car settled on its suspension (%d/4 wheels on the ground)",
+                     s->grounded_settled);
+    ok &= demo_check(tag, s->drive_speed > 3.0f && s->drive_dist > 3.0f,
+                     "engine drives the car: %.2f m/s, %.2f m after 2 s", (double)s->drive_speed, (double)s->drive_dist);
+    float turn = s->heading1 - s->heading0;
+    ok &= demo_check(tag, turn > 15.0f, "steering left turned the car by %.1f degrees in 1 s", (double)turn);
+    ok &= demo_check(tag, s->brake_v0 > 3.0f && s->brake_v1 < 0.3f,
+                     "brake stopped the car: %.2f -> %.2f m/s in 1.5 s", (double)s->brake_v0, (double)s->brake_v1);
+    ok &= demo_check(tag, s->max_tilt < 20.0f && wheels_grounded(s) == 4,
+                     "car stayed upright on its wheels (max tilt %.1f degrees)", (double)s->max_tilt);
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Vehicle -- Raycast Car";
+    app.cfg.tag          = "vehicle";
+    app.cfg.orbit_dist   = 20.0f;
+    app.cfg.orbit_yaw    = 30.0f;
+    app.cfg.orbit_pitch  = -25.0f;
+    app.cfg.target[1]    = -2.0f;
+    app.cfg.grid_extent  = 40.0f;
+    app.cfg.grid_spacing = 4.0f;
+
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "vehicle");
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    vehicle_demo_t *s = (vehicle_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
 
     /* ── Ground ─────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 40.0f, 0.5f, 40.0f);
-    ivp_surman_polygon_t sm_ground;
-    create_ground_object(env, ground_surf, &sm_ground, IVP_REAL(0.0));
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 40.0, 0.5, 40.0);
 
-    /* ── Ramps ──────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ramp_surf =
-        ivp_build_box_surface(NULL, 4.0f, 0.3f, 3.0f);
-    ivp_surman_polygon_t sm_ramp1, sm_ramp2;
-    ivp_surman_polygon_init(&sm_ramp1, ramp_surf);
-    ivp_surman_polygon_init(&sm_ramp2, ramp_surf);
-
-    ivp_object_template_t rpt;
-    ivp_object_template_init(&rpt);
-    rpt.type = IVP_OBJECT_POLYGON;
-    rpt.mass = 0.0f;
-    rpt.physical_unmoveable = true;
-
-    /* Ramp tilt: 15 degrees around Z axis, expressed as axis-angle quaternion.
-     * q = (0, 0, sin(angle/2), cos(angle/2)) for Z-axis rotation. */
-    ivp_real_t ramp_half = IVP_REAL(15.0) * IVP_REAL(3.14159265) / IVP_REAL(360.0);
-
-    /* Ramp 1: tilted forward (+15 deg) */
-    rpt.position = ivp_vec3r(IVP_REAL(15.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    rpt.orientation = ivp_quatr_make(IVP_REAL(0.0), IVP_REAL(0.0),
-                                       ivp_sin(ramp_half), ivp_cos(ramp_half));
-    ivp_quat_fast_normalize(&rpt.orientation);
-    ivp_object_t *ramp1 = ivp_environment_create_object(env, &rpt, &sm_ramp1.base);
-
-    /* Ramp 2: tilted opposite side (-15 deg) */
-    rpt.position = ivp_vec3r(IVP_REAL(-15.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    rpt.orientation = ivp_quatr_make(IVP_REAL(0.0), IVP_REAL(0.0),
-                                       -ivp_sin(ramp_half), ivp_cos(ramp_half));
-    ivp_quat_fast_normalize(&rpt.orientation);
-    ivp_object_t *ramp2 = ivp_environment_create_object(env, &rpt, &sm_ramp2.base);
+    /* ── Ramps (15 degrees around Z, axis-angle quaternion) ─────────────── */
+    {
+        ivp_object_template_t rpt;
+        ivp_object_template_init(&rpt);
+        rpt.mass = 0.0f;
+        rpt.physical_unmoveable = true;
+        ivp_real_t ramp_half = IVP_REAL(15.0) * IVP_REAL(3.14159265) / IVP_REAL(360.0);
+        rpt.position = ivp_vec3r(IVP_REAL(15.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+        rpt.orientation = ivp_quatr_make(IVP_REAL(0.0), IVP_REAL(0.0), ivp_sin(ramp_half), ivp_cos(ramp_half));
+        ivp_quat_fast_normalize(&rpt.orientation);
+        s->ramp1 = demo_create_box_templ(w, &rpt, 4.0, 0.3, 3.0);
+        rpt.position = ivp_vec3r(IVP_REAL(-15.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+        rpt.orientation = ivp_quatr_make(IVP_REAL(0.0), IVP_REAL(0.0), -ivp_sin(ramp_half), ivp_cos(ramp_half));
+        ivp_quat_fast_normalize(&rpt.orientation);
+        s->ramp2 = demo_create_box_templ(w, &rpt, 4.0, 0.3, 3.0);
+    }
 
     /* ── Obstacle boxes ─────────────────────────────────────────────────── */
-    ivp_compact_surface_t *obs_surf =
-        ivp_build_box_surface(NULL, 0.8f, 0.8f, 0.8f);
-    ivp_surman_polygon_t sm_obs[4];
-    ivp_object_t *obs_objs[4];
     for (int i = 0; i < 4; i++) {
-        ivp_surman_polygon_init(&sm_obs[i], obs_surf);
         ivp_object_template_t ot;
         ivp_object_template_init(&ot);
-        ot.type = IVP_OBJECT_POLYGON;
         ot.mass = IVP_REAL(1.0);
         set_box_inertia(&ot, IVP_REAL(1.0), IVP_REAL(0.8), IVP_REAL(0.8), IVP_REAL(0.8));
         ot.material.friction   = IVP_REAL(0.6);
         ot.material.elasticity = IVP_REAL(0.3);
         float angle = 6.2832f * (float)i / 4.0f;
-        ot.position = ivp_vec3r(
-            (ivp_real_t)(8.0f * cosf(angle)),
-            IVP_REAL(-1.3),
-            (ivp_real_t)(8.0f * sinf(angle)));
-        obs_objs[i] = ivp_environment_create_object(env, &ot, &sm_obs[i].base);
+        ot.position = ivp_vec3r((ivp_real_t)(8.0f * cosf(angle)), IVP_REAL(-1.3), (ivp_real_t)(8.0f * sinf(angle)));
+        s->obs[i] = demo_create_box_templ(w, &ot, 0.8, 0.8, 0.8);
     }
 
     /* ── Chassis (box) ──────────────────────────────────────────────────── */
-    ivp_compact_surface_t *chassis_surf =
-        ivp_build_box_surface(NULL, 1.0f, 0.4f, 2.0f);
-    ivp_surman_polygon_t sm_chassis;
-    ivp_surman_polygon_init(&sm_chassis, chassis_surf);
-
     ivp_object_template_t cht;
     ivp_object_template_init(&cht);
-    cht.type = IVP_OBJECT_POLYGON;
     cht.mass = IVP_REAL(20.0);
     set_box_inertia(&cht, IVP_REAL(20.0), IVP_REAL(1.0), IVP_REAL(0.4), IVP_REAL(2.0));
     cht.material.friction   = IVP_REAL(0.3);
     cht.material.elasticity = IVP_REAL(0.1);
     cht.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-3.0), IVP_REAL(0.0));
-    ivp_object_t *chassis = ivp_environment_create_object(env, &cht, &sm_chassis.base);
+    s->chassis = demo_create_box_templ(w, &cht, 1.0, 0.4, 2.0);
 
-    /* ── Raycast car ────────────────────────────────────────────────────── */
-    ivp_car_state_t car;
-    ivp_car_init_4wheel(&car, chassis,
-        IVP_REAL(3.0),   /* wheelbase */
-        IVP_REAL(1.8),   /* track width */
-        IVP_REAL(0.35),  /* wheel radius */
-        IVP_REAL(0.6));  /* suspension length */
-
-    /* Tune suspension */
-    for (int i = 0; i < car.n_wheels; i++) {
-        car.wheels[i].spring_constant = IVP_REAL(800.0);
-        car.wheels[i].damping         = IVP_REAL(60.0);
-        car.wheels[i].friction_forward = IVP_REAL(1.2);
-        car.wheels[i].friction_side    = IVP_REAL(1.0);
+    /* ── Raycast car ────────────────────────────────────────────────────── *
+     * registers the controller (front axle at +z, steered; the engine
+     * drives the rear axle); without a ray caster the wheels cast rays
+     * against the environment's objects */
+    if (!ivp_car_init_4wheel(&s->car, s->chassis,
+                             IVP_REAL(3.0),    /* wheelbase */
+                             IVP_REAL(1.8),    /* track width */
+                             IVP_REAL(0.35),   /* wheel radius */
+                             IVP_REAL(0.6))) { /* suspension length */
+        fprintf(stderr, "ivp_car_init_4wheel failed\n");
+        return 1;
     }
-    car.steer_front = true;
-    car.drive_rear  = true;
-    car.ground_normal = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    car.ground_height = IVP_REAL(0.0);
-
-    ivp_environment_add_controller(env, 100,
-        ivp_controller_raycast_car, &car);
-
-    /* ── Colors ─────────────────────────────────────────────────────────── */
-    const float c_ground[]   = {0.22f, 0.24f, 0.30f};
-    const float c_grid[]     = {0.38f, 0.43f, 0.52f};
-    const float c_hud[]      = {0.95f, 0.97f, 1.0f};
-    const float c_chassis[]  = {0.2f, 0.6f, 1.0f};
-    const float c_ramp[]     = {0.6f, 0.5f, 0.3f};
-    const float c_obs[]      = {0.9f, 0.5f, 0.2f};
-    const float c_wheel_g[]  = {0.2f, 1.0f, 0.3f};  /* grounded */
-    const float c_wheel_a[]  = {1.0f, 0.3f, 0.2f};  /* airborne */
-    const float c_susp[]     = {1.0f, 1.0f, 0.2f};
-    const float c_vel[]      = {0.2f, 1.0f, 0.4f};
-    const float c_drag[]     = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]    = {1.0f, 0.65f, 0.25f};
-
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
-
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        /* Keyboard input */
-        const bool *keys = SDL_GetKeyboardState(NULL);
-
-        /* Steering */
-        ivp_real_t steer = IVP_REAL(0.0);
-        if (keys[SDL_SCANCODE_LEFT])  steer += IVP_REAL(0.4);
-        if (keys[SDL_SCANCODE_RIGHT]) steer -= IVP_REAL(0.4);
-        ivp_car_set_steering(&car, steer);
-
-        /* Engine: 200N forward, 100N reverse (balanced for 20kg chassis) */
-        ivp_real_t engine = IVP_REAL(0.0);
-        if (keys[SDL_SCANCODE_UP])   engine = IVP_REAL(200.0);
-        if (keys[SDL_SCANCODE_DOWN]) engine = IVP_REAL(-100.0);
-        ivp_car_set_engine(&car, engine);
-
-        /* Brake: 200N gives ~1g deceleration on 20kg chassis (realistic max) */
-        ivp_real_t brake = IVP_REAL(0.0);
-        if (keys[SDL_SCANCODE_SPACE]) brake = IVP_REAL(200.0);
-        ivp_car_set_brake(&car, brake);
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        /* Follow camera: track chassis */
-        {
-            ivp_vec3r_t cp;
-            ivp_object_get_position(chassis, &cp);
-            float target[3]; vec3r_to_float3(&cp, target);
-            cam.target[0] += (target[0] - cam.target[0]) * 0.05f;
-            cam.target[1] += (target[1] - cam.target[1]) * 0.05f;
-            cam.target[2] += (target[2] - cam.target[2]) * 0.05f;
-        }
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 40.0f, 4.0f, c_grid);
-        {
-            float gp[3] = {0, 0, 0}, gs[3] = {40.0f, 0.5f, 40.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-
-        /* Ramps */
-        for (int i = 0; i < 2; i++) {
-            ivp_object_t *r = (i == 0) ? ramp1 : ramp2;
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(r, &p);
-            ivp_object_get_orientation(r, &q);
-            float fp[3]; vec3r_to_float3(&p, fp);
-            float rot[9]; quat_to_col_rot(&q, rot);
-            float hs[3] = {4.0f, 0.3f, 3.0f};
-            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_ramp);
-        }
-
-        /* Obstacles */
-        for (int i = 0; i < 4; i++) {
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(obs_objs[i], &p);
-            ivp_object_get_orientation(obs_objs[i], &q);
-            float fp[3]; vec3r_to_float3(&p, fp);
-            float rot[9]; quat_to_col_rot(&q, rot);
-            float hs[3] = {0.8f, 0.8f, 0.8f};
-            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_obs);
-        }
-
-        /* Chassis */
-        {
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(chassis, &p);
-            ivp_object_get_orientation(chassis, &q);
-            float fp[3]; vec3r_to_float3(&p, fp);
-            float rot[9]; quat_to_col_rot(&q, rot);
-            float hs[3] = {1.0f, 0.4f, 2.0f};
-            ivp_render_draw_wire_box(renderer, fp, hs, rot, c_chassis);
-
-            /* Velocity arrow */
-            ivp_vec3r_t v;
-            ivp_object_get_speed(chassis, &v);
-            float speed = vec3r_speed(&v);
-            if (speed > 0.5f) {
-                float sc = 0.3f;
-                float to[3] = {fp[0]+(float)v.k[0]*sc,
-                               fp[1]+(float)v.k[1]*sc,
-                               fp[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.3f);
-            }
-        }
-
-        /* Wheel contact points + suspension visualization.
-         * Transform hardpoint_cs through chassis rotation (not just translation)
-         * so wheels display correctly on ramps and during turns. */
-        int n_grounded = 0;
-        ivp_vec3r_t chassis_p; ivp_quatr_t chassis_q;
-        ivp_object_get_position(chassis, &chassis_p);
-        ivp_object_get_orientation(chassis, &chassis_q);
-        ivp_mat3r_t chassis_rot;
-        ivp_quat_to_mat3(&chassis_q, &chassis_rot);
-
-        for (int i = 0; i < car.n_wheels; i++) {
-            const ivp_car_wheel_t *w = &car.wheels[i];
-
-            /* Transform hardpoint from chassis-space to world-space:
-             * hp_ws = chassis_rot * hp_cs + chassis_pos */
-            float hp[3];
-            for (int r = 0; r < 3; r++) {
-                hp[r] = (float)(chassis_rot.rows[r].k[0] * w->hardpoint_cs.k[0]
-                              + chassis_rot.rows[r].k[1] * w->hardpoint_cs.k[1]
-                              + chassis_rot.rows[r].k[2] * w->hardpoint_cs.k[2]
-                              + chassis_p.k[r]);
-            }
-
-            if (w->grounded) {
-                n_grounded++;
-                float cp[3] = {(float)w->contact_point_ws.k[0],
-                               (float)w->contact_point_ws.k[1],
-                               (float)w->contact_point_ws.k[2]};
-                /* Draw wheel as circle at wheel center using actual radius (0.35m) */
-                ivp_render_draw_wire_sphere(renderer, cp, 0.35f, c_wheel_g);
-                ivp_render_draw_line(renderer, hp, cp, c_susp);
-            } else {
-                /* Draw ungrounded wheel marker at transformed hardpoint */
-                ivp_render_draw_wire_sphere(renderer, hp, 0.35f, c_wheel_a);
-            }
-        }
-
-        /* Axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 2.0f);
-        }
-
-        if (ivp_example_inspector_tick(&inspector)) {
-            ivp_vec3r_t cv;
-            ivp_object_get_speed(chassis, &cv);
-            ivp_example_inspector_log(&inspector,
-                "speed=%.3f steer=%.3f engine=%.1f brake=%.1f grounded=%d/%d",
-                vec3r_speed(&cv),
-                (float)car.steering_angle,
-                (float)car.engine_force,
-                (float)car.brake_force,
-                n_grounded, car.n_wheels);
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus,
-                                              c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            ivp_vec3r_t cv;
-            ivp_object_get_speed(chassis, &cv);
-            float speed = vec3r_speed(&cv);
-
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Speed: %.1f m/s  Time: %.1fs",
-                     sl.fps_display, speed, (float)sl.t_prev);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf),
-                "Arrows: steer/drive  Space: brake  Grounded: %d/%d",
-                n_grounded, car.n_wheels);
-            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf), "Steer: %.2f  Engine: %.0f N  Brake: %.0f N",
-                     (float)car.steering_angle,
-                     (float)car.engine_force,
-                     (float)car.brake_force);
-            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf, c_susp);
-
-            ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,
-                                             c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
+    /* Tune suspension for the 20 kg chassis (the 4-wheel defaults are
+     * 50000 N/m and 3000 N*s/m).  The compression damping must be tuned as
+     * well: with 3000 N*s/m a 6 m/s landing made each shock push with
+     * 18000 N for one 1/66 s PSI and the car was launched 100 m high. */
+    for (int i = 0; i < s->car.n_wheels; i++) {
+        s->car.wheels[i].spring_constant      = 800.0f;
+        s->car.wheels[i].spring_damp_relax    = 60.0f;
+        s->car.wheels[i].spring_damp_compress = 60.0f;
+        s->car.wheels[i].friction_of_wheel    = 1.2f;
     }
 
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, obs_surf);
-    ivp_compact_surface_free(NULL, ramp_surf);
-    ivp_compact_surface_free(NULL, chassis_surf);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    app.controls = "Arrows: steer / drive   B: brake";
+    app.update   = vehicle_update;
+    app.draw     = vehicle_draw;
+    app.stats    = vehicle_stats;
+    app.check    = vehicle_check;
+
+    int rc = demo_run(&app, argc, argv);
+    ivp_car_destroy(&s->car);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }

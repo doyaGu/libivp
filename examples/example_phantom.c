@@ -3,298 +3,256 @@
  * A stationary sphere phantom at the center (drawn as wireframe) and
  * cubes/spheres dropped from above.  Enter/exit events are tracked.
  * Objects inside the phantom are drawn brighter.  HUD shows the
- * tracked count and last event.
+ * tracked count and last event.  Press K to kick the objects inside the
+ * phantom straight up: they leave the trigger volume and fall back in.
  *
  * Demonstrates: ivp_controller_phantom, sphere phantom, enter/exit
  *               callbacks, tracked object list, HUD event log.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/controllers/ivp_controller_phantom.h>
 
-#include <stdio.h>
-#include <string.h>
+#define EVENT_LOG_SIZE 5
+#define N_DROP 10
+#define KICK_SPEED 12.0     /* upward, m/s: ~7 m high, well out of the sphere */
 
 /* ── Phantom event tracking ─────────────────────────────────────────────── */
-
-#define EVENT_LOG_SIZE 5
 
 typedef struct {
     int  total_enters;
     int  total_exits;
+    int  enters[N_DROP];
+    int  exits[N_DROP];
     char last_events[EVENT_LOG_SIZE][64];
     int  log_head;
+    ivp_object_t **objs;
 } phantom_tracker_t;
 
-static void on_phantom_event(void *ctx,
-                              ivp_object_t *phantom_owner,
-                              ivp_object_t *other,
-                              bool entered)
+static void on_phantom_event(void *ctx, ivp_object_t *phantom_owner, ivp_object_t *other, bool entered)
 {
     (void)phantom_owner;
     phantom_tracker_t *tr = ctx;
     if (entered) tr->total_enters++;
     else         tr->total_exits++;
-
+    for (int i = 0; i < N_DROP; i++) {
+        if (tr->objs[i] == other) {
+            if (entered) tr->enters[i]++;
+            else tr->exits[i]++;
+        }
+    }
     const char *name = other->name ? other->name : "?";
-    snprintf(tr->last_events[tr->log_head], 64,
-             "%s %s", entered ? "ENTER" : "EXIT", name);
+    snprintf(tr->last_events[tr->log_head], 64, "%s %s", entered ? "ENTER" : "EXIT", name);
     tr->log_head = (tr->log_head + 1) % EVENT_LOG_SIZE;
 }
 
-#define N_DROP 10
+typedef struct phantom_demo {
+    ivp_object_t        *ground;
+    ivp_object_t        *drop_objs[N_DROP];
+    char                 drop_names[N_DROP][16];
+    ivp_phantom_state_t  phantom;
+    phantom_tracker_t    tracker;
+    int                  n_kicks;
+    int                  kicked_inside;    /* objects inside at the (last) kick */
+    bool                 kicked[N_DROP];
+    int                  inconsistent;     /* frames where the tracked list != enters - exits */
+} phantom_demo_t;
 
-int main(void)
+static const float drop_cols[][3] = {
+    {1.0f, 0.4f, 0.2f}, {0.3f, 1.0f, 0.3f}, {0.3f, 0.5f, 1.0f},
+    {1.0f, 1.0f, 0.2f}, {1.0f, 0.2f, 0.8f}, {0.2f, 1.0f, 0.9f},
+    {0.9f, 0.6f, 0.1f}, {0.6f, 0.3f, 1.0f},
+    {0.8f, 0.8f, 0.4f}, {0.4f, 0.8f, 0.8f}
+};
+
+static bool is_tracked(const phantom_demo_t *s, const ivp_object_t *obj)
 {
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Phantom -- Trigger Volumes", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    for (int t = 0; t < s->phantom.n_tracked; t++)
+        if (s->phantom.tracked[t] == obj) return true;
+    return false;
+}
 
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -4.0f;
-    cam.orbit_distance  = 25.0f;
-    cam.orbit_yaw       = 20.0f;
-    cam.orbit_pitch     = -25.0f;
+/* K: kick every object inside the phantom straight up */
+static void kick_out(demo_app_t *app)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    s->n_kicks++;
+    s->kicked_inside = 0;
+    for (int i = 0; i < N_DROP; i++) {
+        ivp_object_t *o = s->drop_objs[i];
+        s->kicked[i] = false;
+        if (!is_tracked(s, o)) continue;
+        s->kicked_inside++;
+        s->kicked[i] = true;
+        demo_async_add_speed_ws(app->world.env, o, 0.0, -KICK_SPEED, 0.0);
+    }
+    printf("[phantom] t=%.2f kicked %d objects out of the phantom\n",
+           ivp_environment_get_time(app->world.env), s->kicked_inside);
+}
 
-    /* ── Physics ────────────────────────────────────────────────────────── */
+static void start_speed(phantom_demo_t *s, ivp_environment_t *env, bool async)
+{
+    /* Initial downward velocity for natural drop appearance */
+    for (int i = 0; i < N_DROP; i++) {
+        if (async) demo_async_add_speed_ws(env, s->drop_objs[i], 0.0, 0.5, 0.0);
+        else s->drop_objs[i]->physical_core->speed = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
+    }
+}
+
+static void phantom_reset(demo_app_t *app)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    start_speed(s, app->world.env, true);
+}
+
+static void phantom_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    if (s->phantom.n_tracked != s->tracker.total_enters - s->tracker.total_exits) s->inconsistent++;
+    if (v) {
+        if (demo_key_just_pressed(v, SDL_SCANCODE_K)) kick_out(app);
+        return;
+    }
+    if (frame == 300) kick_out(app);
+}
+
+static void phantom_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    const float c_ground[]  = {0.22f, 0.24f, 0.30f};
+    const float c_phantom[] = {1.0f, 1.0f, 0.2f};
+    const float c_bright[]  = {1.0f, 1.0f, 1.0f};
+    const float c_vel[]     = {0.2f, 1.0f, 0.4f};
+    demo_draw_object(v, s->ground, c_ground);
+    {
+        float pc[3];
+        vec3r_to_float3(&s->phantom.center_ws, pc);
+        demo_sphere(v, pc, (float)s->phantom.radius, c_phantom);
+    }
+    for (int i = 0; i < N_DROP; i++) {
+        ivp_object_t *o = s->drop_objs[i];
+        demo_draw_object(v, o, is_tracked(s, o) ? c_bright : drop_cols[i]);
+        if (demo_object_speed(o) > 0.5f) demo_draw_velocity(v, o, c_vel);
+    }
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 1.5f);
+    }
+    demo_hud(v, c_phantom, "Phantom: tracked=%d  enters=%d  exits=%d",
+             s->phantom.n_tracked, s->tracker.total_enters, s->tracker.total_exits);
+    for (int i = 0; i < EVENT_LOG_SIZE; i++) {
+        int idx = (s->tracker.log_head - 1 - i + EVENT_LOG_SIZE) % EVENT_LOG_SIZE;
+        if (s->tracker.last_events[idx][0] != '\0')
+            demo_hud(v, DEMO_COL_INFO, "%s", s->tracker.last_events[idx]);
+    }
+}
+
+static void phantom_stats(demo_app_t *app, char *buf, size_t size)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    int n = snprintf(buf, size, "tracked=%d enters=%d exits=%d inside:", s->phantom.n_tracked,
+                     s->tracker.total_enters, s->tracker.total_exits);
+    for (int i = 0; i < N_DROP && n > 0 && (size_t)n < size; i++)
+        if (is_tracked(s, s->drop_objs[i])) n += snprintf(buf + n, size - (size_t)n, " %d", i);
+}
+
+static bool phantom_check(demo_app_t *app)
+{
+    phantom_demo_t *s = (phantom_demo_t *)app->user;
+    const phantom_tracker_t *tr = &s->tracker;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    /* objects dropped at 2 m from the axis fall into the sphere, the others
+     * (5 m, 8 m) never reach it */
+    int near_in = 0, n_near = 0, far_in = 0;
+    for (int i = 0; i < N_DROP; i++) {
+        if (i % 3 == 0) { n_near++; if (tr->enters[i] > 0) near_in++; }
+        else if (tr->enters[i] > 0) far_in++;
+    }
+    ok &= demo_check(tag, near_in == n_near && far_in == 0,
+                     "the %d objects dropped into the phantom entered it, none of the others (%d)", near_in, far_in);
+    int back = 0;
+    for (int i = 0; i < N_DROP; i++)
+        if (s->kicked[i] && tr->exits[i] >= 1 && tr->enters[i] >= 2 && is_tracked(s, s->drop_objs[i])) back++;
+    ok &= demo_check(tag, s->n_kicks == 1 && s->kicked_inside >= 3 && back == s->kicked_inside,
+                     "kicked %d objects up: %d left the phantom and fell back in", s->kicked_inside, back);
+    ok &= demo_check(tag, s->inconsistent == 0 && s->phantom.n_tracked == tr->total_enters - tr->total_exits,
+                     "tracked list consistent with the events (%d tracked, %d enters, %d exits)",
+                     s->phantom.n_tracked, tr->total_enters, tr->total_exits);
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Phantom -- Trigger Volumes";
+    app.cfg.tag          = "phantom";
+    app.cfg.orbit_dist   = 25.0f;
+    app.cfg.orbit_yaw    = 20.0f;
+    app.cfg.orbit_pitch  = -25.0f;
+    app.cfg.target[1]    = -4.0f;
+    app.cfg.grid_extent  = 15.0f;
+    app.cfg.grid_spacing = 2.0f;
+
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "phantom");
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    phantom_demo_t *s = (phantom_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
 
     /* ── Ground ─────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 15.0f, 0.5f, 15.0f);
-    ivp_surman_polygon_t sm_ground;
-    create_ground_object(env, ground_surf, &sm_ground, IVP_REAL(0.0));
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 15.0, 0.5, 15.0);
 
     /* ── Phantom: sphere at center, radius 3 ────────────────────────────── */
-    phantom_tracker_t tracker;
-    memset(&tracker, 0, sizeof(tracker));
-
-    ivp_phantom_state_t phantom;
+    s->tracker.objs = s->drop_objs;
     {
         ivp_vec3r_t center = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-3.0), IVP_REAL(0.0));
-        ivp_phantom_init_sphere(&phantom, &center, IVP_REAL(3.0),
-                                  on_phantom_event, &tracker);
+        ivp_phantom_init_sphere(&s->phantom, &center, IVP_REAL(3.0), on_phantom_event, &s->tracker);
     }
-    ivp_environment_add_controller(env, 100,
-        ivp_controller_phantom, &phantom);
+    ivp_environment_add_controller(w->env, 100, ivp_controller_phantom, &s->phantom);
 
     /* ── Drop objects: cubes and spheres from varying heights ────────────── */
-    ivp_compact_surface_t *drop_cube_surf =
-        ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
-
-    ivp_surman_polygon_t sm_drop_p[N_DROP];
-    ivp_surman_ball_t    sm_drop_b[N_DROP];
-    ivp_object_t *drop_objs[N_DROP];
-    bool drop_is_sphere[N_DROP];
-    char drop_names[N_DROP][16];
-
-    const float drop_cols[][3] = {
-        {1.0f, 0.4f, 0.2f}, {0.3f, 1.0f, 0.3f}, {0.3f, 0.5f, 1.0f},
-        {1.0f, 1.0f, 0.2f}, {1.0f, 0.2f, 0.8f}, {0.2f, 1.0f, 0.9f},
-        {0.9f, 0.6f, 0.1f}, {0.6f, 0.3f, 1.0f},
-        {0.8f, 0.8f, 0.4f}, {0.4f, 0.8f, 0.8f}
-    };
-
     for (int i = 0; i < N_DROP; i++) {
-        snprintf(drop_names[i], sizeof(drop_names[i]), "obj_%d", i);
+        snprintf(s->drop_names[i], sizeof(s->drop_names[i]), "obj_%d", i);
         ivp_object_template_t t;
         ivp_object_template_init(&t);
         t.mass = IVP_REAL(1.0) + IVP_REAL(0.5) * (ivp_real_t)i;
         t.material.friction   = IVP_REAL(0.5);
         t.material.elasticity = IVP_REAL(0.4);
-        t.name = drop_names[i];
-
+        t.name = s->drop_names[i];
         float angle = 6.2832f * (float)i / (float)N_DROP;
         float r = 2.0f + 3.0f * (float)(i % 3);
-        t.position = ivp_vec3r(
-            (ivp_real_t)(r * cosf(angle)),
-            IVP_REAL(-8.0) - IVP_REAL(2.0) * (ivp_real_t)(i % 4),
-            (ivp_real_t)(r * sinf(angle)));
-
+        t.position = ivp_vec3r((ivp_real_t)(r * cosf(angle)),
+                               IVP_REAL(-8.0) - IVP_REAL(2.0) * (ivp_real_t)(i % 4),
+                               (ivp_real_t)(r * sinf(angle)));
         if (i % 2 == 0) {
-            /* Cube */
-            t.type = IVP_OBJECT_POLYGON;
-            ivp_surman_polygon_init(&sm_drop_p[i], drop_cube_surf);
             set_box_inertia(&t, t.mass, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(0.5));
-            drop_objs[i] = ivp_environment_create_object(env, &t, &sm_drop_p[i].base);
-            drop_is_sphere[i] = false;
+            s->drop_objs[i] = demo_create_box_templ(w, &t, 0.5, 0.5, 0.5);
         } else {
-            /* Sphere */
-            t.type = IVP_OBJECT_BALL;
-            ivp_surman_ball_init(&sm_drop_b[i], 0.5f);
             set_sphere_inertia(&t, t.mass, IVP_REAL(0.5));
-            drop_objs[i] = ivp_environment_create_object(env, &t, &sm_drop_b[i].base);
-            drop_is_sphere[i] = true;
+            s->drop_objs[i] = demo_create_ball_templ(w, &t, 0.5);
         }
-        /* Initial downward velocity for natural drop appearance */
-        drop_objs[i]->core.speed = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
     }
+    start_speed(s, w->env, false);
 
-    /* ── Colors ─────────────────────────────────────────────────────────── */
-    const float c_ground[]   = {0.22f, 0.24f, 0.30f};
-    const float c_grid[]     = {0.38f, 0.43f, 0.52f};
-    const float c_hud[]      = {0.95f, 0.97f, 1.0f};
-    const float c_phantom[]  = {1.0f, 1.0f, 0.2f};
-    const float c_bright[]   = {1.0f, 1.0f, 1.0f};
-    const float c_vel[]      = {0.2f, 1.0f, 0.4f};
-    const float c_drag[]     = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]    = {1.0f, 0.65f, 0.25f};
+    app.controls = "K: kick the objects inside the phantom upward";
+    app.update   = phantom_update;
+    app.on_reset = phantom_reset;
+    app.draw     = phantom_draw;
+    app.stats    = phantom_stats;
+    app.check    = phantom_check;
 
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
-
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
-        {
-            float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-
-        /* Phantom volume (wireframe sphere) */
-        {
-            float pc[3] = {(float)phantom.center_ws.k[0],
-                           (float)phantom.center_ws.k[1],
-                           (float)phantom.center_ws.k[2]};
-            ivp_render_draw_wire_sphere(renderer, pc,
-                (float)phantom.radius, c_phantom);
-        }
-
-        /* Drop objects */
-        for (int i = 0; i < N_DROP; i++) {
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(drop_objs[i], &p);
-            ivp_object_get_orientation(drop_objs[i], &q);
-            float fp[3]; vec3r_to_float3(&p, fp);
-
-            /* Check if inside phantom */
-            bool inside = false;
-            for (int t = 0; t < phantom.n_tracked; t++) {
-                if (phantom.tracked[t] == drop_objs[i]) {
-                    inside = true;
-                    break;
-                }
-            }
-            const float *col = inside ? c_bright : drop_cols[i];
-
-            if (drop_is_sphere[i]) {
-                ivp_render_draw_wire_sphere(renderer, fp, 0.5f, col);
-            } else {
-                float rot[9]; quat_to_col_rot(&q, rot);
-                float hs[3] = {0.5f, 0.5f, 0.5f};
-                ivp_render_draw_wire_box(renderer, fp, hs, rot, col);
-            }
-
-            /* Velocity arrow */
-            ivp_vec3r_t v;
-            ivp_object_get_speed(drop_objs[i], &v);
-            float speed = vec3r_speed(&v);
-            if (speed > 0.5f) {
-                float sc = 0.3f;
-                float to[3] = {fp[0]+(float)v.k[0]*sc,
-                               fp[1]+(float)v.k[1]*sc,
-                               fp[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
-            }
-        }
-
-        /* Axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
-
-        if (ivp_example_inspector_tick(&inspector)) {
-            ivp_example_inspector_log(&inspector,
-                "tracked=%d enters=%d exits=%d",
-                phantom.n_tracked,
-                tracker.total_enters,
-                tracker.total_exits);
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus,
-                                              c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
-                     sl.fps_display, N_DROP, (float)sl.t_prev);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf), "Phantom: tracked=%d  enters=%d  exits=%d",
-                     phantom.n_tracked,
-                     tracker.total_enters,
-                     tracker.total_exits);
-            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_phantom);
-
-            /* Event log */
-            for (int i = 0; i < EVENT_LOG_SIZE; i++) {
-                int idx = (tracker.log_head - 1 - i + EVENT_LOG_SIZE)
-                          % EVENT_LOG_SIZE;
-                if (tracker.last_events[idx][0] != '\0') {
-                    ivp_render_draw_text(renderer, 10.0f, 50.0f + 18.0f * (float)i,
-                                     tracker.last_events[idx], c_hud);
-                }
-            }
-
-            ivp_example_draw_interaction_hud(renderer, 10.0f,
-                50.0f + 18.0f * EVENT_LOG_SIZE + 8.0f, c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
-    }
-
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, drop_cube_surf);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }

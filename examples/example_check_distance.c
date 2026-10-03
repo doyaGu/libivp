@@ -1,23 +1,30 @@
 /* example_check_distance.c -- Distance-triggered rotation motor
  *
- * A pendulum swings above a small box.  When the pendulum tip comes
+ * A pendulum swings above a small box.  When the pendulum bob comes
  * within a distance threshold, a callback activates a rotation motor
  * on the box.  When the pendulum swings away, the motor stops.
  * A circle on the ground visualizes the threshold radius.
+ *
+ * The ball-socket joint sits at the pivot: the bob is attached to it at
+ * its start distance (7.1 m rod).  (It used to join the pivot centre to the
+ * top of the bob, 6.4 m apart at the start: the joint yanked the bob up to
+ * the pivot, where it hung 8 m above the box and never reached the range.)
  *
  * Demonstrates: ivp_actuator_check_dist, distance threshold callbacks,
  *               ivp_constraint (ball_socket), ivp_actuator_rot_mot,
  *               combined controller interaction.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/controllers/ivp_actuator_check_dist.h>
 #include <ivp/controllers/ivp_constraint.h>
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
 
-#include <stdio.h>
+#define RANGE        4.0
+#define MOTOR_POWER  8.0
+/* max torque: the box's base (friction 0.8 x 0.5 on the ground) needs
+ * ~9 N*m to turn; 5 N*m (as before) could not move it at all */
+#define MOTOR_TORQUE 15.0
 
 /* ── Distance event callback ────────────────────────────────────────────── */
 
@@ -29,11 +36,8 @@ typedef struct {
     int                  exit_count;
 } dist_event_ctx_t;
 
-static void on_distance_event(void *ctx,
-                               ivp_object_t *obj_a,
-                               ivp_object_t *obj_b,
-                               ivp_real_t distance,
-                               bool is_inside_range)
+static void on_distance_event(void *ctx, ivp_object_t *obj_a, ivp_object_t *obj_b,
+                              ivp_real_t distance, bool is_inside_range)
 {
     (void)obj_a; (void)obj_b; (void)distance;
     dist_event_ctx_t *dc = ctx;
@@ -48,131 +52,60 @@ static void on_distance_event(void *ctx,
     }
 }
 
-int main(void)
-{
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Check Distance -- Motor Trigger", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
-
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -5.0f;
-    cam.orbit_distance  = 25.0f;
-    cam.orbit_yaw       = 30.0f;
-    cam.orbit_pitch     = -20.0f;
-
-    /* ── Physics ────────────────────────────────────────────────────────── */
-    ivp_environment_config_t ecfg;
-    ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "check_distance");
-
-    /* ── Ground ─────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 15.0f, 0.5f, 15.0f);
-    ivp_surman_polygon_t sm_ground;
-    create_ground_object(env, ground_surf, &sm_ground, IVP_REAL(0.0));
-
-    /* ── Pendulum pivot (static) ────────────────────────────────────────── */
-    ivp_compact_surface_t *pivot_surf =
-        ivp_build_box_surface(NULL, 0.3f, 0.3f, 0.3f);
-    ivp_surman_polygon_t sm_pivot;
-    ivp_surman_polygon_init(&sm_pivot, pivot_surf);
-
-    ivp_object_template_t pvt;
-    ivp_object_template_init(&pvt);
-    pvt.type = IVP_OBJECT_POLYGON;
-    pvt.mass = 0.0f;
-    pvt.physical_unmoveable = true;
-    pvt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-10.0), IVP_REAL(0.0));
-    ivp_object_t *pivot = ivp_environment_create_object(env, &pvt, &sm_pivot.base);
-
-    /* ── Pendulum bob (heavy sphere) ────────────────────────────────────── */
-    ivp_surman_ball_t sm_bob;
-    ivp_surman_ball_init(&sm_bob, 0.6f);
-
-    ivp_object_template_t bobt;
-    ivp_object_template_init(&bobt);
-    bobt.type = IVP_OBJECT_BALL;
-    bobt.mass = IVP_REAL(5.0);
-    set_sphere_inertia(&bobt, IVP_REAL(5.0), IVP_REAL(0.6));
-    bobt.material.friction   = IVP_REAL(0.3);
-    bobt.material.elasticity = IVP_REAL(0.1);
-    /* Start displaced to the side so it swings */
-    bobt.position = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(-5.0), IVP_REAL(0.0));
-    ivp_object_t *bob = ivp_environment_create_object(env, &bobt, &sm_bob.base);
-
-    /* ── Ball-socket constraint (pendulum joint) ────────────────────────── */
+typedef struct check_demo {
+    ivp_object_t          *ground, *pivot, *bob, *spin_box;
     ivp_constraint_state_t pend_joint;
-    {
-        ivp_vec3r_t a_anchor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        ivp_vec3r_t b_anchor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.6), IVP_REAL(0.0));
-        ivp_constraint_init_ball_socket(&pend_joint,
-            pivot, &a_anchor, bob, &b_anchor);
-    }
-    ivp_environment_add_controller(env, 50, ivp_controller_constraint, &pend_joint);
-
-    /* ── Spinning box (target on ground) ────────────────────────────────── */
-    ivp_compact_surface_t *box_surf =
-        ivp_build_box_surface(NULL, 0.8f, 0.4f, 0.8f);
-    ivp_surman_polygon_t sm_box;
-    ivp_surman_polygon_init(&sm_box, box_surf);
-
-    ivp_object_template_t bxt;
-    ivp_object_template_init(&bxt);
-    bxt.type = IVP_OBJECT_POLYGON;
-    bxt.mass = IVP_REAL(2.0);
-    set_box_inertia(&bxt, IVP_REAL(2.0), IVP_REAL(0.8), IVP_REAL(0.4), IVP_REAL(0.8));
-    bxt.material.friction   = IVP_REAL(0.8);
-    bxt.material.elasticity = IVP_REAL(0.05);
-    bxt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.9), IVP_REAL(0.0));
-    ivp_object_t *spin_box = ivp_environment_create_object(env, &bxt, &sm_box.base);
-
-    /* ── Rotation motor on the box ──────────────────────────────────────── */
-    ivp_rot_mot_state_t motor;
-    ivp_rot_mot_state_init(&motor);
-    {
-        ivp_vec3r_t ma = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        ivp_vec3r_t mb = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-        /* Moderate torque for a 2kg box (I≈0.43): 5N·m → ~12 rad/s² angular accel */
-        ivp_rot_mot_state_setup(&motor,
-            NULL, &ma, spin_box, &mb,
-            IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(6.0));
-    }
-    ivp_environment_add_controller(env, 100, ivp_controller_rot_mot, &motor);
-
-    /* ── Distance checker (bob ↔ spin_box, threshold 4m) ────────────────── */
-    dist_event_ctx_t dist_ctx = {
-        .motor = &motor,
-        .motor_power = IVP_REAL(8.0),
-        .motor_active = false,
-        .enter_count = 0,
-        .exit_count = 0
-    };
-
+    ivp_rot_mot_state_t    motor;
     ivp_check_dist_state_t dist_check;
-    ivp_check_dist_state_init(&dist_check);
-    {
-        ivp_vec3r_t pa = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        ivp_vec3r_t pb = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        ivp_check_dist_state_setup(&dist_check, bob, &pa, spin_box, &pb,
-                                     IVP_REAL(4.0));
-    }
-    dist_check.use_object_centers = true;
-    ivp_check_dist_set_callback(&dist_check, on_distance_event, &dist_ctx);
-    ivp_environment_add_controller(env, 100,
-        ivp_controller_check_dist, &dist_check);
+    dist_event_ctx_t       dist_ctx;
+    float                  rod_length;
+    float                  max_rod_error;
+    float                  max_spin_on;        /* box |omega_y| while the motor is on */
+    float                  max_spin_off;       /* ... 0.5 s or more after it was switched off */
+    double                 off_since;
+    float                  min_dist, max_dist;
+    int                    state_mismatch;     /* motor flag != inside the range */
+} check_demo_t;
 
-    /* ── Colors ─────────────────────────────────────────────────────────── */
+static float box_spin(const check_demo_t *s)
+{
+    return fabsf(s->spin_box->physical_core->rot_speed.k[1]);
+}
+
+static void check_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    check_demo_t *s = (check_demo_t *)app->user;
+    (void)v;
+    if (frame == 0) return;
+    float rod = demo_object_distance(s->pivot, s->bob);
+    float err = fabsf(rod - s->rod_length);
+    if (err > s->max_rod_error) s->max_rod_error = err;
+    double t = ivp_environment_get_time(app->world.env);
+    if (s->dist_ctx.motor_active) {
+        if (box_spin(s) > s->max_spin_on) s->max_spin_on = box_spin(s);
+        s->off_since = -1.0;
+    } else {
+        if (s->off_since < 0.0) s->off_since = t;
+        if (t - s->off_since > 0.5 && box_spin(s) > s->max_spin_off) s->max_spin_off = box_spin(s);
+    }
+    float d = (float)s->dist_check.current_distance;
+    if (d < s->min_dist) s->min_dist = d;
+    if (d > s->max_dist) s->max_dist = d;
+    if (s->dist_ctx.motor_active != (s->dist_check.is_outside == 0)) s->state_mismatch++;
+}
+
+static void check_reset(demo_app_t *app)
+{
+    check_demo_t *s = (check_demo_t *)app->user;
+    /* the bob was beamed back to its start pose: re-evaluate the range now
+     * (fires the callback, i.e. switches the motor, on a change) */
+    ivp_check_dist_set_range(&s->dist_check, s->dist_check.range);
+}
+
+static void check_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    check_demo_t *s = (check_demo_t *)app->user;
     const float c_ground[]  = {0.22f, 0.24f, 0.30f};
-    const float c_grid[]    = {0.38f, 0.43f, 0.52f};
-    const float c_hud[]     = {0.95f, 0.97f, 1.0f};
     const float c_pivot[]   = {0.5f, 0.5f, 0.5f};
     const float c_bob[]     = {0.2f, 0.8f, 1.0f};
     const float c_box_on[]  = {0.2f, 1.0f, 0.3f};
@@ -180,166 +113,174 @@ int main(void)
     const float c_range[]   = {1.0f, 1.0f, 0.2f};
     const float c_link[]    = {0.6f, 0.6f, 0.6f};
     const float c_vel[]     = {0.2f, 1.0f, 0.4f};
-    const float c_drag[]    = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]   = {1.0f, 0.65f, 0.25f};
 
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
+    demo_draw_object(v, s->ground, c_ground);
+    demo_draw_object(v, s->pivot, c_pivot);
+    demo_draw_object(v, s->bob, c_bob);
+    {
+        float pp[3], pb[3];
+        demo_object_center(s->pivot, pp);
+        demo_object_center(s->bob, pb);
+        demo_thick_line(v, pp, pb, c_link, 2);
+    }
+    demo_draw_object(v, s->spin_box, s->dist_ctx.motor_active ? c_box_on : c_box_off);
 
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
-        {
-            float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-
-        /* Pivot */
-        {
-            ivp_vec3r_t p;
-            ivp_object_get_position(pivot, &p);
-            float fp[3]; vec3r_to_float3(&p, fp);
-            float hs[3] = {0.3f, 0.3f, 0.3f};
-            ivp_render_draw_wire_box(renderer, fp, hs, NULL, c_pivot);
-        }
-
-        /* Bob + pendulum rod */
-        float fp_bob[3], fp_pivot[3];
-        {
-            ivp_vec3r_t pb, pp;
-            ivp_object_get_position(bob, &pb);
-            ivp_object_get_position(pivot, &pp);
-            vec3r_to_float3(&pb, fp_bob);
-            vec3r_to_float3(&pp, fp_pivot);
-            ivp_render_draw_wire_sphere(renderer, fp_bob, 0.6f, c_bob);
-            ivp_render_draw_thick_line(renderer, fp_pivot, fp_bob, c_link, 2);
-        }
-
-        /* Spin box (color depends on motor state) */
-        float fp_box[3];
-        {
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(spin_box, &p);
-            ivp_object_get_orientation(spin_box, &q);
-            vec3r_to_float3(&p, fp_box);
-            float rot[9]; quat_to_col_rot(&q, rot);
-            float hs[3] = {0.8f, 0.4f, 0.8f};
-            ivp_render_draw_wire_box(renderer, fp_box, hs, rot,
-                              dist_ctx.motor_active ? c_box_on : c_box_off);
-        }
-
-        /* Threshold circle (on ground plane, Y≈0, 16 segments) */
-        {
-            int segs = 16;
-            for (int i = 0; i < segs; i++) {
-                float a0 = 6.2832f * (float)i / (float)segs;
-                float a1 = 6.2832f * (float)(i + 1) / (float)segs;
-                float r = 4.0f; /* match threshold */
-                float p0[3] = {fp_box[0] + r * cosf(a0), -0.2f,
-                               fp_box[2] + r * sinf(a0)};
-                float p1[3] = {fp_box[0] + r * cosf(a1), -0.2f,
-                               fp_box[2] + r * sinf(a1)};
-                ivp_render_draw_line(renderer, p0, p1, c_range);
-            }
-        }
-
-        /* Velocity arrow on bob */
-        {
-            ivp_vec3r_t v;
-            ivp_object_get_speed(bob, &v);
-            float speed = vec3r_speed(&v);
-            if (speed > 0.3f) {
-                float sc = 0.3f;
-                float to[3] = {fp_bob[0]+(float)v.k[0]*sc,
-                               fp_bob[1]+(float)v.k[1]*sc,
-                               fp_bob[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp_bob, to, c_vel, 0.2f);
-            }
-        }
-
-        /* Axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
-
-        if (ivp_example_inspector_tick(&inspector)) {
-            ivp_example_inspector_log(&inspector,
-                "dist=%.3f inside=%d motor=%d enters=%d exits=%d motor_speed=%.3f",
-                (float)dist_check.current_distance,
-                1 - dist_check.is_outside,
-                dist_ctx.motor_active ? 1 : 0,
-                dist_ctx.enter_count,
-                dist_ctx.exit_count,
-                (float)motor.current_speed);
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus,
-                                              c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Time: %.1fs",
-                     sl.fps_display, (float)sl.t_prev);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf), "Distance: %.2f m  Threshold: 4.0 m",
-                     (float)dist_check.current_distance);
-            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_range);
-
-            snprintf(buf, sizeof(buf), "Motor: %s  Speed: %.1f rad/s",
-                     dist_ctx.motor_active ? "ON" : "OFF",
-                     (float)motor.current_speed);
-            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf,
-                             dist_ctx.motor_active ? c_box_on : c_box_off);
-
-            ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,
-                                             c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
+    /* Threshold circle (on the ground plane, 16 segments) */
+    float box[3];
+    demo_object_center(s->spin_box, box);
+    for (int i = 0; i < 16; i++) {
+        float a0 = 6.2832f * (float)i / 16.0f;
+        float a1 = 6.2832f * (float)(i + 1) / 16.0f;
+        float r = (float)RANGE;
+        float p0[3] = {box[0] + r * cosf(a0), -0.6f, box[2] + r * sinf(a0)};
+        float p1[3] = {box[0] + r * cosf(a1), -0.6f, box[2] + r * sinf(a1)};
+        demo_line(v, p0, p1, c_range);
+    }
+    demo_draw_velocity(v, s->bob, c_vel);
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 1.5f);
     }
 
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, box_surf);
-    ivp_compact_surface_free(NULL, pivot_surf);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    demo_hud(v, c_range, "Distance: %.2f m  Threshold: %.1f m  (enters %d, exits %d)",
+             (double)s->dist_check.current_distance, RANGE, s->dist_ctx.enter_count, s->dist_ctx.exit_count);
+    demo_hud(v, s->dist_ctx.motor_active ? c_box_on : c_box_off, "Motor: %s  Speed: %.1f rad/s",
+             s->dist_ctx.motor_active ? "ON" : "OFF", (double)s->motor.current_speed);
+}
+
+static void check_stats(demo_app_t *app, char *buf, size_t size)
+{
+    check_demo_t *s = (check_demo_t *)app->user;
+    float pb[3];
+    demo_object_center(s->bob, pb);
+    snprintf(buf, size, "dist=%.3f inside=%d motor=%d enters=%d exits=%d box_spin=%.3f bob=(%.2f,%.2f,%.2f) rod=%.3f",
+             (double)s->dist_check.current_distance, 1 - s->dist_check.is_outside,
+             s->dist_ctx.motor_active ? 1 : 0, s->dist_ctx.enter_count, s->dist_ctx.exit_count,
+             (double)box_spin(s), (double)pb[0], (double)pb[1], (double)pb[2],
+             (double)demo_object_distance(s->pivot, s->bob));
+}
+
+static bool check_check(demo_app_t *app)
+{
+    check_demo_t *s = (check_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    ok &= demo_check(tag, s->max_rod_error < 0.05f,
+                     "ball-socket joint keeps the pendulum length (%.3f m, max error %.4f m)",
+                     (double)s->rod_length, (double)s->max_rod_error);
+    ok &= demo_check(tag, s->min_dist < 2.5f && s->max_dist > 5.0f,
+                     "bob swings past the box (distance %.2f .. %.2f m, range %.1f m)",
+                     (double)s->min_dist, (double)s->max_dist, RANGE);
+    ok &= demo_check(tag, s->dist_ctx.enter_count >= 3 && s->dist_ctx.exit_count >= 2,
+                     "range events: %d enters, %d exits", s->dist_ctx.enter_count, s->dist_ctx.exit_count);
+    ok &= demo_check(tag, s->state_mismatch == 0, "motor switched on exactly while inside the range (%d mismatching frames)",
+                     s->state_mismatch);
+    ok &= demo_check(tag, s->max_spin_on > 0.5f && s->max_spin_off < 0.05f,
+                     "box spins while the motor is on (max %.2f rad/s) and stops when it is off (%.3f rad/s)",
+                     (double)s->max_spin_on, (double)s->max_spin_off);
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Check Distance -- Motor Trigger";
+    app.cfg.tag          = "check_distance";
+    app.cfg.orbit_dist   = 25.0f;
+    app.cfg.orbit_yaw    = 30.0f;
+    app.cfg.orbit_pitch  = -20.0f;
+    app.cfg.target[1]    = -5.0f;
+    app.cfg.grid_extent  = 15.0f;
+    app.cfg.grid_spacing = 2.0f;
+
+    ivp_environment_config_t ecfg;
+    ivp_environment_config_init(&ecfg);
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    check_demo_t *s = (check_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
+
+    /* ── Ground ─────────────────────────────────────────────────────────── */
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 15.0, 0.5, 15.0);
+
+    /* ── Pendulum pivot (static) ────────────────────────────────────────── */
+    ivp_object_template_t pvt;
+    ivp_object_template_init(&pvt);
+    pvt.mass = 0.0f;
+    pvt.physical_unmoveable = true;
+    pvt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-10.0), IVP_REAL(0.0));
+    s->pivot = demo_create_box_templ(w, &pvt, 0.3, 0.3, 0.3);
+
+    /* ── Pendulum bob (heavy sphere), displaced to the side so it swings ── */
+    ivp_object_template_t bobt;
+    ivp_object_template_init(&bobt);
+    bobt.mass = IVP_REAL(5.0);
+    set_sphere_inertia(&bobt, IVP_REAL(5.0), IVP_REAL(0.6));
+    bobt.material.friction   = IVP_REAL(0.3);
+    bobt.material.elasticity = IVP_REAL(0.1);
+    bobt.position = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(-5.0), IVP_REAL(0.0));
+    s->bob = demo_create_ball_templ(w, &bobt, 0.6);
+
+    /* ── Ball-socket constraint (pendulum joint at the pivot) ───────────── */
+    {
+        ivp_vec3r_t a_anchor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_vec3r_t b_anchor = ivp_vec3r(IVP_REAL(-5.0), IVP_REAL(-5.0), IVP_REAL(0.0));  /* pivot - bob */
+        ivp_constraint_init_ball_socket(&s->pend_joint, s->pivot, &a_anchor, s->bob, &b_anchor);
+    }
+    ivp_environment_add_controller(w->env, 50, ivp_controller_constraint, &s->pend_joint);
+    s->rod_length = demo_object_distance(s->pivot, s->bob);
+
+    /* ── Spinning box (target on ground) ────────────────────────────────── */
+    ivp_object_template_t bxt;
+    ivp_object_template_init(&bxt);
+    bxt.mass = IVP_REAL(2.0);
+    set_box_inertia(&bxt, IVP_REAL(2.0), IVP_REAL(0.8), IVP_REAL(0.4), IVP_REAL(0.8));
+    bxt.material.friction   = IVP_REAL(0.8);
+    bxt.material.elasticity = IVP_REAL(0.05);
+    bxt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.9), IVP_REAL(0.0));
+    s->spin_box = demo_create_box_templ(w, &bxt, 0.8, 0.4, 0.8);
+
+    /* ── Rotation motor on the box (vertical axis), off until triggered ─── */
+    ivp_rot_mot_state_init(&s->motor);
+    {
+        ivp_vec3r_t ma = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_vec3r_t mb = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+        ivp_rot_mot_state_setup(&s->motor, NULL, &ma, s->spin_box, &mb,
+                                IVP_REAL(0.0), (ivp_real_t)MOTOR_TORQUE, IVP_REAL(6.0));
+    }
+    ivp_environment_add_controller(w->env, 100, ivp_controller_rot_mot, &s->motor);
+
+    /* ── Distance checker (bob <-> spin_box centres, threshold 4 m) ─────── */
+    s->dist_ctx.motor = &s->motor;
+    s->dist_ctx.motor_power = (ivp_real_t)MOTOR_POWER;
+    ivp_check_dist_state_init(&s->dist_check);
+    {
+        /* anchors at the object centres (world positions at setup) */
+        ivp_vec3r_t pa = s->bob->physical_core->pos_world_f_core_last_psi;
+        ivp_vec3r_t pb = s->spin_box->physical_core->pos_world_f_core_last_psi;
+        ivp_check_dist_state_setup(&s->dist_check, s->bob, &pa, s->spin_box, &pb, (ivp_real_t)RANGE);
+    }
+    ivp_check_dist_set_callback(&s->dist_check, on_distance_event, &s->dist_ctx);
+    ivp_environment_add_controller(w->env, 100, ivp_controller_check_dist, &s->dist_check);
+    s->min_dist = 1e9f;
+    s->off_since = -1.0;
+
+    app.update   = check_update;
+    app.on_reset = check_reset;
+    app.draw     = check_draw;
+    app.stats    = check_stats;
+    app.check    = check_check;
+
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }

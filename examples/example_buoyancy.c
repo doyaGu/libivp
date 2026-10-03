@@ -7,20 +7,27 @@
  * Demonstrates: ivp_controller_buoyancy, fluid density, flow_velocity,
  *               sphere vs box shapes, HUD text, velocity arrows.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
-#include <ivp/base/ivp_types.h>
-#include <ivp/dynamics/ivp_object.h>
-#include <ivp/builder/ivp_build_surface.h>
-#include <ivp/geometry/ivp_surman.h>
 #include <ivp/controllers/ivp_controller_buoyancy.h>
-
-#include <stdio.h>
 
 /* Water surface in Y-down coords -- negative Y = up */
 #define WATER_SURFACE_Y  (-7.0f)
+/* Medium density in the mass scale of the objects below: their masses are
+ * 1/1000 of real objects of that size and material (the 1 m^3 "steel" cube
+ * weighs 8 kg, i.e. density 8 = 8000/1000), so "water" is 1000/1000 = 1.
+ * Buoyancy and drag accelerations only depend on the density ratio and
+ * the medium density relative to the object masses, so the scene behaves
+ * like real objects in real water.  (With medium_density 1000 every object
+ * was 40 to 20000 times lighter than the water it displaces: buoyancy
+ * accelerations of 40 g to 20000 g shot the objects out of the water at
+ * the 2000 m/s velocity limit, and the explicit quadratic pressure drag
+ * (linear_drag 3, 30 times the reference default) overshot and diverged
+ * within a few PSIs -- speed changes above 1e5 m/s, which the reference
+ * debug build rejects (IVP_Core::core_plausible_check).) */
+#define WATER_DENSITY    1.0f
+#define FLOW_SPEED_X     1.2f
+#define SEA_FLOOR_Y      4.5f     /* top of the ground box */
 
 /* ── Object descriptors ────────────────────────────────────────────────── */
 #define N_OBJS 7
@@ -45,93 +52,242 @@ static const obj_desc_t descs[N_OBJS] = {
     {"Lead  12kg",   12.0f, {0.4f,0.4f,0.4f},  { 4.5f,-8.0f,-3.0f}, {0.3f, 0.3f, 0.4f},  false},
 };
 
-
-int main(void)
+static float desc_volume(const obj_desc_t *d)
 {
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Buoyancy -- Floating & Sinking", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    if (d->is_sphere) return (4.0f / 3.0f) * 3.14159265f * d->hs[0] * d->hs[0] * d->hs[0];
+    return 8.0f * d->hs[0] * d->hs[1] * d->hs[2];
+}
 
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -2.0f;
-    cam.orbit_distance  = 28.0f;
-    cam.orbit_yaw       = 20.0f;
-    cam.orbit_pitch     = -20.0f;
+static float desc_density(const obj_desc_t *d)
+{
+    float vol = desc_volume(d);
+    return vol > 1e-6f ? d->mass / vol : 0.0f;
+}
 
-    /* ── Physics ────────────────────────────────────────────────────────── */
-    ivp_environment_config_t ecfg;
-    ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "buoyancy");
+/* vertical half extent of the (unrotated) object */
+static float desc_half_height(const obj_desc_t *d)
+{
+    return d->is_sphere ? d->hs[0] : d->hs[1];
+}
 
-    /* ── Ground (sea floor) ─────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 15.0f, 0.5f, 15.0f);
-    ivp_surman_polygon_t sm_ground;
-    ivp_surman_polygon_init(&sm_ground, ground_surf);
-
-    ivp_object_template_t gt;
-    ivp_object_template_init(&gt);
-    gt.type = IVP_OBJECT_POLYGON;
-    gt.mass = 0.0f;
-    gt.physical_unmoveable = true;
-    gt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(0.0));
-    ivp_environment_create_object(env, &gt, &sm_ground.base);
-
-    /* ── Side walls (keep objects from drifting away with current) ──── */
-    ivp_compact_surface_t *wall_surf =
-        ivp_build_box_surface(NULL, 0.3f, 6.0f, 15.0f);
-    ivp_surman_polygon_t sm_wall_l, sm_wall_r;
-    ivp_surman_polygon_init(&sm_wall_l, wall_surf);
-    ivp_surman_polygon_init(&sm_wall_r, wall_surf);
-
-    ivp_object_template_t wt;
-    ivp_object_template_init(&wt);
-    wt.type = IVP_OBJECT_POLYGON;
-    wt.mass = 0.0f;
-    wt.physical_unmoveable = true;
-    wt.position = ivp_vec3r(IVP_REAL(-12.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_environment_create_object(env, &wt, &sm_wall_l.base);
-    wt.position = ivp_vec3r(IVP_REAL(12.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_environment_create_object(env, &wt, &sm_wall_r.base);
-
-    /* ── Create floatable objects ───────────────────────────────────────── */
-    ivp_compact_surface_t *surfs[N_OBJS];
-    ivp_surman_polygon_t   sm_poly[N_OBJS];
-    ivp_surman_ball_t      sm_ball[N_OBJS];
-    ivp_object_t          *objs[N_OBJS];
-    float                  start_x[N_OBJS];
-
+typedef struct buoyancy_demo {
+    ivp_object_t        *ground, *wall_l, *wall_r;
+    ivp_object_t        *objs[N_OBJS];
     ivp_buoyancy_state_t buoy;
-    ivp_buoyancy_init(&buoy,
-        (ivp_real_t)WATER_SURFACE_Y,
-        IVP_REAL(1000.0));
-    buoy.linear_drag  = IVP_REAL(3.0);
-    buoy.angular_drag = IVP_REAL(2.0);
-    ivp_vec3r_set(&buoy.flow_velocity, IVP_REAL(1.2), IVP_REAL(0.0), IVP_REAL(0.0));
+    float                max_speed;           /* over the whole run */
+} buoyancy_demo_t;
+
+static void give_initial_speed(buoyancy_demo_t *s)
+{
+    /* Objects above water get a small initial downward velocity for natural drop */
+    for (int i = 0; i < N_OBJS; i++) {
+        if (descs[i].start_pos[1] < WATER_SURFACE_Y)
+            s->objs[i]->physical_core->speed = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
+    }
+}
+
+/* fraction of the object's height below the water surface (0..1) */
+static float submerged_fraction(const obj_desc_t *d, float y)
+{
+    float h = desc_half_height(d);
+    float under = (y + h) - WATER_SURFACE_Y;     /* depth of the lowest point */
+    float f = under / (2.0f * h);
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    return f;
+}
+
+static void buoyancy_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    (void)v;
+    (void)frame;
+    for (int i = 0; i < N_OBJS; i++) {
+        float speed = demo_object_speed(s->objs[i]);
+        if (speed > s->max_speed) s->max_speed = speed;
+    }
+}
+
+static void buoyancy_reset(demo_app_t *app)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    give_initial_speed(s);
+}
+
+static void buoyancy_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    const float c_water[]  = {0.10f, 0.30f, 0.65f};
+    const float c_ground[] = {0.30f, 0.28f, 0.25f};
+    const float c_wall[]   = {0.20f, 0.20f, 0.25f};
+    const float c_vel[]    = {0.2f,  1.0f,  0.4f };
+    const float c_buoy[]   = {0.3f,  0.6f,  1.0f };
+    const float c_flow[]   = {0.3f,  0.7f,  1.0f };
+
+    demo_draw_object(v, s->ground, c_ground);
+    demo_draw_object(v, s->wall_l, c_wall);
+    demo_draw_object(v, s->wall_r, c_wall);
+
+    /* Water surface grid (denser, with thick border) */
+    {
+        float ext = 12.0f;
+        float wy = WATER_SURFACE_Y;
+        for (float x = -ext; x <= ext; x += 1.5f) {
+            float a[3] = {x, wy, -ext}, b[3] = {x, wy, ext};
+            demo_line(v, a, b, c_water);
+        }
+        for (float z = -ext; z <= ext; z += 1.5f) {
+            float a[3] = {-ext, wy, z}, b[3] = {ext, wy, z};
+            demo_line(v, a, b, c_water);
+        }
+        float a[3], b[3];
+        a[1] = b[1] = wy;
+        a[2] = -ext; b[2] = ext; a[0] = b[0] = -ext;
+        demo_thick_line(v, a, b, c_water, 3);
+        a[0] = b[0] = ext;
+        demo_thick_line(v, a, b, c_water, 3);
+        a[0] = -ext; b[0] = ext; a[2] = b[2] = -ext;
+        demo_thick_line(v, a, b, c_water, 3);
+        a[2] = b[2] = ext;
+        demo_thick_line(v, a, b, c_water, 3);
+    }
+
+    /* Flow direction arrow in the water */
+    {
+        float fa[3] = {-8.0f, WATER_SURFACE_Y, 8.0f};
+        float fb[3] = {-3.0f, WATER_SURFACE_Y, 8.0f};
+        demo_arrow(v, fa, fb, c_flow, 0.5f);
+    }
 
     for (int i = 0; i < N_OBJS; i++) {
         const obj_desc_t *d = &descs[i];
-
-        if (d->is_sphere) {
-            ivp_surman_ball_init(&sm_ball[i], d->hs[0]);
-        } else {
-            surfs[i] = ivp_build_box_surface(NULL, d->hs[0], d->hs[1], d->hs[2]);
-            ivp_surman_polygon_init(&sm_poly[i], surfs[i]);
+        demo_draw_object(v, s->objs[i], d->col);
+        float p[3];
+        demo_object_center(s->objs[i], p);
+        float speed = demo_object_speed(s->objs[i]);
+        if (speed > 0.4f) demo_draw_velocity(v, s->objs[i], c_vel);
+        /* upward buoyancy indicator when (partly) submerged */
+        if (submerged_fraction(d, p[1]) > 0.01f) {
+            float bb[3] = {p[0], p[1] - 1.5f, p[2]};
+            demo_arrow(v, p, bb, c_buoy, 0.2f);
         }
+    }
 
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 1.5f);
+    }
+
+    demo_hud(v, DEMO_COL_INFO, "Objects: %d  Water Y=%.1f  (rel. density = object / water)",
+             N_OBJS, (double)WATER_SURFACE_Y);
+    for (int i = 0; i < N_OBJS; i++) {
+        float p[3];
+        demo_object_center(s->objs[i], p);
+        float depth = p[1] - WATER_SURFACE_Y;
+        float sub = submerged_fraction(&descs[i], p[1]);
+        const char *status = sub >= 0.999f ? (p[1] > SEA_FLOOR_Y - 2.0f ? "SUNK" : "SINKING")
+                           : (sub > 0.0f ? "FLOATING" : "ABOVE");
+        demo_hud(v, descs[i].col, "%s  depth:%.1f  %s  rel. density %.2f",
+                 descs[i].label, (double)depth, status,
+                 (double)(desc_density(&descs[i]) / WATER_DENSITY));
+    }
+    demo_hud(v, DEMO_COL_INFO, "Current: +X %.1f m/s", (double)FLOW_SPEED_X);
+}
+
+static void buoyancy_stats(demo_app_t *app, char *buf, size_t size)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    int n = snprintf(buf, size, "max_speed=%.2f", (double)s->max_speed);
+    for (int i = 0; i < N_OBJS && n > 0 && (size_t)n < size; i++) {
+        float p[3];
+        demo_object_center(s->objs[i], p);
+        n += snprintf(buf + n, size - (size_t)n, " %.5s(%.1f,%.2f)", descs[i].label,
+                      (double)p[0], (double)p[1]);
+    }
+}
+
+static bool buoyancy_check(demo_app_t *app)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    for (int i = 0; i < N_OBJS; i++) {
+        const obj_desc_t *d = &descs[i];
+        float p[3];
+        demo_object_center(s->objs[i], p);
+        float density = desc_density(d);
+        float speed = demo_object_speed(s->objs[i]);
+        if (density < WATER_DENSITY) {
+            /* floats: the expected immersion is density / water density */
+            float sub = submerged_fraction(d, p[1]);
+            float expect = density / WATER_DENSITY;
+            ok &= demo_check(tag, sub > 0.0f && sub < 1.0f && fabsf(sub - expect) < 0.25f && speed < 2.0f,
+                             "%s (rel. density %.2f) floats: %.0f%% submerged (expected ~%.0f%%), y=%.2f speed %.2f",
+                             d->label, (double)(density / WATER_DENSITY), (double)(sub * 100.0f), (double)(expect * 100.0f),
+                             (double)p[1], (double)speed);
+            ok &= demo_check(tag, p[0] - d->start_pos[0] > 1.0f,
+                             "%s drifted with the current (+X %.2f m)", d->label,
+                             (double)(p[0] - d->start_pos[0]));
+        } else {
+            float h = desc_half_height(d);
+            ok &= demo_check(tag, p[1] > SEA_FLOOR_Y - 2.0f * h - 0.3f && speed < 0.5f,
+                             "%s (rel. density %.2f) sank to the floor: y=%.2f (floor %.1f) speed %.2f",
+                             d->label, (double)(density / WATER_DENSITY), (double)p[1], (double)SEA_FLOOR_Y, (double)speed);
+        }
+    }
+    ok &= demo_check(tag, s->max_speed < 30.0f, "plausible speeds (max %.2f m/s)", (double)s->max_speed);
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Buoyancy -- Floating & Sinking";
+    app.cfg.tag          = "buoyancy";
+    app.cfg.orbit_dist   = 28.0f;
+    app.cfg.orbit_yaw    = 20.0f;
+    app.cfg.orbit_pitch  = -20.0f;
+    app.cfg.target[1]    = -2.0f;
+    app.cfg.grid_extent  = 15.0f;
+    app.cfg.grid_spacing = 2.0f;
+
+    ivp_environment_config_t ecfg;
+    ivp_environment_config_init(&ecfg);
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    buoyancy_demo_t *s = (buoyancy_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
+
+    /* ── Ground (sea floor) ─────────────────────────────────────────────── */
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    gt.position = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(5.0), IVP_REAL(0.0));
+    s->ground = demo_create_box_templ(w, &gt, 15.0, 0.5, 15.0);
+
+    /* ── Side walls (keep objects from drifting away with current) ──── *
+     * They reach 1 m above the water surface (y = -8 .. 6): floating
+     * objects are stopped by the right wall instead of drifting over it. */
+    ivp_object_template_t wt;
+    ivp_object_template_init(&wt);
+    wt.mass = 0.0f;
+    wt.physical_unmoveable = true;
+    wt.position = ivp_vec3r(IVP_REAL(-12.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+    s->wall_l = demo_create_box_templ(w, &wt, 0.3, 7.0, 15.0);
+    wt.position = ivp_vec3r(IVP_REAL(12.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+    s->wall_r = demo_create_box_templ(w, &wt, 0.3, 7.0, 15.0);
+
+    /* ── Floatable objects ──────────────────────────────────────────────── */
+    for (int i = 0; i < N_OBJS; i++) {
+        const obj_desc_t *d = &descs[i];
         ivp_object_template_t ot;
         ivp_object_template_init(&ot);
-        ot.type = d->is_sphere ? IVP_OBJECT_BALL : IVP_OBJECT_POLYGON;
         ot.mass = (ivp_real_t)d->mass;
-        /* Per-shape inertia: sphere uses (2/5)mr^2, box uses (m/3)(hy^2+hz^2) */
         if (d->is_sphere)
             set_sphere_inertia(&ot, ot.mass, (ivp_real_t)d->hs[0]);
         else
@@ -139,251 +295,31 @@ int main(void)
                 (ivp_real_t)d->hs[0], (ivp_real_t)d->hs[1], (ivp_real_t)d->hs[2]);
         ot.material.friction   = IVP_REAL(0.5);
         ot.material.elasticity = IVP_REAL(0.2);
-        ot.position = ivp_vec3r(
-            (ivp_real_t)d->start_pos[0],
-            (ivp_real_t)d->start_pos[1],
-            (ivp_real_t)d->start_pos[2]);
-
+        ot.position = ivp_vec3r((ivp_real_t)d->start_pos[0], (ivp_real_t)d->start_pos[1],
+                                (ivp_real_t)d->start_pos[2]);
         if (d->is_sphere)
-            objs[i] = ivp_environment_create_object(env, &ot, &sm_ball[i].base);
+            s->objs[i] = demo_create_ball_templ(w, &ot, d->hs[0]);
         else
-            objs[i] = ivp_environment_create_object(env, &ot, &sm_poly[i].base);
-        start_x[i] = d->start_pos[0];
-
-        /* Objects above water get a small initial downward velocity for natural drop */
-        if (d->start_pos[1] < WATER_SURFACE_Y)
-            objs[i]->core.speed = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.5), IVP_REAL(0.0));
+            s->objs[i] = demo_create_box_templ(w, &ot, d->hs[0], d->hs[1], d->hs[2]);
+        if (!s->objs[i]) return 1;
     }
+    give_initial_speed(s);
 
-    ivp_environment_add_controller(env, 200,
-        ivp_controller_buoyancy, &buoy);
+    ivp_buoyancy_init(&s->buoy, (ivp_real_t)WATER_SURFACE_Y, (ivp_real_t)WATER_DENSITY);
+    s->buoy.linear_drag  = IVP_REAL(3.0);
+    s->buoy.angular_drag = IVP_REAL(2.0);
+    ivp_vec3r_set(&s->buoy.flow_velocity, (ivp_real_t)FLOW_SPEED_X, IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_environment_add_controller(w->env, 200, ivp_controller_buoyancy, &s->buoy);
 
-    /* ── Colors ─────────────────────────────────────────────────────────── */
-    const float c_water[]  = {0.10f, 0.30f, 0.65f};
-    const float c_ground[] = {0.30f, 0.28f, 0.25f};
-    const float c_grid[]   = {0.10f, 0.10f, 0.15f};
-    const float c_wall[]   = {0.20f, 0.20f, 0.25f};
-    const float c_hud[]    = {0.8f,  0.8f,  0.8f };
-    const float c_vel[]    = {0.2f,  1.0f,  0.4f };
-    const float c_buoy[]   = {0.3f,  0.6f,  1.0f };
-    const float c_drag[]   = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]  = {1.0f, 0.65f, 0.25f};
+    app.update   = buoyancy_update;
+    app.on_reset = buoyancy_reset;
+    app.draw     = buoyancy_draw;
+    app.stats    = buoyancy_stats;
+    app.check    = buoyancy_check;
 
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
-
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
-        {
-            float gp[3] = {0, 5.0f, 0}, gs[3] = {15.0f, 0.5f, 15.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-        /* Walls */
-        {
-            float ws[3] = {0.3f, 6.0f, 15.0f};
-            float wl[3] = {-12.0f, 0, 0}; ivp_render_draw_wire_box(renderer, wl, ws, NULL, c_wall);
-            float wr[3] = { 12.0f, 0, 0}; ivp_render_draw_wire_box(renderer, wr, ws, NULL, c_wall);
-        }
-
-        /* Water surface grid (denser, with thick border) */
-        {
-            float ext = 12.0f;
-            float wy = WATER_SURFACE_Y;
-            for (float x = -ext; x <= ext; x += 1.5f) {
-                float a[3] = {x, wy, -ext}, b[3] = {x, wy, ext};
-                ivp_render_draw_line(renderer, a, b, c_water);
-            }
-            for (float z = -ext; z <= ext; z += 1.5f) {
-                float a[3] = {-ext, wy, z}, b[3] = {ext, wy, z};
-                ivp_render_draw_line(renderer, a, b, c_water);
-            }
-            /* Thick border lines */
-            float a[3], b[3];
-            a[1] = b[1] = wy;
-            a[2] = -ext; b[2] = ext; a[0] = b[0] = -ext;
-            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
-            a[0] = b[0] = ext;
-            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
-            a[0] = -ext; b[0] = ext; a[2] = b[2] = -ext;
-            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
-            a[2] = b[2] = ext;
-            ivp_render_draw_thick_line(renderer, a, b, c_water, 3);
-        }
-
-        /* Flow direction arrow in the water */
-        {
-            float fa[3] = {-8.0f, WATER_SURFACE_Y, 8.0f};
-            float fb[3] = {-3.0f, WATER_SURFACE_Y, 8.0f};
-            const float c_flow[] = {0.3f, 0.7f, 1.0f};
-            ivp_render_draw_arrow(renderer, fa, fb, c_flow, 0.5f);
-        }
-
-        /* Draw objects */
-        float max_obj_speed = 0.0f;
-        int submerged_count = 0;
-        int mostly_submerged_count = 0;
-        int floating_near_surface_count = 0;
-        float sum_submerge = 0.0f;
-        float sum_drift_x = 0.0f;
-        float sum_depth = 0.0f;
-        for (int i = 0; i < N_OBJS; i++) {
-            const obj_desc_t *d = &descs[i];
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(objs[i], &p);
-            ivp_object_get_orientation(objs[i], &q);
-
-            float fp[3]; vec3r_to_float3(&p, fp);
-
-            if (d->is_sphere) {
-                ivp_render_draw_wire_sphere(renderer, fp, d->hs[0], d->col);
-            } else {
-                float rot[9]; quat_to_col_rot(&q, rot);
-                float hs[3] = {d->hs[0], d->hs[1], d->hs[2]};
-                ivp_render_draw_wire_box(renderer, fp, hs, rot, d->col);
-            }
-
-            /* Velocity arrow */
-            ivp_vec3r_t v;
-            ivp_object_get_speed(objs[i], &v);
-            float speed = vec3r_speed(&v);
-            if (speed > max_obj_speed) max_obj_speed = speed;
-            if (speed > 0.4f) {
-                float sc = 0.3f;
-                float to[3] = {fp[0]+(float)v.k[0]*sc,
-                               fp[1]+(float)v.k[1]*sc,
-                               fp[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
-            }
-
-            /* Upward buoyancy indicator when submerged.
-             * For boxes, use vertical half-height (max extent) instead of
-             * the diagonal radius for a more meaningful submersion estimate. */
-            float radius = d->is_sphere
-                ? d->hs[0]
-                : fmaxf(d->hs[0], fmaxf(d->hs[1], d->hs[2]));
-            float submerge = 0.0f;
-            if (radius > 1e-6f) {
-                float dist = WATER_SURFACE_Y - fp[1];
-                float h = radius - dist;
-                if (h > 0.0f) {
-                    float max_h = 2.0f * radius;
-                    if (h > max_h) h = max_h;
-                    submerge = h / max_h;
-                }
-            }
-
-            if (submerge > 0.01f) {
-                submerged_count++;
-                float ba[3] = {fp[0], fp[1], fp[2]};
-                float bb[3] = {fp[0], fp[1] - 1.5f, fp[2]};
-                ivp_render_draw_arrow(renderer, ba, bb, c_buoy, 0.2f);
-            }
-            if (submerge > 0.50f) mostly_submerged_count++;
-            if (submerge > 0.10f && submerge < 0.90f && fabsf((float)v.k[1]) < 1.0f)
-                floating_near_surface_count++;
-            sum_submerge += submerge;
-            sum_drift_x += (fp[0] - start_x[i]);
-            sum_depth += (fp[1] - WATER_SURFACE_Y);
-        }
-
-        if (ivp_example_inspector_tick(&inspector)) {
-            ivp_example_inspector_log(&inspector,
-                "max_speed=%.3f submerged=%.2f/%d mostly_submerged=%d near_surface=%d mean_drift_x=%.3f mean_depth=%.3f",
-                max_obj_speed,
-                sum_submerge,
-                N_OBJS,
-                mostly_submerged_count,
-                floating_near_surface_count,
-                sum_drift_x / (float)N_OBJS,
-                sum_depth / (float)N_OBJS);
-        }
-
-        /* Axes at origin */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus, c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Water Y=%.1f",
-                     sl.fps_display, N_OBJS, WATER_SURFACE_Y);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            for (int i = 0; i < N_OBJS; i++) {
-                ivp_vec3r_t p;
-                ivp_object_get_position(objs[i], &p);
-                float depth = (float)p.k[1] - WATER_SURFACE_Y;
-                const char *status = depth > 0.1f ? "SUNK" : (depth > -0.5f ? "FLOATING" : "ABOVE");
-                /* Compute object density (kg/m^3) for display.
-                 * Volume: sphere = (4/3)pi*r^3, box = 8*hx*hy*hz.
-                 * Water density = 1000 kg/m^3; object sinks if density > water. */
-                float vol;
-                if (descs[i].is_sphere)
-                    vol = (4.0f/3.0f) * 3.14159f * descs[i].hs[0] * descs[i].hs[0] * descs[i].hs[0];
-                else
-                    vol = 8.0f * descs[i].hs[0] * descs[i].hs[1] * descs[i].hs[2];
-                float density = (vol > 1e-6f) ? descs[i].mass / vol : 0.0f;
-                snprintf(buf, sizeof(buf), "%s  depth:%.1f  %s  d:%.0f",
-                         descs[i].label, depth, status, density);
-                ivp_render_draw_text(renderer, 10.0f, 30.0f + 18.0f * (float)i, buf, descs[i].col);
-            }
-
-            ivp_render_draw_text(renderer, 10.0f, 30.0f + 18.0f * N_OBJS + 10.0f,
-                "Current:+X 1.5m/s", c_hud);
-            ivp_example_draw_interaction_hud(renderer,
-                10.0f, 30.0f + 18.0f * N_OBJS + 28.0f, c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
-    }
-
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    for (int i = 0; i < N_OBJS; i++) {
-        if (!descs[i].is_sphere)
-            ivp_compact_surface_free(NULL, surfs[i]);
-    }
-    ivp_compact_surface_free(NULL, wall_surf);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    ivp_buoyancy_state_destroy(&s->buoy);
+    free(s);
+    return rc;
 }

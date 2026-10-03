@@ -1,21 +1,24 @@
-/* example_3ds_import.c -- Load .3ds file → physics simulation
+/* example_3ds_import.c -- Load .3ds file -> physics simulation
  *
- * Demonstrates the content pipeline: load .3ds → build surface → create
- * environment + ground + dynamic object → simulate with render loop.
+ * Demonstrates the content pipeline: load .3ds -> build surface -> create
+ * environment + ground + dynamic object built from the imported mesh ->
+ * simulate.  The mesh drops onto the ground and comes to rest; it is drawn
+ * as the wireframe of its compact surface.  Like the reference importer
+ * every face becomes a two sided triangle ledge.
  *
- * Usage: example_3ds_import [filename.3ds]
- *        (if no file given, uses a built-in tetrahedron)
+ * Usage: example_3ds_import [filename.3ds] [--headless [frames]]
+ *        (if no file is given, a built-in tetrahedron is used)
+ *
+ * (The example used to build the surface but create both objects without
+ *  a surface manager: nothing collided and only placeholder boxes were
+ *  drawn.)
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/builder/ivp_import_3ds.h>
-#include <ivp/builder/ivp_build_surface.h>
-#include <ivp/geometry/ivp_surman.h>
 
-#include <stdio.h>
-#include <string.h>
+#define DROP_Y     (-5.0)
+#define GROUND_TOP (-0.5f)
 
 /* Inline synthetic tetrahedron .3ds for when no file is provided */
 static void w16(unsigned char *buf, int *pos, uint16_t val) {
@@ -76,120 +79,161 @@ static int build_demo_3ds(unsigned char *buf) {
     return pos;
 }
 
+/* The .3ds file argument: the first argument that is neither the headless
+ * switch nor its frame count (NULL = built-in tetrahedron). */
+static const char *file_argument(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-H") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
+            continue;
+        }
+        return argv[i];
+    }
+    return NULL;
+}
+
+typedef struct import_demo {
+    const char   *source;           /* file name or "built-in tetrahedron" */
+    int           n_vertices, n_triangles, n_ledges;
+    ivp_object_t *ground, *mesh;
+    float         max_speed;
+} import_demo_t;
+
+static void count_ledge(void *ctx, const ivp_compact_ledge_t *ledge)
+{
+    (void)ledge;
+    (*(int *)ctx)++;
+}
+
+static void import_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    import_demo_t *s = (import_demo_t *)app->user;
+    (void)v;
+    (void)frame;
+    float sp = demo_object_speed(s->mesh);
+    if (sp > s->max_speed) s->max_speed = sp;
+}
+
+static void import_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    import_demo_t *s = (import_demo_t *)app->user;
+    const float ground_color[3] = {0.4f, 0.5f, 0.4f};
+    const float mesh_color[3]   = {0.9f, 0.3f, 0.2f};
+    demo_draw_object(v, s->ground, ground_color);
+    demo_draw_object(v, s->mesh, mesh_color);
+    demo_hud(v, DEMO_COL_INFO, "Source: %s", s->source);
+    demo_hud(v, DEMO_COL_INFO, "Mesh: %d vertices, %d triangles -> %d ledges",
+             s->n_vertices, s->n_triangles, s->n_ledges);
+    demo_hud_object(v, "Imported object", s->mesh);
+}
+
+static void import_stats(demo_app_t *app, char *buf, size_t size)
+{
+    import_demo_t *s = (import_demo_t *)app->user;
+    float p[3];
+    demo_object_center(s->mesh, p);
+    snprintf(buf, size, "mesh pos=(%.3f,%.3f,%.3f) speed=%.3f tilt=%.1f%s", (double)p[0], (double)p[1], (double)p[2],
+             (double)demo_object_speed(s->mesh), (double)demo_object_tilt_deg(s->mesh),
+             ivp_object_is_frozen(s->mesh) ? " frozen" : "");
+}
+
+static bool import_check(demo_app_t *app)
+{
+    import_demo_t *s = (import_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    ok &= demo_check(tag, s->n_ledges == s->n_triangles && s->n_ledges > 0,
+                     "imported %d triangles as %d two sided triangle ledges", s->n_triangles, s->n_ledges);
+    float p[3];
+    demo_object_center(s->mesh, p);
+    float radius = s->mesh->physical_core->upper_limit_radius;
+    ok &= demo_check(tag, s->max_speed > 3.0f, "mesh fell (max speed %.2f m/s)", (double)s->max_speed);
+    ok &= demo_check(tag, p[1] < GROUND_TOP && p[1] > GROUND_TOP - radius - 0.05f && demo_object_speed(s->mesh) < 0.05f,
+                     "mesh rests on the ground: centre %.3f m above it (bounding radius %.3f), speed %.3f",
+                     (double)(GROUND_TOP - p[1]), (double)radius, (double)demo_object_speed(s->mesh));
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
-    /* ── Renderer ──────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP 3DS Import Example", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
-
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -3.0f;
-    cam.orbit_distance  = 15.0f;
-    cam.orbit_yaw       = 25.0f;
-    cam.orbit_pitch     = -20.0f;
-
     /* ── Load 3DS ──────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *mesh_surface = NULL;
+    const char *file = file_argument(argc, argv);
     ivp_3ds_scene_t scene;
     memset(&scene, 0, sizeof(scene));
-
-    if (argc > 1) {
-        ivp_result_t r = ivp_3ds_load_file(NULL, argv[1], &scene);
-        if (!ivp_ok(r)) {
-            fprintf(stderr, "Failed to load %s: %s\n", argv[1], ivp_result_str(r));
-            ivp_renderer_destroy(renderer);
-            return 1;
-        }
-        mesh_surface = ivp_3ds_build_surface(NULL, &scene, 0, NULL);
+    ivp_result_t r;
+    if (file) {
+        r = ivp_3ds_load_file(NULL, file, &scene);
     } else {
         unsigned char buf[1024];
         int sz = build_demo_3ds(buf);
-        ivp_result_t r = ivp_3ds_load_memory(NULL, buf, sz, &scene);
-        if (ivp_ok(r))
-            mesh_surface = ivp_3ds_build_surface(NULL, &scene, 0, NULL);
+        r = ivp_3ds_load_memory(NULL, buf, sz, &scene);
     }
-
+    if (!ivp_ok(r) || scene.n_meshes < 1) {
+        fprintf(stderr, "Failed to load %s: %s\n", file ? file : "the built-in tetrahedron", ivp_result_str(r));
+        ivp_3ds_scene_free(&scene);
+        return 1;
+    }
+    ivp_compact_surface_t *mesh_surface = ivp_3ds_build_surface(NULL, &scene, 0, NULL);
     if (!mesh_surface) {
         fprintf(stderr, "Failed to build mesh surface\n");
         ivp_3ds_scene_free(&scene);
-        ivp_renderer_destroy(renderer);
         return 1;
     }
 
-    /* ── Physics ───────────────────────────────────────────────────────── */
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP 3DS Import Example";
+    app.cfg.tag          = "3ds_import";
+    app.cfg.orbit_dist   = 15.0f;
+    app.cfg.orbit_yaw    = 25.0f;
+    app.cfg.orbit_pitch  = -20.0f;
+    app.cfg.target[1]    = -3.0f;
+    app.cfg.grid_extent  = 20.0f;
+
+    import_demo_t *s = (import_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    s->source = file ? file : "built-in tetrahedron";
+    s->n_vertices = scene.meshes[0].n_vertices;
+    s->n_triangles = scene.meshes[0].n_triangles;
+    ivp_3ds_scene_free(&scene);
+
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+    demo_world_t *w = &app.world;
 
     /* Ground */
-    ivp_compact_surface_t *ground_surf = ivp_build_box_surface(NULL, 20.0f, 0.5f, 20.0f);
     ivp_object_template_t gt;
     ivp_object_template_init(&gt);
     gt.mass = IVP_REAL(0.0);
-    ivp_vec3r_set(&gt.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_object_t *ground = ivp_environment_create_object(env, &gt, NULL);
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 20.0, 0.5, 20.0);
 
-    /* Dynamic imported object */
+    /* Dynamic imported object (inertia from the compact surface) */
     ivp_object_template_t ot;
     ivp_object_template_init(&ot);
     ot.mass = IVP_REAL(1.0);
-    ivp_vec3r_set(&ot.position, IVP_REAL(0.0), IVP_REAL(-5.0), IVP_REAL(0.0));
-    ivp_object_t *dyn = ivp_environment_create_object(env, &ot, NULL);
-
-    /* ── Render visuals (legacy draw helpers) ─────────────────────────── */
-    float ground_half[3] = {20.0f, 0.5f, 20.0f};
-    float ground_color[3] = {0.4f, 0.5f, 0.4f};
-    float dyn_half[3] = {0.5f, 0.5f, 0.5f};
-    float dyn_color[3] = {0.9f, 0.3f, 0.2f};
-
-    /* ── Main loop (use ivp_renderer frame loop and sim utilities) ───── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-
-        /* Step physics at fixed timestep (simple single-step for this example) */
-        (void)frame_dt;
-        ivp_environment_simulate_dtime(env, IVP_REAL(1.0 / 60.0));
-
-        /* Draw ground */
-        {
-            const ivp_core_t *c = ivp_object_get_core_const(ground);
-            float gp[3] = {(float)c->pos_world_f_core_last_psi.k[0],
-                           (float)c->pos_world_f_core_last_psi.k[1],
-                           (float)c->pos_world_f_core_last_psi.k[2]};
-            float grot[9];
-            quat_to_col_rot(&c->q_world_f_core_last_psi, grot);
-            ivp_render_draw_wire_box(renderer, gp, ground_half, grot, ground_color);
-        }
-
-        /* Draw imported object */
-        {
-            const ivp_core_t *c = ivp_object_get_core_const(dyn);
-            float dp[3] = {(float)c->pos_world_f_core_last_psi.k[0],
-                           (float)c->pos_world_f_core_last_psi.k[1],
-                           (float)c->pos_world_f_core_last_psi.k[2]};
-            float drot[9];
-            quat_to_col_rot(&c->q_world_f_core_last_psi, drot);
-            ivp_render_draw_wire_box(renderer, dp, dyn_half, drot, dyn_color);
-        }
-
-        ivp_renderer_end_frame(renderer);
+    set_inertia_from_surface(&ot, ot.mass, mesh_surface);
+    ivp_vec3r_set(&ot.position, IVP_REAL(0.0), (ivp_real_t)DROP_Y, IVP_REAL(0.0));
+    s->mesh = demo_create_polygon(w, mesh_surface, &ot);   /* the world owns the surface */
+    if (!s->mesh) {
+        fprintf(stderr, "Failed to create the imported object\n");
+        return 1;
     }
+    ivp_surman_get_all_terminal_ledges(s->mesh->surman, count_ledge, &s->n_ledges);
+    printf("[3ds_import] %s: %d vertices, %d triangles, %d ledges\n", s->source, s->n_vertices,
+           s->n_triangles, s->n_ledges);
 
-    /* ── Cleanup ───────────────────────────────────────────────────────── */
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, mesh_surface);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_3ds_scene_free(&scene);
-    ivp_renderer_destroy(renderer);
+    app.update = import_update;
+    app.draw   = import_draw;
+    app.stats  = import_stats;
+    app.check  = import_check;
 
-    return 0;
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }

@@ -1,265 +1,230 @@
 /* example_force_actuator.c -- Magnetic force actuator demo
  *
  * Two cubes connected by a force actuator that pulls them together.
- * Every 5 seconds the magnet toggles on/off.  Force direction arrows
- * and distance readout shown in HUD.
+ * Every 5 seconds (simulated time) the magnet toggles on/off.  Force
+ * direction arrows and distance readout shown in HUD.
+ *
+ * The force acts along the line between the two anchors; like the
+ * reference IVP_Actuator_Force a positive force pushes the first object
+ * away from the second one, so the attracting magnet uses a negative force.
  *
  * Demonstrates: ivp_actuator_force, force toggling, anchor-based
  *               force application, HUD text, velocity arrows.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/controllers/ivp_actuator_force.h>
 
-#include <stdio.h>
+/* 15 N attraction on 3 kg cubes = 5 m/s^2.  Note: real magnetic force has
+ * inverse-square falloff with distance; this constant force is a
+ * simplification for demonstration. */
+#define MAGNET_FORCE   (-15.0)
+#define TOGGLE_PERIOD  5.0
+#define CUBE_HS        1.0
+#define PUSH_SPEED     3.0      /* P: push the cubes apart (m/s each) */
 
-int main(void)
+typedef struct force_demo {
+    ivp_object_t              *ground, *cube_a, *cube_b;
+    ivp_force_actuator_state_t fa;
+    bool                       magnet_on;
+    int                        toggle_count;
+    double                     next_toggle;
+    float                      start_dist;
+    float                      min_dist_on;      /* while the magnet is on */
+    float                      dist_at_toggle;   /* when it was switched off */
+    int                        n_pushes;
+    float                      dist_after_push_on;   /* max distance after the push, magnet on */
+} force_demo_t;
+
+static float anchor_distance(const force_demo_t *s)
 {
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Force Actuator -- Magnet Toggle", .vsync = true
-    };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    float pa[3], pb[3];
+    demo_core_point_ws(s->fa.obj_a, &s->fa.anchor_a_os, pa);
+    demo_core_point_ws(s->fa.obj_b, &s->fa.anchor_b_os, pb);
+    return demo_distance(pa, pb);
+}
 
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -3.0f;
-    cam.orbit_distance  = 22.0f;
-    cam.orbit_yaw       = 20.0f;
-    cam.orbit_pitch     = -20.0f;
+static void set_magnet(force_demo_t *s, bool on)
+{
+    s->magnet_on = on;
+    ivp_force_actuator_set_force(&s->fa, on ? (ivp_real_t)MAGNET_FORCE : IVP_REAL(0.0));
+}
 
-    /* ── Physics ────────────────────────────────────────────────────────── */
-    ivp_environment_config_t ecfg;
-    ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "force_actuator");
+static void push_apart(demo_app_t *app)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    demo_async_add_speed_ws(app->world.env, s->cube_a, -PUSH_SPEED, 0.0, 0.0);
+    demo_async_add_speed_ws(app->world.env, s->cube_b, PUSH_SPEED, 0.0, 0.0);
+    s->n_pushes++;
+    printf("[force_actuator] t=%.2f push apart (magnet %s)\n", ivp_environment_get_time(app->world.env),
+           s->magnet_on ? "ON" : "OFF");
+}
 
-    /* ── Ground ─────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 15.0f, 0.5f, 10.0f);
-    ivp_surman_polygon_t sm_ground;
-    create_ground_object(env, ground_surf, &sm_ground, IVP_REAL(0.0));
+static void force_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    if (v) {
+        if (demo_key_just_pressed(v, SDL_SCANCODE_P)) push_apart(app);
+    } else {
+        /* once while the magnet is on, once while it is off */
+        if (frame == 180 || frame == 360) push_apart(app);
+    }
+    /* Toggle the magnet every 5 seconds of simulated time */
+    double t = ivp_environment_get_time(app->world.env);
+    if (t >= s->next_toggle) {
+        s->next_toggle += TOGGLE_PERIOD;
+        set_magnet(s, !s->magnet_on);
+        s->toggle_count++;
+        if (!s->magnet_on) s->dist_at_toggle = anchor_distance(s);
+        printf("[force_actuator] t=%.2f magnet %s\n", t, s->magnet_on ? "ON" : "OFF");
+    }
+    float d = anchor_distance(s);
+    if (s->magnet_on) {
+        if (d < s->min_dist_on) s->min_dist_on = d;
+        if (s->n_pushes > 0 && d > s->dist_after_push_on) s->dist_after_push_on = d;
+    }
+}
 
-    /* ── Two cubes ~8m apart ────────────────────────────────────────────── */
-    ivp_compact_surface_t *cube_surf =
-        ivp_build_box_surface(NULL, 1.0f, 1.0f, 1.0f);
-    ivp_surman_polygon_t sm_a, sm_b;
-    ivp_surman_polygon_init(&sm_a, cube_surf);
-    ivp_surman_polygon_init(&sm_b, cube_surf);
+static void force_reset(demo_app_t *app)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    set_magnet(s, true);
+    s->next_toggle = ivp_environment_get_time(app->world.env) + TOGGLE_PERIOD;
+}
 
-    ivp_object_template_t ta;
-    ivp_object_template_init(&ta);
-    ta.type = IVP_OBJECT_POLYGON;
-    ta.mass = IVP_REAL(3.0);
-    set_box_inertia(&ta, IVP_REAL(3.0), IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    ta.material.friction   = IVP_REAL(0.6);
-    ta.material.elasticity = IVP_REAL(0.2);
-    ta.position = ivp_vec3r(IVP_REAL(-4.0), IVP_REAL(-2.0), IVP_REAL(0.0));
-    ivp_object_t *cube_a = ivp_environment_create_object(env, &ta, &sm_a.base);
-
-    ivp_object_template_t tb;
-    ivp_object_template_init(&tb);
-    tb.type = IVP_OBJECT_POLYGON;
-    tb.mass = IVP_REAL(3.0);
-    set_box_inertia(&tb, IVP_REAL(3.0), IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(1.0));
-    tb.material.friction   = IVP_REAL(0.6);
-    tb.material.elasticity = IVP_REAL(0.2);
-    tb.position = ivp_vec3r(IVP_REAL(4.0), IVP_REAL(-2.0), IVP_REAL(0.0));
-    ivp_object_t *cube_b = ivp_environment_create_object(env, &tb, &sm_b.base);
-
-    /* ── Force actuator ─────────────────────────────────────────────────── */
-    ivp_force_actuator_state_t fa_state;
-    ivp_force_actuator_state_init(&fa_state);
-    ivp_vec3r_t anchor_a = ivp_vec3r(IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_vec3r_t anchor_b = ivp_vec3r(IVP_REAL(-1.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    /* 15N attraction on 3kg cubes = 5 m/s² (half gravity).
-     * Note: real magnetic force has inverse-square falloff with distance;
-     * this constant force is a simplification for demonstration. */
-    ivp_force_actuator_state_setup(&fa_state,
-        cube_a, &anchor_a, cube_b, &anchor_b,
-        IVP_REAL(15.0), true, true);
-    ivp_environment_add_controller(env, 100,
-        ivp_controller_force_actuator, &fa_state);
-
-    /* ── Toggle state ───────────────────────────────────────────────────── */
-    float toggle_timer = 0.0f;
-    bool  magnet_on    = true;
-    ivp_real_t force_mag = IVP_REAL(15.0);
-    int   toggle_count = 0;
-    float min_dist = 1000.0f;
-    float max_dist = 0.0f;
-
-    /* ── Colors ─────────────────────────────────────────────────────────── */
+static void force_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
     const float c_ground[] = {0.22f, 0.24f, 0.30f};
-    const float c_grid[]   = {0.38f, 0.43f, 0.52f};
-    const float c_hud[]    = {0.95f, 0.97f, 1.0f};
     const float c_cube_a[] = {1.0f, 0.4f, 0.2f};
     const float c_cube_b[] = {0.3f, 0.5f, 1.0f};
     const float c_force[]  = {1.0f, 1.0f, 0.2f};
     const float c_vel[]    = {0.2f, 1.0f, 0.4f};
-    const float c_drag[]   = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]  = {1.0f, 0.65f, 0.25f};
     const float c_on[]     = {0.2f, 1.0f, 0.3f};
     const float c_off[]    = {1.0f, 0.3f, 0.2f};
 
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
-
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        /* Toggle magnet every 5 seconds */
-        toggle_timer += frame_dt;
-        if (toggle_timer >= 5.0f) {
-            toggle_timer -= 5.0f;
-            magnet_on = !magnet_on;
-            ivp_force_actuator_set_force(&fa_state,
-                magnet_on ? force_mag : IVP_REAL(0.0));
-            toggle_count++;
-        }
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        float dist = (float)fa_state.current_distance;
-        if (dist < min_dist) min_dist = dist;
-        if (dist > max_dist) max_dist = dist;
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 15.0f, 2.0f, c_grid);
-        {
-            float gp[3] = {0, 0, 0}, gs[3] = {15.0f, 0.5f, 10.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-
-        /* Cubes */
-        ivp_vec3r_t pa, pb;
-        float fpa[3], fpb[3];
-        {
-            ivp_quatr_t qa;
-            ivp_object_get_position(cube_a, &pa);
-            ivp_object_get_orientation(cube_a, &qa);
-            float rot[9]; quat_to_col_rot(&qa, rot);
-            vec3r_to_float3(&pa, fpa);
-            float hs[3] = {1.0f, 1.0f, 1.0f};
-            ivp_render_draw_wire_box(renderer, fpa, hs, rot, c_cube_a);
-        }
-        {
-            ivp_quatr_t qb;
-            ivp_object_get_position(cube_b, &pb);
-            ivp_object_get_orientation(cube_b, &qb);
-            float rot[9]; quat_to_col_rot(&qb, rot);
-            vec3r_to_float3(&pb, fpb);
-            float hs[3] = {1.0f, 1.0f, 1.0f};
-            ivp_render_draw_wire_box(renderer, fpb, hs, rot, c_cube_b);
-        }
-
-        /* Force direction arrow (A→B) when magnet is on */
-        if (magnet_on)
-            ivp_render_draw_arrow(renderer, fpa, fpb, c_force, 0.4f);
-
-        /* Velocity arrows */
-        for (int i = 0; i < 2; i++) {
-            ivp_object_t *obj = (i == 0) ? cube_a : cube_b;
-            float *fp = (i == 0) ? fpa : fpb;
-            ivp_vec3r_t v;
-            ivp_object_get_speed(obj, &v);
-            float speed = vec3r_speed(&v);
-            if (speed > 0.3f) {
-                float sc = 0.3f;
-                float to[3] = {fp[0]+(float)v.k[0]*sc,
-                               fp[1]+(float)v.k[1]*sc,
-                               fp[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
-            }
-        }
-
-        /* Axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
-
-        /* Inspector */
-        {
-            ivp_vec3r_t va, vb;
-            ivp_object_get_speed(cube_a, &va);
-            ivp_object_get_speed(cube_b, &vb);
-            if (ivp_example_inspector_tick(&inspector)) {
-                ivp_example_inspector_log(&inspector,
-                    "dist=%.3f force=%.1f on=%d toggles=%d speed_a=%.3f speed_b=%.3f min_dist=%.3f max_dist=%.3f",
-                    dist, (float)fa_state.force,
-                    magnet_on ? 1 : 0, toggle_count,
-                    vec3r_speed(&va), vec3r_speed(&vb),
-                    min_dist, max_dist);
-            }
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus,
-                                              c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Time: %.1fs",
-                     sl.fps_display, (float)sl.t_prev);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf), "Force: %.1f N  Distance: %.2f m",
-                     (float)fa_state.force, dist);
-            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_force);
-
-            snprintf(buf, sizeof(buf), "Magnet: %s  (toggles every 5s)",
-                     magnet_on ? "ON" : "OFF");
-            ivp_render_draw_text(renderer, 10.0f, 48.0f, buf,
-                             magnet_on ? c_on : c_off);
-
-            ivp_example_draw_interaction_hud(renderer, 10.0f, 70.0f,
-                                             c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
+    demo_draw_object(v, s->ground, c_ground);
+    demo_draw_object(v, s->cube_a, c_cube_a);
+    demo_draw_object(v, s->cube_b, c_cube_b);
+    if (s->magnet_on) {
+        /* the pull on each cube, towards the other anchor */
+        float pa[3], pb[3];
+        demo_core_point_ws(s->fa.obj_a, &s->fa.anchor_a_os, pa);
+        demo_core_point_ws(s->fa.obj_b, &s->fa.anchor_b_os, pb);
+        float mid[3] = {(pa[0] + pb[0]) * 0.5f, (pa[1] + pb[1]) * 0.5f, (pa[2] + pb[2]) * 0.5f};
+        demo_arrow(v, pa, mid, c_force, 0.4f);
+        demo_arrow(v, pb, mid, c_force, 0.4f);
+    }
+    demo_draw_velocity(v, s->cube_a, c_vel);
+    demo_draw_velocity(v, s->cube_b, c_vel);
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 1.5f);
     }
 
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, cube_surf);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    demo_hud(v, DEMO_COL_INFO, "Time: %.1fs", (double)ivp_environment_get_time(app->world.env));
+    demo_hud(v, c_force, "Force: %.1f N (negative = attraction)  Distance: %.2f m",
+             (double)s->fa.force, (double)anchor_distance(s));
+    demo_hud(v, s->magnet_on ? c_on : c_off, "Magnet: %s  (toggles every %.0f s, %d toggles)",
+             s->magnet_on ? "ON" : "OFF", TOGGLE_PERIOD, s->toggle_count);
+}
+
+static void force_stats(demo_app_t *app, char *buf, size_t size)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    float pa[3], pb[3];
+    demo_object_center(s->cube_a, pa);
+    demo_object_center(s->cube_b, pb);
+    snprintf(buf, size, "dist=%.3f force=%.1f on=%d toggles=%d a=(%.2f,%.2f) b=(%.2f,%.2f) speed_a=%.3f speed_b=%.3f",
+             (double)anchor_distance(s), (double)s->fa.force, s->magnet_on ? 1 : 0, s->toggle_count,
+             (double)pa[0], (double)pa[1], (double)pb[0], (double)pb[1],
+             (double)demo_object_speed(s->cube_a), (double)demo_object_speed(s->cube_b));
+}
+
+static bool force_check(demo_app_t *app)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    float d = anchor_distance(s);
+    ok &= demo_check(tag, s->min_dist_on < 0.1f, "magnet pulled the cubes together (anchor distance %.2f -> %.3f m)",
+                     (double)s->start_dist, (double)s->min_dist_on);
+    ok &= demo_check(tag, s->dist_after_push_on > 0.5f && s->dist_at_toggle < 0.1f,
+                     "pushed apart while on (%.2f m), the magnet pulled them back (%.3f m when switched off)",
+                     (double)s->dist_after_push_on, (double)s->dist_at_toggle);
+    ok &= demo_check(tag, s->toggle_count == 1 && !s->magnet_on && s->fa.force == IVP_REAL(0.0),
+                     "magnet toggled off after %.0f s (%d toggle, force %.1f N)", TOGGLE_PERIOD,
+                     s->toggle_count, (double)s->fa.force);
+    ok &= demo_check(tag, d > 1.5f && demo_object_speed(s->cube_a) < 0.01f && demo_object_speed(s->cube_b) < 0.01f,
+                     "pushed apart while off, the cubes stay apart (%.2f m, at rest)", (double)d);
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Force Actuator -- Magnet Toggle";
+    app.cfg.tag          = "force_actuator";
+    app.cfg.orbit_dist   = 22.0f;
+    app.cfg.orbit_yaw    = 20.0f;
+    app.cfg.orbit_pitch  = -20.0f;
+    app.cfg.target[1]    = -3.0f;
+    app.cfg.grid_extent  = 15.0f;
+    app.cfg.grid_spacing = 2.0f;
+
+    ivp_environment_config_t ecfg;
+    ivp_environment_config_init(&ecfg);
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    force_demo_t *s = (force_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
+
+    /* ── Ground ─────────────────────────────────────────────────────────── */
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 15.0, 0.5, 10.0);
+
+    /* ── Two cubes ~8m apart ────────────────────────────────────────────── */
+    ivp_object_template_t ct;
+    ivp_object_template_init(&ct);
+    ct.mass = IVP_REAL(3.0);
+    set_box_inertia(&ct, IVP_REAL(3.0), (ivp_real_t)CUBE_HS, (ivp_real_t)CUBE_HS, (ivp_real_t)CUBE_HS);
+    ct.material.friction   = IVP_REAL(0.6);
+    ct.material.elasticity = IVP_REAL(0.2);
+    ct.position = ivp_vec3r(IVP_REAL(-4.0), IVP_REAL(-2.0), IVP_REAL(0.0));
+    s->cube_a = demo_create_box_templ(w, &ct, CUBE_HS, CUBE_HS, CUBE_HS);
+    ct.position = ivp_vec3r(IVP_REAL(4.0), IVP_REAL(-2.0), IVP_REAL(0.0));
+    s->cube_b = demo_create_box_templ(w, &ct, CUBE_HS, CUBE_HS, CUBE_HS);
+
+    /* ── Force actuator between the facing faces ────────────────────────── */
+    ivp_force_actuator_state_init(&s->fa);
+    {
+        ivp_vec3r_t anchor_a = ivp_vec3r((ivp_real_t)CUBE_HS, IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_vec3r_t anchor_b = ivp_vec3r(-(ivp_real_t)CUBE_HS, IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_force_actuator_state_setup(&s->fa, s->cube_a, &anchor_a, s->cube_b, &anchor_b,
+                                       (ivp_real_t)MAGNET_FORCE, true, true);
+    }
+    ivp_environment_add_controller(w->env, 100, ivp_controller_force_actuator, &s->fa);
+    s->magnet_on = true;
+    s->next_toggle = TOGGLE_PERIOD;
+    s->start_dist = anchor_distance(s);
+    s->min_dist_on = 1e9f;
+
+    app.controls = "P: push the cubes apart";
+    app.update   = force_update;
+    app.on_reset = force_reset;
+    app.draw     = force_draw;
+    app.stats    = force_stats;
+    app.check    = force_check;
+
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }

@@ -9,322 +9,286 @@
  * Demonstrates: ivp_forcefield, three force field modes, mass-dependent
  *               behavior, keyboard input, HUD.
  */
-#include "examples_common.h"
-#include "interaction.h"
-#include "inspect.h"
+#include "demo_app.h"
 
 #include <ivp/controllers/ivp_forcefield.h>
 
-#include <SDL3/SDL.h>
-#include <stdio.h>
-
 #define N_OBJECTS 24
+#define START_Y   (-3.0f)
 
 typedef struct {
     ivp_object_t *obj;
     float col[3];
     float mass;
-    float hs[3];
-    bool  is_sphere;
-    float radius;
 } ff_obj_t;
 
-int main(void)
+typedef struct forcefield_demo {
+    ivp_object_t          *ground;
+    ff_obj_t               objs[N_OBJECTS];
+    int                    n_obj;
+    ivp_forcefield_state_t ff;
+    int                    current_mode;
+    /* headless measurements */
+    float                  fall_vy[N_OBJECTS];      /* vertical speed 0.5 s after the start */
+    float                  wind_x0[N_OBJECTS];      /* x when the wind started */
+    float                  wind_dx[N_OBJECTS];      /* x travel during 0.5 s of wind */
+    float                  drag_v0, drag_v1;        /* mean speed at the drag switch / 0.5 s later */
+} forcefield_demo_t;
+
+static const char *mode_names[] = {"REDUCED GRAVITY", "HORIZONTAL WIND", "VISCOUS DRAG"};
+
+/* Switch the field law.  Resting objects may be frozen (not simulated, so
+ * no controller reaches them): wake every object so that the new field
+ * acts at once. */
+static void set_mode(demo_app_t *app, int mode)
 {
-    /* ── Renderer ───────────────────────────────────────────────────────── */
-    ivp_render_config_t rcfg = {
-        .width = 1280, .height = 720,
-        .title = "IVP Force Field -- Mode Switching", .vsync = true
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    s->current_mode = mode;
+    switch (mode) {
+    case 0:
+        /* REDUCED GRAVITY: upward acceleration partially cancels gravity.
+         * Net effect: ~3.8 m/s^2 down (all objects equally). */
+        s->ff.mode = IVP_FORCEFIELD_CONSTANT;
+        s->ff.value = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0), IVP_REAL(0.0));
+        break;
+    case 1:
+        /* HORIZONTAL WIND: constant force in +X direction.  Light objects
+         * (0.5kg) accelerate at 30 m/s^2, heavy (10kg) at 1.5 m/s^2. */
+        s->ff.mode = IVP_FORCEFIELD_FORCE;
+        s->ff.value = ivp_vec3r(IVP_REAL(15.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        break;
+    default:
+        /* VISCOUS DRAG: velocity-proportional resistance, coefficient 5. */
+        s->ff.mode = IVP_FORCEFIELD_DRAG;
+        s->ff.value = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(5.0), IVP_REAL(5.0));
+        break;
+    }
+    for (int i = 0; i < s->n_obj; i++)
+        ivp_environment_ensure_core_in_simulation(app->world.env, s->objs[i].obj);
+    printf("[forcefield] t=%.2f mode %s\n", ivp_environment_get_time(app->world.env), mode_names[mode]);
+}
+
+static float mean_speed(const forcefield_demo_t *s)
+{
+    float sum = 0.0f;
+    for (int i = 0; i < s->n_obj; i++) sum += demo_object_speed(s->objs[i].obj);
+    return sum / (float)s->n_obj;
+}
+
+static void forcefield_update(demo_app_t *app, demo_viewer_t *v, int frame)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    if (v) {
+        if (demo_key_just_pressed(v, SDL_SCANCODE_1)) set_mode(app, 0);
+        if (demo_key_just_pressed(v, SDL_SCANCODE_2)) set_mode(app, 1);
+        if (demo_key_just_pressed(v, SDL_SCANCODE_3)) set_mode(app, 2);
+        return;
+    }
+    /* scripted: reduced gravity, then 0.5 s of wind, then drag */
+    if (frame == 30) {
+        for (int i = 0; i < s->n_obj; i++)
+            s->fall_vy[i] = (float)s->objs[i].obj->physical_core->speed.k[1];
+    }
+    if (frame == 180) {
+        set_mode(app, 1);
+        for (int i = 0; i < s->n_obj; i++)
+            s->wind_x0[i] = (float)s->objs[i].obj->physical_core->pos_world_f_core_last_psi.k[0];
+    }
+    if (frame == 210) {
+        for (int i = 0; i < s->n_obj; i++)
+            s->wind_dx[i] = (float)s->objs[i].obj->physical_core->pos_world_f_core_last_psi.k[0] - s->wind_x0[i];
+        set_mode(app, 2);
+        s->drag_v0 = mean_speed(s);
+    }
+    if (frame == 240) s->drag_v1 = mean_speed(s);
+}
+
+static void forcefield_draw(demo_app_t *app, demo_viewer_t *v)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    const float c_ground[] = {0.22f, 0.24f, 0.30f};
+    const float c_vel[]    = {0.2f, 1.0f, 0.4f};
+    const float c_mode[]   = {1.0f, 1.0f, 0.2f};
+    demo_draw_object(v, s->ground, c_ground);
+    int airborne = 0;
+    for (int i = 0; i < s->n_obj; i++) {
+        demo_draw_object(v, s->objs[i].obj, s->objs[i].col);
+        if (demo_object_speed(s->objs[i].obj) > 0.5f) demo_draw_velocity(v, s->objs[i].obj, c_vel);
+        if ((float)s->objs[i].obj->physical_core->pos_world_f_core_last_psi.k[1] < -1.0f) airborne++;
+    }
+    {
+        float org[3] = {0, 0, 0};
+        demo_axes(v, org, NULL, 1.5f);
+    }
+    static const char *desc[] = {
+        "Upward accel -6 m/s^2 (net ~3.8 down, all equal)",
+        "Horizontal force +X 15N (light blown, heavy resist)",
+        "Drag coeff 5 (moving objects slow down)"
     };
-    ivp_renderer_t *renderer = NULL;
-    ivp_renderer_create(&renderer, &rcfg);
-    if (!renderer) { fprintf(stderr, "renderer init failed\n"); return 1; }
+    demo_hud(v, c_mode, "Mode: %s  [1]Gravity [2]Wind [3]Drag", mode_names[s->current_mode]);
+    demo_hud(v, DEMO_COL_INFO, "%s", desc[s->current_mode]);
+    demo_hud(v, DEMO_COL_INFO, "Red=0.5kg  Green=3kg  Blue=10kg  Airborne: %d", airborne);
+}
 
-    ivp_camera_t cam;
-    ivp_camera_init(&cam);
-    cam.target[1]      = -5.0f;
-    cam.orbit_distance  = 30.0f;
-    cam.orbit_yaw       = 25.0f;
-    cam.orbit_pitch     = -25.0f;
+static void forcefield_stats(demo_app_t *app, char *buf, size_t size)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    float max_speed = 0.0f, avg_h = 0.0f, max_x = -1e9f;
+    int frozen = 0;
+    for (int i = 0; i < s->n_obj; i++) {
+        const ivp_object_t *o = s->objs[i].obj;
+        float sp = demo_object_speed(o);
+        if (sp > max_speed) max_speed = sp;
+        avg_h += -(float)o->physical_core->pos_world_f_core_last_psi.k[1];
+        float x = (float)o->physical_core->pos_world_f_core_last_psi.k[0];
+        if (x > max_x) max_x = x;
+        if (ivp_object_is_frozen(o)) frozen++;
+    }
+    snprintf(buf, size, "mode=%s max_speed=%.3f mean_speed=%.3f avg_height=%.3f max_x=%.2f frozen=%d/%d",
+             mode_names[s->current_mode], (double)max_speed, (double)mean_speed(s),
+             (double)(avg_h / (float)s->n_obj), (double)max_x, frozen, s->n_obj);
+}
 
-    /* ── Physics ────────────────────────────────────────────────────────── */
+static bool forcefield_check(demo_app_t *app)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    const char *tag = app->cfg.tag;
+    bool ok = true;
+    /* reduced gravity: every object falls at g - 6 regardless of its mass */
+    float vmin = 1e9f, vmax = -1e9f, vsum = 0.0f;
+    for (int i = 0; i < s->n_obj; i++) {
+        vsum += s->fall_vy[i];
+        if (s->fall_vy[i] < vmin) vmin = s->fall_vy[i];
+        if (s->fall_vy[i] > vmax) vmax = s->fall_vy[i];
+    }
+    float vmean = vsum / (float)s->n_obj;
+    float g = (float)app->world.env->gravity.k[1];
+    float expect = (g - 6.0f) * 0.5f;
+    /* (a few percent of spread are expected: the reference movement check,
+     * which visits one simulation unit every ~15 units, can see a core that
+     * has not moved 1 cm yet and mark it IVP_MT_SLOW, i.e. extra damping
+     * until its next check) */
+    ok &= demo_check(tag, fabsf(vmean - expect) < 0.06f * expect && vmax - vmin < 0.05f * vmean,
+                     "reduced gravity: all masses fall alike, %.3f m/s after 0.5 s (expected %.3f, spread %.4f)",
+                     (double)vmean, (double)expect, (double)(vmax - vmin));
+    /* wind: a constant force accelerates the light objects much more */
+    float dx[3] = {0, 0, 0};
+    int nx[3] = {0, 0, 0};
+    bool all_pos = true;
+    for (int i = 0; i < s->n_obj; i++) {
+        int k = s->objs[i].mass < 1.0f ? 0 : (s->objs[i].mass < 5.0f ? 1 : 2);
+        dx[k] += s->wind_dx[i];
+        nx[k]++;
+        if (!(s->wind_dx[i] > 0.0f)) all_pos = false;
+    }
+    for (int k = 0; k < 3; k++) dx[k] /= (float)(nx[k] > 0 ? nx[k] : 1);
+    ok &= demo_check(tag, all_pos && dx[0] > dx[1] && dx[1] > dx[2] && dx[0] > 5.0f * dx[2],
+                     "wind (+X 15 N): 0.5 s travel 0.5 kg %.3f m > 3 kg %.3f m > 10 kg %.3f m",
+                     (double)dx[0], (double)dx[1], (double)dx[2]);
+    ok &= demo_check(tag, s->drag_v1 < 0.3f * s->drag_v0,
+                     "drag: mean speed %.3f -> %.3f m/s within 0.5 s", (double)s->drag_v0, (double)s->drag_v1);
+    int on_ground = 0;
+    for (int i = 0; i < s->n_obj; i++) {
+        const ivp_vec3r_t *p = &s->objs[i].obj->physical_core->pos_world_f_core_last_psi;
+        if (fabs((double)p->k[0]) < 18.0 && fabs((double)p->k[2]) < 18.0 && (double)p->k[1] < -0.5) on_ground++;
+    }
+    ok &= demo_check(tag, on_ground == s->n_obj, "%d/%d objects still on the platform", on_ground, s->n_obj);
+    return ok;
+}
+
+static void add_obj(forcefield_demo_t *s, ivp_object_t *obj, float mass, float r, float g, float b)
+{
+    ff_obj_t *o = &s->objs[s->n_obj++];
+    o->obj = obj;
+    o->mass = mass;
+    o->col[0] = r; o->col[1] = g; o->col[2] = b;
+}
+
+int main(int argc, char **argv)
+{
+    demo_app_t app;
+    memset(&app, 0, sizeof(app));
+    demo_config_defaults(&app.cfg);
+    app.cfg.title        = "IVP Force Field -- Mode Switching";
+    app.cfg.tag          = "forcefield";
+    app.cfg.orbit_dist   = 30.0f;
+    app.cfg.orbit_yaw    = 25.0f;
+    app.cfg.orbit_pitch  = -25.0f;
+    app.cfg.target[1]    = -5.0f;
+    app.cfg.grid_extent  = 18.0f;
+    app.cfg.grid_spacing = 2.0f;
+
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
-    ivp_environment_t *env = ivp_environment_create(&ecfg);
-    ivp_example_inspector_t inspector;
-    ivp_example_inspector_init(&inspector, "forcefield");
+    if (!demo_world_init_env(&app.world, &app.cfg, &ecfg)) return 1;
+
+    forcefield_demo_t *s = (forcefield_demo_t *)calloc(1, sizeof(*s));
+    if (!s) return 1;
+    app.user = s;
+    demo_world_t *w = &app.world;
 
     /* ── Ground ─────────────────────────────────────────────────────────── */
-    ivp_compact_surface_t *ground_surf =
-        ivp_build_box_surface(NULL, 18.0f, 0.5f, 18.0f);
-    ivp_surman_polygon_t sm_ground;
-    create_ground_object(env, ground_surf, &sm_ground, IVP_REAL(0.0));
-
-    /* ── Objects: cubes and spheres of varying mass ──────────────────────── */
-    ivp_compact_surface_t *cube_s =
-        ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
-    ivp_compact_surface_t *cube_m =
-        ivp_build_box_surface(NULL, 0.7f, 0.7f, 0.7f);
-    ivp_compact_surface_t *cube_l =
-        ivp_build_box_surface(NULL, 1.0f, 1.0f, 1.0f);
-
-    ivp_surman_polygon_t sm_poly[N_OBJECTS];
-    ivp_surman_ball_t    sm_ball[N_OBJECTS];
-    ff_obj_t objs[N_OBJECTS];
-    int n_obj = 0;
+    ivp_object_template_t gt;
+    ivp_object_template_init(&gt);
+    gt.mass = 0.0f;
+    gt.physical_unmoveable = true;
+    s->ground = demo_create_box_templ(w, &gt, 18.0, 0.5, 18.0);
 
     /* Light cubes (mass 0.5) — red */
     for (int i = 0; i < 8; i++) {
-        ivp_surman_polygon_init(&sm_poly[n_obj], cube_s);
         ivp_object_template_t t;
         ivp_object_template_init(&t);
-        t.type = IVP_OBJECT_POLYGON;
         t.mass = IVP_REAL(0.5);
         set_box_inertia(&t, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(0.5));
         t.material.friction   = IVP_REAL(0.5);
         t.material.elasticity = IVP_REAL(0.3);
         float angle = 6.2832f * (float)i / 8.0f;
         float r = 5.0f;
-        t.position = ivp_vec3r(
-            (ivp_real_t)(r * cosf(angle)),
-            IVP_REAL(-3.0),
-            (ivp_real_t)(r * sinf(angle)));
-        objs[n_obj].obj = ivp_environment_create_object(env, &t, &sm_poly[n_obj].base);
-        objs[n_obj].col[0] = 1.0f; objs[n_obj].col[1] = 0.3f; objs[n_obj].col[2] = 0.2f;
-        objs[n_obj].mass = 0.5f;
-        objs[n_obj].hs[0] = objs[n_obj].hs[1] = objs[n_obj].hs[2] = 0.5f;
-        objs[n_obj].is_sphere = false;
-        n_obj++;
+        t.position = ivp_vec3r((ivp_real_t)(r * cosf(angle)), (ivp_real_t)START_Y, (ivp_real_t)(r * sinf(angle)));
+        add_obj(s, demo_create_box_templ(w, &t, 0.5, 0.5, 0.5), 0.5f, 1.0f, 0.3f, 0.2f);
     }
 
     /* Medium cubes (mass 3.0) — green */
     for (int i = 0; i < 8; i++) {
-        ivp_surman_polygon_init(&sm_poly[n_obj], cube_m);
         ivp_object_template_t t;
         ivp_object_template_init(&t);
-        t.type = IVP_OBJECT_POLYGON;
         t.mass = IVP_REAL(3.0);
         set_box_inertia(&t, IVP_REAL(3.0), IVP_REAL(0.7), IVP_REAL(0.7), IVP_REAL(0.7));
         t.material.friction   = IVP_REAL(0.5);
         t.material.elasticity = IVP_REAL(0.3);
         float angle = 6.2832f * (float)i / 8.0f + 0.39f;
         float r = 8.0f;
-        t.position = ivp_vec3r(
-            (ivp_real_t)(r * cosf(angle)),
-            IVP_REAL(-3.0),
-            (ivp_real_t)(r * sinf(angle)));
-        objs[n_obj].obj = ivp_environment_create_object(env, &t, &sm_poly[n_obj].base);
-        objs[n_obj].col[0] = 0.3f; objs[n_obj].col[1] = 1.0f; objs[n_obj].col[2] = 0.3f;
-        objs[n_obj].mass = 3.0f;
-        objs[n_obj].hs[0] = objs[n_obj].hs[1] = objs[n_obj].hs[2] = 0.7f;
-        objs[n_obj].is_sphere = false;
-        n_obj++;
+        t.position = ivp_vec3r((ivp_real_t)(r * cosf(angle)), (ivp_real_t)START_Y, (ivp_real_t)(r * sinf(angle)));
+        add_obj(s, demo_create_box_templ(w, &t, 0.7, 0.7, 0.7), 3.0f, 0.3f, 1.0f, 0.3f);
     }
 
     /* Heavy spheres (mass 10.0) — blue */
     for (int i = 0; i < 8; i++) {
-        ivp_surman_ball_init(&sm_ball[i], 0.8f);
         ivp_object_template_t t;
         ivp_object_template_init(&t);
-        t.type = IVP_OBJECT_BALL;
         t.mass = IVP_REAL(10.0);
         set_sphere_inertia(&t, IVP_REAL(10.0), IVP_REAL(0.8));
         t.material.friction   = IVP_REAL(0.5);
         t.material.elasticity = IVP_REAL(0.3);
         float angle = 6.2832f * (float)i / 8.0f + 0.78f;
         float r = 11.0f;
-        t.position = ivp_vec3r(
-            (ivp_real_t)(r * cosf(angle)),
-            IVP_REAL(-3.0),
-            (ivp_real_t)(r * sinf(angle)));
-        objs[n_obj].obj = ivp_environment_create_object(env, &t, &sm_ball[i].base);
-        objs[n_obj].col[0] = 0.3f; objs[n_obj].col[1] = 0.5f; objs[n_obj].col[2] = 1.0f;
-        objs[n_obj].mass = 10.0f;
-        objs[n_obj].is_sphere = true;
-        objs[n_obj].radius = 0.8f;
-        n_obj++;
+        t.position = ivp_vec3r((ivp_real_t)(r * cosf(angle)), (ivp_real_t)START_Y, (ivp_real_t)(r * sinf(angle)));
+        add_obj(s, demo_create_ball_templ(w, &t, 0.8), 10.0f, 0.3f, 0.5f, 1.0f);
     }
 
     /* ── Force field: start in CONSTANT mode, upward (anti-gravity) ─────── */
-    ivp_forcefield_state_t ff_state;
     ivp_vec3r_t ff_val = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0), IVP_REAL(0.0));
-    ivp_forcefield_state_init(&ff_state, IVP_FORCEFIELD_CONSTANT, &ff_val);
-    ivp_environment_add_controller(env, 100, ivp_controller_forcefield, &ff_state);
+    ivp_forcefield_state_init(&s->ff, IVP_FORCEFIELD_CONSTANT, &ff_val);
+    ivp_environment_add_controller(w->env, 100, ivp_controller_forcefield, &s->ff);
 
-    int current_mode = 0;
-    const char *mode_names[] = {"REDUCED GRAVITY", "HORIZONTAL WIND", "VISCOUS DRAG"};
-    bool prev_key1 = false, prev_key2 = false, prev_key3 = false;
+    app.controls = "1: reduced gravity   2: horizontal wind   3: viscous drag";
+    app.update   = forcefield_update;
+    app.draw     = forcefield_draw;
+    app.stats    = forcefield_stats;
+    app.check    = forcefield_check;
 
-    /* ── Colors ─────────────────────────────────────────────────────────── */
-    const float c_ground[] = {0.22f, 0.24f, 0.30f};
-    const float c_grid[]   = {0.38f, 0.43f, 0.52f};
-    const float c_hud[]    = {0.95f, 0.97f, 1.0f};
-    const float c_vel[]    = {0.2f, 1.0f, 0.4f};
-    const float c_drag[]   = {1.0f, 0.85f, 0.25f};
-    const float c_focus[]  = {1.0f, 0.65f, 0.25f};
-    const float c_mode[]   = {1.0f, 1.0f, 0.2f};
-
-    ivp_example_dragger_t dragger;
-    ivp_example_dragger_init(&dragger);
-    ivp_example_dragger_attach(&dragger, env, 100);
-
-    ivp_example_focus_controller_t focus;
-    ivp_example_focus_init(&focus);
-
-    ivp_example_input_tracker_t input;
-    ivp_example_input_tracker_init(&input);
-
-    ivp_camera_defaults_t cam_defaults;
-    ivp_camera_store_defaults(&cam_defaults, &cam);
-
-    ivp_scene_snapshot_t scene_snap;
-    ivp_scene_snapshot_take(&scene_snap, env);
-
-    /* ── Main loop ──────────────────────────────────────────────────────── */
-    sim_loop_t sl;
-    sim_loop_init(&sl, renderer);
-
-    while (ivp_renderer_begin_frame(renderer, &cam)) {
-        float frame_dt = sim_loop_begin(&sl, renderer);
-        ivp_example_input_tracker_update(&input);
-        if (input.scene_reset_requested) {
-            ivp_scene_snapshot_restore(&scene_snap);
-            sl.sim_accum = 0.0f;
-        }
-        if (input.view_reset_requested) {
-            ivp_camera_restore_defaults(&cam, &cam_defaults);
-        }
-
-        int win_w = 0, win_h = 0;
-        ivp_renderer_get_size(renderer, &win_w, &win_h);
-        ivp_example_dragger_update(&dragger, &cam, env, win_w, win_h, frame_dt);
-        ivp_example_focus_update(&focus, &cam, env, frame_dt);
-
-        /* Keyboard: mode switching */
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        bool k1 = keys[SDL_SCANCODE_1];
-        bool k2 = keys[SDL_SCANCODE_2];
-        bool k3 = keys[SDL_SCANCODE_3];
-
-        if (k1 && !prev_key1) {
-            /* REDUCED GRAVITY: upward acceleration partially cancels gravity.
-             * Net effect: ~3.8 m/s² down (all objects equally). */
-            current_mode = 0;
-            ivp_vec3r_t v = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0), IVP_REAL(0.0));
-            ivp_forcefield_state_init(&ff_state, IVP_FORCEFIELD_CONSTANT, &v);
-        }
-        if (k2 && !prev_key2) {
-            /* HORIZONTAL WIND: constant force in +X direction.
-             * Light objects (0.5kg) accelerate at 30 m/s², heavy (10kg) at 1.5 m/s².
-             * Demonstrates mass-dependent behavior clearly. */
-            current_mode = 1;
-            ivp_vec3r_t v = ivp_vec3r(IVP_REAL(15.0), IVP_REAL(0.0), IVP_REAL(0.0));
-            ivp_forcefield_state_init(&ff_state, IVP_FORCEFIELD_FORCE, &v);
-        }
-        if (k3 && !prev_key3) {
-            /* VISCOUS DRAG: velocity-proportional resistance.
-             * Coefficient 5 for clearly visible slowdown effect. */
-            current_mode = 2;
-            ivp_vec3r_t v = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(5.0), IVP_REAL(5.0));
-            ivp_forcefield_state_init(&ff_state, IVP_FORCEFIELD_DRAG, &v);
-        }
-        prev_key1 = k1; prev_key2 = k2; prev_key3 = k3;
-
-        sim_loop_step(&sl, env, frame_dt);
-
-        /* Grid & ground */
-        ivp_render_draw_ground_grid(renderer, 18.0f, 2.0f, c_grid);
-        {
-            float gp[3] = {0, 0, 0}, gs[3] = {18.0f, 0.5f, 18.0f};
-            ivp_render_draw_wire_box(renderer, gp, gs, NULL, c_ground);
-        }
-
-        /* Objects */
-        float max_speed = 0.0f;
-        float avg_height = 0.0f;
-        int airborne = 0;
-        for (int i = 0; i < n_obj; i++) {
-            ivp_vec3r_t p; ivp_quatr_t q;
-            ivp_object_get_position(objs[i].obj, &p);
-            ivp_object_get_orientation(objs[i].obj, &q);
-            float fp[3]; vec3r_to_float3(&p, fp);
-
-            if (objs[i].is_sphere) {
-                ivp_render_draw_wire_sphere(renderer, fp, objs[i].radius, objs[i].col);
-            } else {
-                float rot[9]; quat_to_col_rot(&q, rot);
-                ivp_render_draw_wire_box(renderer, fp, objs[i].hs, rot, objs[i].col);
-            }
-
-            ivp_vec3r_t v;
-            ivp_object_get_speed(objs[i].obj, &v);
-            float speed = vec3r_speed(&v);
-            if (speed > max_speed) max_speed = speed;
-            avg_height += -(float)p.k[1];
-            if ((float)p.k[1] < -1.0f) airborne++;
-
-            if (speed > 0.5f) {
-                float sc = 0.3f;
-                float to[3] = {fp[0]+(float)v.k[0]*sc,
-                               fp[1]+(float)v.k[1]*sc,
-                               fp[2]+(float)v.k[2]*sc};
-                ivp_render_draw_arrow(renderer, fp, to, c_vel, 0.2f);
-            }
-        }
-        avg_height /= (float)n_obj;
-
-        /* Axes */
-        {
-            float org[3] = {0, 0, 0};
-            ivp_render_draw_axes(renderer, org, NULL, 1.5f);
-        }
-
-        if (ivp_example_inspector_tick(&inspector)) {
-            ivp_example_inspector_log(&inspector,
-                "mode=%s max_speed=%.3f avg_height=%.3f airborne=%d/%d",
-                mode_names[current_mode], max_speed, avg_height,
-                airborne, n_obj);
-        }
-
-        ivp_example_interaction_draw_overlays(renderer, &dragger, &focus,
-                                              c_drag, c_focus);
-
-        /* HUD */
-        {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "FPS: %.0f  Objects: %d  Time: %.1fs",
-                     sl.fps_display, n_obj, (float)sl.t_prev);
-            ivp_render_draw_text(renderer, 10.0f, 10.0f, buf, c_hud);
-
-            snprintf(buf, sizeof(buf), "Mode: %s  [1]Gravity [2]Wind [3]Drag",
-                     mode_names[current_mode]);
-            ivp_render_draw_text(renderer, 10.0f, 30.0f, buf, c_mode);
-
-            /* Mode description */
-            const char *desc[] = {
-                "Upward accel -6 m/s^2 (net ~3.8 down, all equal)",
-                "Horizontal force +X 15N (light blown, heavy resist)",
-                "Drag coeff 5 (moving objects slow down)"
-            };
-            ivp_render_draw_text(renderer, 10.0f, 48.0f, desc[current_mode], c_hud);
-
-            snprintf(buf, sizeof(buf),
-                "Red=0.5kg  Green=3kg  Blue=10kg  Airborne: %d", airborne);
-            ivp_render_draw_text(renderer, 10.0f, 66.0f, buf, c_hud);
-
-            ivp_example_draw_interaction_hud(renderer, 10.0f, 88.0f,
-                                             c_hud, c_drag);
-        }
-
-        ivp_renderer_end_frame(renderer);
-    }
-
-    ivp_example_dragger_detach(&dragger, env);
-    ivp_environment_destroy(env);
-    ivp_compact_surface_free(NULL, cube_l);
-    ivp_compact_surface_free(NULL, cube_m);
-    ivp_compact_surface_free(NULL, cube_s);
-    ivp_compact_surface_free(NULL, ground_surf);
-    ivp_renderer_destroy(renderer);
-    return 0;
+    int rc = demo_run(&app, argc, argv);
+    demo_world_destroy(&app.world);
+    free(s);
+    return rc;
 }
