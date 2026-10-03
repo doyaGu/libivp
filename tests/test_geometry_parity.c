@@ -2,7 +2,7 @@
  * reference IVP engine.
  *
  * Every expected number below was printed by the legacy C++ engine
- * (/Users/touyou/Work/ivp, IVP_SurfaceBuilder_Pointsoup /
+ * (../ivp, IVP_SurfaceBuilder_Pointsoup /
  * IVP_SurfaceBuilder_Ledge_Soup / IVP_SurfaceBuilder_Halfspacesoup, see the
  * report for the dump program) and is compared with a relative tolerance of
  * 1e-5 (absolute 1e-6 for values near zero).
