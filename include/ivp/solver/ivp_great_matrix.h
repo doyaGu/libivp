@@ -301,6 +301,7 @@ void ivp_gmmz_matrix_multiplication(ivp_gmmz_t *m, const double *first,
 void ivp_gmmz_copy_matrix(ivp_gmmz_t *dst, const ivp_gmmz_t *src);
 void ivp_gmmz_copy_matrix_to(const ivp_gmmz_t *m, double *values,
                              double *desired);
+/* values_big_matrix: packed m->columns x m->columns, row stride m->columns */
 void ivp_gmmz_copy_to_sub_matrix(const ivp_gmmz_t *m,
                                  const double *values_big_matrix,
                                  ivp_gmmz_t *sub_matrix,

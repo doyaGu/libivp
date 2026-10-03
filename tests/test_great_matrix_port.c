@@ -408,6 +408,28 @@ IVP_TEST(lcs_invalid_args)
     IVP_ASSERT_EQ(ivp_lcs_init_and_solve(NULL, NULL, NULL, 0, 0, NULL), IVP_OK);
 }
 
+/* Reference cf18246: the source of copy_to_sub_matrix is a packed
+ * columns x columns buffer (row stride columns), even when the matrix rows
+ * are padded to aligned_row_len; the sub matrix uses its own stride. */
+IVP_TEST(gmmz_copy_to_sub_matrix_reads_packed_source)
+{
+    ivp_gmmz_t big, sub;
+    IVP_ASSERT_EQ(ivp_gmmz_init(&big, 5, NULL), IVP_OK);
+    IVP_ASSERT_EQ(ivp_gmmz_init(&sub, 2, NULL), IVP_OK);
+    double packed[64];
+    for (int k = 0; k < 64; k++) packed[k] = -1.0;
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 5; j++) packed[i * 5 + j] = (double)(10 * i + j);
+    const int original_pos[2] = {3, 1};
+    ivp_gmmz_copy_to_sub_matrix(&big, packed, &sub, original_pos);
+    IVP_ASSERT_TRUE(sub.matrix_values[0] == 33.0);
+    IVP_ASSERT_TRUE(sub.matrix_values[1] == 31.0);
+    IVP_ASSERT_TRUE(sub.matrix_values[sub.aligned_row_len + 0] == 13.0);
+    IVP_ASSERT_TRUE(sub.matrix_values[sub.aligned_row_len + 1] == 11.0);
+    ivp_gmmz_destroy(&sub, NULL);
+    ivp_gmmz_destroy(&big, NULL);
+}
+
 int main(void)
 {
     IVP_REGISTER(gmmz_init_layout);
@@ -429,5 +451,6 @@ int main(void)
     IVP_REGISTER(lcs_mixed_active_inactive);
     IVP_REGISTER(lcs_strided_matches_dense);
     IVP_REGISTER(lcs_invalid_args);
+    IVP_REGISTER(gmmz_copy_to_sub_matrix_reads_packed_source);
     IVP_RUN_ALL();
 }

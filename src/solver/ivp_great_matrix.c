@@ -1124,13 +1124,16 @@ void ivp_gmmz_fill_from_bigger_matrix(ivp_gmmz_t *m, const ivp_gmmz_t *big,
     }
 }
 
+/* values_big_matrix is a packed external buffer (columns x columns, row
+ * stride columns, like copy_matrix_to writes it); the sub matrix keeps its
+ * own aligned stride (reference cf18246) */
 void ivp_gmmz_copy_to_sub_matrix(const ivp_gmmz_t *m, const double *values_big_matrix,
                                  ivp_gmmz_t *sub_matrix, const int *original_pos)
 {
     for (int i = 0; i < sub_matrix->columns; i++) {
         for (int j = 0; j < sub_matrix->columns; j++) {
             sub_matrix->matrix_values[i * sub_matrix->aligned_row_len + j] =
-                values_big_matrix[original_pos[i] * m->aligned_row_len + original_pos[j]];
+                values_big_matrix[original_pos[i] * m->columns + original_pos[j]];
         }
     }
 }
