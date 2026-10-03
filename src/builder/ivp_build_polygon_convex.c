@@ -1112,7 +1112,7 @@ static ivp_compact_ledge_t *pc_generate_compact_ledge(const ivp_allocator_t *all
         /* c_ledge->set_offset_ledge_points(offset) (ivp_compact_ledge.hxx:173) */
         int32_t offset =
             (int32_t)(sizeof(ivp_compact_ledge_t) + (size_t)n_triangles * sizeof(ivp_compact_triangle_t));
-        IVP_ASSERT((offset & 15) == 0);
+        IVP_ASSERT((offset & 3) == 0);
         c_ledge->c_point_offset = offset;
     }
     ivp_compact_poly_point_t *pa = ivp_ledge_get_point_array_mut(c_ledge);

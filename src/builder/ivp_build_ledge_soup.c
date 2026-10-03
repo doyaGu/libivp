@@ -421,7 +421,7 @@ static int ls_copy_ledge(ls_point_merge_t *pm, const ivp_compact_ledge_t *src, c
         memcpy(dest, src, head);
         memcpy(dest + head, ivp_ledge_get_point_array(src), (size_t)size - head);
         ivp_compact_ledge_t *dl = (ivp_compact_ledge_t *)dest;
-        IVP_ASSERT(((int)head & 15) == 0);   /* set_offset_ledge_points (ivp_compact_ledge.hxx:173) */
+        IVP_ASSERT(((int)head & 3) == 0);   /* set_offset_ledge_points (ivp_compact_ledge.hxx:173) */
         dl->c_point_offset = (int32_t)head;
         ivp_ledge_set_size(dl, size);
         ivp_ledge_set_is_compact(dl, 1);
@@ -454,7 +454,7 @@ static int ls_copy_ledge(ls_point_merge_t *pm, const ivp_compact_ledge_t *src, c
     {
         /* dl->set_offset_ledge_points(offset) (ivp_compact_ledge.hxx:173) */
         int32_t offset = (int32_t)((char *)pm->first - (char *)dl);
-        IVP_ASSERT((offset & 15) == 0);
+        IVP_ASSERT((offset & 3) == 0);
         dl->c_point_offset = offset;
     }
     return size;

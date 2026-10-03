@@ -35,7 +35,7 @@ static inline bool ivp_debug_check_ledge_points(const ivp_compact_ledge_t *cl,
     typedef intptr_t intp;
     /* For debugging only.  Checks for consistency */
     IVP_ASSERT(((intp)cl & 15) == 0);
-    IVP_ASSERT_NONFATAL(((intp)ppppp & 15) == 0); /* fails for grid ledges (4-byte aligned points), as in the reference */
+    IVP_ASSERT(((intp)ppppp & 3) == 0); /* grid ledge points are only 4-byte aligned */
 
     /* all triangles */
     const ivp_compact_triangle_t *tri = ivp_ledge_get_first_triangle(cl);

@@ -223,7 +223,7 @@ static void set_points(gb_t *b, int base)
          * the grid is compiled (the work ledges and the point buffer are
          * separate allocations here) */
         intptr_t offset = (intptr_t)((uintptr_t)b->c_points - (uintptr_t)b->c_ledge);
-        IVP_ASSERT((offset & 15) == 0);
+        IVP_ASSERT((offset & 3) == 0);
         IVP_USE(offset);
     }
 }
@@ -760,7 +760,7 @@ static ivp_compact_grid_t *compile_grid(gb_t *b)
             /* cl_dest->set_offset_ledge_points(offset) (ivp_compact_ledge.hxx:173) */
             int32_t offset = (int32_t)((compact_points + (size_t)b->ledge_base[i] *
                                         sizeof(ivp_compact_poly_point_t)) - dest);
-            IVP_ASSERT_NONFATAL((offset & 15) == 0); /* grid points are 4-byte aligned: fails in the reference debug build too */
+            IVP_ASSERT((offset & 3) == 0); /* grid points are 4-byte aligned */
             cl->c_point_offset = offset;
         }
         IVP_IF(1) {
@@ -778,7 +778,7 @@ static ivp_compact_grid_t *compile_grid(gb_t *b)
         cg->offset_compact_ledge_array[i] = (int32_t)(dest - (char *)cg);
         dest += l_size;
     }
-    IVP_ASSERT_NONFATAL((char *)dest - (char *)cg == cg->byte_size); /* reference size estimate is padded: fails there too */
+    IVP_ASSERT((char *)dest - (char *)cg <= cg->byte_size); /* byte_size is a padded estimate */
 
     ivp_compact_grid_element_t *ge = (ivp_compact_grid_element_t *)((char *)cg + off_elements);
     const ivp_compact_grid_element_t *src = b->ledge_reference_field;

@@ -90,10 +90,9 @@ void ivp_assert_report(const char *expr, const char *file, int line,
         } while (0)
 
     /* Reference IVP_ASSERTs that also fail on valid data (the reference debug
-     * build raises SIGINT there, e.g. its 16-byte alignment checks on compact
-     * grid ledges, whose points are only 4-byte aligned): reported to a custom
-     * assert handler like any assert, but never trap and print nothing by
-     * default. */
+     * build raises SIGINT there, e.g. the 16-byte alignment check on compact
+     * grid ledge allocations): reported to a custom assert handler like any
+     * assert, but never trap and print nothing by default. */
     #define IVP_ASSERT_NONFATAL(expr)                                      \
         do {                                                               \
             if (!(expr)) {                                                 \

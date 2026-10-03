@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <ivp/base/ivp_assert.h>
 #include <ivp/builder/ivp_build_grid.h>
 #include <ivp/geometry/ivp_compact_grid.h>
 #include <ivp/geometry/ivp_surman_grid.h>
@@ -224,6 +225,41 @@ IVP_TEST(compact_grid_binary_layout_matches_reference)
     ivp_compact_grid_free(NULL, g);
 }
 
+/* The grid's shared point array is only 4-byte aligned and byte_size is a
+ * padded estimate.  The reference (063fceb, e0dd03a) asserts
+ * (offset & 3) == 0 and used <= byte_size, so building a grid reports no
+ * assertion failure. */
+static int g_grid_assert_count;
+
+static void grid_count_assert(const char *expr, const char *file, int line,
+                              const char *func, const char *msg, void *userdata)
+{
+    (void)expr; (void)file; (void)line; (void)func; (void)msg; (void)userdata;
+    g_grid_assert_count++;
+}
+
+IVP_TEST(compact_grid_build_reports_no_alignment_asserts)
+{
+    float h[6 * 4];
+    for (int r = 0; r < 6; r++)
+        for (int c = 0; c < 4; c++) h[r * 4 + c] = 0.3f * (float)((r * 5 + c * 3) % 4) - 0.1f * (float)r;
+    ivp_template_compact_grid_t t;
+    ivp_template_compact_grid_init(&t);
+    t.row_info.n_points = 6;
+    t.row_info.maps_to = 2;
+    t.column_info.n_points = 4;
+    t.column_info.maps_to = 0;
+    t.height_maps_to = 1;
+    t.grid_field_size = 1.5f;
+    g_grid_assert_count = 0;
+    ivp_set_assert_handler(grid_count_assert, NULL);
+    ivp_compact_grid_t *g = ivp_gridbuild_array_to_compact_grid(NULL, &t, h);
+    ivp_set_assert_handler(NULL, NULL);
+    IVP_ASSERT_NOT_NULL(g);
+    IVP_ASSERT_EQ(g_grid_assert_count, 0);
+    ivp_compact_grid_free(NULL, g);
+}
+
 IVP_TEST(compact_grid_ray_hits_flat_area)
 {
     float h[GF_ROWS * GF_COLS];
@@ -255,5 +291,6 @@ int main(void)
     IVP_REGISTER(compact_grid_inverted_axes_match_reference);
     IVP_REGISTER(compact_grid_ray_hits_flat_area);
     IVP_REGISTER(compact_grid_binary_layout_matches_reference);
+    IVP_REGISTER(compact_grid_build_reports_no_alignment_asserts);
     IVP_RUN_ALL();
 }
