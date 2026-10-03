@@ -1,855 +1,819 @@
-/* ivp_sim_unit.c — Dynamic simulation island implementation
- *
- * Aligned with reference IVP_Simulation_Unit / IVP_Sim_Units_Manager
- * (ivp_sim_unit.hxx / ivp_sim_unit.cxx).
+/* ivp_sim_unit.c — port of IVP_Simulation_Unit / IVP_Sim_Units_Manager /
+ * IVP_Controller_Manager (ivp_intern/ivp_sim_unit.cxx)
  */
-#include <ivp/dynamics/ivp_sim_unit.h>
-#include <ivp/dynamics/ivp_core.h>
-#include <ivp/dynamics/ivp_object.h>
-#include <ivp/dynamics/ivp_environment.h>
-#include <ivp/base/ivp_assert.h>
-#include <ivp/utility/ivp_union_find.h>
-#include "controllers/ivp_controller_system.h"
-#include "ivp_environment_events.h"
+#include <stdlib.h>
 #include <string.h>
 
-static int core_index_in_array(ivp_core_t **cores, int count, const ivp_core_t *core)
+#include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_message.h>
+#include <ivp/dynamics/ivp_sim_unit.h>
+#include "dynamics/ivp_sim_internal.h"
+#include "solver/ivp_friction_internal.h"
+
+static inline ivp_core_t *su_core_at(const ivp_sim_unit_t *su, int i) {
+    return (ivp_core_t *)ivp_pvec_at(&su->sim_unit_cores, i);
+}
+static inline ivp_su_ctrl_list_t *su_cl_at(const ivp_sim_unit_t *su, int i) {
+    return (ivp_su_ctrl_list_t *)ivp_pvec_at(&su->controller_cores, i);
+}
+
+/* ── lifecycle ─────────────────────────────────────────────────────────── */
+
+ivp_sim_unit_t *ivp_sim_unit_new(void)
 {
-    for (int i = 0; i < count; i++) {
-        if (cores[i] == core) return i;
+    ivp_sim_unit_t *su = (ivp_sim_unit_t *)calloc(1, sizeof(*su));
+    if (!su) return NULL;
+    su->union_find_needed_for_sim_unit = false;
+    su->sim_unit_movement_type = IVP_MT_NOT_SIM;
+    su->sim_unit_just_slowed_down = false;
+    su->sim_unit_has_fast_objects = false;
+    su->prev_sim_unit = NULL;
+    su->next_sim_unit = NULL;
+    ivp_pvec_init(&su->sim_unit_cores);
+    ivp_pvec_init(&su->controller_cores);
+    return su;
+}
+
+static void su_cl_delete(ivp_su_ctrl_list_t *cl)
+{
+    ivp_pvec_clear(&cl->cores_controlled_by);
+    free(cl);
+}
+
+void ivp_sim_unit_clean_sim_unit(ivp_sim_unit_t *su)
+{
+    for (int i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        su_cl_delete(su_cl_at(su, i));
     }
-    return -1;
+    ivp_pvec_remove_all(&su->controller_cores);
 }
 
-static void unlink_core_entry_from_unit(ivp_sim_unit_t *su,
-                                        ivp_sim_unit_core_entry_t *entry)
+void ivp_sim_unit_delete(ivp_sim_unit_t *su)
 {
-    if (entry->prev) {
-        entry->prev->next = entry->next;
-    } else {
-        su->core_list = entry->next;
-    }
-    if (entry->next) {
-        entry->next->prev = entry->prev;
-    }
-    su->core_count--;
+    if (!su) return;
+    ivp_sim_unit_clean_sim_unit(su);
+    ivp_pvec_clear(&su->controller_cores);
+    ivp_pvec_clear(&su->sim_unit_cores);
+    free(su);
 }
 
-static void link_core_entry_to_unit(ivp_sim_unit_t *su,
-                                    ivp_sim_unit_core_entry_t *entry)
-{
-    entry->prev = NULL;
-    entry->next = su->core_list;
-    if (su->core_list) {
-        su->core_list->prev = entry;
-    }
-    su->core_list = entry;
-    su->core_count++;
-}
+/* ── controller lists ──────────────────────────────────────────────────── */
 
-static void move_core_entry_between_units(ivp_sim_unit_t *from,
-                                          ivp_sim_unit_t *to,
-                                          ivp_sim_unit_core_entry_t *entry)
+static bool su_controller_is_known(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
 {
-    unlink_core_entry_from_unit(from, entry);
-    link_core_entry_to_unit(to, entry);
-
-    entry->core->sim_unit = to;
-    entry->core->sim_unit_entry = entry;
-}
-
-static ivp_controller_system_t *controller_system_from_env(ivp_environment_t *env)
-{
-    return (ivp_controller_system_t *)env->controller_system;
-}
-
-/* Until all built-in controllers are migrated to exact per-core association
- * semantics, keep this guard to avoid false-positive island splits caused by
- * global low-priority sync controllers. */
-static bool has_sync_all_cores_controller_below_gravity(ivp_environment_t *env)
-{
-    ivp_controller_system_t *cs = controller_system_from_env(env);
-    int sc = ivp_controller_system_count(cs);
-    for (int si = 0; si < sc; si++) {
-        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
-        if (!slot || !slot->enabled) continue;
-        if (slot->mode != IVP_CONTROLLER_INDEPENDENT) continue;
-        if (!slot->run_for_all_cores) continue;
-        if (slot->priority < IVP_CP_GRAVITY) return true;
+    for (int i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        if (su_cl_at(su, i)->l_controller == c) return true;
     }
     return false;
 }
 
-/* Reference-aligned behavior: dependent controllers connect simulation
- * units. Perform eager merges before PSI stepping so connected cores are
- * advanced/frozen as one island instead of relying on freeze suppression. */
-static void merge_units_connected_by_dependent_controllers(ivp_sim_units_manager_t *mgr,
-                                                           ivp_environment_t *env)
+static void su_add_controlled_core_for_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c, ivp_core_t *core)
 {
-    if (!mgr || !env) return;
-
-    ivp_controller_system_t *cs = controller_system_from_env(env);
-    ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
-    const int sc = ivp_controller_system_count(cs);
-
-    for (int si = 0; si < sc; si++) {
-        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
-        if (!slot || !slot->enabled) continue;
-        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
-
-        int count = ivp_controller_slot_collect_associated_handles(
-            slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
-        if (count <= 1) continue;
-
-        ivp_sim_unit_t *base = NULL;
-        for (int ai = 0; ai < count; ai++) {
-            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, handles[ai]);
-            if (!obj) continue;
-            ivp_core_t *core = &obj->core;
-            if (core->physical_unmoveable) continue;
-            ivp_sim_unit_t *su = core->sim_unit;
-            if (!su || su == &mgr->still_slot) continue;
-
-            if (!base) {
-                base = su;
-                continue;
-            }
-            if (su == base) continue;
-
-            if (su->core_count > base->core_count) {
-                ivp_sim_unit_t *tmp = base;
-                base = su;
-                su = tmp;
-            }
-            base = ivp_sim_unit_merge(mgr, base, su);
-        }
+    int i;
+    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        if (su_cl_at(su, i)->l_controller == c) break;
     }
+    IVP_ASSERT(i >= 0);
+    if (i < 0) return;
+    ivp_pvec_install(&su_cl_at(su, i)->cores_controlled_by, core);
 }
 
-static void union_friction_connectivity(ivp_friction_manager_t *fm,
-                                        ivp_core_t **cores,
-                                        int n,
-                                        int *parent)
+static void su_add_controller_unit_sim(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
 {
-    for (int si = 0; si < fm->system_count; si++) {
-        ivp_friction_system_t *sys = fm->systems[si];
-        if (!sys) continue;
-        for (int pi = 0; pi < sys->pair_count; pi++) {
-            const ivp_friction_core_pair_t *pair = &sys->pairs[pi];
-            int ia = core_index_in_array(cores, n, pair->cores[0]);
-            int ib = core_index_in_array(cores, n, pair->cores[1]);
-            if (ia >= 0 && ib >= 0) {
-                ivp_union_find_union(parent, ia, ib);
+    ivp_su_ctrl_list_t *cl = (ivp_su_ctrl_list_t *)calloc(1, sizeof(*cl));
+    if (!cl) return;
+    cl->l_controller = c;
+    ivp_pvec_init(&cl->cores_controlled_by);
+    ivp_pvec_add(&su->controller_cores, cl);
+}
+
+static int su_get_pos_of_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
+{
+    int i;
+    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        if (su_cl_at(su, i)->l_controller == c) break;
+    }
+    return i;
+}
+
+/* IVP_Simulation_Unit::sim_unit_exchange_controllers */
+static void su_exchange_controllers(ivp_sim_unit_t *su, int first, int second)
+{
+    IVP_ASSERT(first >= 0);
+    IVP_ASSERT(second >= 0);
+    IVP_ASSERT(first < ivp_pvec_len(&su->controller_cores));
+    IVP_ASSERT(second < ivp_pvec_len(&su->controller_cores));
+    ivp_pvec_swap(&su->controller_cores, first, second);
+}
+
+static void su_sort_controllers(ivp_sim_unit_t *su)
+{
+    int contr_num = ivp_pvec_len(&su->controller_cores);
+    int first = 0;
+    for (;;) {
+        int second = first + 1;
+        if (second >= contr_num) break;
+        int second_prio = ivp_sim_ctrl_priority(su_cl_at(su, second)->l_controller);
+        if (ivp_sim_ctrl_priority(su_cl_at(su, first)->l_controller) > second_prio) {
+            su_exchange_controllers(su, first, second);
+            int test_pos = first;
+            while ((test_pos > 0) &&
+                   (ivp_sim_ctrl_priority(su_cl_at(su, test_pos - 1)->l_controller) > second_prio)) {
+                su_exchange_controllers(su, test_pos - 1, test_pos);
+                test_pos--;
             }
         }
+        first = second;
     }
-}
-
-static void union_dependent_controller_connectivity(ivp_environment_t *env,
-                                                    ivp_core_t **cores,
-                                                    int n,
-                                                    int *parent)
-{
-    ivp_controller_system_t *cs = controller_system_from_env(env);
-    ivp_object_handle_t associated_handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
-    int sc = ivp_controller_system_count(cs);
-    for (int si = 0; si < sc; si++) {
-        ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, si);
-        if (!slot || !slot->enabled) continue;
-        if (slot->mode != IVP_CONTROLLER_DEPENDENT) continue;
-
-        int associated_count = ivp_controller_slot_collect_associated_handles(
-            slot, env, associated_handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
-        if (associated_count <= 1) continue;
-
-        int base_idx = -1;
-        for (int ai = 0; ai < associated_count; ai++) {
-            ivp_object_t *obj = ivp_environment_get_object_by_handle(env, associated_handles[ai]);
-            if (!obj) continue;
-            int idx = core_index_in_array(cores, n, &obj->core);
-            if (idx < 0) continue;
-            if (base_idx < 0) {
-                base_idx = idx;
-            } else {
-                ivp_union_find_union(parent, base_idx, idx);
-            }
-        }
-    }
-}
-
-static int label_connected_components(int *parent,
-                                      int *component,
-                                      int *component_size,
-                                      int n)
-{
-    int component_count = 0;
-    for (int i = 0; i < n; i++) {
-        int root = ivp_union_find_find(parent, i);
-        int cid = -1;
-        for (int j = 0; j < component_count; j++) {
-            if (component[j] == root) {
-                cid = j;
-                break;
-            }
-        }
-        if (cid < 0) {
-            cid = component_count;
-            component[component_count] = root;
-            component_size[component_count] = 0;
-            component_count++;
-        }
-        parent[i] = cid;
-        component_size[cid]++;
-    }
-    return component_count;
-}
-
-static void rehome_friction_controllers_after_split(ivp_sim_unit_t *su,
-                                                    ivp_friction_manager_t *fm)
-{
-    for (int si = 0; si < fm->system_count; si++) {
-        ivp_friction_system_t *sys = fm->systems[si];
-        if (!sys || sys->core_count <= 0 || !sys->cores) continue;
-
-        ivp_sim_unit_t *target_su = NULL;
-        for (int ci = 0; ci < sys->core_count; ci++) {
-            ivp_core_t *core = sys->cores[ci];
-            if (core && core->sim_unit && core->sim_unit != &su->manager->still_slot) {
-                target_su = core->sim_unit;
-                break;
-            }
-        }
-        if (!target_su) continue;
-
-        ivp_controller_core_t *ccs[3] = { &sys->static_cc, &sys->dynamic_cc, &sys->energy_cc };
-        for (int ci = 0; ci < 3; ci++) {
-            ivp_controller_core_t *cc = ccs[ci];
-            if (cc->sim_unit == target_su) continue;
-            if (cc->sim_unit) {
-                ivp_sim_unit_remove_controller(cc);
-            }
-            ivp_sim_unit_add_controller(target_su, cc);
-        }
-    }
-}
-
-static void maybe_split_disconnected_components(ivp_sim_unit_t *su,
-                                                ivp_environment_t *env)
-{
-    if (!su || !env) return;
-    if (su->core_count <= 1) return;
-    if (has_sync_all_cores_controller_below_gravity(env)) return;
-
-    ivp_core_t *local_cores[64];
-    int local_parent[64];
-    int local_component[64];
-    int local_component_size[64];
-    ivp_core_t **cores = local_cores;
-    int *parent = NULL;
-    int *component = NULL;
-    int *component_size = NULL;
-    bool heap_alloc = false;
-
-    if (su->core_count > 64) {
-        size_t core_bytes = (size_t)su->core_count * sizeof(ivp_core_t *);
-        size_t int_bytes = (size_t)su->core_count * sizeof(int);
-        cores = (ivp_core_t **)ivp_alloc(su->manager->allocator, core_bytes);
-        parent = (int *)ivp_alloc(su->manager->allocator, int_bytes);
-        component = (int *)ivp_alloc(su->manager->allocator, int_bytes);
-        component_size = (int *)ivp_alloc(su->manager->allocator, int_bytes);
-        if (!cores || !parent || !component || !component_size) {
-            if (component_size) ivp_free(su->manager->allocator, component_size, int_bytes);
-            if (component) ivp_free(su->manager->allocator, component, int_bytes);
-            if (parent) ivp_free(su->manager->allocator, parent, int_bytes);
-            if (cores) ivp_free(su->manager->allocator, cores, core_bytes);
-            return;
-        }
-        heap_alloc = true;
-    } else {
-        parent = local_parent;
-        component = local_component;
-        component_size = local_component_size;
-    }
-
-    int n = 0;
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        cores[n] = ce->core;
-        component[n] = -1;
-        component_size[n] = 0;
-        n++;
-    }
-    ivp_union_find_init(parent, n);
-
-    ivp_friction_manager_t *fm = &env->friction_manager;
-    union_friction_connectivity(fm, cores, n, parent);
-    union_dependent_controller_connectivity(env, cores, n, parent);
-
-    int component_count = label_connected_components(parent, component, component_size, n);
-
-    if (component_count > 1) {
-        int keep_component = 0;
-        for (int c = 1; c < component_count; c++) {
-            if (component_size[c] > component_size[keep_component]) {
-                keep_component = c;
-            }
-        }
-
-        for (int c = 0; c < component_count; c++) {
-            if (c == keep_component) continue;
-
-            ivp_sim_unit_t *new_su = ivp_sim_unit_create(su->manager);
-            if (!new_su) continue;
-
-            for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ) {
-                ivp_sim_unit_core_entry_t *next = ce->next;
-                int idx = core_index_in_array(cores, n, ce->core);
-                if (idx >= 0 && parent[idx] == c) {
-                    move_core_entry_between_units(su, new_su, ce);
-                }
-                ce = next;
-            }
-        }
-
-        rehome_friction_controllers_after_split(su, fm);
-    }
-
-    if (heap_alloc) {
-        size_t core_bytes = (size_t)n * sizeof(ivp_core_t *);
-        size_t int_bytes = (size_t)n * sizeof(int);
-        ivp_free(su->manager->allocator, component_size, int_bytes);
-        ivp_free(su->manager->allocator, component, int_bytes);
-        ivp_free(su->manager->allocator, parent, int_bytes);
-        ivp_free(su->manager->allocator, cores, core_bytes);
-    }
-}
-
-/* ── Internal helpers ──────────────────────────────────────────────────── */
-
-static ivp_sim_unit_core_entry_t *alloc_core_entry(ivp_sim_units_manager_t *mgr)
-{
-    ivp_sim_unit_core_entry_t *e = (ivp_sim_unit_core_entry_t *)ivp_alloc(
-        mgr->allocator, sizeof(ivp_sim_unit_core_entry_t));
-    if (e) memset(e, 0, sizeof(*e));
-    return e;
-}
-
-static void free_core_entry(ivp_sim_units_manager_t *mgr, ivp_sim_unit_core_entry_t *e)
-{
-    ivp_free(mgr->allocator, e, sizeof(ivp_sim_unit_core_entry_t));
-}
-
-/* Unlink a sim unit from the manager's active list. */
-static void unlink_from_active(ivp_sim_units_manager_t *mgr, ivp_sim_unit_t *su)
-{
-    if (su->prev_unit) {
-        su->prev_unit->next_unit = su->next_unit;
-    } else {
-        mgr->active_units = su->next_unit;
-    }
-    if (su->next_unit) {
-        su->next_unit->prev_unit = su->prev_unit;
-    }
-    su->next_unit = NULL;
-    su->prev_unit = NULL;
-    mgr->active_count--;
-}
-
-/* Link a sim unit into the manager's active list (at head). */
-static void link_to_active(ivp_sim_units_manager_t *mgr, ivp_sim_unit_t *su)
-{
-    su->prev_unit = NULL;
-    su->next_unit = mgr->active_units;
-    if (mgr->active_units) {
-        mgr->active_units->prev_unit = su;
-    }
-    mgr->active_units = su;
-    mgr->active_count++;
-}
-
-/* ── Manager lifecycle ─────────────────────────────────────────────────── */
-
-ivp_sim_units_manager_t *ivp_sim_units_manager_create(ivp_environment_t *env,
-                                                       const ivp_allocator_t *alloc)
-{
-    if (!alloc) alloc = ivp_default_allocator();
-
-    ivp_sim_units_manager_t *mgr = (ivp_sim_units_manager_t *)ivp_alloc(
-        alloc, sizeof(ivp_sim_units_manager_t));
-    if (!mgr) return NULL;
-
-    memset(mgr, 0, sizeof(*mgr));
-    mgr->env = env;
-    mgr->allocator = alloc;
-    mgr->active_units = NULL;
-    mgr->active_count = 0;
-
-    /* Initialize still_slot as a pseudo-unit for frozen cores */
-    memset(&mgr->still_slot, 0, sizeof(mgr->still_slot));
-    mgr->still_slot.movement_type = IVP_SUM_STILL;
-    mgr->still_slot.manager = mgr;
-
-    return mgr;
-}
-
-void ivp_sim_units_manager_destroy(ivp_sim_units_manager_t *mgr)
-{
-    if (!mgr) return;
-
-    /* Free all active units and their core entries */
-    ivp_sim_unit_t *su = mgr->active_units;
-    while (su) {
-        ivp_sim_unit_t *next = su->next_unit;
-
-        /* Free core entries */
-        ivp_sim_unit_core_entry_t *ce = su->core_list;
-        while (ce) {
-            ivp_sim_unit_core_entry_t *cn = ce->next;
-            ce->core->sim_unit = NULL;
-            ce->core->sim_unit_entry = NULL;
-            free_core_entry(mgr, ce);
-            ce = cn;
-        }
-
-        ivp_free(mgr->allocator, su, sizeof(ivp_sim_unit_t));
-        su = next;
-    }
-
-    /* Free still_slot core entries */
+    IVP_IF(1)
     {
-        ivp_sim_unit_core_entry_t *ce = mgr->still_slot.core_list;
-        while (ce) {
-            ivp_sim_unit_core_entry_t *cn = ce->next;
-            ce->core->sim_unit = NULL;
-            ce->core->sim_unit_entry = NULL;
-            free_core_entry(mgr, ce);
-            ce = cn;
+        for (int i = 0; i < contr_num - 1; i++) {
+            IVP_ASSERT(!(ivp_sim_ctrl_priority(su_cl_at(su, i)->l_controller) >
+                         ivp_sim_ctrl_priority(su_cl_at(su, i + 1)->l_controller)));
         }
-        mgr->still_slot.core_list = NULL;
-    }
-
-    const ivp_allocator_t *alloc = mgr->allocator;
-    ivp_free(alloc, mgr, sizeof(ivp_sim_units_manager_t));
-}
-
-/* ── Sim unit lifecycle ────────────────────────────────────────────────── */
-
-ivp_sim_unit_t *ivp_sim_unit_create(ivp_sim_units_manager_t *mgr)
-{
-    ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_alloc(
-        mgr->allocator, sizeof(ivp_sim_unit_t));
-    if (!su) return NULL;
-
-    memset(su, 0, sizeof(*su));
-    su->movement_type = IVP_SUM_MOVING;
-    su->manager = mgr;
-
-    link_to_active(mgr, su);
-    return su;
-}
-
-void ivp_sim_unit_destroy(ivp_sim_units_manager_t *mgr, ivp_sim_unit_t *su)
-{
-    if (!su || su == &mgr->still_slot) return;
-    IVP_ASSERT(su->core_count == 0);
-    IVP_ASSERT(su->controller_count == 0);
-
-    unlink_from_active(mgr, su);
-    ivp_free(mgr->allocator, su, sizeof(ivp_sim_unit_t));
-}
-
-/* ── Core management ───────────────────────────────────────────────────── */
-
-void ivp_sim_unit_add_core(ivp_sim_unit_t *su, ivp_core_t *core)
-{
-    IVP_ASSERT(su && core);
-
-    /* If already in a different unit, remove first */
-    if (core->sim_unit && core->sim_unit != su) {
-        ivp_sim_unit_remove_core(su->manager, core);
-    }
-
-    /* Already in this unit? */
-    if (core->sim_unit == su) return;
-
-    ivp_sim_unit_core_entry_t *entry = alloc_core_entry(su->manager);
-    if (!entry) return;
-
-    entry->core = core;
-    link_core_entry_to_unit(su, entry);
-
-    core->sim_unit = su;
-    core->sim_unit_entry = entry;
-}
-
-void ivp_sim_unit_remove_core(ivp_sim_units_manager_t *mgr, ivp_core_t *core)
-{
-    if (!core || !core->sim_unit) return;
-
-    ivp_sim_unit_t *su = core->sim_unit;
-    ivp_sim_unit_core_entry_t *entry = core->sim_unit_entry;
-    IVP_ASSERT(entry);
-
-    unlink_core_entry_from_unit(su, entry);
-
-    core->sim_unit = NULL;
-    core->sim_unit_entry = NULL;
-    free_core_entry(mgr, entry);
-
-    /* Destroy unit if empty (and not still_slot) */
-    if (su->core_count == 0 && su->controller_count == 0 && su != &mgr->still_slot) {
-        ivp_sim_unit_destroy(mgr, su);
     }
 }
 
-/* ── Sim unit merge ────────────────────────────────────────────────────── */
-
-ivp_sim_unit_t *ivp_sim_unit_merge(ivp_sim_units_manager_t *mgr,
-                                    ivp_sim_unit_t *su_a,
-                                    ivp_sim_unit_t *su_b)
+void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
 {
-    if (su_a == su_b) return su_a;
-    IVP_ASSERT(su_a && su_b);
-    IVP_ASSERT(su_a != &mgr->still_slot && su_b != &mgr->still_slot);
-
-    /* Move all cores from su_b to su_a */
-    ivp_sim_unit_core_entry_t *ce = su_b->core_list;
-    while (ce) {
-        ivp_sim_unit_core_entry_t *next = ce->next;
-        move_core_entry_between_units(su_b, su_a, ce);
-        ce = next;
-    }
-
-    /* Move all controllers from su_b to su_a (re-insert sorted) */
-    ivp_controller_core_t *cc = su_b->controller_list;
-    while (cc) {
-        ivp_controller_core_t *next = cc->next_in_unit;
-        cc->next_in_unit = NULL;
-        cc->prev_in_unit = NULL;
-        cc->sim_unit = NULL;
-        su_b->controller_count--;
-        ivp_sim_unit_add_controller(su_a, cc);
-        cc = next;
-    }
-    su_b->controller_list = NULL;
-    su_b->controller_count = 0;
-
-    /* Destroy the now-empty su_b */
-    ivp_sim_unit_destroy(mgr, su_b);
-
-    return su_a;
-}
-
-/* ── Controller registration ───────────────────────────────────────────── */
-
-void ivp_sim_unit_add_controller(ivp_sim_unit_t *su, ivp_controller_core_t *cc)
-{
-    IVP_ASSERT(su && cc);
-
-    /* Remove from previous unit if any */
-    if (cc->sim_unit) {
-        ivp_sim_unit_remove_controller(cc);
-    }
-
-    cc->sim_unit = su;
-
-    /* Insert sorted by priority (descending: higher first) */
-    ivp_controller_core_t **pp = &su->controller_list;
-    while (*pp && (*pp)->priority >= cc->priority) {
-        pp = &(*pp)->next_in_unit;
-    }
-
-    cc->next_in_unit = *pp;
-    cc->prev_in_unit = NULL;
-    if (*pp) {
-        cc->prev_in_unit = (*pp)->prev_in_unit;
-        (*pp)->prev_in_unit = cc;
-    } else {
-        /* Inserting at end: find the last element for prev_in_unit */
-        ivp_controller_core_t *last = su->controller_list;
-        while (last && last->next_in_unit) {
-            last = last->next_in_unit;
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        ivp_core_t *my_core = su_core_at(su, i);
+        for (int k = ivp_pvec_len(&my_core->controllers_of_core) - 1; k >= 0; k--) {
+            ivp_sim_ctrl_t *c = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, k);
+            if (!su_controller_is_known(su, c)) su_add_controller_unit_sim(su, c);
+            su_add_controlled_core_for_controller(su, c, my_core);
         }
-        cc->prev_in_unit = (last != cc) ? last : NULL;
     }
-    if (cc->prev_in_unit) {
-        cc->prev_in_unit->next_in_unit = cc;
-    } else {
-        su->controller_list = cc;
-    }
-
-    su->controller_count++;
+    su_sort_controllers(su);
 }
 
-void ivp_sim_unit_remove_controller(ivp_controller_core_t *cc)
+static void su_rem_sim_unit_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
 {
-    if (!cc || !cc->sim_unit) return;
-
-    ivp_sim_unit_t *su = cc->sim_unit;
-
-    if (cc->prev_in_unit) {
-        cc->prev_in_unit->next_in_unit = cc->next_in_unit;
-    } else {
-        su->controller_list = cc->next_in_unit;
-    }
-    if (cc->next_in_unit) {
-        cc->next_in_unit->prev_in_unit = cc->prev_in_unit;
-    }
-
-    cc->next_in_unit = NULL;
-    cc->prev_in_unit = NULL;
-    cc->sim_unit = NULL;
-
-    su->controller_count--;
+    int pos = su_get_pos_of_controller(su, c);
+    IVP_ASSERT(pos >= 0);
+    if (pos < 0) return;
+    su_cl_delete(su_cl_at(su, pos));
+    ivp_pvec_remove_at(&su->controller_cores, pos);
 }
 
-/* ── PSI execution ─────────────────────────────────────────────────────── */
-
-void ivp_sim_unit_simulate_psi(ivp_sim_unit_t *su,
-                                ivp_environment_t *env,
-                                ivp_real_t delta_time,
-                                ivp_time_t step_end_time)
+void ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c)
 {
-    if (!su || su->core_count == 0) return;
+    if (!su_controller_is_known(su, c)) su_add_controller_unit_sim(su, c);
+    su_add_controlled_core_for_controller(su, c, core);
+    su_sort_controllers(su);
+}
 
-    /* Step 1: Init all cores for PSI + reset cascade fields.
-     * Reference (ivp_sim_unit.cxx:844): uses per-core d_time =
-     * current_time - core->time_of_last_psi for forward projection.
-     * This handles revived cores whose time_of_last_psi may be stale. */
-    ivp_time_t current_time = step_end_time - (ivp_time_t)delta_time;
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_t *core = ce->core;
-        core->temporarily_unmovable = false;
-        core->impacts_since_last_PSI = 0;
-        ivp_real_t d_time = (ivp_real_t)(current_time - core->time_of_last_psi);
-        if (d_time <= IVP_REAL(0.0)) d_time = delta_time;
-        ivp_core_init_for_psi_ex(core, d_time, env->use_forward_projection);
+void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c)
+{
+    int pos = su_get_pos_of_controller(su, c);
+    IVP_ASSERT(pos >= 0);
+    if (pos < 0) return;
+    ivp_su_ctrl_list_t *cl = su_cl_at(su, pos);
+    ivp_pvec_remove(&cl->cores_controlled_by, core);
+    if (ivp_pvec_len(&cl->cores_controlled_by) <= 0) {
+        su_cl_delete(cl);
+        ivp_pvec_remove_at(&su->controller_cores, pos);
+    }
+}
+
+/* ── cores ─────────────────────────────────────────────────────────────── */
+
+void ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core) { ivp_pvec_add(&su->sim_unit_cores, core); }
+void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core) { ivp_pvec_remove(&su->sim_unit_cores, core); }
+
+void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *del_core)
+{
+    ivp_sim_unit_rem_sim_unit_core(su, del_core);
+    for (int i = ivp_pvec_len(&del_core->controllers_of_core) - 1; i >= 0; i--) {
+        ivp_sim_ctrl_t *c = (ivp_sim_ctrl_t *)ivp_pvec_at(&del_core->controllers_of_core, i);
+        int pos = su_get_pos_of_controller(su, c);
+        IVP_ASSERT(pos >= 0);
+        if (pos < 0) continue;
+        ivp_su_ctrl_list_t *cl = su_cl_at(su, pos);
+        ivp_pvec_remove(&cl->cores_controlled_by, del_core);
+        if (ivp_pvec_len(&cl->cores_controlled_by) == 0) su_rem_sim_unit_controller(su, c);
+    }
+    if (ivp_pvec_len(&su->sim_unit_cores) == 0) {
+        ivp_sim_units_mgr_rem_sim_unit(ivp_env_get_sim_units_manager(ivp_core_env(del_core)), su);
+        ivp_sim_unit_delete(su);
+    }
+}
+
+/* IVP_Simulation_Unit::sim_unit_core_exists */
+bool ivp_sim_unit_sim_unit_core_exists(ivp_sim_unit_t *su, ivp_core_t *core)
+{
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        if (su_core_at(su, i) == core) return true;
+    }
+    return false;
+}
+
+#ifdef IVP_DEBUG_BUILD
+/* IVP_Simulation_Unit::sim_unit_debug_out (reference: #ifdef DEBUG) */
+void ivp_sim_unit_sim_unit_debug_out(ivp_sim_unit_t *su)
+{
+    ivp_debug_printf("sim_unit_cores:\n");
+    int i;
+    for (i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        ivp_core_t *my_core = su_core_at(su, i);
+        ivp_debug_printf("%p: ", (void *)my_core);
+        ivp_sim_ctrl_t *my_cnt;
+        int j;
+        for (j = ivp_pvec_len(&my_core->controllers_of_core) - 1; j >= 0; j--) {
+            my_cnt = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, j);
+            ivp_debug_printf("%p ", (void *)my_cnt);
+        }
+        ivp_debug_printf("\n");
     }
 
-    /* Step 2: Commit all async pushes BEFORE controllers run
-     * (reference: ivp_sim_unit.cxx:890,908) */
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_commit_async_pushes(ce->core);
+    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        ivp_debug_printf("    controlr %p: ", (void *)su_cl_at(su, i)->l_controller);
+        int j;
+        ivp_su_ctrl_list_t *c_info = su_cl_at(su, i);
+        for (j = ivp_pvec_len(&c_info->cores_controlled_by) - 1; j >= 0; j--) {
+            ivp_debug_printf("%p ", ivp_pvec_at(&c_info->cores_controlled_by, j));
+        }
+        ivp_debug_printf("\n");
+    }
+}
+
+/* IVP_Simulation_Unit::sim_unit_debug_consistency (reference: #ifdef DEBUG) */
+void ivp_sim_unit_sim_unit_debug_consistency(ivp_sim_unit_t *su)
+{
+    /* every core has to occur only once */
+    int i, j;
+    for (i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        ivp_core_t *search_core = su_core_at(su, i);
+        for (j = i - 1; j >= 0; j--) {
+            IVP_ASSERT(su_core_at(su, j) != search_core);
+        }
+        IVP_ASSERT(!search_core->physical_unmoveable);
+        IVP_ASSERT(search_core->sim_unit == su);
+    }
+    /* every controller has to occur only once */
+    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        ivp_sim_ctrl_t *search_controller = su_cl_at(su, i)->l_controller;
+        for (j = i - 1; j >= 0; j--) {
+            IVP_ASSERT(su_cl_at(su, j)->l_controller != search_controller);
+        }
+        IVP_USE(search_controller);
     }
 
-    /* Step 3: Run ALL controllers (global + per-unit) in unified descending
-     * priority order via two-pointer merge.
-     *
-     * Reference ordering (ivp_sim_unit.cxx:907-952):
-     *   Controllers are sorted, then executed from highest priority first:
-     *   energy_friction(2000) → forcefield(1600) → actuator(1500) →
-     *   spring(1400) → gravity(1000) → dynamic_friction(600) →
-     *   motion(500) → constraints(405) → static_friction(0)
-     */
-    ivp_environment_run_controllers_for_unit(env, su, delta_time);
-
-    /* Note: post-controller commit is NOT done here.
-     * In the reference, the gravity controller (IVP_CP_GRAVITY=1000) calls
-     * commit_all_async_pushes() mid-execution, which commits impulses from
-     * higher-priority controllers (priority > 1000: springs, energy friction).
-     * Lower-priority controllers (< 1000: constraints, static friction) leave
-     * their async pushes to be committed at the start of the NEXT PSI. */
-
-    /* Step 4: Integration — calc_next_PSI_matrix for all cores
-     * (reference: ivp_sim_unit.cxx:953-961) */
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_t *core = ce->core;
-        ivp_core_calc_next_psi_matrix(core, delta_time);
-        core->time_of_last_psi = step_end_time;
+    /* sim_unit_controllers and controller_cores are associated */
+    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        ivp_su_ctrl_list_t *c_info = su_cl_at(su, i);
+        /* every core in controller list must exist */
+        for (j = ivp_pvec_len(&c_info->cores_controlled_by) - 1; j >= 0; j--) {
+            ivp_core_t *test_core = (ivp_core_t *)ivp_pvec_at(&c_info->cores_controlled_by, j);
+            IVP_ASSERT(ivp_sim_unit_sim_unit_core_exists(su, test_core) == true);
+            IVP_USE(test_core);
+        }
     }
 
-    /* Step 5: Movement state / freeze check */
-    ivp_sim_unit_calc_movement_state(su, env);
+    /* all cores must have all their controllers in controller list */
+    for (int i1 = ivp_pvec_len(&su->sim_unit_cores) - 1; i1 >= 0; i1--) {
+        ivp_core_t *my_core = su_core_at(su, i1);
+        for (int i2 = ivp_pvec_len(&my_core->controllers_of_core) - 1; i2 >= 0; i2--) {
+            ivp_sim_ctrl_t *my_controller = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, i2);
 
-    /* If the unit was frozen (all cores moved to still_slot), destroy it
-     * and skip further processing.  simulate_all_psi already snapshots
-     * the next pointer, so removing from active_units is safe. */
-    if (su->core_count == 0) {
-        ivp_sim_unit_destroy(su->manager, su);
+            IVP_ASSERT(su_controller_is_known(su, my_controller) == true);
+
+            /* for every core its via controllers associated cores must exist */
+            ivp_pvec_t *core_list = my_controller->vt->get_associated_controlled_cores(my_controller);
+            for (int i4 = (core_list ? ivp_pvec_len(core_list) : 0) - 1; i4 >= 0; i4--) {
+                ivp_core_t *test_core = (ivp_core_t *)ivp_pvec_at(core_list, i4);
+                IVP_ASSERT(!test_core->physical_unmoveable);
+                IVP_ASSERT(ivp_sim_unit_sim_unit_core_exists(su, test_core) == true);
+                IVP_USE(test_core);
+            }
+
+            /* every core/controller pair must be represented in c_info */
+            int pos = su_get_pos_of_controller(su, my_controller);
+            if (pos < 0) continue; /* libivp: no element_at(-1) */
+            ivp_su_ctrl_list_t *c_info = su_cl_at(su, pos);
+            int found = 0;
+            for (int i5 = ivp_pvec_len(&c_info->cores_controlled_by) - 1; i5 >= 0; i5--) {
+                ivp_core_t *tt_core = (ivp_core_t *)ivp_pvec_at(&c_info->cores_controlled_by, i5);
+                if (tt_core == my_core) {
+                    found = 1;
+                }
+                /* this controller must be found in my cores controller list */
+                int find_contr = 0;
+                for (int k = 0; k < ivp_pvec_len(&tt_core->controllers_of_core); k++) {
+                    if (ivp_pvec_at(&tt_core->controllers_of_core, k) == (void *)my_controller) {
+                        find_contr = 1;
+                    }
+                }
+                IVP_ASSERT(find_contr == 1);
+                IVP_USE(find_contr);
+            }
+            IVP_ASSERT(found == 1);
+            IVP_USE(found);
+        }
+    }
+}
+#endif /* IVP_DEBUG_BUILD */
+
+/* ── manager ───────────────────────────────────────────────────────────── */
+
+void ivp_sim_units_mgr_init(ivp_sim_units_manager_t *m, struct ivp_environment *env)
+{
+    m->l_environment = env;
+    m->sim_units_slot0 = NULL;
+    m->still_slot = NULL;
+}
+
+static void mgr_add_unit_to_slot(ivp_sim_unit_t *sim_u, ivp_sim_unit_t **slot)
+{
+    ivp_sim_unit_t *s_u = *slot;
+    sim_u->next_sim_unit = s_u;
+    if (s_u) s_u->prev_sim_unit = sim_u;
+    sim_u->prev_sim_unit = NULL;
+    *slot = sim_u;
+}
+
+static void mgr_rem_unit_from_slot(ivp_sim_unit_t *sim_u, ivp_sim_unit_t **slot)
+{
+    ivp_sim_unit_t *prev_u = sim_u->prev_sim_unit;
+    ivp_sim_unit_t *next_u = sim_u->next_sim_unit;
+    if (prev_u) {
+        prev_u->next_sim_unit = next_u;
+    } else {
+        *slot = next_u;
+    }
+    if (next_u) next_u->prev_sim_unit = prev_u;
+}
+
+void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
+{
+    ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
+    mgr_add_unit_to_slot(su, slot);
+}
+
+void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
+{
+    ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
+    mgr_rem_unit_from_slot(su, slot);
+}
+
+/* ── merge / split / union find ────────────────────────────────────────── */
+
+void ivp_sim_unit_throw_cores_into_my_sim_unit(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
+{
+    struct ivp_environment *env = NULL;
+    for (int i = 0; i < ivp_pvec_len(&second_unit->sim_unit_cores); i++) {
+        ivp_core_t *my_core = su_core_at(second_unit, i);
+        ivp_sim_unit_add_sim_unit_core(su, my_core);
+        env = ivp_core_env(my_core);
+        my_core->sim_unit = su;
+    }
+    if (env) ivp_sim_units_mgr_rem_sim_unit(ivp_env_get_sim_units_manager(env), second_unit);
+}
+
+void ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
+{
+    ivp_sim_unit_clean_sim_unit(su);
+    ivp_sim_unit_throw_cores_into_my_sim_unit(su, second_unit);
+    ivp_sim_unit_sim_unit_calc_redundants(su);
+}
+
+static ivp_core_t *su_union_find_test(ivp_sim_unit_t *su)
+{
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        su_core_at(su, i)->union_find_father = NULL;
+    }
+    for (int i2 = ivp_pvec_len(&su->controller_cores) - 1; i2 >= 0; i2--) {
+        ivp_sim_ctrl_t *c = su_cl_at(su, i2)->l_controller;
+        ivp_pvec_t *list_of_cores = c->vt->get_associated_controlled_cores(c);
+        if (!list_of_cores) continue;
+        int j = ivp_pvec_len(list_of_cores) - 1;
+        if (j >= 0) {
+            ivp_core_t *father_core = ivp_core_union_find_get_father((ivp_core_t *)ivp_pvec_at(list_of_cores, 0));
+            for (; j >= 0; j--) {
+                ivp_core_t *test_core = (ivp_core_t *)ivp_pvec_at(list_of_cores, j);
+                ivp_core_t *test_father = ivp_core_union_find_get_father(test_core);
+                if (father_core != test_father) test_father->union_find_father = father_core;
+            }
+        }
+    }
+    ivp_core_t *first_father = ivp_core_union_find_get_father(su_core_at(su, 0));
+    for (int j = 0; j < ivp_pvec_len(&su->sim_unit_cores); j++) {
+        ivp_core_t *test_father = ivp_core_union_find_get_father(su_core_at(su, j));
+        if (test_father != first_father) return test_father;
+    }
+    return NULL;
+}
+
+static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
+{
+    IVP_ASSERT(split_father);
+    ivp_core_t *next_split_father = NULL;
+    bool next_split_necessary = false;
+    ivp_sim_unit_t *split_new_unit = ivp_sim_unit_new();
+    if (!split_new_unit) return;
+    split_new_unit->sim_unit_movement_type = IVP_MT_MOVING;
+    ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(ivp_core_env(split_father)), split_new_unit);
+    for (int i = 0; i < ivp_pvec_len(&su->sim_unit_cores); i++) {
+        ivp_core_t *my_core = su_core_at(su, i);
+        ivp_core_t *test_core = ivp_core_union_find_get_father(my_core);
+        if (test_core != split_father) {
+            if (next_split_father != NULL) {
+                if (test_core != next_split_father) next_split_necessary = true;
+            } else {
+                next_split_father = test_core;
+            }
+        } else {
+            ivp_pvec_remove_at(&su->sim_unit_cores, i);
+            i--;
+            ivp_pvec_add(&split_new_unit->sim_unit_cores, my_core);
+            my_core->sim_unit = split_new_unit;
+        }
+    }
+    ivp_sim_unit_sim_unit_calc_redundants(split_new_unit);
+#ifdef IVP_DEBUG_BUILD
+    IVP_IF(1)
+    {
+        ivp_sim_unit_sim_unit_debug_consistency(split_new_unit);
+    }
+#endif
+    if (next_split_necessary) su_split_sim_unit(su, next_split_father);
+}
+
+static void su_perform_test_and_split(ivp_sim_unit_t *su)
+{
+    ivp_core_t *father = su_union_find_test(su);
+    if (father) {
+        ivp_sim_unit_clean_sim_unit(su);
+        su_split_sim_unit(su, father);
+        ivp_sim_unit_sim_unit_calc_redundants(su);
+#ifdef IVP_DEBUG_BUILD
+        ivp_sim_unit_sim_unit_debug_consistency(su);
+#endif
+    }
+}
+
+void ivp_sim_unit_do_sim_unit_union_find(ivp_sim_unit_t *su)
+{
+    ivp_sim_unit_clean_sim_unit(su);
+    ivp_sim_unit_sim_unit_calc_redundants(su);
+    su_perform_test_and_split(su);
+    su->union_find_needed_for_sim_unit = false;
+}
+
+/* ── revive / freeze ───────────────────────────────────────────────────── */
+
+void ivp_sim_unit_revive_for_simulation(ivp_sim_unit_t *su, struct ivp_environment *env)
+{
+revive_all_cores:
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        ivp_core_t *my_core = su_core_at(su, i);
+        IVP_ASSERT(!my_core->physical_unmoveable);
+        if (my_core->movement_state >= IVP_MT_NOT_SIM) {
+            bool fusion_was_done = ivp_core_revive_simulation_core(my_core);
+            if (fusion_was_done) {
+                /* the cores may have moved into another unit */
+                su = my_core->sim_unit;
+                goto revive_all_cores;
+            }
+        }
+    }
+    if (su->sim_unit_movement_type == IVP_MT_NOT_SIM) {
+        ivp_sim_units_manager_t *m = ivp_env_get_sim_units_manager(env);
+        ivp_sim_units_mgr_rem_sim_unit(m, su);
+        su->sim_unit_movement_type = IVP_MT_MOVING;
+        ivp_sim_units_mgr_add_sim_unit(m, su);
+    }
+}
+
+void ivp_sim_unit_ensure_cores_movement(ivp_sim_unit_t *su)
+{
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        ivp_core_reset_freeze_check_values(su_core_at(su, i));
+    }
+}
+
+void ivp_sim_unit_ensure_in_simulation(ivp_sim_unit_t *su)
+{
+    if (su->sim_unit_movement_type >= IVP_MT_NOT_SIM) {
+        IVP_ASSERT(ivp_pvec_len(&su->sim_unit_cores) > 0);
+        ivp_sim_unit_revive_for_simulation(su, ivp_core_env(su_core_at(su, 0)));
+    } else {
+        ivp_sim_unit_ensure_cores_movement(su);
+    }
+}
+
+static void su_clear_movement_check_values(ivp_sim_unit_t *su)
+{
+    for (int c = ivp_pvec_len(&su->sim_unit_cores) - 1; c >= 0; c--) {
+        ivp_core_reset_freeze_check_values(su_core_at(su, c));
+    }
+}
+
+static bool su_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *env)
+{
+    int whole_sys = IVP_MT_CALM;
+    ivp_time_t current_time = ivp_env_get_current_time(env);
+    for (int c = ivp_pvec_len(&su->sim_unit_cores) - 1; c >= 0; c--) {
+        ivp_core_t *core = su_core_at(su, c);
+        core->movement_state = ivp_core_calc_movement_state(core, current_time);
+        whole_sys = whole_sys & (int)core->movement_state;
+    }
+    if (whole_sys == IVP_MT_CALM) {
+        for (int n = ivp_pvec_len(&su->sim_unit_cores) - 1; n >= 0; n--) {
+            ivp_core_freeze_simulation_core(su_core_at(su, n));
+        }
+        ivp_sim_units_manager_t *m = ivp_env_get_sim_units_manager(env);
+        ivp_sim_units_mgr_rem_sim_unit(m, su);
+        su->sim_unit_movement_type = IVP_MT_NOT_SIM;
+        ivp_sim_units_mgr_add_sim_unit(m, su);
+        return true;
+    }
+    return false;
+}
+
+bool ivp_sim_unit_sim_unit_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *env)
+{
+    return su_calc_movement_state(su, env);
+}
+
+/* ── PSI ───────────────────────────────────────────────────────────────── */
+
+/* IVP_Simulation_Unit::init_moving_core_for_psi */
+static void su_init_moving_core_for_psi(ivp_core_t *core, ivp_time_t c_time)
+{
+    IVP_IF(1)
+    {
+        ivp_fr_info_for_core_t *info = ivp_core_moveable_core_has_friction_info(core);
+        struct ivp_fr_system *fs = NULL;
+        if (info) {
+            fs = info->l_friction_system;
+        }
+        IVP_USE(fs);
+    }
+
+    IVP_ASSERT(!core->physical_unmoveable);
+    double d_time = ivp_time_diff(c_time, core->time_of_last_psi);
+    ivp_quat_to_mat3(&core->q_world_f_core_next_psi, &core->m_world_f_core_last_psi.rot);
+    core->m_world_f_core_last_psi.pos.k[0] =
+        (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[0] + (double)core->delta_world_f_core_psis.k[0] * d_time);
+    core->m_world_f_core_last_psi.pos.k[1] =
+        (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[1] + (double)core->delta_world_f_core_psis.k[1] * d_time);
+    core->m_world_f_core_last_psi.pos.k[2] =
+        (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[2] + (double)core->delta_world_f_core_psis.k[2] * d_time);
+}
+
+static int su_fast_moving_flag(ivp_core_t *my_core)
+{
+    /* IVP_U_Float_Point::quad_length (float arithmetic) */
+    const float sx = (float)my_core->speed.k[0], sy = (float)my_core->speed.k[1], sz = (float)my_core->speed.k[2];
+    float ql = sx * sx + sy * sy + sz * sz;
+    float fast_moving_core_p = (float)((double)(IVP_OBJECT_MOVING_FAST * IVP_OBJECT_MOVING_FAST) - (double)ql);
+    int fast_moving_core;
+    memcpy(&fast_moving_core, &fast_moving_core_p, sizeof(int));
+    return fast_moving_core;
+}
+
+static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su, ivp_sim_es_t *es, ivp_pvec_t *touched_cores)
+{
+#ifdef IVP_DEBUG_BUILD
+    IVP_IF(1)
+    {
+        ivp_sim_unit_sim_unit_debug_consistency(su);
+    }
+#endif
+    struct ivp_environment *env = es->environment;
+    es->sim_unit = su;
+    ivp_env_sim_mem_begin(env);
+    int controller_num = ivp_pvec_len(&su->controller_cores);
+    ivp_time_t current_time = ivp_env_get_current_time(env);
+    int fast_moving_flag = 0;
+    for (int d = ivp_pvec_len(&su->sim_unit_cores) - 1; d >= 0; d--) {
+        ivp_core_t *my_core = su_core_at(su, d);
+        su_init_moving_core_for_psi(my_core, current_time);
+        IVP_IF(1)
+        {
+            for (int k = ivp_core_n_objects(my_core) - 1; k >= 0; k--) {
+                IVP_ASSERT(ivp_core_object_at(my_core, k)->object_movement_state < IVP_MT_NOT_SIM);
+            }
+        }
+        ivp_core_commit_all_async_pushes_ref(my_core);
+        my_core->temporarily_unmovable = false;
+        my_core->impacts_since_last_PSI = 0;
+        fast_moving_flag |= su_fast_moving_flag(my_core);
+    }
+    bool check_movement_state;
+    if (fast_moving_flag < 0) {
+        su->sim_unit_has_fast_objects = true;
+        check_movement_state = ivp_env_must_perform_movement_check(env);
+    } else {
+        su->sim_unit_just_slowed_down = su->sim_unit_has_fast_objects;
+        if (su->sim_unit_just_slowed_down) su_clear_movement_check_values(su);
+        su->sim_unit_has_fast_objects = false;
+        check_movement_state = ivp_env_must_perform_movement_check(env);
+    }
+    for (int j = controller_num - 1; j >= 0; j--) {
+        if (j >= ivp_pvec_len(&su->controller_cores)) continue;
+        int debug_contr_prio;
+        ivp_su_ctrl_list_t *cl = su_cl_at(su, j);
+        ivp_sim_ctrl_t *c = cl->l_controller;
+        IVP_IF(1)
+        {
+            debug_contr_prio = ivp_sim_ctrl_priority(c);
+            IVP_USE(debug_contr_prio);
+        }
+        c->vt->do_simulation(c, es, &cl->cores_controlled_by);
+        IVP_IF(1)
+        {
+            for (int tc = ivp_pvec_len(&su->sim_unit_cores) - 1; tc >= 0; tc--) {
+                ivp_core_t *tcore = su_core_at(su, tc);
+                ivp_core_core_plausible_check(tcore);
+            }
+        }
+    }
+    for (int c = ivp_pvec_len(&su->sim_unit_cores) - 1; c >= 0; c--) {
+        ivp_core_t *core = su_core_at(su, c);
+        ivp_pvec_add(touched_cores, core);   /* calc_next_PSI_matrix */
+        IVP_IF(0)
+        {
+            ivp_core_debug_vec_movement_state(core);
+        }
+    }
+    if (check_movement_state) su_calc_movement_state(su, env);
+    for (int k = ivp_pvec_len(&su->sim_unit_cores) - 1; k >= 0; k--) {
+        ivp_core_t *my_core = su_core_at(su, k);
+        for (int c = ivp_core_n_objects(my_core) - 1; c >= 0; c--) {
+            ivp_object_recalc_invalid_mindists_of_object(ivp_core_object_at(my_core, c));
+        }
+    }
+    ivp_env_sim_mem_end(env);
+}
+
+void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp_pvec_t *touched_cores)
+{
+    ivp_sim_es_t es;
+    ivp_sim_es_init(&es, sman->l_environment);
+    ivp_sim_unit_t *s_u, *n0_su, *n1_su, *n2_su;
+    s_u = sman->sim_units_slot0;
+    if (!s_u) goto sim_units_0;
+    n0_su = s_u->next_sim_unit;
+    if (!n0_su) goto sim_units_1;
+    n1_su = n0_su->next_sim_unit;
+    if (!n1_su) goto sim_units_2;
+    n2_su = n1_su->next_sim_unit;
+    while (n2_su) {
+        su_simulate_single_sim_unit_psi(s_u, &es, touched_cores);
+        s_u = n0_su;
+        n0_su = n1_su;
+        n1_su = n2_su;
+        n2_su = n2_su->next_sim_unit;
+    }
+    su_simulate_single_sim_unit_psi(n1_su, &es, touched_cores);
+sim_units_2:
+    su_simulate_single_sim_unit_psi(n0_su, &es, touched_cores);
+sim_units_1:
+    su_simulate_single_sim_unit_psi(s_u, &es, touched_cores);
+sim_units_0:
+    for (s_u = sman->sim_units_slot0; s_u;) {
+        ivp_sim_unit_t *next_su = s_u->next_sim_unit;
+        if (s_u->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(s_u);
+        s_u = next_su;
+    }
+    for (s_u = sman->still_slot; s_u;) {
+        ivp_sim_unit_t *next_su = s_u->next_sim_unit;
+        if (s_u->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(s_u);
+        s_u = next_su;
+    }
+}
+
+static void su_reset_time(ivp_sim_unit_t *su, double offset)
+{
+    for (int j = ivp_pvec_len(&su->controller_cores) - 1; j >= 0; j--) {
+        ivp_sim_ctrl_t *c = su_cl_at(su, j)->l_controller;
+        if (c->vt->reset_time) c->vt->reset_time(c, offset);
+    }
+    for (int c = ivp_pvec_len(&su->sim_unit_cores) - 1; c >= 0; c--) {
+        ivp_core_reset_time(su_core_at(su, c), offset);
+    }
+}
+
+void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset)
+{
+    for (ivp_sim_unit_t *s = m->sim_units_slot0; s; s = s->next_sim_unit) su_reset_time(s, offset);
+    for (ivp_sim_unit_t *s = m->still_slot; s; s = s->next_sim_unit) su_reset_time(s, offset);
+}
+
+/* ── IVP_Controller_Manager ────────────────────────────────────────────── */
+
+bool ivp_ctrl_mgr_core_has_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
+{
+    if (!core) return false;
+    for (int i = ivp_pvec_len(&core->controllers_of_core) - 1; i >= 0; i--) {
+        if (ivp_pvec_at(&core->controllers_of_core, i) == c) return true;
+    }
+    return false;
+}
+
+void ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core)
+{
+    if (!core || !c) return;
+    if (ivp_ctrl_mgr_core_has_controller(core, c)) return;
+    ivp_core_add_core_controller(core, c);
+}
+
+void ivp_ctrl_mgr_remove_controller_from_core(ivp_sim_ctrl_t *c, ivp_core_t *core)
+{
+    if (!core || !c) return;
+    if (!ivp_ctrl_mgr_core_has_controller(core, c)) return;
+    ivp_core_rem_core_controller(core, c);
+}
+
+static bool su_was_touched(ivp_pvec_t *units, ivp_sim_unit_t *unit)
+{
+    for (int i = ivp_pvec_len(units) - 1; i >= 0; i--) {
+        if (ivp_pvec_at(units, i) == unit) return true;
+    }
+    return false;
+}
+
+void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently)
+{
+    (void)env;
+    ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
+    if (!controlled_cores) return;
+    ivp_pvec_t touched_units;
+    ivp_pvec_init(&touched_units);
+    for (int i = ivp_pvec_len(controlled_cores) - 1; i >= 0; i--) {
+        ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
+        if (!my_core) continue;
+        if (!ivp_ctrl_mgr_core_has_controller(my_core, c)) continue;
+        ivp_sim_unit_t *core_unit = my_core->sim_unit;
+        if (!core_unit) {
+            IVP_ASSERT(0);
+            ivp_pvec_remove(&my_core->controllers_of_core, c);
+            continue;
+        }
+        ivp_core_rem_core_controller(my_core, c);
+        if (!su_was_touched(&touched_units, core_unit)) ivp_pvec_add(&touched_units, core_unit);
+    }
+    for (int i = ivp_pvec_len(&touched_units) - 1; i >= 0; i--) {
+        ivp_sim_unit_t *reference_unit = (ivp_sim_unit_t *)ivp_pvec_at(&touched_units, i);
+        reference_unit->union_find_needed_for_sim_unit = true;
+        if (!silently) ivp_sim_unit_ensure_in_simulation(reference_unit);
+    }
+    ivp_pvec_clear(&touched_units);
+}
+
+void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, ivp_sim_ctrl_t *c)
+{
+    (void)env;
+    ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
+    IVP_ASSERT(controlled_cores && ivp_pvec_len(controlled_cores) > 0);
+    if (!controlled_cores) return;
+    ivp_core_t *fallback_core = NULL;
+    for (int i = 0; i < ivp_pvec_len(controlled_cores); i++) {
+        ivp_core_t *core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
+        if (!core || core->physical_unmoveable) continue;
+        if (!fallback_core) fallback_core = core;
+        if (!core->sim_unit) continue;
+        ivp_sim_unit_ensure_in_simulation(core->sim_unit);
         return;
     }
-
-    /* Step 6: Union find if needed (deferred split) */
-    if (su->union_find_needed) {
-        maybe_split_disconnected_components(su, env);
-        su->union_find_needed = false;
-    }
+    if (fallback_core) ivp_core_ensure_core_in_simulation_delayed(fallback_core);
 }
 
-void ivp_sim_units_manager_simulate_all_psi(ivp_sim_units_manager_t *mgr,
-                                             ivp_real_t delta_time,
-                                             ivp_time_t step_end_time)
+void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c)
 {
-    if (!mgr) return;
-
-    /* Pre-pass: enforce dependent-controller island connectivity before
-     * per-unit PSI traversal to keep iteration pointers stable. */
-    merge_units_connected_by_dependent_controllers(mgr, mgr->env);
-
-    /* Iterate active units. We snapshot the list because simulate_psi
-     * may freeze a unit and move it to still_slot. */
-    ivp_sim_unit_t *su = mgr->active_units;
-    while (su) {
-        ivp_sim_unit_t *next = su->next_unit;
-        ivp_sim_unit_simulate_psi(su, mgr->env, delta_time, step_end_time);
-        su = next;
-    }
-}
-
-/* ── Freeze / wake ─────────────────────────────────────────────────────── */
-
-/* Actually freeze a sim unit: zero velocities, set NOT_SIM, detach
- * per-unit controllers, move all cores to still_slot, emit events.
- * After this call the sim unit is empty (core_count == 0, controller_count == 0)
- * and the caller should destroy it.
- *
- * Reference: IVP_Simulation_Unit::do_freeze_check_sim_unit()
- * (ivp_sim_unit.cxx) — when all cores are CALM for sustained time,
- * the unit freezes: velocities zeroed, cores move to still_slot,
- * unit is deleted. */
-static void freeze_sim_unit(ivp_sim_unit_t *su, ivp_environment_t *env)
-{
-    ivp_sim_units_manager_t *mgr = su->manager;
-
-    /* 1. Zero velocities and set NOT_SIM for all moveable cores */
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_t *core = ce->core;
-        if (core->physical_unmoveable) continue;
-
-        ivp_vec3r_set(&core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        core->rot_speed = ivp_vec3f(0.0f, 0.0f, 0.0f);
-        ivp_vec3r_set(&core->speed_change, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        ivp_vec3r_set(&core->rot_speed_change, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        core->movement_state = IVP_MT_NOT_SIM;
-    }
-
-    /* 2. Detach all per-unit controllers (friction controller_cores etc.)
-     * They remain owned by their friction_system; we just unlink them from
-     * the unit's sorted controller list. They will be re-registered when
-     * cores revive and the friction system re-homes them. */
-    while (su->controller_list) {
-        ivp_sim_unit_remove_controller(su->controller_list);
-    }
-
-    /* 3. Emit freeze events BEFORE moving cores (so dense_index is still valid) */
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_t *core = ce->core;
-        if (core->physical_unmoveable) continue;
-        ivp_object_t *obj = (ivp_object_t *)core;
-        ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_FROZEN,
-                                            env->delta_psi_time,
-                                            obj->dense_index, 0);
-    }
-
-    /* 4. Move all cores to still_slot */
-    ivp_sim_unit_core_entry_t *ce = su->core_list;
-    while (ce) {
-        ivp_sim_unit_core_entry_t *next = ce->next;
-        move_core_entry_between_units(su, &mgr->still_slot, ce);
-        ce = next;
-    }
-
-    su->movement_type = IVP_SUM_STILL;
-}
-
-void ivp_sim_unit_calc_movement_state(ivp_sim_unit_t *su,
-                                       ivp_environment_t *env)
-{
-    if (!su || su->core_count == 0) return;
-
-    bool all_calm = true;
-    bool any_moving = false;
-
-    for (ivp_sim_unit_core_entry_t *ce = su->core_list; ce; ce = ce->next) {
-        ivp_core_t *core = ce->core;
-        if (core->physical_unmoveable) continue;
-
-        /* Periodic movement check */
-        core->movement_check_counter++;
-        if (core->movement_check_counter >= IVP_MOVEMENT_CHECK_COUNT) {
-            core->movement_check_counter = 0;
-            ivp_core_calc_movement_state(core, &env->freeze_params);
+    ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
+    if (!controlled_cores) return;
+    ivp_sim_unit_t *reference_unit = NULL;
+    bool did_fusion = false;
+    int mtype = IVP_MT_NOT_SIM;
+    for (int i = ivp_pvec_len(controlled_cores) - 1; i >= 0; i--) {
+        ivp_core_t *test_core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
+        if (!test_core || test_core->physical_unmoveable) continue;
+        mtype = mtype & (int)test_core->movement_state;
+        ivp_sim_unit_t *test_sim_unit = test_core->sim_unit;
+        if (!test_sim_unit) {
+            IVP_ASSERT(0);
+            ivp_core_ensure_core_in_simulation_delayed(test_core);
+            continue;
         }
-
-        if (core->movement_state == IVP_MT_MOVING || core->movement_state == IVP_MT_SLOW) {
-            any_moving = true;
-            all_calm = false;
-        } else if (core->movement_state != IVP_MT_CALM &&
-                   core->movement_state != IVP_MT_NOT_SIM) {
-            all_calm = false;
+        if (reference_unit != NULL) {
+            if (test_sim_unit != reference_unit) {
+                ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit);
+                ivp_sim_unit_delete(test_sim_unit);
+                did_fusion = true;
+            }
+        } else {
+            reference_unit = test_sim_unit;
         }
+        if (!ivp_ctrl_mgr_core_has_controller(test_core, c)) ivp_core_add_core_controller(test_core, c);
     }
-
-    if (any_moving) {
-        su->movement_type = IVP_SUM_MOVING;
-    } else if (all_calm) {
-        /* Reference-aligned behavior: dependent-controller connectivity
-         * is handled by pre-PSI island merging, so calm units freeze directly. */
-        freeze_sim_unit(su, env);
-    } else {
-        su->movement_type = IVP_SUM_CALM;
+    if (did_fusion && reference_unit) {
+        ivp_sim_unit_clean_sim_unit(reference_unit);
+        ivp_sim_unit_sim_unit_calc_redundants(reference_unit);
     }
-}
-
-void ivp_sim_unit_revive_core(ivp_sim_units_manager_t *mgr, ivp_core_t *core)
-{
-    if (!mgr || !core) return;
-    if (core->sim_unit != &mgr->still_slot) return;
-
-    /* Remove from still_slot */
-    ivp_sim_unit_core_entry_t *entry = core->sim_unit_entry;
-    if (!entry) return;
-
-    if (entry->prev) entry->prev->next = entry->next;
-    else mgr->still_slot.core_list = entry->next;
-    if (entry->next) entry->next->prev = entry->prev;
-    mgr->still_slot.core_count--;
-
-    /* Create a new active unit for this core */
-    ivp_sim_unit_t *su = ivp_sim_unit_create(mgr);
-    if (!su) {
-        /* Fallback: just relink into still_slot */
-        entry->prev = NULL;
-        entry->next = mgr->still_slot.core_list;
-        if (mgr->still_slot.core_list) {
-            mgr->still_slot.core_list->prev = entry;
-        }
-        mgr->still_slot.core_list = entry;
-        mgr->still_slot.core_count++;
-        return;
+    if (mtype < IVP_MT_NOT_SIM && reference_unit) {
+        ivp_sim_unit_revive_for_simulation(reference_unit, env);
     }
-
-    /* Link entry into new unit */
-    entry->prev = NULL;
-    entry->next = su->core_list;
-    if (su->core_list) {
-        su->core_list->prev = entry;
-    }
-    su->core_list = entry;
-    su->core_count++;
-    core->sim_unit = su;
-
-    /* Reference: revive_core lifecycle (ivp_sim_unit.cxx)
-     * 1. Set MOVING
-     * 2. Update time_of_last_psi to current env time
-     * 3. Reset movement checkpoints so freeze detection starts fresh
-     * 4. Ensure async pushes are zeroed (they should be from freeze) */
-    core->movement_state = IVP_MT_MOVING;
-    core->time_of_last_psi = mgr->env->current_time;
-    core->movement_check_counter = 0;
-
-    /* Reset freeze-detection checkpoints to current pose */
-    core->checkpoint_short.pos  = core->pos_world_f_core_last_psi;
-    core->checkpoint_short.quat = core->q_world_f_core_last_psi;
-    core->checkpoint_short.time = mgr->env->current_time;
-    core->checkpoint_long.pos   = core->pos_world_f_core_last_psi;
-    core->checkpoint_long.quat  = core->q_world_f_core_last_psi;
-    core->checkpoint_long.time  = mgr->env->current_time;
-}
-
-/* ── Queries ───────────────────────────────────────────────────────────── */
-
-bool ivp_sim_unit_core_is_frozen(const ivp_sim_units_manager_t *mgr,
-                                   const ivp_core_t *core)
-{
-    return core->sim_unit == &mgr->still_slot;
 }
