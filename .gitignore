@@ -30,6 +30,7 @@ Makefile
 !cmake/*.pc.in
 
 # IDE files
+.claude/
 .vscode/
 .clangd/
 .idea/
