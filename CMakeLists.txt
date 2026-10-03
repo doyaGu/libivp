@@ -7,10 +7,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 # ── Options ───────────────────────────────────────────────────────────────────
-option(IVP_REAL_DOUBLE "Use double as ivp_real_t (default: float)" OFF)
+option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
 option(IVP_ENABLE_ASSERTS "Enable IVP_ASSERT in Release builds" OFF)
 option(IVP_CONTAINER_DEBUG "Enable container debug checks (iterator, bounds, canaries)" OFF)
 option(IVP_ENABLE_STATS "Enable runtime statistics counters" OFF)
+option(IVP_HOME_BUILD "Compile the engine hooks of the clustering visualizer (reference IVP_HOME_BUILD)" OFF)
+option(IVP_MD_INTERPOLATION "Buoyancy multidimensional interpolation (the reference compiles it out with IVP_NO_MD_INTERPOLATION)" OFF)
 option(IVP_ENABLE_PARITY_TESTS "Enable C17 vs golden-reference parity tests" OFF)
 option(IVP_ENABLE_SCENARIO_TESTS "Enable scenario regression tests (test_scenario_*)" OFF)
 option(IVP_ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -51,12 +53,20 @@ endif ()
 if (IVP_ENABLE_STATS)
     add_compile_definitions(IVP_ENABLE_STATS)
 endif ()
+if (IVP_MD_INTERPOLATION)
+    add_compile_definitions(IVP_MD_INTERPOLATION)
+endif ()
+if (IVP_HOME_BUILD)
+    add_compile_definitions(IVP_HOME_BUILD)
+endif ()
 
 # ── Source files ──────────────────────────────────────────────────────────────
 set(IVP_BASE_SOURCES
         src/base/ivp_assert.c
         src/base/ivp_allocator.c
         src/base/ivp_arena.c
+        src/base/ivp_u_memory.c
+        src/base/ivp_message.c
 )
 
 set(IVP_MATH_SOURCES
@@ -76,6 +86,9 @@ set(IVP_CONTAINER_SOURCES
         src/containers/ivp_minheap.c
         src/containers/ivp_vhash.c
         src/containers/ivp_minlist.c
+        src/containers/ivp_min_hash.c
+        src/containers/ivp_set.c
+        src/containers/ivp_diff_hash.c
 )
 
 set(IVP_GEOMETRY_SOURCES
@@ -84,17 +97,21 @@ set(IVP_GEOMETRY_SOURCES
         src/geometry/ivp_ledgetree.c
         src/geometry/ivp_surman.c
         src/geometry/ivp_surman_grid.c
+        src/geometry/ivp_compact_ledge_geom.c
 )
 
 set(IVP_BUILDER_SOURCES
         src/builder/ivp_build_box.c
+        src/builder/ivp_build_ledge.c
         src/builder/ivp_build_convex_qhull.c
+        src/builder/ivp_build_polygon_convex.c
         src/builder/ivp_rot_inertia.c
         src/builder/ivp_build_ledge_soup.c
         src/builder/ivp_build_bvh_bottomup.c
         src/builder/ivp_build_polygon.c
         src/builder/ivp_build_pointsoup.c
         src/builder/ivp_convex_decompose.c
+        src/builder/ivp_geompack.c
         src/builder/ivp_build_concave.c
         src/builder/ivp_build_halfspacesoup.c
         src/builder/ivp_build_compact_recursive.c
@@ -102,6 +119,7 @@ set(IVP_BUILDER_SOURCES
         src/builder/ivp_import_3ds.c
         src/builder/ivp_build_q12bsp.c
         src/builder/ivp_build_grid.c
+        src/builder/ivp_gridbuild_array.c
 )
 
 set(IVP_COLLISION_SOURCES
@@ -109,22 +127,14 @@ set(IVP_COLLISION_SOURCES
         src/collision/ivp_narrowphase.c
         src/collision/ivp_compact_ledge_solver.c
         src/collision/ivp_sphere_solver.c
-        src/collision/ivp_mindist.c
+        src/collision/ivp_hull_mgr.c
+        src/collision/ivp_ov_tree.c
+        src/collision/ivp_mindist_core.c
+        src/collision/ivp_mindist_minimize.c
         src/collision/ivp_mindist_event.c
-        src/collision/ivp_mindist_recursive.c
-        src/collision/ivp_oo_watcher.c
-        src/collision/ivp_synapse.c
-        src/collision/ivp_time_event_queue.c
         src/collision/ivp_ray_solver.c
         src/collision/ivp_range_manager.c
         src/collision/ivp_collision_filter.c
-        src/collision/ivp_3d_solver.c
-        src/collision/ivp_matrix_cache.c
-        src/collision/ivp_broadphase_sap.c
-        src/collision/ivp_mindist_persistent.c
-        src/collision/ivp_hull_manager.c
-        src/collision/ivp_ledgetree_collision.c
-        src/collision/ivp_ccd_narrowphase.c
         src/collision/ivp_radar.c
 )
 
@@ -134,8 +144,10 @@ set(IVP_DYNAMICS_SOURCES
         src/dynamics/ivp_registry.c
         src/dynamics/ivp_object_system.c
         src/dynamics/ivp_environment.c
-        src/dynamics/ivp_environment_collision.c
         src/dynamics/ivp_sim_unit.c
+        src/dynamics/ivp_time_manager.c
+        src/dynamics/ivp_object_pipeline.c
+        src/dynamics/ivp_phantom.c
         src/dynamics/ivp_object_attach.c
         src/dynamics/ivp_merge_core.c
         src/dynamics/ivp_anomaly_manager.c
@@ -155,6 +167,7 @@ set(IVP_CONTROLLER_SOURCES
         src/controllers/ivp_controller_buoyancy.c
         src/controllers/ivp_buoyancy_solver.c
         src/controllers/ivp_controller_raycast_car.c
+        src/controllers/ivp_controller_raycast.c
         src/controllers/ivp_actuator_rot_mot.c
         src/controllers/ivp_actuator_force.c
         src/controllers/ivp_actuator_torque.c
@@ -163,17 +176,24 @@ set(IVP_CONTROLLER_SOURCES
         src/controllers/ivp_actuator_check_dist.c
         src/controllers/ivp_controller_floating.c
         src/controllers/ivp_constraint_local.c
+        src/controllers/ivp_constraint_local_core.c
         src/controllers/ivp_constraint_fixed_keyed.c
         src/controllers/ivp_controller_airboat.c
         src/controllers/ivp_controller_fake_jetski.c
         src/controllers/ivp_car_system.c
+        src/controllers/ivp_constraint_car.c
+        src/controllers/ivp_car_wheel_physics.c
         src/controllers/ivp_liquid_surface.c
         src/controllers/ivp_controller_golem.c
+        src/controllers/ivp_attacher_to_cores.c
+        src/controllers/ivp_actuator_extra.c
+        src/controllers/ivp_controller_factory.c
 )
 
 set(IVP_UTILITY_SOURCES
         src/utility/ivp_hash.c
         src/utility/ivp_active_value.c
+        src/utility/ivp_string.c
         src/utility/ivp_multidimensional_interp.c
     src/utility/ivp_union_find.c
 )
@@ -184,69 +204,85 @@ set(IVP_EVENT_SOURCES
         src/events/ivp_listener_psi.c
 )
 
+set(IVP_DIAGNOSTICS_SOURCES
+        src/diagnostics/ivp_performance_counter.c
+        src/diagnostics/ivp_better_statistics_manager.c
+        src/diagnostics/ivp_statistics_console_callback.c
+        src/diagnostics/ivp_debug_manager.c
+        src/diagnostics/ivp_clustering_visualizer.c
+        src/diagnostics/ivp_statistic_manager.c
+)
+
 set(IVP_SOLVER_SOURCES
         src/solver/ivp_great_matrix.c
-        src/solver/ivp_contact.c
-        src/solver/ivp_impact.c
-        src/solver/ivp_impact_rescue.c
-        src/solver/ivp_friction_system.c
-        src/solver/ivp_mindist_friction_update.c
-        src/solver/ivp_impact_system.c
-        src/solver/ivp_solver_config.c
-        src/solver/ivp_solver_metrics.c
-        src/solver/ivp_contact_order.c
+        src/solver/ivp_linear_constraint_solver.c
+        src/solver/ivp_solver_core_reaction.c
+        src/solver/ivp_contact_point.c
+        src/solver/ivp_fr_system.c
+        src/solver/ivp_impact_core.c
 )
 
-# ── Third-party: QHull (bundled, reentrant C API) ─────────────────────────
-set(QHULL_R_SOURCES
-        deps/qhull/src/libqhull_r/accessors_r.c
-        deps/qhull/src/libqhull_r/geom2_r.c
-        deps/qhull/src/libqhull_r/geom_r.c
-        deps/qhull/src/libqhull_r/global_r.c
-        deps/qhull/src/libqhull_r/io_r.c
-        deps/qhull/src/libqhull_r/libqhull_r.c
-        deps/qhull/src/libqhull_r/mem_r.c
-        deps/qhull/src/libqhull_r/merge_r.c
-        deps/qhull/src/libqhull_r/poly2_r.c
-        deps/qhull/src/libqhull_r/poly_r.c
-        deps/qhull/src/libqhull_r/qset_r.c
-        deps/qhull/src/libqhull_r/random_r.c
-        deps/qhull/src/libqhull_r/stat_r.c
-        deps/qhull/src/libqhull_r/user_r.c
-        deps/qhull/src/libqhull_r/usermem_r.c
-        deps/qhull/src/libqhull_r/userprintf_r.c
+# ── Third-party: QHull 2.6 as bundled by the reference IVP ───────────────
+# deps/qhull_ivp is the reference's own qhull (ivp_compact_builder/qhull*.cxx,
+# Geometry Center 1999) converted to C17.  The pointsoup builder needs its
+# exact facet / facet-vertex order for a reference identical ledge layout.
+# Non-reentrant: qhull 2.6 keeps its state in the global qh_qh.
+set(QHULL_IVP_SOURCES
+        deps/qhull_ivp/qhull.c
+        deps/qhull_ivp/qhull_geom.c
+        deps/qhull_ivp/qhull_geom2.c
+        deps/qhull_ivp/qhull_global.c
+        deps/qhull_ivp/qhull_io.c
+        deps/qhull_ivp/qhull_mem.c
+        deps/qhull_ivp/qhull_merge.c
+        deps/qhull_ivp/qhull_poly.c
+        deps/qhull_ivp/qhull_poly2.c
+        deps/qhull_ivp/qhull_qset.c
+        deps/qhull_ivp/qhull_stat.c
+        deps/qhull_ivp/qhull_user.c
+        deps/qhull_ivp/qhull_ivp_api.c
 )
 
-add_library(ivp_qhull_r STATIC ${QHULL_R_SOURCES})
-target_include_directories(ivp_qhull_r
+add_library(ivp_qhull_ivp STATIC ${QHULL_IVP_SOURCES})
+target_include_directories(ivp_qhull_ivp
         PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull/src/libqhull_r
+        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull_ivp
 )
 
 # Apply strict floating-point rules
 if (MSVC)
-    target_compile_options(ivp_qhull_r PRIVATE /fp:strict /Oi-)
+    target_compile_options(ivp_qhull_ivp PRIVATE /fp:strict /Oi-)
     if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-        target_compile_options(ivp_qhull_r PRIVATE -ffp-contract=off -fno-fast-math)
+        target_compile_options(ivp_qhull_ivp PRIVATE -ffp-contract=off -fno-fast-math)
     endif ()
 else ()
-    target_compile_options(ivp_qhull_r PRIVATE
+    target_compile_options(ivp_qhull_ivp PRIVATE
             -ffp-contract=off -fno-fast-math -frounding-math
     )
 endif ()
 
-# Relax warnings for third-party code only
+# Project warning set (not fatal: third-party code), with the warning
+# classes the vendored 1999 code triggers silenced for these files only
 if (MSVC)
-    target_compile_options(ivp_qhull_r PRIVATE /W0)
+    target_compile_options(ivp_qhull_ivp PRIVATE /W0)
 else ()
-    target_compile_options(ivp_qhull_r PRIVATE
-            -Wno-error
+    target_compile_options(ivp_qhull_ivp PRIVATE
+            -Wall -Wextra -Wpedantic
+            -Wconversion -Wshadow -Wdouble-promotion
+            -Wno-unused-parameter
+            -Wno-clobbered
+            -Wno-implicit-fallthrough
+            -Wno-maybe-uninitialized
             -Wno-conversion
+            -Wno-sign-conversion
+            -Wno-sign-compare
             -Wno-shadow
             -Wno-double-promotion
-            -Wno-unused-parameter
-            -Wno-sign-conversion
+            -Wno-unused-but-set-variable
+            -Wno-unused-but-set-parameter
+            -Wno-format-pedantic
+            -Wno-deprecated-declarations
+            -Wno-unknown-warning-option
     )
 endif ()
 
@@ -263,16 +299,20 @@ add_library(ivp STATIC
         ${IVP_EVENT_SOURCES}
         ${IVP_SOLVER_SOURCES}
         ${IVP_UTILITY_SOURCES}
+        ${IVP_DIAGNOSTICS_SOURCES}
 )
 
 target_include_directories(ivp
         PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull/src
 )
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
+if (IVP_REAL_DOUBLE)
+    # ivp_real_t is part of the public ABI: consumers must see the same type
+    target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)
+endif ()
 
 if (IVP_BUILD_TESTS)
     target_compile_definitions(ivp PRIVATE IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API)
@@ -292,6 +332,48 @@ else ()
     )
 endif ()
 
+# The reference pipeline port mixes IVP_FLOAT and IVP_DOUBLE on purpose
+# (float storage, double arithmetic) exactly like the C++ reference.
+set(IVP_REFERENCE_PIPELINE_SOURCES
+        src/collision/ivp_hull_mgr.c
+        src/collision/ivp_ov_tree.c
+        src/collision/ivp_mindist_core.c
+        src/collision/ivp_mindist_minimize.c
+        src/collision/ivp_mindist_event.c
+        src/solver/ivp_solver_core_reaction.c
+        src/solver/ivp_contact_point.c
+        src/solver/ivp_fr_system.c
+        src/solver/ivp_impact_core.c
+        src/dynamics/ivp_core.c
+        src/dynamics/ivp_sim_unit.c
+        src/dynamics/ivp_time_manager.c
+        src/dynamics/ivp_object_pipeline.c
+        src/dynamics/ivp_phantom.c
+        src/dynamics/ivp_environment.c
+        src/dynamics/ivp_merge_core.c
+        src/dynamics/ivp_object_attach.c
+        src/controllers/ivp_car_system.c
+        src/controllers/ivp_constraint_car.c
+        src/controllers/ivp_car_wheel_physics.c
+        src/controllers/ivp_controller_stiff_spring.c
+        src/controllers/ivp_constraint_fixed_keyed.c
+        src/controllers/ivp_controller_floating.c
+        src/controllers/ivp_controller_raycast_car.c
+)
+if (NOT MSVC)
+    set_source_files_properties(${IVP_REFERENCE_PIPELINE_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-double-promotion")
+    # The friction solver and its dense solvers read stale IVP_U_Memory arena
+    # bytes as double that an earlier transaction may have stored as int (see
+    # ivp_u_memory.h); like the reference, compile them without type-based
+    # alias analysis.
+    set_property(SOURCE
+            src/base/ivp_u_memory.c
+            src/solver/ivp_great_matrix.c
+            src/solver/ivp_linear_constraint_solver.c
+            src/solver/ivp_fr_system.c
+            APPEND PROPERTY COMPILE_OPTIONS "-fno-strict-aliasing")
+endif ()
+
 # Apply strict warning flags
 if (MSVC)
     target_compile_options(ivp PRIVATE /W4 /WX)
@@ -303,7 +385,7 @@ else ()
     )
 endif ()
 
-target_link_libraries(ivp PRIVATE ivp_qhull_r)
+target_link_libraries(ivp PRIVATE ivp_qhull_ivp)
 
 # Link math library on non-Windows
 if (NOT MSVC)
@@ -548,6 +630,10 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_math tests/test_math.c)
     ivp_add_test(test_containers tests/test_containers.c)
     ivp_add_test(test_geometry tests/test_geometry.c)
+    ivp_add_test(test_geometry_parity tests/test_geometry_parity.c)
+    ivp_add_test(test_ray_solver tests/test_ray_solver.c)
+    ivp_add_test(test_convex_decompose tests/test_convex_decompose.c)
+    ivp_add_test(test_compact_grid tests/test_compact_grid.c)
     ivp_add_test(test_collision tests/test_collision.c)
     ivp_add_test(test_dynamics tests/test_dynamics.c)
     ivp_add_test(test_solver tests/test_solver.c)
@@ -556,34 +642,39 @@ if (IVP_BUILD_TESTS)
     # New coverage-expansion tests
     ivp_add_test(test_controllers tests/test_controllers.c)
     ivp_add_test(test_builders tests/test_builders.c)
+    ivp_add_test(test_convex_layout tests/test_convex_layout.c)
     ivp_add_test(test_anomaly tests/test_anomaly.c)
     ivp_add_test(test_object_lifecycle tests/test_object_lifecycle.c)
     ivp_add_test(test_containers_ext tests/test_containers_ext.c)
     ivp_add_test(test_math_ext tests/test_math_ext.c)
+    ivp_add_test(test_math_ref tests/test_math_ref.c)
+    ivp_add_test(test_active_value_ref tests/test_active_value_ref.c)
+    ivp_add_test(test_utility_ref tests/test_utility_ref.c)
     ivp_add_test(test_collision_ext tests/test_collision_ext.c)
     ivp_add_test(test_events tests/test_events.c)
+    ivp_add_test(test_diagnostics tests/test_diagnostics.c)
+    ivp_add_test(test_env_services tests/test_env_services.c)
 
     # Gap-fill tests (legacy alignment)
     ivp_add_test(test_active_value_ext tests/test_active_value_ext.c)
     ivp_add_test(test_collision_filter tests/test_collision_filter.c)
-    ivp_add_test(test_friction_system tests/test_friction_system.c)
-    ivp_add_test(test_impact_system tests/test_impact_system.c)
-    ivp_add_test(test_3d_solver tests/test_3d_solver.c)
     ivp_add_test(test_bvh_bottomup tests/test_bvh_bottomup.c)
     ivp_add_test(test_polygon_collision_debug tests/test_polygon_collision_debug.c)
     ivp_add_test(test_fake_jetski tests/test_fake_jetski.c)
 
-    # Hierarchical collision and CCD tests
-    ivp_add_test(test_hierarchical_collision tests/test_hierarchical_collision.c)
-    ivp_add_test(test_ccd_integration tests/test_ccd_integration.c)
-    ivp_add_test(test_mindist_event_solver tests/test_mindist_event_solver.c)
-    ivp_add_test(test_time_event_queue tests/test_time_event_queue.c)
-    ivp_add_test(test_synapse_links tests/test_synapse_links.c)
-    ivp_add_test(test_recursive_mindist tests/test_recursive_mindist.c)
-    ivp_add_test(test_contact_pipeline_parity tests/test_contact_pipeline_parity.c)
+    # Reference-faithful dense solvers (Many_Zero Gauss, LU, LCS)
+    ivp_add_test(test_great_matrix_port tests/test_great_matrix_port.c)
+    ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
 
     # P1 controller tests (stabilizer, suspension, constraint API)
     ivp_add_test(test_p1_controllers tests/test_p1_controllers.c)
+    ivp_add_test(test_controller_parity tests/test_controller_parity.c)
+
+    # Real-wheel car system + car constraint solver
+    ivp_add_test(test_car_system tests/test_car_system.c)
+    ivp_add_test(test_controller_active tests/test_controller_active.c)
+    ivp_add_test(test_controller_factory tests/test_controller_factory.c)
+    ivp_add_test(test_controller_sets tests/test_controller_sets.c)
 
     # P3 content pipeline tests
     ivp_add_test(test_content_pipeline tests/test_content_pipeline.c)
@@ -603,6 +694,13 @@ if (IVP_BUILD_TESTS)
         )
         if (NOT MSVC)
             target_link_libraries(test_scenarios PRIVATE m)
+            # Scene setup must round exactly like the reference runner (built
+            # with -ffp-contract=off): a fused multiply-add in e.g.
+            # -6 + spacing * (i + 1) moves an initial position by an ulp and
+            # breaks symmetric ties differently.
+            target_compile_options(test_scenarios PRIVATE -ffp-contract=off -fno-fast-math)
+        else ()
+            target_compile_options(test_scenarios PRIVATE /fp:strict)
         endif ()
     endif ()
 
@@ -637,20 +735,25 @@ if (IVP_BUILD_TESTS)
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry test_collision
             test_dynamics test_solver test_utility
-            test_controllers test_builders test_anomaly test_object_lifecycle
-            test_containers_ext test_math_ext test_collision_ext test_events
-            test_active_value_ext test_collision_filter test_friction_system
-            test_impact_system test_3d_solver test_bvh_bottomup
+            test_controllers test_builders test_convex_layout test_anomaly test_object_lifecycle
+            test_containers_ext test_math_ext test_collision_ext test_events test_diagnostics test_env_services
+            test_active_value_ext test_collision_filter test_bvh_bottomup
             test_fake_jetski
-            test_hierarchical_collision test_ccd_integration
-            test_mindist_event_solver test_time_event_queue test_synapse_links
-            test_recursive_mindist test_contact_pipeline_parity
-            test_p1_controllers
+            test_p1_controllers test_controller_parity test_car_system
+            test_controller_active test_controller_sets test_controller_factory
             test_content_pipeline
     )
     foreach (T ${IVP_UNIT_TESTS})
         set_tests_properties(${T} PROPERTIES LABELS "unit")
     endforeach ()
+    set_tests_properties(test_math_ref PROPERTIES LABELS "unit")
+    set_tests_properties(test_active_value_ref PROPERTIES LABELS "unit")
+    set_tests_properties(test_utility_ref PROPERTIES LABELS "unit")
+    # Reference-parity tests evaluate header-inline math in the test TU:
+    # compile them with the library's strict FP flags (no FMA contraction).
+    if (NOT MSVC)
+        target_compile_options(test_math_ref PRIVATE -ffp-contract=off -fno-fast-math)
+    endif ()
     set_tests_properties(test_perf PROPERTIES LABELS "perf")
     set_tests_properties(test_stability_benchmarks PROPERTIES LABELS "perf;stability")
 
@@ -666,50 +769,26 @@ if (IVP_BUILD_TESTS)
 
         set(IVP_VALIDATION_CONFIG ${IVP_REPO_ROOT}/tools/validation_config.json)
 
-        # Per-scenario parameters
-        # Original 3 scenarios: 240 steps, dt=1/60
-        set(SCENARIO_STEPS_freefall 240)
-        set(SCENARIO_DT_freefall "0.016666666666666666")
-        set(SCENARIO_STEPS_two_balls 240)
-        set(SCENARIO_DT_two_balls "0.016666666666666666")
-        set(SCENARIO_STEPS_slope_friction 240)
-        set(SCENARIO_DT_slope_friction "0.016666666666666666")
-        # Remaining scenarios: 480 steps, dt=1/180
-        set(SCENARIO_STEPS_springs 480)
-        set(SCENARIO_DT_springs "0.005555555555555556")
-        set(SCENARIO_STEPS_rope 480)
-        set(SCENARIO_DT_rope "0.005555555555555556")
-        set(SCENARIO_STEPS_motor 480)
-        set(SCENARIO_DT_motor "0.005555555555555556")
-        set(SCENARIO_STEPS_buoyancy 480)
-        set(SCENARIO_DT_buoyancy "0.005555555555555556")
-        set(SCENARIO_STEPS_cubes 480)
-        set(SCENARIO_DT_cubes "0.005555555555555556")
-        set(SCENARIO_STEPS_force_actuator 480)
-        set(SCENARIO_DT_force_actuator "0.005555555555555556")
-        set(SCENARIO_STEPS_forcefield 480)
-        set(SCENARIO_DT_forcefield "0.005555555555555556")
-        set(SCENARIO_STEPS_stiff_spring 480)
-        set(SCENARIO_DT_stiff_spring "0.005555555555555556")
-        set(SCENARIO_STEPS_check_distance 480)
-        set(SCENARIO_DT_check_distance "0.005555555555555556")
-        set(SCENARIO_STEPS_collision_filter 480)
-        set(SCENARIO_DT_collision_filter "0.005555555555555556")
-        set(SCENARIO_STEPS_motion_controller 480)
-        set(SCENARIO_DT_motion_controller "0.005555555555555556")
-        set(SCENARIO_STEPS_phantom 480)
-        set(SCENARIO_DT_phantom "0.005555555555555556")
-        set(SCENARIO_STEPS_vehicle 480)
-        set(SCENARIO_DT_vehicle "0.005555555555555556")
+        # Scenario list (name, dt, steps) shared with tools/regen_reference.sh
+        # and tools/regen_baselines.sh
+        set(IVP_SCENARIO_LIST_FILE ${IVP_REPO_ROOT}/tools/scenarios.txt)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${IVP_SCENARIO_LIST_FILE})
+        file(STRINGS ${IVP_SCENARIO_LIST_FILE} IVP_SCENARIO_LINES REGEX "^[a-z]")
+        set(IVP_SCENARIOS)
+        foreach (LINE ${IVP_SCENARIO_LINES})
+            string(REGEX REPLACE "[ \t]+" ";" FIELDS "${LINE}")
+            list(GET FIELDS 0 S_NAME)
+            list(GET FIELDS 1 S_DT_VALUE)
+            list(GET FIELDS 2 S_STEPS_VALUE)
+            list(APPEND IVP_SCENARIOS ${S_NAME})
+            set(SCENARIO_DT_${S_NAME} ${S_DT_VALUE})
+            set(SCENARIO_STEPS_${S_NAME} ${S_STEPS_VALUE})
+        endforeach ()
 
         set(IVP_SCENARIO_BASELINE_DIR ${IVP_REPO_ROOT}/tools/baselines)
         file(MAKE_DIRECTORY ${IVP_SCENARIO_BASELINE_DIR})
 
-        foreach (SCENARIO
-                freefall two_balls slope_friction
-                springs rope motor buoyancy
-                cubes force_actuator forcefield stiff_spring
-                check_distance collision_filter motion_controller phantom vehicle)
+        foreach (SCENARIO ${IVP_SCENARIOS})
             set(SCENARIO_OUTPUT ${IVP_SCENARIO_OUTPUT_DIR}/${SCENARIO}.jsonl)
             set(SCENARIO_REF ${IVP_SCENARIO_REFDIR}/ref_${SCENARIO}.jsonl)
             set(SCENARIO_METRICS ${IVP_SCENARIO_OUTPUT_DIR}/metrics_${SCENARIO}.json)
@@ -800,7 +879,6 @@ if (IVP_BUILD_TESTS)
                     set_tests_properties(test_scenario_ref_${SCENARIO} PROPERTIES
                             DEPENDS test_scenario_gen_${SCENARIO}
                             LABELS "parity;validation"
-                            DISABLED TRUE
                             TIMEOUT 15
                     )
                 else ()
