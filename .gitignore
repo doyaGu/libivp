@@ -134,3 +134,5 @@ benchmark_results/
 config.local.h
 config.h
 !config.h.in
+# Reference JSONL generated from the legacy engine (tools/regen_reference.sh)
+tools/testdata/ref_*.jsonl

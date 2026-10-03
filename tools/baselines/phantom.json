@@ -1,0 +1,43 @@
+{
+  "frame_count": 481,
+  "object_comparisons": 1443,
+  "position": {
+    "max": 0.0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "orientation": {
+    "max": 0.0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "linear_velocity": {
+    "max": 0.0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "angular_velocity": {
+    "max": 0.0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "energy_absolute": {
+    "max": 0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "energy_relative": {
+    "max": 0.0,
+    "mean": 0.0,
+    "rms": 0.0
+  },
+  "time": {
+    "max": 0
+  },
+  "timing": {
+    "checks": 0,
+    "mismatches": 0
+  },
+  "failure_count": 0,
+  "failures": []
+}
