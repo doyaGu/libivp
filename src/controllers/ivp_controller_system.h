@@ -39,6 +39,9 @@ typedef struct ivp_controller_slot {
     ivp_object_handle_t *associated_handles;
     int associated_count;
     int associated_capacity;
+
+    /* Simulation-unit controller adapter owned by the environment. */
+    void *sim_ctrl;
 } ivp_controller_slot_t;
 
 ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,
