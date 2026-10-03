@@ -10,6 +10,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_transform.h>
 #include <string.h>
+#include "controllers/ivp_controller_ref.h"
 
 /* ── Initialization ────────────────────────────────────────────────────── */
 
@@ -35,11 +36,14 @@ void ivp_stabilizer_state_setup(ivp_stabilizer_state_t *state,
     state->obj[1] = obj1;
     state->obj[2] = obj2;
     state->obj[3] = obj3;
-    state->anchor_os[0] = *anchor0;
-    state->anchor_os[1] = *anchor1;
-    state->anchor_os[2] = *anchor2;
-    state->anchor_os[3] = *anchor3;
-    state->stabi_constant = stabi_constant;
+    /* IVP_Actuator_Four_Point: IVP_Anchor::init_anchor for every anchor
+     * (object space -> world -> core_pos) */
+    const ivp_vec3r_t *anchors[4] = { anchor0, anchor1, anchor2, anchor3 };
+    ivp_environment_t *env = ivp_ctl_env_of(state->obj, 4);
+    for (int i = 0; i < 4; i++) {
+        ivp_ctl_anchor_setup_os(state->obj[i], env, anchors[i], &state->anchor_os[i]);
+    }
+    state->stabi_constant = (ivp_real_t)(float)stabi_constant; /* IVP_FLOAT */
 }
 
 /* ── Runtime adjustment ────────────────────────────────────────────────── */
@@ -47,75 +51,80 @@ void ivp_stabilizer_state_setup(ivp_stabilizer_state_t *state,
 void ivp_stabilizer_set_constant(ivp_stabilizer_state_t *state,
                                   ivp_real_t value)
 {
-    state->stabi_constant = value;
+    /* Reference set_stabi_constant(IVP_DOUBLE): IVP_FLOAT member, anchor 0
+     * object ensure_in_simulation(). */
+    if ((double)(float)state->stabi_constant == (double)value) return;
+    state->stabi_constant = (ivp_real_t)(float)value;
+    ivp_controller_wake_object(state->obj[0]);
 }
 
 /* ── Controller callback ───────────────────────────────────────────────── */
 
+/* Port of IVP_Actuator_Stabilizer::do_simulation_controller
+ * (ivp_controller/ivp_actuator.cxx:1052-1099):
+ *   dir_i  = pos0_i - pos1_i, dist_i = |dir_i|
+ *   force  = (dist_1 - dist_0) * stabi_constant * dt
+ *   pair i: second anchor pushed by +dir_i * force, first by -dir_i * force,
+ *           force negated for the second pair.
+ * Note: the reference IVP_Actuator_Four_Point constructor never announces the
+ * controller to the environment, so a reference stabilizer created through
+ * the factory is inert; libivp keeps the explicit registration. */
 void ivp_controller_stabilizer(const ivp_event_sim_t *event_sim,
                                 ivp_object_t *obj,
                                 void *ctx)
 {
-    const ivp_real_t dt = event_sim->delta_time;
-
     ivp_stabilizer_state_t *state = (ivp_stabilizer_state_t *)ctx;
     if (!state || !state->active) return;
 
-    /* Execute-once guard: select first dynamic object among all 4 */
-    ivp_object_t *exec_obj = NULL;
+    if (obj != ivp_controller_pick_exec_object(state->obj, 4)) return;
+
+    ivp_environment_t *env = event_sim->environment;
+    ivp_core_t *core[4];
+    ivp_vec3f_t core_pos[4];
     for (int i = 0; i < 4; i++) {
-        if (state->obj[i] && !state->obj[i]->core.physical_unmoveable) {
-            exec_obj = state->obj[i];
-            break;
+        core[i] = ivp_ctl_anchor_friction_core(state->obj[i], env);   /* l_anchor_object->friction_core */
+        core_pos[i] = ivp_ctl_f(&state->anchor_os[i]);
+    }
+
+    ivp_vec3f_t dir[2];
+    ivp_vec3r_t pos0_ws[2], pos1_ws[2];
+    double dist[2];
+    for (int i = 0; i < 2; i++) {
+        ivp_ctl_anchor_pos_ws(core[i * 2], &core_pos[i * 2], &pos0_ws[i]);
+        ivp_ctl_anchor_pos_ws(core[i * 2 + 1], &core_pos[i * 2 + 1], &pos1_ws[i]);
+        lvf_subtract2_p(&dir[i], &pos0_ws[i], &pos1_ws[i]); /* force direction world coords */
+        dist[i] = (double)lvf_real_length_plus_normize(&dir[i]);
+    }
+
+    const double diff_dist = dist[1] - dist[0];
+    state->current_diff_dist = (ivp_real_t)diff_dist;
+
+    double force = diff_dist * (double)(float)state->stabi_constant * (double)event_sim->delta_time;
+
+    for (int i = 0; i < 2; i++) {
+        ivp_vec3f_t force_vector;
+        lvf_set_multiple(&force_vector, &dir[i], (D)force);
+
+        ivp_object_t *o0 = state->obj[i * 2];
+        ivp_object_t *o1 = state->obj[i * 2 + 1];
+        if (ivp_controller_object_pushable(o1)) {
+            ivp_ctl_async_push_core_ws(core[i * 2 + 1], &pos1_ws[i], &force_vector);
         }
-    }
-    if (!exec_obj || obj != exec_obj) return;
-
-    /* Get all 4 anchor world positions */
-    ivp_vec3r_t pos_ws[4];
-    for (int i = 0; i < 4; i++) {
-        ivp_controller_get_anchor_ws(state->obj[i], &state->anchor_os[i], &pos_ws[i]);
-    }
-
-    /* Compute direction and distance for each pair */
-    ivp_vec3r_t dir[2];
-    ivp_real_t dist[2];
-
-    for (int p = 0; p < 2; p++) {
-        int i0 = p * 2;
-        int i1 = p * 2 + 1;
-        ivp_vec3r_sub(&dir[p], &pos_ws[i0], &pos_ws[i1]);
-        dist[p] = ivp_vec3r_length(&dir[p]);
-        if (dist[p] > IVP_REAL_EPS) {
-            ivp_real_t inv_len = IVP_REAL(1.0) / dist[p];
-            ivp_vec3r_scale(&dir[p], &dir[p], inv_len);
+        if (ivp_controller_object_pushable(o0)) {
+            lvf_mult(&force_vector, (D)-1.0);
+            ivp_ctl_async_push_core_ws(core[i * 2], &pos0_ws[i], &force_vector);
         }
-    }
 
-    ivp_real_t diff = dist[1] - dist[0];
-    state->current_diff_dist = diff;
-
-    ivp_real_t force_mag = diff * state->stabi_constant;
-    if (ivp_fabs(force_mag) < IVP_REAL_EPS) return;
-
-    /* Apply force to pair 0: push apart/together along dir[0]
-     * to increase/decrease dist[0] toward equilibrium.
-     * Positive diff means dist[1] > dist[0], so increase dist[0]:
-     *   obj[0] gets force along +dir[0], obj[1] gets force along -dir[0].
-     * Apply opposite to pair 1: decrease dist[1]:
-     *   obj[2] gets force along -dir[1], obj[3] gets force along +dir[1]. */
-    {
-        ivp_vec3r_t f0, f1;
-        ivp_vec3r_scale(&f0, &dir[0], force_mag);
-        ivp_vec3r_scale(&f1, &dir[0], -force_mag);
-        ivp_controller_apply_force_at_anchor(state->obj[0], &pos_ws[0], &f0, dt);
-        ivp_controller_apply_force_at_anchor(state->obj[1], &pos_ws[1], &f1, dt);
+        force *= -1; /* reverted force direction for other anchor pair */
     }
-    {
-        ivp_vec3r_t f2, f3;
-        ivp_vec3r_scale(&f2, &dir[1], -force_mag);
-        ivp_vec3r_scale(&f3, &dir[1], force_mag);
-        ivp_controller_apply_force_at_anchor(state->obj[2], &pos_ws[2], &f2, dt);
-        ivp_controller_apply_force_at_anchor(state->obj[3], &pos_ws[3], &f3, dt);
-    }
+}
+
+int ivp_stabilizer_discovery(void *ctx, ivp_environment_t *env,
+               ivp_object_handle_t *out_handles, int max_handles)
+{
+    (void)env;
+    const ivp_stabilizer_state_t *s = (const ivp_stabilizer_state_t *)ctx;
+    if (!s) return 0;
+    ivp_object_t *objs[4] = { s->obj[0], s->obj[1], s->obj[2], s->obj[3] };
+    return ivp_controller_discover_objects(objs, 4, out_handles, max_handles);
 }

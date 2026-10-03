@@ -22,7 +22,8 @@ extern "C" {
 typedef struct ivp_stabilizer_state {
     /* Pair 0: (obj[0], obj[1]), Pair 1: (obj[2], obj[3]) */
     ivp_object_t *obj[4];
-    ivp_vec3r_t   anchor_os[4];    /* body-space anchors */
+    ivp_vec3r_t   anchor_os[4];    /* IVP_Anchor::core_pos (float-exact); setup takes
+                                      object-space coordinates */
 
     /* Parameters */
     ivp_real_t    stabi_constant;  /* [N/m] */
@@ -55,6 +56,12 @@ void ivp_stabilizer_state_setup(ivp_stabilizer_state_t *state,
 
 void ivp_stabilizer_set_constant(ivp_stabilizer_state_t *state,
                                   ivp_real_t value);
+
+/* Discovery function for ivp_environment_announce_dependent_controller():
+ * reports the movable objects of the actuator so that their simulation
+ * units are merged (reference IVP_Controller_Dependent semantics). */
+int ivp_stabilizer_discovery(void *ctx, ivp_environment_t *env,
+               ivp_object_handle_t *out_handles, int max_handles);
 
 /* ── Controller callback ───────────────────────────────────────────────── */
 
