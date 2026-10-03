@@ -34,8 +34,12 @@ typedef void (*ivp_psi_listener_fn_t)(void *ctx,
 
 /* ── PSI listener state ────────────────────────────────────────────────── */
 
+/* IVP_Listener_PSI::environment_will_be_deleted */
+typedef void (*ivp_psi_listener_env_deleted_fn_t)(void *ctx, ivp_environment_t *env);
+
 typedef struct ivp_psi_listener {
     ivp_psi_listener_fn_t     fn;
+    ivp_psi_listener_env_deleted_fn_t env_deleted_fn; /* optional */
     void                     *ctx;
     ivp_event_listener_handle_t event_handle; /* internal: handle in event system */
     ivp_environment_t        *registered_env; /* internal: env owning event_handle */
@@ -56,6 +60,11 @@ int ivp_psi_listener_register(ivp_psi_listener_t *listener,
  * Returns 0 on success, -1 if not found. */
 int ivp_psi_listener_unregister(ivp_psi_listener_t *listener,
                                 ivp_environment_t *env);
+
+/* Optional IVP_Listener_PSI::environment_will_be_deleted callback (called with
+ * the listener ctx when the environment is destroyed while registered). */
+void ivp_psi_listener_set_environment_deleted_fn(ivp_psi_listener_t *listener,
+                                                 ivp_psi_listener_env_deleted_fn_t fn);
 
 #ifdef __cplusplus
 }

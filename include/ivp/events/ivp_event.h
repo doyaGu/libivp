@@ -30,7 +30,8 @@ typedef enum ivp_event_type {
     IVP_EVENT_OBJECT_FROZEN,
     IVP_EVENT_OBJECT_UNFROZEN,
     IVP_EVENT_COLLISION_DETECTED,
-    IVP_EVENT_CONSTRAINT_BROKEN          /* reference: IVP_Listener_Constraint::event_constraint_broken */
+    IVP_EVENT_CONSTRAINT_BROKEN,         /* reference: IVP_Listener_Constraint::event_constraint_broken */
+    IVP_EVENT_ENVIRONMENT_DELETED        /* ~IVP_Environment: environment_will_be_deleted (first thing) */
 } ivp_event_type_t;
 
 /* Per-controller simulation payload parity with legacy IVP_Event_Sim.
@@ -51,8 +52,8 @@ typedef struct ivp_event {
     ivp_time_t           time;
     ivp_real_t           dt;
     int                  sim_unit_index;
-    /* Dense object index for live-object events; -1 when no stable index is available
-     * (e.g. IVP_EVENT_OBJECT_DESTROYED or non-object events). */
+    /* Dense object index for object events (for IVP_EVENT_OBJECT_DESTROYED the
+     * index the object had before removal); -1 for non-object events. */
     int                  object_index;
     int                  controller_id;
 } ivp_event_t;

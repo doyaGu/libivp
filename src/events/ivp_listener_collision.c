@@ -1,8 +1,18 @@
-/* ivp_listener_collision.c — Per-object collision listener implementation */
+/* ivp_listener_collision.c — IVP_Listener_Collision registration
+ *
+ * Per-object listener tables live in the environment
+ * (IVP_Cluster_Manager::collision_callback_hash, see ivp_environment.c);
+ * the simulation fires them from the impact / friction code.
+ */
 
 #include <ivp/events/ivp_listener_collision.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <string.h>
+
+#include "dynamics/ivp_env_pipeline.h"
+
+/* kinds of ivp_env_fire_collision_private (ivp_environment.c) */
+enum { COLL_PRE, COLL_POST, COLL_FR_CREATED, COLL_FR_DELETED, COLL_OBJ_DELETED };
 
 /* ── Initialization ────────────────────────────────────────────────────── */
 
@@ -16,137 +26,57 @@ void ivp_collision_listener_init(ivp_collision_listener_t *listener,
     listener->active = true;
 }
 
-/* ── Attach / detach ───────────────────────────────────────────────────── */
+/* ── Attach / detach (IVP_Real_Object::add/remove_listener_collision) ──── */
 
 int ivp_object_add_collision_listener(ivp_object_t *obj,
                                       ivp_collision_listener_t *listener)
 {
-    if (!obj || !listener) return -1;
-
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        if (!obj->collision_listeners[i]) {
-            obj->collision_listeners[i] = listener;
-            return 0;
-        }
-    }
-    return -1;  /* no free slot */
+    if (!obj || !listener || !obj->owner) return -1;
+    return ivp_env_add_listener_collision_private(obj->owner, obj, listener);
 }
 
 int ivp_object_remove_collision_listener(ivp_object_t *obj,
                                          ivp_collision_listener_t *listener)
 {
-    if (!obj || !listener) return -1;
-
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        if (obj->collision_listeners[i] == listener) {
-            obj->collision_listeners[i] = NULL;
-            return 0;
-        }
-    }
-    return -1;  /* not found */
+    if (!obj || !listener || !obj->owner) return -1;
+    return ivp_env_remove_listener_collision_private(obj->owner, obj, listener);
 }
 
-/* ── Dispatch helpers ──────────────────────────────────────────────────── */
-
-static void fire_pre_for_object(ivp_object_t *obj,
-                                const ivp_collision_event_t *event)
-{
-    if (!obj) return;
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        ivp_collision_listener_t *l = obj->collision_listeners[i];
-        if (!l || !l->active) continue;
-        if (!(l->enabled_callbacks & IVP_COLLISION_CB_PRE_COLLISION)) continue;
-        if (l->pre_collision_fn) {
-            l->pre_collision_fn(l->ctx, event);
-        }
-    }
-}
-
-static void fire_post_for_object(ivp_object_t *obj,
-                                 const ivp_collision_event_t *event)
-{
-    if (!obj) return;
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        ivp_collision_listener_t *l = obj->collision_listeners[i];
-        if (!l || !l->active) continue;
-        if (!(l->enabled_callbacks & IVP_COLLISION_CB_POST_COLLISION)) continue;
-        if (l->post_collision_fn) {
-            l->post_collision_fn(l->ctx, event);
-        }
-    }
-}
-
-static void fire_friction_created_for_object(ivp_object_t *obj,
-                                              const ivp_friction_event_t *event)
-{
-    if (!obj) return;
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        ivp_collision_listener_t *l = obj->collision_listeners[i];
-        if (!l || !l->active) continue;
-        if (!(l->enabled_callbacks & IVP_COLLISION_CB_FRICTION_CREATED)) continue;
-        if (l->friction_created_fn) {
-            l->friction_created_fn(l->ctx, event);
-        }
-    }
-}
-
-static void fire_friction_deleted_for_object(ivp_object_t *obj,
-                                              const ivp_friction_event_t *event)
-{
-    if (!obj) return;
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        ivp_collision_listener_t *l = obj->collision_listeners[i];
-        if (!l || !l->active) continue;
-        if (!(l->enabled_callbacks & IVP_COLLISION_CB_FRICTION_DELETED)) continue;
-        if (l->friction_deleted_fn) {
-            l->friction_deleted_fn(l->ctx, event);
-        }
-    }
-}
-
-/* ── Public dispatch ───────────────────────────────────────────────────── */
+/* ── Manual dispatch to the private listeners of the given objects ─────── */
 
 void ivp_collision_listeners_fire_pre(ivp_object_t *obj_a,
                                       ivp_object_t *obj_b,
                                       const ivp_collision_event_t *event)
 {
-    fire_pre_for_object(obj_a, event);
-    fire_pre_for_object(obj_b, event);
+    if (obj_a && obj_a->owner) ivp_env_fire_collision_private(obj_a->owner, obj_a, COLL_PRE, event);
+    if (obj_b && obj_b->owner) ivp_env_fire_collision_private(obj_b->owner, obj_b, COLL_PRE, event);
 }
 
 void ivp_collision_listeners_fire_post(ivp_object_t *obj_a,
                                        ivp_object_t *obj_b,
                                        const ivp_collision_event_t *event)
 {
-    fire_post_for_object(obj_a, event);
-    fire_post_for_object(obj_b, event);
+    if (obj_a && obj_a->owner) ivp_env_fire_collision_private(obj_a->owner, obj_a, COLL_POST, event);
+    if (obj_b && obj_b->owner) ivp_env_fire_collision_private(obj_b->owner, obj_b, COLL_POST, event);
 }
 
 void ivp_collision_listeners_fire_friction_created(ivp_object_t *obj_a,
                                                     ivp_object_t *obj_b,
                                                     const ivp_friction_event_t *event)
 {
-    fire_friction_created_for_object(obj_a, event);
-    fire_friction_created_for_object(obj_b, event);
+    if (obj_a && obj_a->owner) ivp_env_fire_collision_private(obj_a->owner, obj_a, COLL_FR_CREATED, event);
+    if (obj_b && obj_b->owner) ivp_env_fire_collision_private(obj_b->owner, obj_b, COLL_FR_CREATED, event);
 }
 
 void ivp_collision_listeners_fire_friction_deleted(ivp_object_t *obj_a,
                                                     ivp_object_t *obj_b,
                                                     const ivp_friction_event_t *event)
 {
-    fire_friction_deleted_for_object(obj_a, event);
-    fire_friction_deleted_for_object(obj_b, event);
+    if (obj_a && obj_a->owner) ivp_env_fire_collision_private(obj_a->owner, obj_a, COLL_FR_DELETED, event);
+    if (obj_b && obj_b->owner) ivp_env_fire_collision_private(obj_b->owner, obj_b, COLL_FR_DELETED, event);
 }
 
 void ivp_collision_listeners_fire_object_deleted(ivp_object_t *obj)
 {
-    if (!obj) return;
-    for (int i = 0; i < IVP_MAX_COLLISION_LISTENERS_PER_OBJECT; i++) {
-        ivp_collision_listener_t *l = obj->collision_listeners[i];
-        if (!l || !l->active) continue;
-        if (!(l->enabled_callbacks & IVP_COLLISION_CB_OBJECT_DELETED)) continue;
-        if (l->object_deleted_fn) {
-            l->object_deleted_fn(l->ctx, obj);
-        }
-    }
+    if (obj && obj->owner) ivp_env_fire_collision_private(obj->owner, obj, COLL_OBJ_DELETED, (const void *)obj);
 }

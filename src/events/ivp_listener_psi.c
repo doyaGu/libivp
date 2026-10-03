@@ -27,9 +27,14 @@ static void psi_event_adapter(void *ctx,
                               const ivp_event_t *event_data)
 {
     ivp_psi_listener_t *listener = (ivp_psi_listener_t *)ctx;
-    if (!listener || !listener->active || !listener->fn) return;
+    if (!listener || !listener->active) return;
 
-    /* Only fire on SIM_UNIT_BEGIN events */
+    if (event_data->type == IVP_EVENT_ENVIRONMENT_DELETED) {
+        if (listener->env_deleted_fn) listener->env_deleted_fn(listener->ctx, env);
+        return;
+    }
+    if (!listener->fn) return;
+    /* Only fire on SIM_UNIT_BEGIN events (fire_event_PSI) */
     if (event_data->type != IVP_EVENT_SIM_UNIT_BEGIN) return;
 
     listener->fn(listener->ctx, env, event_data->time, event_data->dt);
@@ -92,4 +97,12 @@ int ivp_psi_listener_unregister(ivp_psi_listener_t *listener,
     listener->fn = NULL;
     listener->ctx = NULL;
     return 0;
+}
+
+void ivp_psi_listener_set_environment_deleted_fn(ivp_psi_listener_t *listener,
+                                                 ivp_psi_listener_env_deleted_fn_t fn)
+{
+    if (!listener) return;
+    if (!ivp_psi_listener_is_initialized(listener)) ivp_psi_listener_reset(listener);
+    listener->env_deleted_fn = fn;
 }

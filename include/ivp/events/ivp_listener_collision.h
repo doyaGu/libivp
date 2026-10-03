@@ -21,6 +21,11 @@
 extern "C" {
 #endif
 
+struct ivp_environment;
+struct ivp_compact_edge;
+struct ivp_contact_pt;    /* IVP_Contact_Point (friction handle) */
+struct ivp_fr_core_pair;  /* IVP_Friction_Core_Pair */
+
 /* ── Callback enable flags ─────────────────────────────────────────────── */
 
 typedef enum ivp_collision_callback_flags {
@@ -35,13 +40,18 @@ typedef enum ivp_collision_callback_flags {
 /* ── Collision event data ──────────────────────────────────────────────── */
 
 typedef struct ivp_collision_event {
-    ivp_object_t      *obj_a;          /* first colliding object */
-    ivp_object_t      *obj_b;          /* second colliding object */
-    ivp_vec3r_t        contact_point;  /* world-space contact point */
-    ivp_vec3r_t        contact_normal; /* world-space normal (A→B) */
-    ivp_real_t         closing_speed;  /* relative velocity along normal */
-    ivp_real_t         impulse;        /* applied impulse magnitude */
-    ivp_real_t         gap_distance;   /* gap at contact (negative = penetration) */
+    ivp_object_t      *obj_a;          /* contact_situation->objects[0] */
+    ivp_object_t      *obj_b;          /* contact_situation->objects[1] */
+    ivp_vec3r_t        contact_point;  /* contact_situation->contact_point_ws */
+    ivp_vec3r_t        contact_normal; /* contact_situation->surf_normal (normized, pointing to obj_b) */
+    ivp_real_t         closing_speed;  /* relative velocity along normal (speed . surf_normal) */
+    ivp_real_t         impulse;        /* unused (0) */
+    ivp_real_t         gap_distance;   /* unused (0) */
+    /* IVP_Event_Collision / IVP_Contact_Situation */
+    ivp_real_t                 d_time_since_last_collision; /* time since the last impact of this core pair */
+    struct ivp_environment    *environment;
+    ivp_vec3r_t                speed;            /* contact_situation->speed: surface speed of obj_b relative to obj_a */
+    const struct ivp_compact_edge *compact_edges[2];
 } ivp_collision_event_t;
 
 /* ── Friction event data ───────────────────────────────────────────────── */
@@ -52,6 +62,10 @@ typedef struct ivp_friction_event {
     ivp_vec3r_t        contact_point;
     ivp_vec3r_t        contact_normal;
     ivp_real_t         normal_force;   /* current normal (vertical) force */
+    /* IVP_Event_Friction */
+    struct ivp_environment    *environment;
+    struct ivp_contact_pt     *friction_handle; /* IVP_Contact_Point (see the Contact_Point_API below) */
+    const struct ivp_compact_edge *compact_edges[2];
 } ivp_friction_event_t;
 
 /* ── Callback function types ───────────────────────────────────────────── */
@@ -67,6 +81,13 @@ typedef void (*ivp_friction_listener_fn_t)(void *ctx,
 typedef void (*ivp_collision_object_deleted_fn_t)(void *ctx,
                                                   ivp_object_t *obj);
 
+/* IVP_Listener_Collision::event_friction_pair_created / deleted (global
+ * listeners with IVP_COLLISION_CB_FRICTION_CREATED / _DELETED) */
+typedef void (*ivp_friction_pair_listener_fn_t)(void *ctx, struct ivp_fr_core_pair *pair);
+
+/* IVP_Listener_Collision::event_environment_deleted (global listeners) */
+typedef void (*ivp_collision_env_deleted_fn_t)(void *ctx, struct ivp_environment *env);
+
 /* ── Collision listener ────────────────────────────────────────────────── */
 
 typedef struct ivp_collision_listener {
@@ -75,6 +96,9 @@ typedef struct ivp_collision_listener {
     ivp_friction_listener_fn_t            friction_created_fn;
     ivp_friction_listener_fn_t            friction_deleted_fn;
     ivp_collision_object_deleted_fn_t     object_deleted_fn;
+    ivp_friction_pair_listener_fn_t       friction_pair_created_fn;
+    ivp_friction_pair_listener_fn_t       friction_pair_deleted_fn;
+    ivp_collision_env_deleted_fn_t        environment_deleted_fn;
     void                                 *ctx;
     int                                   enabled_callbacks;  /* bitmask of ivp_collision_callback_flags_t */
     bool                                  active;
@@ -90,6 +114,14 @@ void ivp_collision_listener_init(ivp_collision_listener_t *listener,
 /* Attach a collision listener to an object.
  * Returns 0 on success, -1 if max listeners reached.
  * The listener must remain valid for the lifetime of the attachment. */
+/* IVP_Contact_Point_API (friction_handle of ivp_friction_event_t) */
+float ivp_contact_point_get_eliminated_energy(const struct ivp_contact_pt *friction_handle);
+void  ivp_contact_point_reset_eliminated_energy(struct ivp_contact_pt *friction_handle);
+float ivp_contact_point_get_vert_force(const struct ivp_contact_pt *friction_handle);
+void  ivp_contact_point_get_surface_normal_ws(const struct ivp_contact_pt *friction_handle, ivp_vec3r_t *normal);
+
+/* IVP_Real_Object::add/remove_listener_collision (any number per object;
+ * fired from the last added to the first, after the global listeners) */
 int ivp_object_add_collision_listener(ivp_object_t *obj,
                                       ivp_collision_listener_t *listener);
 
