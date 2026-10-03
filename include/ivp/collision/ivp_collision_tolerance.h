@@ -21,7 +21,6 @@ extern "C" {
 #define IVP_DEFAULT_COLLISION_TOLERANCE         IVP_REAL(0.01)
 #define IVP_DEFAULT_GRAVITY_FOR_KEEPER_SPEED    IVP_REAL(9.81)
 #define IVP_MAX_STEPS_FOR_COLLDIST_DECREASE     64
-#define IVP_MAX_SPAWNED_MINDIST_COUNT           1000
 
 /* ── Collision settings structure ───────────────────────────────────────── */
 
