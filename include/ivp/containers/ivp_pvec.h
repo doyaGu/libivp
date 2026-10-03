@@ -55,6 +55,7 @@ static inline void ivp_pvec_ensure(ivp_pvec_t *v) {
 
 static inline int ivp_pvec_add(ivp_pvec_t *v, void *e) {
     ivp_pvec_ensure(v);
+    if (v->n >= v->cap) return -1;   /* could not grow: nothing written */
     v->elems[v->n] = e;
     return v->n++;
 }
@@ -120,8 +121,10 @@ static inline void ivp_pvec_swap(ivp_pvec_t *v, int index1, int index2) {
 
 static inline void ivp_pvec_insert_after(ivp_pvec_t *v, int index, void *e) {
     IVP_ASSERT(index >= 0 && index < v->n);
+    if (index < 0 || index >= v->n) return;
     index++;
     ivp_pvec_ensure(v);
+    if (v->n >= v->cap) return;
     for (int j = v->n; j > index; j--) v->elems[j] = v->elems[j - 1];
     v->elems[index] = e;
     v->n++;
