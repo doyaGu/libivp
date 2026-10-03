@@ -12,6 +12,8 @@
 #include <ivp/dynamics/ivp_cluster.h>
 #include <ivp/events/ivp_listener_object.h>
 #include <ivp/math/ivp_transform.h>
+#include "dynamics/ivp_sim_internal.h"
+#include <math.h>
 #include <string.h>
 
 #ifdef IVP_REAL_DOUBLE
@@ -222,6 +224,75 @@ IVP_TEST(merge_objects_rejects_unsafe_input) {
     ivp_environment_destroy(env);
 }
 
+/* Reference 8ad306e: invalid requests are rejected atomically (nothing
+ * changes); more than IVP_MAX_CORE_STACK (6) objects merge fine. */
+IVP_TEST(merge_objects_rejects_null_and_foreign_objects) {
+    ivp_environment_t *env = create_test_env();
+    ivp_environment_t *other = create_test_env();
+    ivp_object_t *a = create_test_object_ex(env, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+    ivp_object_t *b = create_test_object_ex(env, IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+    ivp_object_t *foreign = create_test_object_ex(other, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+    ivp_core_t *ca = a->physical_core, *cb = b->physical_core;
+    ivp_object_t *with_null[3] = { a, NULL, b };
+    IVP_ASSERT_FALSE(ivp_environment_merge_objects(env, with_null, 3));
+    ivp_object_t *with_foreign[3] = { a, b, foreign };
+    IVP_ASSERT_FALSE(ivp_environment_merge_objects(env, with_foreign, 3));
+    ivp_object_t *ab[2] = { a, b };
+    IVP_ASSERT_FALSE(ivp_environment_merge_objects(env, ab, 0));
+    IVP_ASSERT_TRUE(a->physical_core == ca && b->physical_core == cb);
+    IVP_ASSERT_EQ(ivp_pvec_len(&ca->objects), 1);
+    IVP_ASSERT_EQ(ivp_pvec_len(&cb->objects), 1);
+    ivp_environment_destroy(other);
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(merge_objects_more_than_six) {
+    ivp_environment_t *env = create_test_env();
+    ivp_object_t *objs[8];
+    for (int i = 0; i < 8; i++) {
+        objs[i] = create_test_object_ex(env, IVP_REAL(2.0) * (ivp_real_t)i, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+        IVP_ASSERT_TRUE(objs[i] != NULL);
+    }
+    IVP_ASSERT_TRUE(ivp_environment_merge_objects(env, objs, 8));
+    ivp_core_t *core = objs[0]->physical_core;
+    for (int i = 1; i < 8; i++) IVP_ASSERT_TRUE(objs[i]->physical_core == core);
+    IVP_ASSERT_EQ(ivp_pvec_len(&core->objects), 8);
+    IVP_ASSERT_NEAR(core->mass, IVP_REAL(8.0), TOL);
+    IVP_ASSERT_NEAR(core->m_world_f_core_last_psi.pos.k[0], IVP_REAL(7.0), TOL);
+    ivp_environment_destroy(env);
+}
+
+/* Reference f105953: attach_object(NULL, x), attach_object(x, NULL) and
+ * attaching an object to itself return without changes. */
+IVP_TEST(attach_object_ignores_null_and_self) {
+    ivp_environment_t *env = create_test_env();
+    ivp_object_t *a = create_test_object(env, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_core_t *ca = a->physical_core;
+    ivp_object_attach_object(NULL, a, IVP_OBJECT_ATTACH_CURRENT_DISTANCE);
+    ivp_object_attach_object(a, NULL, IVP_OBJECT_ATTACH_CURRENT_DISTANCE);
+    ivp_object_attach_object(a, a, IVP_OBJECT_ATTACH_CURRENT_DISTANCE);
+    IVP_ASSERT_TRUE(a->physical_core == ca && a->friction_core == ca && a->original_core == ca);
+    IVP_ASSERT_EQ(ivp_pvec_len(&ca->objects), 1);
+    for (int i = 0; i < 3; i++) ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_TRUE(a->physical_core == ca);
+    ivp_environment_destroy(env);
+}
+
+/* Reference 8ca7bb2: IVP_Core_Merged(core0, core1) starts the next-PSI
+ * quaternion from q_world_f_core_last_psi before its first matrix is
+ * calculated (the core has no objects yet). */
+IVP_TEST(merged_core_from_two_cores_has_valid_next_psi_quat) {
+    ivp_environment_t *env = create_test_env();
+    ivp_object_t *a = create_test_object_ex(env, IVP_REAL(-1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+    ivp_object_t *b = create_test_object_ex(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0), false);
+    ivp_core_merged_t *mc = ivp_core_merged_create_from_cores(a->physical_core, b->physical_core);
+    IVP_ASSERT_TRUE(mc != NULL);
+    IVP_ASSERT_TRUE(fabs((double)mc->core.q_world_f_core_next_psi.w) > 0.5);
+    IVP_ASSERT_EQ(ivp_pvec_len(&mc->core.objects), 0);
+    ivp_core_delete(&mc->core);
+    ivp_environment_destroy(env);
+}
+
 /* ========== environment teardown order (~IVP_Environment) ========== */
 
 typedef struct deleted_log {
@@ -371,6 +442,10 @@ int main(void) {
     /* IVP_Environment::merge_objects */
     IVP_REGISTER(merge_objects_shared_core);
     IVP_REGISTER(merge_objects_rejects_unsafe_input);
+    IVP_REGISTER(merge_objects_rejects_null_and_foreign_objects);
+    IVP_REGISTER(merge_objects_more_than_six);
+    IVP_REGISTER(attach_object_ignores_null_and_self);
+    IVP_REGISTER(merged_core_from_two_cores_has_valid_next_psi_quat);
 
     /* ~IVP_Environment */
     IVP_REGISTER(environment_teardown_cluster_order);
