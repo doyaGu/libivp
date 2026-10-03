@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <ivp/base/ivp_assert.h>
 #include <ivp/builder/ivp_build_grid.h>
@@ -14,6 +15,10 @@
 #include <ivp/geometry/ivp_surman_grid.h>
 #include <ivp/geometry/ivp_compact_ledge_geom.h>
 #include <ivp/collision/ivp_ray_solver.h>
+#include <ivp/collision/ivp_sphere_solver.h>
+#include <ivp/dynamics/ivp_environment.h>
+#include <ivp/dynamics/ivp_object.h>
+#include <ivp/math/ivp_quat.h>
 
 #define GF_ROWS 9
 #define GF_COLS 7
@@ -285,6 +290,51 @@ IVP_TEST(compact_grid_ray_hits_flat_area)
     ivp_compact_grid_free(NULL, g);
 }
 
+/* Reference 6623a1d: a sphere query on an object whose surface manager is
+ * not a polygon manager (a compact grid) asks the manager for the ledges
+ * within the query radius instead of reading a polygon ledge tree.  The
+ * grid manager selects ledges by their grid squares (x and z only). */
+IVP_TEST(sphere_query_on_compact_grid)
+{
+    float h[6 * 6];
+    for (int k = 0; k < 6 * 6; k++) h[k] = 0.0f;
+    ivp_template_compact_grid_t t;
+    ivp_template_compact_grid_init(&t);
+    t.row_info.n_points = 6;
+    t.row_info.maps_to = 0;
+    t.column_info.n_points = 6;
+    t.column_info.maps_to = 2;
+    t.height_maps_to = 1;
+    t.grid_field_size = 1.0f;
+    ivp_compact_grid_t *g = ivp_gridbuild_array_to_compact_grid(NULL, &t, h);
+    IVP_ASSERT_NOT_NULL(g);
+    ivp_surman_compact_grid_t sm;
+    ivp_surman_compact_grid_init(&sm, g);
+
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.type = IVP_OBJECT_POLYGON;
+    tmpl.physical_unmoveable = true;
+    tmpl.orientation = ivp_quatr_identity();
+    ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, &sm.base);
+    IVP_ASSERT_NOT_NULL(obj);
+
+    ivp_sphere_solver_template_t q;
+    memset(&q, 0, sizeof(q));
+    q.radius = IVP_REAL(0.5);
+    q.max_traversal_depth = 8;
+    ivp_vec3r_set(&q.center, IVP_REAL(2.5), IVP_REAL(0.2), IVP_REAL(2.5));
+    IVP_ASSERT_TRUE(ivp_sphere_solver_check_object(&q, obj));
+    ivp_vec3r_set(&q.center, IVP_REAL(20.0), IVP_REAL(0.0), IVP_REAL(20.0));
+    IVP_ASSERT_FALSE(ivp_sphere_solver_check_object(&q, obj));
+
+    ivp_environment_destroy(env);
+    ivp_compact_grid_free(NULL, g);
+}
+
 int main(void)
 {
     IVP_REGISTER(compact_grid_matches_reference);
@@ -292,5 +342,6 @@ int main(void)
     IVP_REGISTER(compact_grid_ray_hits_flat_area);
     IVP_REGISTER(compact_grid_binary_layout_matches_reference);
     IVP_REGISTER(compact_grid_build_reports_no_alignment_asserts);
+    IVP_REGISTER(sphere_query_on_compact_grid);
     IVP_RUN_ALL();
 }
