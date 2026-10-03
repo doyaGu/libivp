@@ -61,6 +61,8 @@ The library is structured into independent modules, each with a matching `src/<m
 
 ### Third-Party Dependencies
 
+Copyright notices and licenses: `THIRD_PARTY_NOTICES.md`. Keep the notices in the vendored files. The reference engine sources stay outside the repository (`.gitignore` blocks `*.cxx`, `*.hxx` and `reference/`).
+
 - **qhull 2.6** (`deps/qhull/`, Geometry Center 1999): the qhull version the reference compiles (`ivp_compact_builder/qhull*.cxx`), as C17 (global state, not reentrant: the convex builders are not thread safe). Compiled as `ivp_qhull` with strict FP; it reproduces the reference facet order, which the ledge layout depends on. Its error output goes to stderr and through `ivp_message`, as in the reference.
 - **SDL3**: Fetched via CMake FetchContent when not system-installed. Only needed for examples/render.
 

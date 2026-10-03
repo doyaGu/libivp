@@ -137,3 +137,9 @@ config.h
 !config.h.in
 # Reference JSONL generated from the legacy engine (tools/regen_reference.sh)
 tools/testdata/ref_*.jsonl
+
+# Reference engine sources stay outside the repository (default ../ivp)
+reference/
+*.cxx
+*.hxx
+!tests/data/lcs_ref_harness.cxx
