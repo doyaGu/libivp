@@ -1,15 +1,31 @@
-/* ivp_merge_core.h -- Merged core for breakable object groups
+/* ivp_merge_core.h -- merged cores (port of IVP_Core_Merged / IVP_Merge_Core,
+ * ivp_intern/ivp_merge_core.{hxx,cxx}, and IVP_Environment::merge_objects)
  *
- * A merge core joins multiple objects into a single rigid body by
- * summing their masses and inertias. When a break threshold is exceeded
- * (impulse or energy), the merge splits and objects regain independence.
+ * ivp_environment_merge_objects gives several objects one shared core: the
+ * new IVP_Core_Merged takes the orientation of the heaviest core (or of an
+ * unmovable core), its matrix position is the mass center (pos_world_f_core_
+ * last_psi stays at the heaviest core, exactly like the reference), mass,
+ * rotation inertia, speeds and damping are combined by IVP_Merge_Core and
+ * every object is placed in the new core space (set_new_m_object_f_core).
+ * The old cores are deleted.  The objects' physical_core, friction_core and
+ * original_core all become the merged core.
  *
- * Unlike ivp_object_attach (which keeps follower cores pinned),
- * merge_core replaces the individual cores with a single shared
- * aggregate core. On split, new individual cores are created from
- * the aggregate state.
- *
- * Ported from ivp_merge_core.hxx.
+ * Reference limits (the reference crashes, hangs or leaves dangling
+ * pointers otherwise; libivp refuses such a merge and returns false
+ * without changing anything):
+ *   - every object must be the only object of its core (cores of objects
+ *     that are already merged / attached are deleted while other objects
+ *     still use them, and a core listed twice is deleted twice);
+ *   - no core may be simulated: IVP_Core::init leaves the merged core's
+ *     q_world_f_core_next_psi zero and the simulated branch of
+ *     merge_objects normalizes it (endless loop in fast_normize_quat);
+ *     freeze objects first (ivp_object_disable_simulation) or merge them
+ *     before they are woken up;
+ *   - no object may have contact points (friction systems keep pointers to
+ *     the deleted cores).
+ * More than IVP_MAX_CORE_STACK objects overflow the reference's
+ * IVP_Merge_Core::core_stack; libivp does not write the (otherwise unused)
+ * stack, so any number of objects can be merged.
  */
 #ifndef IVP_MERGE_CORE_H
 #define IVP_MERGE_CORE_H
@@ -22,69 +38,23 @@
 extern "C" {
 #endif
 
-/* ── Merge group ───────────────────────────────────────────────────────── */
+#define IVP_MAX_CORE_STACK 6
 
-#define IVP_MERGE_MAX_OBJECTS 32
+struct ivp_environment;
 
-/* Forward declare for break callback typedef */
-typedef struct ivp_merge_group ivp_merge_group_t;
+/* IVP_Environment::merge_objects(objs_to_merge): the merged core is
+ * created from objs_to_merge[0] (IVP_Core_Merged(real_obj)).  Returns false
+ * (and changes nothing) for inputs outside the reference limits above. */
+bool ivp_environment_merge_objects(struct ivp_environment *env, ivp_object_t *const *objs_to_merge, int n_objs);
 
-typedef struct ivp_merge_member {
-    ivp_object_t *obj;
-    ivp_vec3r_t   offset_pos;   /* offset from merge center in merge frame */
-    ivp_quatr_t   offset_rot;   /* rotation offset from merge frame */
-    ivp_core_t    saved_core;   /* original core state (restored on split) */
-} ivp_merge_member_t;
-
-/* Callback when the merge group breaks. */
-typedef void (*ivp_merge_break_fn_t)(void *ctx,
-                                       ivp_merge_group_t *group);
-
-struct ivp_merge_group {
-    ivp_core_t         merged_core;     /* aggregate core */
-    ivp_merge_member_t members[IVP_MERGE_MAX_OBJECTS];
-    int                n_members;
-    ivp_real_t         break_impulse;   /* break threshold (impulse magnitude) */
-    ivp_merge_break_fn_t break_fn;
-    void              *break_ctx;
-    bool               merged;          /* true if currently merged */
-};
-
-/* ── API ───────────────────────────────────────────────────────────────── */
-
-/* Initialize a merge group. break_impulse <= 0 means unbreakable. */
-void ivp_merge_group_init(ivp_merge_group_t *group,
-                            ivp_real_t break_impulse);
-
-/* Add an object to the merge group. Must call ivp_merge_group_merge()
- * after adding all objects. Returns IVP_OK on success. */
-ivp_result_t ivp_merge_group_add(ivp_merge_group_t *group,
-                                   ivp_object_t *obj);
-
-/* Compute the merged core from all members.
- * After this call, all member objects share the merged core state. */
-void ivp_merge_group_merge(ivp_merge_group_t *group);
-
-/* Split the merged group: restore individual cores from saved state
- * with velocities inherited from the merged core.
- * Typically called from the break callback or externally. */
-void ivp_merge_group_split(ivp_merge_group_t *group);
-
-/* Check if accumulated impulse exceeds break threshold.
- * Call after collision resolution. If exceeded, calls break_fn
- * and splits automatically. */
-void ivp_merge_group_check_break(ivp_merge_group_t *group,
-                                   ivp_real_t impulse_magnitude);
-
-/* Set break callback. */
-static inline void ivp_merge_group_set_break_callback(
-    ivp_merge_group_t *group,
-    ivp_merge_break_fn_t fn,
-    void *ctx)
-{
-    group->break_fn = fn;
-    group->break_ctx = ctx;
-}
+/* IVP_Core::set_matrizes_and_speed (splitting): set the matrix, speed and
+ * rotation speed of a core that was replaced by template_core (directly or
+ * through a chain of merged cores) from template_core; *m_CORE_f_core_out is
+ * the change of core space.  Not used by the reference simulation (its only
+ * caller, IVP_Core_Collision::split_collision_merged_core_next_PSI, returns
+ * before reaching it). */
+void ivp_core_set_matrizes_and_speed(ivp_core_t *core, ivp_core_merged_t *template_core,
+                                     ivp_transform_r_t *m_CORE_f_core_out);
 
 #ifdef __cplusplus
 }
