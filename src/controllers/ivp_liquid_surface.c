@@ -16,11 +16,10 @@ static bool simple_eval(void *ctx,
     *out_height         = ls->surface_height;
     *out_velocity       = ls->flow_velocity;
 
-    /* Check if the query point is below the surface.
-     * For a plane defined as normal · p = height, a point is inside
-     * (below surface) if normal · p > height (normal points OUT). */
+    /* Plane normal . p = height with the normal pointing OUT of the liquid:
+     * a point is inside the liquid when normal . p <= height. */
     ivp_real_t dot = ivp_vec3r_dot(&ls->surface_normal, query_pos_ws);
-    return dot > ls->surface_height;
+    return dot <= ls->surface_height;
 }
 
 /* ── Public API ────────────────────────────────────────────────────────── */
@@ -29,9 +28,12 @@ void ivp_liquid_surface_simple_init(ivp_liquid_surface_simple_t *ls,
                                     ivp_real_t surface_y,
                                     ivp_real_t density)
 {
+    /* Y-down world: liquid for y > surface_y; normal (0,-1,0) points out of
+     * the liquid, so the plane is -y = -surface_y (same convention as
+     * ivp_buoyancy_init). */
     ivp_vec3r_t normal;
     ivp_vec3r_set(&normal, IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
-    ivp_liquid_surface_simple_init_plane(ls, &normal, surface_y, density);
+    ivp_liquid_surface_simple_init_plane(ls, &normal, -surface_y, density);
 }
 
 void ivp_liquid_surface_simple_init_plane(ivp_liquid_surface_simple_t *ls,
