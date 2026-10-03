@@ -60,8 +60,26 @@ typedef struct ivp_object_template {
     const char       *name;                        /* optional debug name      */
     void             *client_data;                 /* user pointer             */
     bool              physical_unmoveable;          /* static object            */
-    bool              ccd_enabled;                  /* per-object CCD (default: false) */
-    ivp_real_t        ccd_speed_threshold;          /* 0 = auto (50% of radius / dt) */
+    bool              ccd_enabled;                  /* unused (kept for API compatibility) */
+    ivp_real_t        ccd_speed_threshold;          /* unused */
+
+    /* IVP_Template_Real_Object / IVP_Template_Ball fields */
+    ivp_real_t        ball_radius;                  /* IVP_Template_Ball::radius (BALL objects)       */
+    ivp_real_t        extra_radius;                 /* default 0                                      */
+    bool              rot_inertia_is_factor;        /* default true (reference): inertia =
+                                                     * surface inertia (unit mass) * rot_inertia * mass;
+                                                     * false: rot_inertia is the absolute inertia      */
+    ivp_real_t        auto_check_rot_inertia;       /* default 0.03                                   */
+    bool              pinned;                       /* default false                                  */
+    bool              enable_piling_optimization;   /* default false                                  */
+    bool              use_mass_center_override;     /* default false                                  */
+    ivp_vec3r_t       mass_center_override;         /* object space                                   */
+    /* at most IVP_NO_COLL_GROUP_STRING_LEN - 1 = 7 characters: a longer id
+     * COREs when it is used (reference IVP_Template_Real_Object::
+     * set_nocoll_group_ident) */
+    const char       *nocoll_group_ident;           /* reference collision group string (NULL = none) */
+    bool              enable_collision_detection;   /* default true                                   */
+    bool              start_in_simulation;          /* default true (ensure_in_simulation_now)        */
 } ivp_object_template_t;
 
 /* Fill with sensible defaults. Must still set mass and surface. */
@@ -72,13 +90,20 @@ void ivp_object_template_init(ivp_object_template_t *tmpl);
 /* Forward declarations */
 struct ivp_environment;
 struct ivp_collision_listener;
-struct ivp_synapse_link;
 struct ivp_cluster;
 
-#define IVP_MAX_COLLISION_LISTENERS_PER_OBJECT 4
+#define IVP_MAX_COLLISION_LISTENERS_PER_OBJECT 4 /* deprecated: no limit any more */
 
 typedef struct ivp_object {
-    ivp_core_t           core;
+    /* IVP_Real_Object cores (heap allocated, owned by the environment):
+     *   physical_core  coordinate system, mass, speed ... (eventually merged)
+     *   friction_core  long term (merged) core for frictions
+     *   original_core  the core that was valid at creation of the object
+     * All three are the same core unless objects are merged or attached
+     * (then all three are the shared core).  NULL for clusters. */
+    ivp_core_t          *physical_core;
+    ivp_core_t          *friction_core;
+    ivp_core_t          *original_core;
     ivp_object_type_t    type;          /* BALL or POLYGON              */
     ivp_material_t       material;
     const char          *no_collision_group; /* DEPRECATED: legacy group tag (pointer equality) */
@@ -91,12 +116,9 @@ typedef struct ivp_object {
     int                  dense_index;   /* index in object system array */
     ivp_handle_t         handle;        /* generational handle */
 
-    /* Per-object collision listeners (up to IVP_MAX_COLLISION_LISTENERS_PER_OBJECT) */
-    struct ivp_collision_listener *collision_listeners[IVP_MAX_COLLISION_LISTENERS_PER_OBJECT];
-
-    /* Legacy-style reverse lookup lists for active mindist/friction synapses. */
-    struct ivp_synapse_link *mindist_synapses;
-    struct ivp_synapse_link *friction_synapses;
+    /* flags.collision_listener_exists: per-object collision listeners are
+     * kept by the environment (IVP_Cluster_Manager::collision_callback_hash) */
+    bool                 collision_listener_exists;
 
     /* Continuous collision detection */
     bool              ccd_enabled;           /* per-object CCD flag (default: false) */
@@ -107,21 +129,45 @@ typedef struct ivp_object {
     bool                shift_core_f_object_is_zero;  /* optimization flag — true when shift is identity */
     ivp_quatr_t        *q_core_f_object;             /* rotation from core to object frame (NULL = identity) */
 
-    /* Cluster hierarchy (ported from IVP_Object) */
+    /* Cluster hierarchy (ported from IVP_Object): real objects live in the
+     * environment's root cluster unless moved into a sub-cluster */
     struct ivp_object  *next_in_cluster;    /* next sibling in parent cluster  */
+    struct ivp_object  *prev_in_cluster;    /* previous sibling                */
     struct ivp_cluster *parent_cluster;     /* parent cluster (NULL if none)   */
 
-    /* Multi-object core list (ported from IVP_Core::objects) */
-    struct ivp_object  *next_in_core_list;  /* next object sharing same core   */
+    /* ── Collision core (port of IVP_Real_Object collision state) ──────── */
+    struct ivp_md_synapse  *exact_synapses;    /* exact mindist synapses           */
+    struct ivp_md_synapse  *invalid_synapses;  /* intruded mindist synapses        */
+    struct ivp_fr_synapse  *fr_synapses;       /* contact point synapses           */
+    struct ivp_ov_element  *ov_element;        /* OV-tree element (NULL = disabled)*/
+    struct ivp_cache_obj   *cache_object;      /* AT-transform cache (lazy)        */
+    void                   *controller_phantom; /* IVP_Controller_Phantom (opaque)  */
+    uint8_t                 object_movement_state; /* flags.object_movement_state   */
+    bool                    collision_detection_enabled;
+    float                   extra_radius;      /* extra collision radius           */
+    char                    nocoll_group_ident[8]; /* IVP_NO_COLL_GROUP_STRING_LEN  */
+    struct ivp_hull_mgr    *hull_manager;      /* per-object hull manager          */
+    bool                    object_deletion_deferred;
+    bool                    check_vicinity_on_deferred_deletion;
+    bool                    object_listener_exists; /* flags.object_listener_exists */
 } ivp_object_t;
 
-/* Get the core from an object */
+/* IVP_Real_Object::get_core: the current (physical) core.  Several objects
+ * share one core after ivp_environment_merge_objects / ivp_object_attach_object;
+ * the object frame relative to the core is shift_core_f_object /
+ * q_core_f_object. */
 static inline ivp_core_t *ivp_object_get_core(ivp_object_t *obj) {
-    return &obj->core;
+    return obj->physical_core;
 }
 
 static inline const ivp_core_t *ivp_object_get_core_const(const ivp_object_t *obj) {
-    return &obj->core;
+    return obj->physical_core;
+}
+
+/* IVP_Real_Object::get_original_core: the core that was valid at creation of
+ * the object (replaced by merge_objects / attach_object / detach_object). */
+static inline ivp_core_t *ivp_object_get_original_core(const ivp_object_t *obj) {
+    return obj->original_core;
 }
 
 /* Get/set client data */
@@ -133,38 +179,40 @@ static inline void ivp_object_set_client_data(ivp_object_t *obj, void *data) {
     obj->client_data = data;
 }
 
-/* Get world position at current PSI time */
+/* Get the core (mass center) world position at the current PSI
+ * (IVP_Core::get_position_PSI, m_world_f_core_last_psi). */
 static inline void ivp_object_get_position(const ivp_object_t *obj,
                                             ivp_vec3r_t *out) {
-    *out = obj->core.pos_world_f_core_last_psi;
+    *out = obj->physical_core->m_world_f_core_last_psi.pos;
 }
 
 /* Get world orientation at current PSI time */
 static inline void ivp_object_get_orientation(const ivp_object_t *obj,
                                                ivp_quatr_t *out) {
-    *out = obj->core.q_world_f_core_last_psi;
+    *out = obj->physical_core->q_world_f_core_last_psi;
 }
 
 /* Get linear velocity */
 static inline void ivp_object_get_speed(const ivp_object_t *obj,
                                          ivp_vec3r_t *out) {
-    *out = obj->core.speed;
+    *out = obj->physical_core->speed;
 }
 
 /* Get angular velocity (core space) */
 static inline void ivp_object_get_rot_speed(const ivp_object_t *obj,
                                               ivp_vec3f_t *out) {
-    *out = obj->core.rot_speed;
+    *out = obj->physical_core->rot_speed;
 }
 
 /* Check if object is static */
 static inline bool ivp_object_is_unmoveable(const ivp_object_t *obj) {
-    return obj->core.physical_unmoveable;
+    return obj->physical_core->physical_unmoveable;
 }
 
-/* Check if object is frozen */
+/* Check if object is frozen (IVP_Real_Object::get_movement_state() == IVP_MT_NOT_SIM;
+ * static objects report IVP_MT_STATIC, not frozen) */
 static inline bool ivp_object_is_frozen(const ivp_object_t *obj) {
-    return obj->core.movement_state == IVP_MT_NOT_SIM;
+    return obj->object_movement_state == IVP_MT_NOT_SIM;
 }
 
 /* Check if two objects share the same legacy no_collision_group (pointer equality). */
@@ -176,7 +224,7 @@ static inline bool ivp_objects_share_no_collision_group(const ivp_object_t *a,
 
 /* Get kinetic energy */
 static inline ivp_real_t ivp_object_get_energy(const ivp_object_t *obj) {
-    return ivp_core_get_energy(&obj->core);
+    return ivp_core_get_energy(obj->physical_core);
 }
 
 /* ── CCD accessors ─────────────────────────────────────────────────────── */
@@ -209,12 +257,21 @@ void ivp_object_change_unmovable(ivp_object_t *obj, bool unmovable);
 /* Pin/unpin object (no gravity/linear push). */
 void ivp_object_set_pinned(ivp_object_t *obj, bool pinned);
 
-/* Set collision group. Objects in the same non-zero group skip collision. */
+/* IVP_Real_Object::recheck_collision_filter: re-evaluate the collision filter
+ * for all pairs of this object (drops mindists the filter now rejects and
+ * creates the ones it now accepts).  Call it after changing the environment's
+ * collision filter, the collision group, the layer mask or exclusive pairs,
+ * which by themselves only affect pairs created later. */
+void ivp_object_recheck_collision_filter(ivp_object_t *obj);
+
+/* Set collision group. Objects in the same non-zero group skip collision.
+ * Existing pairs keep their state until ivp_object_recheck_collision_filter. */
 static inline void ivp_object_set_collision_group(ivp_object_t *obj, int group) {
     obj->collision_group = group;
 }
 
-/* Set collision layer mask. Pairs with no overlapping bits skip collision. */
+/* Set collision layer mask. Pairs with no overlapping bits skip collision.
+ * Existing pairs keep their state until ivp_object_recheck_collision_filter. */
 static inline void ivp_object_set_layer_mask(ivp_object_t *obj, uint32_t mask) {
     obj->layer_mask = mask;
 }
@@ -229,6 +286,37 @@ static inline void ivp_object_enable_collision(ivp_object_t *obj) {
 static inline void ivp_object_disable_collision(ivp_object_t *obj) {
     obj->layer_mask = 0;
 }
+
+/* ── IVP_Real_Object helpers ───────────────────────────────────────────── */
+
+/* IVP_Real_Object::disable_simulation: freeze the object's core (and its
+ * simulation unit when everything in it is calm) immediately, regardless of
+ * the speed; its contact points are removed silently.  Returns true when the
+ * object is not simulated any more (unmoveable objects: always true). */
+bool ivp_object_disable_simulation(ivp_object_t *obj);
+
+/* IVP_Real_Object::change_fast_piling_allowed (on the friction core). */
+void ivp_object_change_fast_piling_allowed(ivp_object_t *obj, bool flag);
+
+/* IVP_Real_Object::ensure_in_simulation: revive at the next PSI. */
+void ivp_object_ensure_in_simulation(ivp_object_t *obj);
+/* IVP_Real_Object::ensure_in_simulation_now: revive immediately. */
+void ivp_object_ensure_in_simulation_now(ivp_object_t *obj);
+
+/* IVP_Real_Object::async_add_speed_object_ws / async_add_rot_speed_object_cs /
+ * async_push_object_ws: wake the object; the change is committed at the
+ * next PSI (impulse in kg*m/s, rotation speed in core space). */
+void ivp_object_async_add_speed_ws(ivp_object_t *obj, const ivp_vec3r_t *speed_ws);
+void ivp_object_async_add_rot_speed_cs(ivp_object_t *obj, const ivp_vec3r_t *rot_speed_cs);
+void ivp_object_async_push_ws(ivp_object_t *obj, const ivp_vec3r_t *position_ws, const ivp_vec3r_t *impulse_ws);
+
+/* IVP_Real_Object::beam_object_to_new_position (object frame pose). */
+void ivp_object_beam_to_new_position(ivp_object_t *obj, const ivp_quatr_t *rotation_world_f_object,
+                                     const ivp_vec3r_t *position_ws, bool optimize_for_repeated_calls);
+
+/* IVP_Real_Object::get_m_world_f_object_AT: object frame at the current
+ * (interpolated) environment time. */
+void ivp_object_get_m_world_f_object_AT(const ivp_object_t *obj, ivp_transform_r_t *m_world_f_object_out);
 
 /* Recompile object after geometry change.
  * Updates bounding radius from surface manager and resets movement state. */

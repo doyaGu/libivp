@@ -45,29 +45,6 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
     }
     memset(obj, 0, sizeof(*obj));
 
-    ivp_core_init(&obj->core, tmpl->mass, &tmpl->rot_inertia);
-    ivp_core_set_pose(&obj->core, &tmpl->position, &tmpl->orientation);
-
-    /* Propagate bounding radius from surface manager to core.
-     * Without this, broadphase sphere overlap uses the default 1.0
-     * and misses all collisions for objects larger than unit size. */
-    if (surman && surman->vtable->get_radius_and_deviation) {
-        float center[3] = {0.0f, 0.0f, 0.0f};
-        float radius = 1.0f, deviation = 0.0f;
-        surman->vtable->get_radius_and_deviation(surman, center, &radius, &deviation);
-        obj->core.upper_limit_radius    = (ivp_real_t)radius;
-        obj->core.max_surface_deviation = (ivp_real_t)deviation;
-    }
-
-    obj->core.speed_damp_factor     = tmpl->speed_damp_factor;
-    obj->core.rot_speed_damp_factor = tmpl->rot_speed_damp_factor;
-    obj->core.physical_unmoveable   = tmpl->physical_unmoveable;
-    obj->core.time_of_last_psi      = env->current_time;
-
-    if (tmpl->physical_unmoveable) {
-        obj->core.movement_state = IVP_MT_STATIC;
-    }
-
     obj->type         = tmpl->type;
     obj->material     = tmpl->material;
     obj->no_collision_group = tmpl->no_collision_group;
@@ -79,9 +56,6 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
     obj->owner        = env;
     obj->ccd_enabled  = tmpl->ccd_enabled;
     obj->ccd_speed_threshold = tmpl->ccd_speed_threshold;
-
-    /* Core-to-object offset: identity by default */
-    obj->shift_core_f_object = (ivp_vec3r_t){{IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0)}};
     obj->shift_core_f_object_is_zero = true;
     obj->q_core_f_object = NULL;
 
@@ -96,10 +70,8 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
     if (out_handle) {
         *out_handle = h;
     }
-
-    ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_CREATED, IVP_REAL(0.0),
-                                        obj->dense_index, 0);
-
+    /* IVP_EVENT_OBJECT_CREATED is emitted by the environment once the
+     * object is fully initialised */
     return obj;
 }
 
@@ -108,14 +80,17 @@ bool ivp_object_system_destroy_by_handle(ivp_object_system_t *sys,
                                          const ivp_allocator_t *alloc)
 {
     void *removed = NULL;
+    ivp_object_t *pre = ivp_object_system_get_by_handle(sys, handle);
+    const int index_before_removal = pre ? pre->dense_index : -1;
     if (!ivp_registry_remove_by_handle(&sys->registry, handle, &removed)) {
         return false;
     }
 
     ivp_object_t *obj = (ivp_object_t *)removed;
     if (obj->owner) {
+        /* object_index: the dense index the object had (now invalid) */
         ivp_environment_emit_event_internal(obj->owner, IVP_EVENT_OBJECT_DESTROYED,
-                                            IVP_REAL(0.0), -1, 0);
+                                            IVP_REAL(0.0), index_before_removal, 0);
     }
     ivp_free(alloc, obj, sizeof(ivp_object_t));
     return true;
