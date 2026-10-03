@@ -9,15 +9,19 @@
  * provides the few host helpers the sources use (p_malloc/p_calloc/P_FREE,
  * ivp_message) so the same code compiles as C17.
  *
- * Modification notice (qhull license condition 3): modified for libivp on
- * 2026-10-02 to reproduce the reference convex hulls (facet and facet
- * vertex order) exactly.  Changes against ivp_compact_builder/qhull*.cxx:
+ * Modification notice (qhull license condition 3): modified by doyaGu for
+ * libivp on 2026-10-02 to reproduce the reference convex hulls (facet and
+ * facet vertex order) exactly.  Changes against
+ * ivp_compact_builder/qhull*.cxx:
  * renamed .cxx/.hxx to .c/.h, <ivp_physics.hxx> replaced by this header,
  * getid_() uses a C cast, qh_readfeasible() prototype matches its
  * definition, ptr_intT is uintptr_t, two unnamed parameters are named,
  * ivp_message() is qh_message() (same text, output through a sink that
  * libivp routes to its ivp_message()), and qhull_api.[ch] were added.
  * Algorithms and arithmetic are unchanged.
+ *
+ * The original qhull source code may be obtained from http://www.qhull.org
+ * (qhull license condition 4).
  */
 #ifndef QHULL_COMPAT_H
 #define QHULL_COMPAT_H
