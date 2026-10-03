@@ -286,11 +286,9 @@ void ivp_core_merged_set_by_merge(ivp_core_merged_t *mcore, ivp_core_t *c0, ivp_
 
 /* IVP_Core_Merged::IVP_Core_Merged(IVP_Core *core0, IVP_Core *core1).  Only
  * IVP_Core_Collision uses it, which the reference never creates
- * (create_collision_merged_core_with returns first).  Like the reference,
- * the final calc_next_PSI_matrix integrates q_world_f_core_next_psi, which
- * neither IVP_Core::init nor set_by_merge sets: the reference loops forever
- * normizing the zero quaternion.  libivp starts from q_world_f_core_last_psi
- * instead (deviation for an unreachable path). */
+ * (create_collision_merged_core_with returns first).  The next-PSI
+ * quaternion starts from q_world_f_core_last_psi before the first
+ * calc_next_PSI_matrix (reference 8ca7bb2). */
 ivp_core_merged_t *ivp_core_merged_create_from_cores(ivp_core_t *core0, ivp_core_t *core1)
 {
     ivp_object_t *io = ivp_core_object_at(core0, 0);
@@ -304,7 +302,7 @@ ivp_core_merged_t *ivp_core_merged_create_from_cores(ivp_core_t *core0, ivp_core
     mc->core.environment = core0->environment;
     mc->core.movement_state = IVP_MT_MOVING;
     ivp_core_merged_set_by_merge(mc, core0, core1);
-    mc->core.q_world_f_core_next_psi = mc->core.q_world_f_core_last_psi;   /* see above */
+    mc->core.q_world_f_core_next_psi = mc->core.q_world_f_core_last_psi;
     ivp_sim_es_t es;
     ivp_sim_es_init(&es, mc->core.environment);
     ivp_cnps_calc_next_psi_matrix(&mc->core, &es, NULL);
@@ -374,7 +372,7 @@ void ivp_core_split_collision_merged_core_next_psi(ivp_core_merged_t *ccore)
 bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *objs_to_merge, int n_objs)
 {
     if (!env || !objs_to_merge || n_objs <= 0) return false;
-    /* inputs on which the reference crashes / hangs (see ivp_merge_core.h) */
+    /* input contract (reference 8ad306e, see ivp_merge_core.h) */
     for (int i = 0; i < n_objs; i++) {
         ivp_object_t *obj = objs_to_merge[i];
         if (!obj || obj->owner != env || !obj->physical_core) return false;
@@ -405,8 +403,6 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
         /* if (IVP_MTIS_SIMULATED(old_core->movement_state)): the reference has
          * the stop_physical_movement / remove_sim_core calls commented out */
         merge_all_objs.cores[i] = my_obj->physical_core;
-        /* core_stack[i] = physical_core: unused (and out of bounds for more
-         * than IVP_MAX_CORE_STACK objects) in the reference */
         my_obj->physical_core = &merged_core_for_all->core;
         my_obj->friction_core = &merged_core_for_all->core;
         my_obj->original_core = &merged_core_for_all->core;
@@ -418,8 +414,7 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
     ivp_sim_es_t es;
     ivp_sim_es_init_dt(&es, env, ivp_time_diff(ivp_env_get_next_psi_time(env), ivp_env_get_current_time(env)));
     /* the movement type is never simulated here (simulated cores are
-     * rejected above: the reference's init_core_for_simulation +
-     * calc_next_PSI_matrix branch loops forever) */
+     * rejected above) */
     IVP_ASSERT(!IVP_MTIS_SIMULATED(merge_all_objs.movement_type));
     ivp_core_calc_next_psi_matrix_zero_speed(&merged_core_for_all->core, &es);
 

@@ -10,22 +10,18 @@
  * The old cores are deleted.  The objects' physical_core, friction_core and
  * original_core all become the merged core.
  *
- * Reference limits (the reference crashes, hangs or leaves dangling
- * pointers otherwise; libivp refuses such a merge and returns false
- * without changing anything):
- *   - every object must be the only object of its core (cores of objects
- *     that are already merged / attached are deleted while other objects
- *     still use them, and a core listed twice is deleted twice);
- *   - no core may be simulated: IVP_Core::init leaves the merged core's
- *     q_world_f_core_next_psi zero and the simulated branch of
- *     merge_objects normalizes it (endless loop in fast_normize_quat);
- *     freeze objects first (ivp_object_disable_simulation) or merge them
- *     before they are woken up;
- *   - no object may have contact points (friction systems keep pointers to
- *     the deleted cores).
- * More than IVP_MAX_CORE_STACK objects overflow the reference's
- * IVP_Merge_Core::core_stack; libivp does not write the (otherwise unused)
- * stack, so any number of objects can be merged.
+ * Input contract (reference 8ad306e; an invalid request is rejected
+ * atomically: false is returned and nothing changes):
+ *   - no NULL entry, every object belongs to this environment and has a
+ *     core, and no object is listed twice;
+ *   - every object is the only object of its core (cores of merged or
+ *     attached objects are shared);
+ *   - no core is simulated: freeze objects first
+ *     (ivp_object_disable_simulation) or merge them before they are woken
+ *     up;
+ *   - no object has contact points.
+ * Any number of objects can be merged (IVP_Merge_Core::core_stack is not
+ * written, as in the reference).
  */
 #ifndef IVP_MERGE_CORE_H
 #define IVP_MERGE_CORE_H
@@ -44,7 +40,7 @@ struct ivp_environment;
 
 /* IVP_Environment::merge_objects(objs_to_merge): the merged core is
  * created from objs_to_merge[0] (IVP_Core_Merged(real_obj)).  Returns false
- * (and changes nothing) for inputs outside the reference limits above. */
+ * (and changes nothing) for inputs outside the contract above. */
 bool ivp_environment_merge_objects(struct ivp_environment *env, ivp_object_t *const *objs_to_merge, int n_objs);
 
 /* IVP_Core::set_matrizes_and_speed (splitting): set the matrix, speed and

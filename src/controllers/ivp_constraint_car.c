@@ -10,12 +10,10 @@
  * ivp_vec3r_t / ivp_transform_r_t, IVP_DOUBLE -> D).  The IVP_IF blocks of
  * the reference (debug build only: the plan B prints) are ported as IVP_IF.
  *
- * Deviations (see ivp_constraint_car.h):
- *   - the builder's temporary matrix uses row stride == columns (the
- *     reference leaves aligned_row_len at 0, which writes every row into
- *     row 0 and inverts uninitialised memory);
- *   - when one of the cores is deleted the solver is detached from the
- *     environment instead of deleting itself (the owner frees it).
+ * The builder's temporary matrix uses row stride == columns (reference
+ * 81357f3).  Deviation: when one of the cores is deleted the solver is
+ * detached from the environment instead of deleting itself (the owner frees
+ * it).
  */
 #include <stdlib.h>
 #include <string.h>
@@ -627,8 +625,7 @@ static ivp_result_t builder_calc_constraint_matrix(car_builder_t *b)
     ivp_result_t r = ivp_gmmz_init(&b->tmp_matrix, gm_size, NULL);
     if (r != IVP_OK) return r;
     b->tmp_matrix.matrix_eps = (double)P_DOUBLE_EPS;
-    /* Reference: aligned_row_len stays 0 (builder P_MEM_CLEAR), see file header. */
-    b->tmp_matrix.aligned_row_len = gm_size;
+    b->tmp_matrix.aligned_row_len = gm_size;   /* ivp_constraint_car.cxx:737 */
 
     for (int app_idx = 0; app_idx < b->n_appends; app_idx++) {
         for (int vec_idx = 0; vec_idx < 6; vec_idx++) {

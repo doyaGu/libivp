@@ -16,8 +16,7 @@ void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_objec
                               double max_distance_attached_object_to_parent)
 {
     if (!parent || !attached_object || !parent->physical_core || !attached_object->physical_core) return;
-    /* attaching an object to itself would delete the core it is attached to
-     * (the reference has no guard and crashes) */
+    /* NULL and self attachment are ignored (reference f105953) */
     if (parent == attached_object) return;
     struct ivp_environment *env = parent->owner;
     D max_dist = (D)max_distance_attached_object_to_parent;

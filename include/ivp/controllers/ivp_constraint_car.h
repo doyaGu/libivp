@@ -24,12 +24,9 @@
  *
  * Usually created by ivp_car_system_init (ivp_car_system.h).
  *
- * Deviation from the reference build: the reference builder leaves the
- * aligned row length of its temporary matrix at 0, so all pushing-behaviour
- * rows are written into row 0 and the inversion runs on uninitialised
- * memory (in practice it fails and the car cannot be created).  libivp
- * fills the matrix row by row (row stride == columns), which is what the
- * inversion expects.
+ * The builder's temporary matrix uses row stride == columns (reference
+ * 81357f3; before that fix the reference left the stride at 0 and could
+ * not build a car).
  */
 #ifndef IVP_CONSTRAINT_CAR_H
 #define IVP_CONSTRAINT_CAR_H

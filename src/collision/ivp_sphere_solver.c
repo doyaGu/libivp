@@ -156,9 +156,8 @@ static bool sphere_against_object_os(const ivp_object_t *obj, const double q_os[
         if (!sm) return false;
         const ivp_compact_ledgetree_node_t *root = polygon_ledgetree_root(sm);
         if (root) return node_rec(root, q_os, r, 0, max_depth);
-        /* libivp: managers without a ledge tree (grids; the reference would
-         * static_cast them to IVP_SurfaceManager_Polygon): intruding when
-         * any ledge lies within the query sphere. */
+        /* other managers (grids): intruding when the manager reports a
+         * ledge within the query radius (reference 6623a1d) */
         bool any = false;
         ivp_surman_get_all_ledges_within_radius(sm, q_os, r, NULL, NULL, any_ledge_cb, &any);
         return any;

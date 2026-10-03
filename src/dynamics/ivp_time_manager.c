@@ -101,14 +101,10 @@ void ivp_time_manager_simulate_variable_time_step(ivp_time_manager_t *tm, struct
 
 void ivp_time_manager_rebase_for_psi(ivp_time_manager_t *tm, ivp_time_t time_of_last_psi)
 {
-    /* Reference IVP_Time_Event_PSI::simulate_time_event subtracts the
-     * ABSOLUTE PSI time (as float) from every queued value.  The values are
-     * relative to the previous base time, so that is only right when nothing
-     * is queued across a PSI, which holds for all events of the simulation
-     * itself (mindist events are scheduled before the next PSI; the queue is
-     * empty at this point).  libivp subtracts the delta to the previous base
-     * so that user events queued across PSIs keep their time; results of the
-     * simulation are unchanged. */
+    /* IVP_Time_Event_PSI::simulate_time_event: the queued values are
+     * relative to the previous base time, so the delta to it is subtracted
+     * and events queued across PSIs keep their absolute time (reference
+     * 4d818ea) */
     float event_time = (float)ivp_time_diff(time_of_last_psi, tm->base_time);
     ivp_minlist_t *ml = &tm->min_hash;
     for (unsigned int i = ml->first_element; i != IVP_MINLIST_UNUSED; i = ml->elems[i].next) {
