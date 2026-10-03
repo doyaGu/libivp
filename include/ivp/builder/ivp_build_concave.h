@@ -1,15 +1,15 @@
 /* ivp_build_concave.h — Concave polyhedron surface builder
  *
- * High-level convenience that converts a concave triangle mesh into a single
- * compound compact surface:
- *   1. Runs convex decomposition (flood-fill by normal similarity).
- *   2. Builds a convex hull for each part.
- *   3. Compiles all parts into a single ledge soup with BVH.
+ * Converts a concave polyhedron into a single compound compact surface like
+ * IVP_SurfaceBuilder_Polyhedron_Concave::convert_concave_polyhedron_to_
+ * single_compact_surface (ivp_surbuild_polyhdrn_cncv.cxx:83):
+ *   1. GEOMPACK convex decomposition (ivp_convex_decompose.h);
+ *   2. a pointsoup convex ledge per part;
+ *   3. ledge soup with build_root_convex_hull = true and
+ *      merge_points = IVP_SLMP_MERGE_AND_REALLOCATE (reference defaults).
  *
- * This is the C17 equivalent of the legacy
- * IVP_SurfaceBuilder_Polyhedron_Concave::convert_concave_polyhedron_to_single_compact_surface().
- *
- * Ported from ivp_surbuild_polyhdrn_cncv.hxx.
+ * Note: with the root hull, ivp_surman_get_single_convex() returns the
+ * (non-terminal) hull ledge, as in the reference.
  */
 #ifndef IVP_BUILD_CONCAVE_H
 #define IVP_BUILD_CONCAVE_H
@@ -18,6 +18,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/builder/ivp_convex_decompose.h>
+#include <ivp/builder/ivp_build_ledge_soup.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,16 +27,18 @@ extern "C" {
 /* ── Concave build options ─────────────────────────────────────────────── */
 
 typedef struct ivp_concave_options {
-    ivp_decompose_options_t decompose;  /* convex decomposition settings */
-    bool  force_single_hull;            /* skip decomposition, build one hull */
-    bool  build_root_convex_hull;       /* also build outer bounding convex hull */
+    ivp_decompose_options_t decompose;   /* convex decomposition settings */
+    bool  force_single_hull;             /* skip decomposition, build one hull */
+    bool  build_root_convex_hull;        /* outer hull at the root node (default true) */
+    ivp_ledge_soup_merge_points_t merge_points; /* default MERGE_AND_REALLOCATE */
 } ivp_concave_options_t;
 
 static inline ivp_concave_options_t ivp_concave_options_default(void) {
     ivp_concave_options_t o;
     o.decompose = ivp_decompose_options_default();
     o.force_single_hull = false;
-    o.build_root_convex_hull = false;
+    o.build_root_convex_hull = true;
+    o.merge_points = IVP_SLMP_MERGE_AND_REALLOCATE;
     return o;
 }
 
@@ -47,7 +50,8 @@ static inline ivp_concave_options_t ivp_concave_options_default(void) {
  *   alloc       -- allocator (NULL for default)
  *   vertices    -- flat float array [x0,y0,z0, x1,y1,z1, ...]
  *   n_vertices  -- number of 3D vertices
- *   indices     -- triangle index array [i0,i1,i2, i3,i4,i5, ...]
+ *   indices     -- triangle index array [i0,i1,i2, i3,i4,i5, ...], every
+ *                  triangle CCW seen from outside (closed 2-manifold)
  *   n_triangles -- number of triangles
  *   options     -- build config (NULL for defaults)
  *
@@ -59,6 +63,17 @@ ivp_compact_surface_t *ivp_build_concave_surface(
     int n_vertices,
     const int *indices,
     int n_triangles,
+    const ivp_concave_options_t *options);
+
+/* Reference path for polygon input: points [n_points][3], faces given by
+ * concatenated 0-based indices (CCW seen from outside) and per face sizes. */
+ivp_compact_surface_t *ivp_build_concave_polyhedron_surface(
+    const ivp_allocator_t *alloc,
+    const double *points,
+    int n_points,
+    const int *face_indices,
+    const int *face_sizes,
+    int n_faces,
     const ivp_concave_options_t *options);
 
 /* Build a compound surface from pre-computed convex parts.

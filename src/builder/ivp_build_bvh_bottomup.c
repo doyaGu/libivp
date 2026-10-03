@@ -662,6 +662,10 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
 
         memset(surface->_pad, 0, sizeof(surface->_pad));
 
+        /* surface header exactly like the reference ledge soup
+         * (insert_radius_in_compact_surface: radius/deviation from the
+         * mass center) */
+        ivp_ledge_soup_insert_radius(surface);
         return surface;
     }
 
@@ -756,6 +760,9 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
     if (dev_factor > 255) dev_factor = 255;
     if (dev_factor < 1) dev_factor = 1;
     ivp_surface_set_max_deviation(surface, dev_factor);
+
+    /* reference header (insert_radius_in_compact_surface) */
+    ivp_ledge_soup_insert_radius(surface);
 
     /* Cleanup */
     ivp_free(alloc, remap, remap_sz);

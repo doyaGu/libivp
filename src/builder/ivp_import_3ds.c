@@ -5,8 +5,10 @@
  */
 
 #include <ivp/builder/ivp_import_3ds.h>
-#include <ivp/builder/ivp_build_concave.h>
 #include <ivp/builder/ivp_build_surface.h>
+#include <ivp/builder/ivp_build_ledge.h>
+#include <ivp/builder/ivp_build_ledge_soup.h>
+#include <ivp/base/ivp_message.h>
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -447,36 +449,62 @@ ivp_result_t ivp_3ds_load_file(const ivp_allocator_t *alloc,
                                const char *filename,
                                ivp_3ds_scene_t *out)
 {
-    if (!filename || !out) return IVP_ERR_INVALID_ARG;
+    /* the file part of IVP_SurfaceBuilder_3ds::convert_3ds_to_concave
+     * (3dsimport_co.cxx:617-708) with its messages */
+    if (!out) return IVP_ERR_INVALID_ARG;
+    if (!filename) {
+        ivp_message("No inputfile specified!\n");
+        return IVP_ERR_INVALID_ARG;
+    }
     if (!alloc) alloc = ivp_default_allocator();
 
     memset(out, 0, sizeof(*out));
 
     FILE *f = fopen(filename, "rb");
-    if (!f) return IVP_ERR_FILE_NOT_FOUND;
+    if (!f) {
+        ivp_message("Failed to open %s\n", filename);
+        return IVP_ERR_FILE_NOT_FOUND;
+    }
 
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END)) {
+        ivp_message("Error seeking %s\n", filename);
+        fclose(f);
+        return IVP_ERR_FILE_READ;
+    }
     long len = ftell(f);
+    if (len == -1L) {
+        ivp_message("Error seeking %s\n", filename);
+        fclose(f);
+        return IVP_ERR_FILE_READ;
+    }
     fseek(f, 0, SEEK_SET);
 
+    /* HRead3dsScene(inf, 0, size) == 0: "Failed to load" */
     if (len <= 0 || len > 256 * 1024 * 1024) {
+        ivp_message("Failed to load %s\n", filename);
         fclose(f);
         return IVP_ERR_FILE_READ;
     }
 
     void *buf = ivp_alloc(alloc, (size_t)len);
-    if (!buf) { fclose(f); return IVP_ERR_OUT_OF_MEMORY; }
+    if (!buf) {
+        ivp_message("Failed to load %s\n", filename);
+        fclose(f);
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
 
     size_t read = fread(buf, 1, (size_t)len, f);
     fclose(f);
 
     if ((long)read != len) {
+        ivp_message("Failed to load %s\n", filename);
         ivp_free(alloc, buf, (size_t)len);
         return IVP_ERR_FILE_READ;
     }
 
     ivp_result_t result = ivp_3ds_load_memory(alloc, buf, (int)len, out);
     ivp_free(alloc, buf, (size_t)len);
+    if (!ivp_ok(result)) ivp_message("Failed to load %s\n", filename);
     return result;
 }
 
@@ -552,26 +580,49 @@ ivp_compact_surface_t *ivp_3ds_build_surface(const ivp_allocator_t *alloc,
         return NULL;
     }
 
-    /* Try concave builder first (handles arbitrary triangle meshes) */
-    ivp_compact_surface_t *surface = ivp_build_concave_surface(
-        alloc, tmp.vertices, tmp.n_vertices,
-        tmp.indices, tmp.n_triangles, NULL);
-
-    /* Fallback: if concave builder fails (e.g. simple convex mesh where
-     * decomposition produces single-triangle groups), try convex hull
-     * from the raw point cloud. */
-    if (!surface && tmp.n_vertices >= 4) {
-        ivp_vec3f_t *points = (ivp_vec3f_t *)ivp_alloc(alloc,
-            (size_t)tmp.n_vertices * sizeof(ivp_vec3f_t));
-        if (points) {
-            for (int i = 0; i < tmp.n_vertices; i++) {
-                points[i].k[0] = tmp.vertices[i * 3 + 0];
-                points[i].k[1] = tmp.vertices[i * 3 + 1];
-                points[i].k[2] = tmp.vertices[i * 3 + 2];
+    /* Reference p_graphlib_robust_convert_3dmax_object_to_compact_ledges
+     * (3dsimport_co.cxx:905): every face becomes its own pointsoup ledge
+     * (a two sided triangle, convert_pointsoup_to_compact_ledge with 3
+     * points) and the ledges are combined by the ledge soup builder. */
+    ivp_compact_surface_t *surface = NULL;
+    {
+        ivp_ledge_soup_t soup;
+        ivp_ledge_soup_init(&soup, alloc);
+        ivp_ledge_soup_template_t lt;
+        ivp_ledge_soup_template_init(&lt);
+        lt.free_input_compact_ledges = true; /* the ledges are ours */
+        bool ok = true;
+        int n_added = 0;
+        for (int t = 0; t < tmp.n_triangles && ok; t++) {
+            double tri[9];
+            for (int k = 0; k < 3; k++) {
+                const float *v = &tmp.vertices[3 * tmp.indices[3 * t + k]];
+                tri[3 * k + 0] = (double)v[0];
+                tri[3 * k + 1] = (double)v[1];
+                tri[3 * k + 2] = (double)v[2];
             }
-            surface = ivp_build_convex_surface(alloc, points, tmp.n_vertices);
-            ivp_free(alloc, points, (size_t)tmp.n_vertices * sizeof(ivp_vec3f_t));
+            ivp_compact_ledge_t *l = ivp_build_convex_ledge_d(alloc, tri, 3);
+            if (!l) continue; /* degenerate face: skipped like the reference */
+            if (ivp_ledge_soup_add(&soup, l) != 0) {
+                ivp_compact_ledge_free(alloc, l);
+                ok = false;
+                break;
+            }
+            n_added++;
         }
+        if (ok && n_added > 0) {
+            surface = ivp_ledge_soup_compile_ex(&soup, &lt);
+            if (!surface) {
+                for (int i = 0; i < soup.n_ledges; i++) {
+                    ivp_compact_ledge_free(alloc, (ivp_compact_ledge_t *)soup.ledges[i]);
+                }
+            }
+        } else {
+            for (int i = 0; i < soup.n_ledges; i++) {
+                ivp_compact_ledge_free(alloc, (ivp_compact_ledge_t *)soup.ledges[i]);
+            }
+        }
+        ivp_ledge_soup_destroy(&soup);
     }
 
     ivp_free(alloc, verts, vert_sz);

@@ -1,117 +1,130 @@
 /* ivp_build_halfspacesoup.c — Half-space intersection surface builder
  *
- * Ported from ivp_surbuild_halfspacesoup.cxx (Ipion Software GmbH).
+ * Port of ivp_compact_builder/ivp_surbuild_halfspacesoup.cxx
+ * (Ipion Software GmbH):
+ *   - every triple of planes is intersected with IVP_U_Point::set_crossing
+ *     (determinant inversion, |D| < P_DOUBLE_EPS -> no intersection);
+ *   - a point is dropped when it lies more than HALFSPACESOUP_TOLERANCE =
+ *     0.01 * P_MIN_EDGE_LEN = 1e-4 outside any plane (ivp_halfspacesoup.hxx:15);
+ *   - points closer than pointmerge_threshold to an earlier point are
+ *     dropped (insert_point_into_list keeps the old one), followed by the
+ *     reference's second merge pass;
+ *   - the points go through the pointsoup convex builder and the ledge soup.
  */
 #include <ivp/builder/ivp_build_halfspacesoup.h>
+#include "ivp_build_halfspacesoup_internal.h"
 #include <ivp/builder/ivp_build_surface.h>
+#include <ivp/builder/ivp_build_ledge.h>
+#include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_message.h>
 #include <math.h>
 #include <string.h>
 
-#define IVP_HALFSPACE_TOLERANCE  0.001f
+/* HALFSPACESOUP_TOLERANCE (0.01f * P_MIN_EDGE_LEN) */
+#define IVP_HALFSPACE_TOLERANCE ((double)(0.01f * 0.01f))
+#define HS_DOUBLE_EPS 1e-10 /* P_DOUBLE_EPS */
 
-/* ── 3-plane intersection ──────────────────────────────────────────────── */
-
-/* Solve the system of three plane equations for a single point.
- * Returns false if planes are parallel/degenerate. */
-static bool intersect_three_planes(const ivp_halfspace_t *p0,
-                                   const ivp_halfspace_t *p1,
-                                   const ivp_halfspace_t *p2,
-                                   float out[3])
+/* IVP_U_Point::set_crossing (ivu_linear.cxx:332) with the reference's
+ * IVP_U_Matrix::real_invert (ivu_linear.cxx:767).  The libivp plane
+ * n.x = dist corresponds to the reference hesse (n, -dist). */
+static bool set_crossing(const ivp_halfspace_t *h0, const ivp_halfspace_t *h1,
+                         const ivp_halfspace_t *h2, double out[3])
 {
-    /* The system is:
-     *   n0 · x = d0
-     *   n1 · x = d1
-     *   n2 · x = d2
-     *
-     * Using Cramer's rule on the 3x3 matrix [n0; n1; n2]. */
-    float det = p0->normal[0] * (p1->normal[1] * p2->normal[2] -
-                                 p1->normal[2] * p2->normal[1])
-              - p0->normal[1] * (p1->normal[0] * p2->normal[2] -
-                                 p1->normal[2] * p2->normal[0])
-              + p0->normal[2] * (p1->normal[0] * p2->normal[1] -
-                                 p1->normal[1] * p2->normal[0]);
-
-    if (fabsf(det) < 1e-10f) return false;
-
-    float inv_det = 1.0f / det;
-
-    out[0] = (p0->dist * (p1->normal[1] * p2->normal[2] -
-                           p1->normal[2] * p2->normal[1])
-            - p0->normal[1] * (p1->dist * p2->normal[2] -
-                                p1->normal[2] * p2->dist)
-            + p0->normal[2] * (p1->dist * p2->normal[1] -
-                                p1->normal[1] * p2->dist)) * inv_det;
-
-    out[1] = (p0->normal[0] * (p1->dist * p2->normal[2] -
-                                p1->normal[2] * p2->dist)
-            - p0->dist * (p1->normal[0] * p2->normal[2] -
-                           p1->normal[2] * p2->normal[0])
-            + p0->normal[2] * (p1->normal[0] * p2->dist -
-                                p1->dist * p2->normal[0])) * inv_det;
-
-    out[2] = (p0->normal[0] * (p1->normal[1] * p2->dist -
-                                p1->dist * p2->normal[1])
-            - p0->normal[1] * (p1->normal[0] * p2->dist -
-                                p1->dist * p2->normal[0])
-            + p0->dist * (p1->normal[0] * p2->normal[1] -
-                           p1->normal[1] * p2->normal[0])) * inv_det;
-
-    return true;
-}
-
-/* ── Point containment test ────────────────────────────────────────────── */
-
-/* Returns true if point is inside (or on) all half-spaces. */
-static bool point_inside_halfspaces(const float point[3],
-                                    const ivp_halfspace_t *halfspaces,
-                                    int n_halfspaces)
-{
-    for (int i = 0; i < n_halfspaces; i++) {
-        const ivp_halfspace_t *h = &halfspaces[i];
-        float d = h->normal[0] * point[0] +
-                  h->normal[1] * point[1] +
-                  h->normal[2] * point[2] - h->dist;
-        if (d < -IVP_HALFSPACE_TOLERANCE) {
-            return false;
-        }
+    double rows[3][3];
+    const ivp_halfspace_t *h[3] = { h0, h1, h2 };
+    for (int i = 0; i < 3; i++) {
+        for (int k = 0; k < 3; k++) rows[i][k] = (double)h[i]->normal[k];
+    }
+    double r[3][3];
+    for (int i = 0; i < 3; i++) {
+        const double *a = rows[(i + 1) % 3];
+        const double *b = rows[(i + 2) % 3];
+        r[i][0] = a[1] * b[2] - a[2] * b[1];
+        r[i][1] = a[2] * b[0] - a[0] * b[2];
+        r[i][2] = a[0] * b[1] - a[1] * b[0];
+    }
+    double D = rows[0][0] * r[0][0] + rows[0][1] * r[0][1] + rows[0][2] * r[0][2];
+    if (fabs(D) < HS_DOUBLE_EPS) return false;
+    double DI = (double)1.0f / D;
+    double rhs[3] = { (double)h0->dist, (double)h1->dist, (double)h2->dist };
+    for (int k = 0; k < 3; k++) {
+        out[k] = (r[0][k] * DI) * rhs[0] + (r[1][k] * DI) * rhs[1] + (r[2][k] * DI) * rhs[2];
     }
     return true;
 }
 
-/* ── Point deduplication ───────────────────────────────────────────────── */
-
-/* Remove duplicate points closer than threshold^2 (squared distance). */
-static int deduplicate_points(float *points, int n_points,
-                              float threshold_sq)
+static double plane_dist(const ivp_halfspace_t *h, const double p[3])
 {
-    if (n_points <= 1) return n_points;
-
-    /* Mark duplicates */
-    int out_count = 0;
-    for (int i = 0; i < n_points; i++) {
-        bool duplicate = false;
-        for (int j = 0; j < out_count; j++) {
-            float dx = points[i * 3 + 0] - points[j * 3 + 0];
-            float dy = points[i * 3 + 1] - points[j * 3 + 1];
-            float dz = points[i * 3 + 2] - points[j * 3 + 2];
-            if (dx * dx + dy * dy + dz * dz < threshold_sq) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (!duplicate) {
-            if (out_count != i) {
-                points[out_count * 3 + 0] = points[i * 3 + 0];
-                points[out_count * 3 + 1] = points[i * 3 + 1];
-                points[out_count * 3 + 2] = points[i * 3 + 2];
-            }
-            out_count++;
-        }
-    }
-    return out_count;
+    return (double)h->normal[0] * p[0] + (double)h->normal[1] * p[1] +
+           (double)h->normal[2] * p[2] - (double)h->dist;
 }
 
-/* ── Convert to points ─────────────────────────────────────────────────── */
+static double qdist(const double *a, const double *b)
+{
+    double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+/* convert_halfspacesoup_to_points (ivp_surbuild_halfspacesoup.cxx:59).
+ * Returns the number of points written to *out (allocated, caller frees
+ * with *out_sz bytes), or -1. */
+static int halfspaces_to_points_d(const ivp_allocator_t *alloc,
+                                  const ivp_halfspace_t *hs, int n,
+                                  double merge_threshold,
+                                  double **out, size_t *out_sz)
+{
+    long max_points = (long)n * (n - 1) * (n - 2) / 6;
+    if (max_points <= 0) return -1;
+    size_t sz = (size_t)max_points * 3u * sizeof(double);
+    double *pts = (double *)ivp_alloc(alloc, sz);
+    if (!pts) return -1;
+    int np = 0;
+    double threshold = merge_threshold * merge_threshold;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            for (int k = j + 1; k < n; k++) {
+                double p[3];
+                if (!set_crossing(&hs[i], &hs[j], &hs[k], p)) continue;
+                bool skip = false;
+                for (int l = 0; l < n; l++) {
+                    if (plane_dist(&hs[l], p) < -IVP_HALFSPACE_TOLERANCE) {
+                        skip = true;
+                        break;
+                    }
+                }
+                if (skip) continue;
+                bool dup = false;
+                for (int q = 0; q < np; q++) {
+                    if (qdist(p, &pts[3 * q]) < threshold) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) continue;
+                memcpy(&pts[3 * np], p, sizeof(p));
+                np++;
+            }
+        }
+    }
+
+    /* second merge pass */
+    for (int i = 0; i < np; i++) {
+        for (int j = np - 1; j > i; j--) {
+            if (qdist(&pts[3 * i], &pts[3 * j]) < threshold) {
+                IVP_IF(1) {
+                    ivp_debug_printf("*** IVP_SurfaceBuilder_Halfspacesoup::convert_halfspacesoup_to_points - removing ");
+                    ivp_debug_printf("Point %f %f %f\n", pts[3 * j + 0], pts[3 * j + 1], pts[3 * j + 2]); /* p2->print() */
+                }
+                memmove(&pts[3 * j], &pts[3 * (j + 1)], (size_t)(np - j - 1) * 3u * sizeof(double));
+                np--;
+            }
+        }
+    }
+    *out = pts;
+    *out_sz = sz;
+    return np;
+}
 
 ivp_result_t ivp_halfspacesoup_to_points(
     const ivp_halfspace_t *halfspaces,
@@ -123,60 +136,50 @@ ivp_result_t ivp_halfspacesoup_to_points(
 {
     if (!halfspaces || n_halfspaces < 4 || !out_points || !out_n_points)
         return IVP_ERR_INVALID_ARG;
-
     if (!alloc) alloc = ivp_default_allocator();
 
-    /* Maximum possible intersection points: C(n, 3) = n*(n-1)*(n-2)/6 */
-    int max_points = n_halfspaces * (n_halfspaces - 1) * (n_halfspaces - 2) / 6;
-    if (max_points <= 0) return IVP_ERR_INVALID_ARG;
-    if (max_points > 100000) max_points = 100000;  /* safety cap */
-
-    float *points = (float *)ivp_alloc(alloc, (size_t)max_points * 3 * sizeof(float));
-    if (!points) return IVP_ERR_OUT_OF_MEMORY;
-
-    int n_points = 0;
-
-    /* Enumerate all triple-plane intersections */
-    for (int i = 0; i < n_halfspaces - 2 && n_points < max_points; i++) {
-        for (int j = i + 1; j < n_halfspaces - 1 && n_points < max_points; j++) {
-            for (int k = j + 1; k < n_halfspaces && n_points < max_points; k++) {
-                float pt[3];
-                if (!intersect_three_planes(&halfspaces[i], &halfspaces[j],
-                                            &halfspaces[k], pt)) {
-                    continue;
-                }
-
-                /* Test containment: point must be inside all half-spaces */
-                if (point_inside_halfspaces(pt, halfspaces, n_halfspaces)) {
-                    points[n_points * 3 + 0] = pt[0];
-                    points[n_points * 3 + 1] = pt[1];
-                    points[n_points * 3 + 2] = pt[2];
-                    n_points++;
-                }
-            }
-        }
-    }
-
-    if (n_points < 4) {
-        ivp_free(alloc, points, (size_t)max_points * 3 * sizeof(float));
-        return IVP_ERR_INVALID_ARG;  /* degenerate or empty intersection */
-    }
-
-    /* Deduplicate nearby points */
-    float threshold_sq = merge_threshold * merge_threshold;
-    n_points = deduplicate_points(points, n_points, threshold_sq);
-
-    if (n_points < 4) {
-        ivp_free(alloc, points, (size_t)max_points * 3 * sizeof(float));
+    double *pts = NULL;
+    size_t sz = 0;
+    int np = halfspaces_to_points_d(alloc, halfspaces, n_halfspaces,
+                                    (double)merge_threshold, &pts, &sz);
+    if (np < 0) return IVP_ERR_OUT_OF_MEMORY;
+    if (np < 4) {
+        ivp_free(alloc, pts, sz);
         return IVP_ERR_INVALID_ARG;
     }
-
-    *out_points = points;
-    *out_n_points = n_points;
+    /* caller frees with ivp_free(alloc, ptr, np * 3 * sizeof(float)) */
+    float *f = (float *)ivp_alloc(alloc, (size_t)np * 3u * sizeof(float));
+    if (!f) {
+        ivp_free(alloc, pts, sz);
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    for (int i = 0; i < 3 * np; i++) f[i] = (float)pts[i];
+    ivp_free(alloc, pts, sz);
+    *out_points = f;
+    *out_n_points = np;
     return IVP_OK;
 }
 
-/* ── Build surface ─────────────────────────────────────────────────────── */
+/* convert_halfspacesoup_to_compact_ledge (ivp_surbuild_halfspacesoup.cxx:195) */
+ivp_compact_ledge_t *ivp_hs_halfspacesoup_to_ledge(const ivp_allocator_t *alloc,
+                                                   const ivp_halfspace_t *halfspaces,
+                                                   int n_halfspaces,
+                                                   float merge_threshold)
+{
+    if (!halfspaces || n_halfspaces < 4) return NULL;
+    if (!alloc) alloc = ivp_default_allocator();
+    if (merge_threshold <= 0.0f) merge_threshold = 0.01f;
+
+    double *pts = NULL;
+    size_t sz = 0;
+    int np = halfspaces_to_points_d(alloc, halfspaces, n_halfspaces,
+                                    (double)merge_threshold, &pts, &sz);
+    if (np < 0) return NULL;
+    /* convert_pointsoup_to_compact_ledge (NULL for fewer than 3 points) */
+    ivp_compact_ledge_t *ledge = ivp_build_convex_ledge_d(alloc, pts, np);
+    ivp_free(alloc, pts, sz);
+    return ledge;
+}
 
 ivp_compact_surface_t *ivp_build_halfspacesoup_surface(
     const ivp_allocator_t *alloc,
@@ -184,46 +187,19 @@ ivp_compact_surface_t *ivp_build_halfspacesoup_surface(
     int n_halfspaces,
     float merge_threshold)
 {
+    /* convert_halfspacesoup_to_compact_surface (ivp_surbuild_halfspacesoup.cxx:216) */
+    if (!halfspaces) return NULL;
     if (!alloc) alloc = ivp_default_allocator();
 
-    if (merge_threshold <= 0.0f) merge_threshold = 0.01f;
-
-    /* Step 1: Convert half-spaces to point cloud */
-    float *points = NULL;
-    int n_points = 0;
-    ivp_result_t res = ivp_halfspacesoup_to_points(
-        halfspaces, n_halfspaces, merge_threshold,
-        &points, &n_points, alloc);
-
-    if (!ivp_ok(res) || n_points < 4) {
-        return NULL;
+    ivp_compact_surface_t *surface = NULL;
+    ivp_compact_ledge_t *ledge = ivp_hs_halfspacesoup_to_ledge(alloc, halfspaces, n_halfspaces,
+                                                               merge_threshold);
+    if (ledge) {
+        /* ledge soup (free_input_compact_ledges = link_to_input_compact_ledges = IVP_FALSE) */
+        surface = ivp_build_surface_from_ledge(alloc, ledge);
+        ivp_compact_ledge_free(alloc, ledge);
+    } else {
+        ivp_debug_printf("*** IVP_SurfaceBuilder_Halfspacesoup::convert_halfspacesoup_to_compact_surface - skipping ledge due to invalid topology\n");
     }
-
-    /* Step 2: Build convex hull from point cloud */
-    ivp_vec3f_t *verts = (ivp_vec3f_t *)ivp_alloc(
-        alloc, (size_t)n_points * sizeof(ivp_vec3f_t));
-    if (!verts) {
-        /* Compute original alloc size for free */
-        int max_points = n_halfspaces * (n_halfspaces - 1) * (n_halfspaces - 2) / 6;
-        if (max_points > 100000) max_points = 100000;
-        ivp_free(alloc, points, (size_t)max_points * 3 * sizeof(float));
-        return NULL;
-    }
-
-    for (int i = 0; i < n_points; i++) {
-        verts[i].k[0] = points[i * 3 + 0];
-        verts[i].k[1] = points[i * 3 + 1];
-        verts[i].k[2] = points[i * 3 + 2];
-    }
-
-    ivp_compact_surface_t *surface =
-        ivp_build_convex_surface(alloc, verts, n_points);
-
-    /* Cleanup */
-    ivp_free(alloc, verts, (size_t)n_points * sizeof(ivp_vec3f_t));
-    int max_points = n_halfspaces * (n_halfspaces - 1) * (n_halfspaces - 2) / 6;
-    if (max_points > 100000) max_points = 100000;
-    ivp_free(alloc, points, (size_t)max_points * 3 * sizeof(float));
-
     return surface;
 }

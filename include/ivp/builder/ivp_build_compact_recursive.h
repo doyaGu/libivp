@@ -1,10 +1,16 @@
-/* ivp_build_compact_recursive.h — Root convex hull builder
+/* ivp_build_compact_recursive.h — Recursive (hull) compact ledges
  *
- * Computes a single convex hull that envelops all vertices from a set
- * of compact ledges.  The resulting hull can serve as a fast broadphase
- * bounding shape for compound (concave) surfaces.
+ * Computes a single convex hull that envelops all vertices of a set of
+ * compact ledges and marks every hull triangle / edge that does not exist
+ * in the input ledges as virtual.  In the reference engine this hull is
+ * stored as the compact hull of the root ledgetree node
+ * (IVP_SurfaceBuilder_Ledge_Soup::build_root_convex_hull), which makes
+ * IVP_SurfaceManager_Polygon::get_single_convex() return it and lets
+ * IVP_Mindist_Recursive test the hull before descending.  Use
+ * ivp_ledge_soup_compile_ex() with build_root_convex_hull = true, or
+ * ivp_build_compound_with_root_hull() below, to get that layout.
  *
- * Ported from ivp_compact_recursive.hxx.
+ * Ported from ivp_compact_builder/ivp_compact_recursive.cxx.
  */
 #ifndef IVP_BUILD_COMPACT_RECURSIVE_H
 #define IVP_BUILD_COMPACT_RECURSIVE_H
@@ -18,34 +24,40 @@
 extern "C" {
 #endif
 
-/* Build a convex hull surface that envelops all vertices from the
- * given set of compact ledges.
- *
- * Parameters:
- *   alloc     -- allocator (NULL for default)
- *   ledges    -- array of compact ledge pointers
- *   n_ledges  -- number of ledges (must be >= 1)
- *
- * Returns:
- *   A newly allocated compact surface containing a single convex ledge,
- *   or NULL on failure.  Caller must free with ivp_compact_surface_free().
- *
- * The input ledges are not modified or freed. */
+/* IVP_Compact_Recursive::compile(): convex hull (pointsoup) of all distinct
+ * vertices of `ledges` (visited in reverse list order, like the reference)
+ * followed by set_rekursive_convex_hull().  Returns a new ledge (free with
+ * ivp_compact_ledge_free()) or NULL. */
+ivp_compact_ledge_t *ivp_compact_recursive_build_hull(const ivp_allocator_t *alloc,
+                                                      const ivp_compact_ledge_t *const *ledges,
+                                                      int n_ledges);
+
+/* IVP_Compact_Recursive::set_rekursive_convex_hull(): mark hull triangles
+ * that are not triangles of any input ledge (matched by point identity)
+ * and hull edges that are not input edges as virtual. */
+void ivp_compact_recursive_set_virtual_flags(ivp_compact_ledge_t *hull,
+                                             const ivp_compact_ledge_t *const *ledges,
+                                             int n_ledges);
+
+/* Build a compound surface from `ledges` whose root ledgetree node carries
+ * the recursive convex hull (ledge soup with build_root_convex_hull).
+ * Input ledges are copied, not freed.  For a single ledge no hull is
+ * generated (reference: only when c_ledge_vec.len() > 1). */
+ivp_compact_surface_t *ivp_build_compound_with_root_hull(const ivp_allocator_t *alloc,
+                                                         const ivp_compact_ledge_t **ledges,
+                                                         int n_ledges);
+
+/* Convenience: the convex hull of all ledges as a separate single-ledge
+ * compact surface (not part of the reference API).  Caller frees with
+ * ivp_compact_surface_free(). */
 ivp_compact_surface_t *ivp_build_root_convex_hull(
     const ivp_allocator_t *alloc,
     const ivp_compact_ledge_t **ledges,
     int n_ledges);
 
-/* Extract all unique vertices from a set of compact ledges into a flat
- * float array suitable for point-soup hull building.
- *
- * Parameters:
- *   ledges      -- array of compact ledge pointers
- *   n_ledges    -- number of ledges
- *   out_coords  -- output: flat float array [x0,y0,z0, x1,...] (caller frees)
- *   out_count   -- output: number of 3D points written
- *   alloc       -- allocator for out_coords (NULL for default)
- *
+/* Extract all unique vertices (bitwise float identity) from a set of
+ * compact ledges into a flat float array.  Caller frees *out_coords with
+ * ivp_free(alloc, ptr, count * 3 * sizeof(float)).
  * Returns 0 on success, -1 on failure. */
 int ivp_extract_ledge_vertices(
     const ivp_compact_ledge_t **ledges,

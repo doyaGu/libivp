@@ -18,16 +18,17 @@
 extern "C" {
 #endif
 
-/* Chop a compact surface along a halfspace plane.
+/* IVP_Compact_Modify::chop: chop off a slice.
  *
- * Removes all geometry on the positive side of the plane defined by:
- *   chop_normal · point >= chop_depth
+ * chop_normal points to the remaining body (need not be normalized); the
+ * slice of thickness chop_depth at the opposite extreme of the surface is
+ * removed, i.e. the result keeps  n.p >= min(n.p over the vertices) + depth.
  *
  * Parameters:
  *   alloc       -- allocator (NULL for default)
  *   surface_in  -- input surface (single convex ledge only)
- *   chop_normal -- plane normal direction (need not be normalized)
- *   chop_depth  -- plane offset along normal
+ *   chop_normal -- direction to the remaining body
+ *   chop_depth  -- thickness of the removed slice [m]
  *
  * Returns a newly allocated chopped surface, or NULL on failure.
  * The input surface is NOT modified or freed. */
@@ -45,7 +46,8 @@ ivp_compact_surface_t *ivp_compact_modify_chop(
  * Parameters:
  *   alloc            -- allocator (NULL for default)
  *   ledge_in         -- input convex ledge
- *   shrink_value     -- distance to shrink inward [m]
+ *   shrink_value     -- distance to move every face plane inward [m]
+ *                       (negative values grow the ledge)
  *   merge_threshold  -- vertex merge distance (0 for default 1e-4)
  *
  * Returns a newly allocated compact surface, or NULL on failure. */

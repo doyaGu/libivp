@@ -3,11 +3,13 @@
  * Builds a convex compact surface from the intersection of half-spaces.
  * Each half-space is defined by a plane (normal + distance).
  *
- * Algorithm:
- *   1. Find all triple-plane intersection points.
- *   2. Test each point for containment within all other half-spaces.
- *   3. Merge nearby points within a tolerance.
- *   4. Build convex hull from the surviving vertices.
+ * Algorithm (IVP_SurfaceBuilder_Halfspacesoup):
+ *   1. Find all triple-plane intersection points (set_crossing).
+ *   2. Drop points more than HALFSPACESOUP_TOLERANCE = 0.01 * P_MIN_EDGE_LEN
+ *      = 1e-4 outside any half-space.
+ *   3. Merge points closer than merge_threshold (first point wins).
+ *   4. Build the convex hull with the pointsoup builder, wrap it with the
+ *      ledge soup (reference mass properties).
  *
  * Ported from ivp_surbuild_halfspacesoup.hxx.
  */
@@ -26,7 +28,8 @@ extern "C" {
 
 typedef struct ivp_halfspace {
     float normal[3];   /* inward-pointing unit normal */
-    float dist;        /* signed distance: normal · point = dist on the plane */
+    float dist;        /* normal · point = dist on the plane; inside: n·p - dist >= 0
+                          (reference IVP_U_Hesse(n, -dist)) */
 } ivp_halfspace_t;
 
 /* ── Build functions ───────────────────────────────────────────────────── */
@@ -58,7 +61,8 @@ ivp_compact_surface_t *ivp_build_halfspacesoup_surface(
  *   out_n_points        -- output: number of points
  *   alloc               -- allocator (NULL for default)
  *
- * Returns IVP_OK on success. Caller must free out_points. */
+ * Returns IVP_OK on success. Caller must free out_points with
+ * ivp_free(alloc, *out_points, *out_n_points * 3 * sizeof(float)). */
 ivp_result_t ivp_halfspacesoup_to_points(
     const ivp_halfspace_t *halfspaces,
     int n_halfspaces,

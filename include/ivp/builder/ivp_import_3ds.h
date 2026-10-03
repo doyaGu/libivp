@@ -4,7 +4,9 @@
  * surfaces suitable for physics simulation.
  *
  * Supports loading from file or from an in-memory buffer.
- * Build step uses ivp_build_concave_surface() for mesh → compound surface.
+ * Build step: like the reference (3dsimport_co.cxx:905) every face becomes
+ * a two sided triangle pointsoup ledge and all ledges are combined by the
+ * ledge soup builder.
  *
  * Ported from ivp_compact_builder/3dsimport_load.cxx and 3dsimport_co.cxx.
  */

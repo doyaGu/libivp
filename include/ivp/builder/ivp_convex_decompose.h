@@ -1,48 +1,72 @@
-/* ivp_convex_decompose.h -- Approximate convex decomposition
+/* ivp_convex_decompose.h -- Convex decomposition of concave polyhedra
  *
- * Decomposes a concave triangle mesh into convex parts suitable for
- * building a ledge soup. Uses a simple flood-fill approach based on
- * face normal clustering.
+ * Port of IVP_Convex_Decompositor (ivp_convex_decompositor.cxx), which runs
+ * Barry Joe's GEOMPACK cvdec3 algorithm: the polyhedron is cut along planes
+ * through its reflex edges (resedg / cutfac / insfac) until every edge
+ * angle is <= pi, retrying with smaller acceptable dihedral angles
+ * (angacc -= 5 degrees, rdacc *= 0.95, at most 36 attempts) like
+ * IVP_Geompack::decompose.  Each resulting convex part is returned as the
+ * point soup of its vertices; the convex hull of each part is built with
+ * the pointsoup builder.
  *
- * Algorithm:
- *   1. Build adjacency graph from triangle mesh.
- *   2. Seed flood-fill: group adjacent triangles whose normals differ
- *      by less than the angle threshold.
- *   3. For each group, compute convex hull of its vertices.
- *   4. Output an array of convex hulls (compact surfaces).
- *
- * For production use, consider a more sophisticated HACD or V-HACD
- * algorithm. This implementation provides a reasonable baseline.
- *
- * Ported from ivp_convex_decompositor.hxx.
+ * Reference failure semantics are kept: if GEOMPACK aborts (non manifold
+ * input, ...) the parts produced so far are returned (initially the whole
+ * polyhedron, i.e. its convex hull).
  */
 #ifndef IVP_CONVEX_DECOMPOSE_H
 #define IVP_CONVEX_DECOMPOSE_H
 
 #include <ivp/geometry/ivp_compact_surface.h>
+#include <ivp/geometry/ivp_compact_ledge.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_result.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── Decomposition options ─────────────────────────────────────────────── */
+/* ── Decomposition parameters (IVP_Convex_Decompositor_Parameters) ─────── */
 
 typedef struct ivp_decompose_options {
-    float angle_threshold_deg;  /* max normal angle within a part (default: 30) */
-    int   max_parts;            /* max convex parts (default: 64) */
-    int   min_triangles_per_part; /* min tris per part (default: 4) */
+    float tolin;   /* relative tolerance (GEOMPACK TOLIN), default 1e-9  */
+    float angacc;  /* min acceptable dihedral angle of cut faces, degrees,
+                      default 30 (reference callers supply their own) */
+    float rdacc;   /* min acceptable relative distance between a cut plane
+                      and vertices not on it, default 0.3 */
 } ivp_decompose_options_t;
 
 static inline ivp_decompose_options_t ivp_decompose_options_default(void) {
     ivp_decompose_options_t o;
-    o.angle_threshold_deg = 30.0f;
-    o.max_parts = 64;
-    o.min_triangles_per_part = 4;
+    o.tolin = 1e-9f;
+    o.angacc = 30.0f;
+    o.rdacc = 0.3f;
     return o;
 }
 
-/* ── Decomposition result ──────────────────────────────────────────────── */
+/* ── Low level: point soups of the convex subparts ──────────────────────── */
+
+/* IVP_Convex_Decompositor::perform_convex_decomposition_on_concave_polyhedron.
+ *
+ *   points       -- [n_points][3]
+ *   face_indices -- concatenated 0-based vertex indices of every face
+ *                   (CCW seen from outside, faces must be simple)
+ *   face_sizes   -- vertex count of every face
+ *
+ * On success *out_part_points receives one allocation holding the points of
+ * all parts ([total][3] doubles, part i starts at out_part_offsets[i] and has
+ * out_part_offsets[i+1]-out_part_offsets[i] points).  Free both arrays with
+ * ivp_decompose_points_free().  Returns the number of parts (>= 0) or -1 on
+ * invalid input / allocation failure. */
+int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
+                                const double *points, int n_points,
+                                const int *face_indices, const int *face_sizes, int n_faces,
+                                const ivp_decompose_options_t *options,
+                                double **out_part_points, int **out_part_offsets);
+
+void ivp_decompose_points_free(const ivp_allocator_t *alloc, int n_parts,
+                               double *part_points, int *part_offsets);
+
+/* ── Decomposition result (convex part surfaces) ────────────────────────── */
 
 typedef struct ivp_decompose_result {
     ivp_compact_surface_t **parts;  /* array of convex hull surfaces */
@@ -53,20 +77,10 @@ typedef struct ivp_decompose_result {
 /* Free all parts in the result. */
 void ivp_decompose_result_free(ivp_decompose_result_t *result);
 
-/* ── Decomposition ─────────────────────────────────────────────────────── */
-
-/* Decompose a triangle mesh into convex parts.
- *
- * Parameters:
- *   alloc       -- allocator (NULL for default)
- *   vertices    -- flat float array [x0,y0,z0, x1,y1,z1, ...]
- *   n_vertices  -- number of 3D vertices
- *   indices     -- triangle index array [i0,i1,i2, i3,i4,i5, ...]
- *   n_triangles -- number of triangles
- *   options     -- decomposition config (NULL for defaults)
- *   result      -- output: array of convex hull compact surfaces
- *
- * Returns IVP_OK on success. */
+/* Decompose a closed triangle mesh into convex parts and build the convex
+ * hull surface (pointsoup) of every part.  Parts whose hull cannot be
+ * built are skipped (reference convert_concave_polyhedron_to_compact_ledges).
+ * Returns IVP_OK on success (n_parts >= 1). */
 ivp_result_t ivp_convex_decompose(
     const ivp_allocator_t *alloc,
     const float *vertices,
@@ -75,6 +89,17 @@ ivp_result_t ivp_convex_decompose(
     int n_triangles,
     const ivp_decompose_options_t *options,
     ivp_decompose_result_t *result);
+
+/* Same as above but returns the convex parts as compact ledges
+ * (IVP_SurfaceBuilder_Polyhedron_Concave::convert_concave_polyhedron_to_
+ * compact_ledges).  *out_ledges is an allocated array of n ledge pointers;
+ * free every ledge with ivp_compact_ledge_free() and the array with
+ * ivp_free(alloc, ptr, n * sizeof(ptr)).  Returns n (>= 0) or -1. */
+int ivp_convex_decompose_to_ledges(const ivp_allocator_t *alloc,
+                                   const double *points, int n_points,
+                                   const int *face_indices, const int *face_sizes, int n_faces,
+                                   const ivp_decompose_options_t *options,
+                                   ivp_compact_ledge_t ***out_ledges);
 
 #ifdef __cplusplus
 }

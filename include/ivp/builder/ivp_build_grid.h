@@ -14,6 +14,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/geometry/ivp_surman_grid.h>
+#include <ivp/geometry/ivp_compact_grid.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,36 @@ ivp_result_t ivp_build_grid_with_surman(const ivp_allocator_t *alloc,
                                         const float *height_field,
                                         ivp_surman_grid_t *surman_out,
                                         const ivp_surman_grid_config_t *grid_cfg);
+
+/* ── Reference compact grid (IVP_GridBuilder_Array) ───────────────────── */
+
+/* IVP_Template_Grid_Axle_Descript */
+typedef struct ivp_template_grid_axle_descript {
+    int  n_points;     /* number of points (not fields) along this direction */
+    int  maps_to;      /* object space axis (0..2) of this array direction */
+    bool invert_axis;  /* true: maps to the negative axis direction */
+} ivp_template_grid_axle_descript_t;
+
+/* IVP_Template_Compact_Grid */
+typedef struct ivp_template_compact_grid {
+    ivp_template_grid_axle_descript_t row_info;
+    ivp_template_grid_axle_descript_t column_info;
+    int   height_maps_to;          /* object space axis of the height values */
+    bool  height_invert_axis;
+    float grid_field_size;         /* distance between two grid points */
+    float position_origin_os[3];   /* position of height_field[0] */
+} ivp_template_compact_grid_t;
+
+void ivp_template_compact_grid_init(ivp_template_compact_grid_t *templ);
+
+/* IVP_GridBuilder_Array::convert_array_to_compact_grid
+ * (ivp_gridbuild_array.cxx:983).  height_field has row_info.n_points rows of
+ * column_info.n_points values (at most IVP_GRID_MAX_ROWS x
+ * IVP_GRID_MAX_COLUMNS).  Free the result with ivp_compact_grid_free().
+ * Use with ivp_surman_compact_grid_t (ivp_surman_grid.h). */
+ivp_compact_grid_t *ivp_gridbuild_array_to_compact_grid(const ivp_allocator_t *alloc,
+                                                        const ivp_template_compact_grid_t *templ,
+                                                        const float *height_field);
 
 #ifdef __cplusplus
 }

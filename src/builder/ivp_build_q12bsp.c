@@ -10,14 +10,20 @@
 
 #include <ivp/builder/ivp_build_q12bsp.h>
 #include <ivp/builder/ivp_build_halfspacesoup.h>
+#include "ivp_build_halfspacesoup_internal.h"
+#include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/builder/ivp_build_ledge_soup.h>
+#include <ivp/builder/ivp_build_surface.h>
 #include <ivp/builder/ivp_build_concave.h>
+#include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_message.h>
 #include <string.h>
 #include <stdio.h>
 
 /* ── BSP file format constants ─────────────────────────────────────────── */
 
 #define BSP_VERSION_Q1    29
+#define BSPVERSION        30 /* reference ivp_surbuild_q12.cxx:161 (debug version message) */
 #define BSP_LUMP_COUNT    15
 
 #define LUMP_PLANES       1
@@ -51,6 +57,11 @@ typedef struct bsp_traverse_ctx {
     ivp_compact_surface_t **parts;
     int n_parts;
     int parts_cap;
+
+    /* conversion statistics (IVP_SurfaceBuilder_Q12::n_solid_nodes,
+     * n_converted_nodes), printed by an IVP_IF(1) block */
+    int n_solid_nodes;
+    int n_converted_nodes;
 } bsp_traverse_ctx_t;
 
 /* ── Plane insertion with Quake→IVP coordinate swap ────────────────────── */
@@ -73,6 +84,8 @@ static void ctx_add_plane(ivp_halfspace_t *planes, int *n_planes,
 
 static void convert_solid_leaf(bsp_traverse_ctx_t *ctx)
 {
+    ctx->n_solid_nodes++;
+
     ivp_halfspace_t planes[MAX_PLANES_PER_LEAF];
     int n_planes = 0;
 
@@ -112,9 +125,18 @@ static void convert_solid_leaf(bsp_traverse_ctx_t *ctx)
         ctx_add_plane(planes, &n_planes, 0, 0, -1, -(model->mins[2] - margin), scale, shrink);
     }
 
-    /* Build convex surface from halfspace intersection */
-    ivp_compact_surface_t *part = ivp_build_halfspacesoup_surface(
-        ctx->alloc, planes, n_planes, ctx->cfg->pointmerge_threshold);
+    /* Build convex surface from halfspace intersection
+     * (reference: convert_halfspacesoup_to_compact_ledge, which prints
+     * nothing for an invalid leaf) */
+    ivp_compact_surface_t *part = NULL;
+    {
+        ivp_compact_ledge_t *ledge = ivp_hs_halfspacesoup_to_ledge(
+            ctx->alloc, planes, n_planes, ctx->cfg->pointmerge_threshold);
+        if (ledge) {
+            part = ivp_build_surface_from_ledge(ctx->alloc, ledge);
+            ivp_compact_ledge_free(ctx->alloc, ledge);
+        }
+    }
 
     if (part) {
         /* Store part for later assembly */
@@ -133,6 +155,7 @@ static void convert_solid_leaf(bsp_traverse_ctx_t *ctx)
             ctx->parts_cap = new_cap;
         }
         ctx->parts[ctx->n_parts++] = part;
+        ctx->n_converted_nodes++;
     }
 }
 
@@ -183,6 +206,9 @@ void ivp_q12bsp_init_from_memory(ivp_q12bsp_t *bsp,
                                  ivp_q12_node_t *nodes, int n_nodes,
                                  ivp_q12_clipnode_t *clipnodes, int n_clipnodes)
 {
+    /* IVP_IF(1) { if (version > BSPVERSION) printf("****** ERROR ******\nSupplied
+     * bsptree is version %i, not %i\n", ...); }: not ported, libivp's
+     * init_from_memory takes no version */
     memset(bsp, 0, sizeof(*bsp));
     bsp->models     = models;
     bsp->planes     = planes;
@@ -229,6 +255,11 @@ ivp_result_t ivp_q12bsp_load_file(const ivp_allocator_t *alloc,
     /* Read BSP header: version + 15 lumps */
     int32_t version;
     if (fread(&version, 4, 1, f) != 1) { fclose(f); return IVP_ERR_FILE_READ; }
+    IVP_IF(1) {
+        if (version > BSPVERSION) {
+            ivp_debug_printf("****** ERROR ******\n%s is version %i, not %i\n", filename, version, BSPVERSION);
+        }
+    }
     if (version != BSP_VERSION_Q1) { fclose(f); return IVP_ERR_FILE_VERSION; }
 
     struct { int32_t offset, length; } lumps[BSP_LUMP_COUNT];
@@ -263,6 +294,10 @@ ivp_result_t ivp_q12bsp_load_file(const ivp_allocator_t *alloc,
     if (out->n_models == 0 || out->n_planes == 0 || out->n_nodes == 0)
         return IVP_ERR_FILE_CORRUPT;
 
+    IVP_IF(1) {
+        ivp_debug_printf("Number of models in bsp file: %d\n", out->n_models);
+    }
+
     return IVP_OK;
 }
 
@@ -294,6 +329,14 @@ ivp_compact_surface_t *ivp_q12bsp_build_surface(const ivp_allocator_t *alloc,
     if (head < 0 || head >= bsp->n_nodes) return NULL;
 
     traverse_node(&ctx, head);
+
+    IVP_IF(1) {
+        ivp_debug_printf("\nBSP tree conversion statistics:\n");
+        ivp_debug_printf("  # of original solid nodes : %d\n", ctx.n_solid_nodes);
+        ivp_debug_printf("  # of converted nodes      : %d\n", ctx.n_converted_nodes);
+        ivp_debug_printf("  # of dropped nodes        : %d\n", ctx.n_solid_nodes - ctx.n_converted_nodes);
+        ivp_debug_printf("\n\n");
+    }
 
     if (ctx.n_parts == 0) {
         if (ctx.parts) ivp_free(alloc, ctx.parts,
