@@ -152,9 +152,13 @@ ivp_intersect_type_t ivp_straight_intersect(const ivp_straight_t *s1,
         return IVP_INTERSECT_PARALLEL;
     }
 
-    r = ivp_hesse_intersect_straight(&hesse, s1, point_out);
-    IVP_ASSERT(r == IVP_OK);
-    (void)r;
+#ifdef IVP_DEBUG_BUILD
+    ivp_result_t flag =
+#endif
+    ivp_hesse_intersect_straight(&hesse, s1, point_out);
+#ifdef IVP_DEBUG_BUILD
+    IVP_ASSERT(flag == IVP_OK);
+#endif
 
     /* Measure distance from the found point to s2 */
     ivp_vec3r_t hp;
