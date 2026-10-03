@@ -16,6 +16,7 @@
 #define IVP_COMPACT_LEDGE_SOLVER_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_assert.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/collision/ivp_narrowphase.h>
@@ -77,6 +78,21 @@ void ivp_cls_calc_hesse_normalized(const ivp_compact_ledge_t *ledge,
                                     const ivp_compact_edge_t *tri_edge,
                                     ivp_vec3r_t *normal_out,
                                     ivp_real_t *dist_out);
+
+#ifdef IVP_DEBUG_BUILD
+/* IVP_Compact_Ledge_Solver::check_ledge ("#ifdef DEBUG", "for debugging",
+ * ivp_compact_ledge_solver.cxx:788): consistency check of one compact ledge
+ * that reports every violation through IVP_ASSERT (16 byte alignment of the
+ * ledge, its point array and its triangles, tri_index sequence, opposite
+ * symmetry, opposite start points, convexity within -10000 * P_FLOAT_RES,
+ * edge round trips) and returns true.  The reference debug build calls it
+ * from the grid / pointsoup builders.  The point-array alignment check is
+ * IVP_ASSERT_NONFATAL: grid ledges have 4-byte aligned points and fail it in
+ * the reference too.  (ivp_compact_ledge_check in
+ * ivp/geometry/ivp_compact_ledge_geom.h is the silent, every-build
+ * validator.) */
+bool ivp_cls_check_ledge(const ivp_compact_ledge_t *c_ledge);
+#endif
 
 #ifdef __cplusplus
 }

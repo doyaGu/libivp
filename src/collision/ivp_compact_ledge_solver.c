@@ -10,7 +10,10 @@
 #include <ivp/collision/ivp_compact_ledge_solver.h>
 #include <ivp/collision/ivp_narrowphase.h>
 #include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_legacy.h>
 #include <ivp/math/ivp_fast_math.h>
+#include <stdint.h>
+#include "geometry/ivp_check_ledge_debug.h"
 
 /* ── Helper: get vertex position as ivp_vec3r_t ────────────────────────── */
 
@@ -185,3 +188,12 @@ ivp_real_t ivp_cls_qdist_point_to_ledge(const ivp_compact_ledge_t *ledge,
 
     return min_dist;
 }
+
+/* ── check_ledge (ivp_compact_ledge_solver.cxx:787, "#ifdef DEBUG") ─────── */
+
+#ifdef IVP_DEBUG_BUILD
+bool ivp_cls_check_ledge(const ivp_compact_ledge_t *cl)
+{
+    return ivp_debug_check_ledge(cl); /* geometry/ivp_check_ledge_debug.h */
+}
+#endif
