@@ -9,7 +9,7 @@
    copyright (c) 1993-1999 The Geometry Center        
 */
 
-#include "qhull_ivp_compat.h"
+#include "qhull_compat.h"
 #include <stdio.h>
 #include <string.h>
 /*** uncomment here and qhull_a.h 

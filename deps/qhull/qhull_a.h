@@ -22,7 +22,7 @@
 #ifndef qhDEFqhulla
 #define qhDEFqhulla
 
-#include "qhull_ivp_compat.h" /* libivp: replaces <ivp_physics.hxx> */
+#include "qhull_compat.h" /* libivp: replaces <ivp_physics.hxx> */
 //#include <stdio.h>
 #include <stdlib.h>
 #include <setjmp.h>

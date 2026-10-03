@@ -23,7 +23,7 @@
    copyright (c) 1993-1999 The Geometry Center        
 */
 
-#include "qhull_ivp_compat.h"
+#include "qhull_compat.h"
 #include "qhull_a.h"
 
 #ifndef qh_NOmerge

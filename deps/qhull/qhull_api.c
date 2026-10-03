@@ -1,8 +1,8 @@
-/* qhull_ivp_api.c -- see qhull_ivp_api.h */
+/* qhull_api.c -- see qhull_api.h */
 #include "qhull_a.h"
-#include "qhull_ivp_api.h"
+#include "qhull_api.h"
 
-int qh_ivp_new_hull(double *points, int n_points, const char *flags)
+int qh_api_new_hull(double *points, int n_points, const char *flags)
 {
   char cmd[256];
   size_t len = strlen(flags);
@@ -14,7 +14,7 @@ int qh_ivp_new_hull(double *points, int n_points, const char *flags)
   return qh_new_qhull(3, n_points, points, False, cmd, stderr, stderr);
 }
 
-int qh_ivp_for_each_facet(qh_ivp_facet_fn fn, void *ctx)
+int qh_api_for_each_facet(qh_api_facet_fn fn, void *ctx)
 {
   facetT *facet;
   int n_facets = 0;
@@ -51,7 +51,7 @@ int qh_ivp_for_each_facet(qh_ivp_facet_fn fn, void *ctx)
   return n_facets;
 }
 
-int qh_ivp_for_each_vertex(qh_ivp_vertex_fn fn, void *ctx)
+int qh_api_for_each_vertex(qh_api_vertex_fn fn, void *ctx)
 {
   vertexT *vertex;
   int n_vertices = 0;
@@ -63,12 +63,12 @@ int qh_ivp_for_each_vertex(qh_ivp_vertex_fn fn, void *ctx)
   return n_vertices;
 }
 
-void qh_ivp_free_hull(void)
+void qh_api_free_hull(void)
 {
   qh_freeqhull(!qh_ALL);
 }
 
-void qh_ivp_free_short_memory(void)
+void qh_api_free_short_memory(void)
 {
   int curlong, totlong;
   qh_memfreeshort(&curlong, &totlong);

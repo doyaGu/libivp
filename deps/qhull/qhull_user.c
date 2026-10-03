@@ -38,7 +38,7 @@
    information it supplies.
 */
 
-#include "qhull_ivp_compat.h"
+#include "qhull_compat.h"
 #include "qhull_a.h" 
 
 /*-<a                             href="qh-c.htm#user"
@@ -338,34 +338,34 @@ void qh_user_memsizes (void) {
 } /* user_memsizes */
 
 
-/* libivp: replacement for IVP's ivp_message() (see qhull_ivp_compat.h).
+/* libivp: replacement for the host's ivp_message() (see qhull_compat.h).
  * Formats the text like ivu_string.cxx (vsnprintf into a 10000 byte
  * buffer) and hands it to the sink installed with
- * qh_ivp_set_message_sink() (libivp's builder routes it to its own
+ * qh_api_set_message_sink() (libivp's builder routes it to its own
  * ivp_message(), which adds the "[havok] " prefix).  Without a sink the
  * reference output is reproduced directly: "[havok] " + text on stdout. */
-#define QH_IVP_MAX_ERROR_BUFFER_LEN 10000 /* ivu_string.cxx MAX_ERROR_BUFFER_LEN */
+#define QH_MESSAGE_BUFFER_LEN 10000 /* ivu_string.cxx MAX_ERROR_BUFFER_LEN */
 
-static qh_ivp_message_fn qh_ivp_message_sink = NULL;
+static qh_api_message_fn qh_message_sink = NULL;
 
-void qh_ivp_set_message_sink(qh_ivp_message_fn fn)
+void qh_api_set_message_sink(qh_api_message_fn fn)
 {
-  qh_ivp_message_sink = fn;
+  qh_message_sink = fn;
 }
 
-void qh_ivp_message(const char *templat, ...)
+void qh_message(const char *templat, ...)
 {
-  char buffer_tmp[QH_IVP_MAX_ERROR_BUFFER_LEN];
+  char buffer_tmp[QH_MESSAGE_BUFFER_LEN];
   va_list parg;
 
   va_start(parg, templat);
   vsnprintf(buffer_tmp, sizeof(buffer_tmp), templat, parg);
   va_end(parg);
 
-  if (qh_ivp_message_sink) {
-    qh_ivp_message_sink(buffer_tmp);
+  if (qh_message_sink) {
+    qh_message_sink(buffer_tmp);
   } else {
-    char buffer[QH_IVP_MAX_ERROR_BUFFER_LEN];
+    char buffer[QH_MESSAGE_BUFFER_LEN];
     snprintf(buffer, sizeof(buffer), "[havok] %s", buffer_tmp);
     printf("%s", buffer);
   }

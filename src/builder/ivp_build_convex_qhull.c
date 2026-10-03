@@ -15,11 +15,11 @@
  *   - convert_pointsoup_to_compact_surface wraps the ledge with the ledge
  *     soup, which computes mass center / inertia / radius / deviation.
  *
- * qhull is the reference's own qhull 2.6 (Geometry Center 1999, as shipped
- * in ivp_compact_builder/qhull*.cxx), vendored as C in deps/qhull_ivp.  A
- * newer qhull builds the same hulls but orders facets / facet vertices
- * differently in places (e.g. the start vertex of merged n-gon facets), and
- * the ledge layout follows that order.  qhull 2.6 is not reentrant (global
+ * The hull comes from qhull 2.6 (Geometry Center 1999), the version the
+ * reference ships in ivp_compact_builder/qhull*.cxx, vendored as C in
+ * deps/qhull.  A newer qhull builds the same hulls but orders facets /
+ * facet vertices differently in places (e.g. the start vertex of merged
+ * n-gon facets), and the ledge layout follows that order.  qhull 2.6 is not reentrant (global
  * state), hence neither is this builder.
  *
  * Not ported: after a successful build the reference copies hesse_val of
@@ -38,7 +38,7 @@
 
 #include "ivp_build_polygon_convex_internal.h"
 #include "geometry/ivp_check_ledge_debug.h"
-#include "qhull_ivp_api.h"
+#include "qhull_api.h"
 
 #include <limits.h>
 #include <math.h>
@@ -242,10 +242,10 @@ static ivp_compact_ledge_t *ps_try_build(const ivp_allocator_t *alloc,
     /* DEBUG: Print all vertices of convex hull */
     IVP_IF(1) {
         IVP_IFDEBUG(IVP_DM_SURBUILD_POINTSOUP) {
-            qh_ivp_for_each_vertex(ps_debug_print_vertex, (void *)(uintptr_t)pts);
+            qh_api_for_each_vertex(ps_debug_print_vertex, (void *)(uintptr_t)pts);
         }
     }
-    int n_facets = qh_ivp_for_each_facet(ps_facet, &ctx);
+    int n_facets = qh_api_for_each_facet(ps_facet, &ctx);
     *skip_point = ctx.skip_point;
 
     ivp_compact_ledge_t *ledge = NULL;
@@ -275,7 +275,7 @@ static ivp_compact_ledge_t *ps_try_build(const ivp_allocator_t *alloc,
 
 /* ── convert_pointsoup_to_compact_ledge_internal ───────────────────────── */
 
-/* qhull's ivp_message() (qhull_ivp_compat.h): the formatted text, printed
+/* qhull's message text (qh_message(), qhull_compat.h): printed
  * with the "[havok] " prefix by libivp's ivp_message() like the reference
  * ivu_string.cxx */
 static void ps_qhull_message(const char *text)
@@ -321,7 +321,7 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         ivp_hashmap_destroy(&map);
     }
     /* qhull's ivp_message() text goes to libivp's ivp_message() */
-    qh_ivp_set_message_sink(ps_qhull_message);
+    qh_api_set_message_sink(ps_qhull_message);
 
     /* first loop, try to randomize point 0 until we get a result.  With
      * fewer than 4 distinct points every qhull call fails ("not enough
@@ -331,8 +331,8 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     for (double random_eps = (double)1e-12f; random_eps < (double)0.02f;) {
         int exitcode = 0;
         if (try_unjumbled) {
-            if (qhull_used) qh_ivp_free_hull();
-            exitcode = qh_ivp_new_hull(pts, numpoints, "qhull Qs Pp C-0 W1e-14 E1.0e-18");
+            if (qhull_used) qh_api_free_hull();
+            exitcode = qh_api_new_hull(pts, numpoints, "qhull Qs Pp C-0 W1e-14 E1.0e-18");
             qhull_used = true;
         }
         if (exitcode || !try_unjumbled) {
@@ -341,8 +341,8 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
             }
             char flags[250];
             snprintf(flags, sizeof(flags), "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18", random_eps);
-            if (qhull_used) qh_ivp_free_hull();
-            exitcode = qh_ivp_new_hull(pts, numpoints, flags);
+            if (qhull_used) qh_api_free_hull();
+            exitcode = qh_api_new_hull(pts, numpoints, flags);
             qhull_used = true;
             if (exitcode) {
                 random_eps = (random_eps + (double)1e-12f) * (double)1.2f;
@@ -377,8 +377,8 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
 
 cleanup:
     if (qhull_used) {
-        qh_ivp_free_hull();
-        qh_ivp_free_short_memory();
+        qh_api_free_hull();
+        qh_api_free_short_memory();
     }
     if (pts) ivp_free(alloc, pts, pts_sz);
     if (skip_list) ivp_free(alloc, skip_list, (size_t)n_in * sizeof(unsigned));

@@ -10,7 +10,7 @@
 
    infrequent code goes into geom2.c
 */
-#include "qhull_ivp_compat.h"
+#include "qhull_compat.h"
    
 #include "qhull_a.h"
    

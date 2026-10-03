@@ -12,7 +12,7 @@
    frequently used code goes into geom.c
 */
    
-#include "qhull_ivp_compat.h"
+#include "qhull_compat.h"
 #include "qhull_a.h"
    
 /*================== functions in alphabetic order ============*/

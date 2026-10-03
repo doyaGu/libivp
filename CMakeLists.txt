@@ -222,41 +222,41 @@ set(IVP_SOLVER_SOURCES
         src/solver/ivp_impact_core.c
 )
 
-# ── Third-party: QHull 2.6 as bundled by the reference IVP ───────────────
-# deps/qhull_ivp is the reference's own qhull (ivp_compact_builder/qhull*.cxx,
-# Geometry Center 1999) converted to C17.  The pointsoup builder needs its
+# ── Third-party: qhull 2.6 ───────────────────────────────────────────────
+# qhull 2.6 (Geometry Center 1999), the version the reference compiles from
+# ivp_compact_builder/qhull*.cxx, as C17.  The pointsoup builder needs its
 # exact facet / facet-vertex order for a reference identical ledge layout.
 # Non-reentrant: qhull 2.6 keeps its state in the global qh_qh.
-set(QHULL_IVP_SOURCES
-        deps/qhull_ivp/qhull.c
-        deps/qhull_ivp/qhull_geom.c
-        deps/qhull_ivp/qhull_geom2.c
-        deps/qhull_ivp/qhull_global.c
-        deps/qhull_ivp/qhull_io.c
-        deps/qhull_ivp/qhull_mem.c
-        deps/qhull_ivp/qhull_merge.c
-        deps/qhull_ivp/qhull_poly.c
-        deps/qhull_ivp/qhull_poly2.c
-        deps/qhull_ivp/qhull_qset.c
-        deps/qhull_ivp/qhull_stat.c
-        deps/qhull_ivp/qhull_user.c
-        deps/qhull_ivp/qhull_ivp_api.c
+set(QHULL_SOURCES
+        deps/qhull/qhull.c
+        deps/qhull/qhull_geom.c
+        deps/qhull/qhull_geom2.c
+        deps/qhull/qhull_global.c
+        deps/qhull/qhull_io.c
+        deps/qhull/qhull_mem.c
+        deps/qhull/qhull_merge.c
+        deps/qhull/qhull_poly.c
+        deps/qhull/qhull_poly2.c
+        deps/qhull/qhull_qset.c
+        deps/qhull/qhull_stat.c
+        deps/qhull/qhull_user.c
+        deps/qhull/qhull_api.c
 )
 
-add_library(ivp_qhull_ivp STATIC ${QHULL_IVP_SOURCES})
-target_include_directories(ivp_qhull_ivp
+add_library(ivp_qhull STATIC ${QHULL_SOURCES})
+target_include_directories(ivp_qhull
         PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull_ivp
+        ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull
 )
 
 # Apply strict floating-point rules
 if (MSVC)
-    target_compile_options(ivp_qhull_ivp PRIVATE /fp:strict /Oi-)
+    target_compile_options(ivp_qhull PRIVATE /fp:strict /Oi-)
     if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-        target_compile_options(ivp_qhull_ivp PRIVATE -ffp-contract=off -fno-fast-math)
+        target_compile_options(ivp_qhull PRIVATE -ffp-contract=off -fno-fast-math)
     endif ()
 else ()
-    target_compile_options(ivp_qhull_ivp PRIVATE
+    target_compile_options(ivp_qhull PRIVATE
             -ffp-contract=off -fno-fast-math -frounding-math
     )
 endif ()
@@ -264,9 +264,9 @@ endif ()
 # Project warning set (not fatal: third-party code), with the warning
 # classes the vendored 1999 code triggers silenced for these files only
 if (MSVC)
-    target_compile_options(ivp_qhull_ivp PRIVATE /W0)
+    target_compile_options(ivp_qhull PRIVATE /W0)
 else ()
-    target_compile_options(ivp_qhull_ivp PRIVATE
+    target_compile_options(ivp_qhull PRIVATE
             -Wall -Wextra -Wpedantic
             -Wconversion -Wshadow -Wdouble-promotion
             -Wno-unused-parameter
@@ -385,7 +385,7 @@ else ()
     )
 endif ()
 
-target_link_libraries(ivp PRIVATE ivp_qhull_ivp)
+target_link_libraries(ivp PRIVATE ivp_qhull)
 
 # Link math library on non-Windows
 if (NOT MSVC)
