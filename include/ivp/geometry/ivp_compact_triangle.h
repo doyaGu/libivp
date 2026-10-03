@@ -32,7 +32,8 @@ _Static_assert(sizeof(ivp_compact_triangle_t) == 16,
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
-#define IVP_MAX_TRIANGLES_PER_LEDGE 8192
+/* tri_index is a 12 bit field (reference ivp_compact_ledge.hxx:40) */
+#define IVP_MAX_TRIANGLES_PER_LEDGE (1 << 12)
 
 /* ── Bit field accessors ────────────────────────────────────────────────── */
 

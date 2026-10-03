@@ -13,6 +13,7 @@
 #define IVP_SURMAN_GRID_H
 
 #include <ivp/geometry/ivp_surman.h>
+#include <ivp/geometry/ivp_compact_grid.h>
 #include <ivp/base/ivp_allocator.h>
 
 #ifdef __cplusplus
@@ -107,6 +108,24 @@ static inline const ivp_compact_ledge_t *ivp_surman_grid_get_ledge(
     if (index < 0 || index >= sm->n_ledges) return NULL;
     return sm->ledges[index];
 }
+
+/* ── Reference grid surface manager (IVP_SurfaceManager_Grid) ──────────── */
+
+/* Surface manager over an ivp_compact_grid_t (ivp_surman_grid.cxx):
+ *   - get_all_ledges_within_radius: traverse_grid — every ledge referenced
+ *     by the grid squares under the query square (object -> grid space via
+ *     m_grid_f_object), two-triangle ledges additionally distance tested;
+ *   - mass center = grid center, rotation inertia = radius^2 (each axis),
+ *     radius = grid radius + |center shift|, deviation = radius;
+ *   - get_single_convex: NULL, type POLYGON, no ledgetree: the collision
+ *     detection queries the ledges through get_all_ledges_within_radius
+ *     (IVP_Mindist_Recursive), as in the reference. */
+typedef struct ivp_surman_compact_grid {
+    ivp_surman_t base;
+    const ivp_compact_grid_t *compact_grid;
+} ivp_surman_compact_grid_t;
+
+void ivp_surman_compact_grid_init(ivp_surman_compact_grid_t *sm, const ivp_compact_grid_t *grid);
 
 #ifdef __cplusplus
 }

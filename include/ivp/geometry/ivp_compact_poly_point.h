@@ -1,9 +1,13 @@
-/* ivp_compact_poly_point.h — Compact poly point (16-byte aligned vertex)
+/* ivp_compact_poly_point.h — Compact poly point (16-byte vertex)
  *
  * Matches original IVP_Compact_Poly_Point layout:
  *   float k[3]       — vertex position (12 bytes)
  *   float hesse_val  — plane distance / client data (4 bytes)
- * Total: 16 bytes, must be 16-byte aligned.
+ * Total: 16 bytes.  Like the reference class the type is only float
+ * aligned: compact surfaces / ledges keep their point arrays 16-byte
+ * aligned, but the shared point array of a compact grid starts right after
+ * the grid elements (IVP_GridBuilder_Array), i.e. possibly at a 4-byte
+ * boundary.
  */
 #ifndef IVP_COMPACT_POLY_POINT_H
 #define IVP_COMPACT_POLY_POINT_H
@@ -14,7 +18,7 @@
 extern "C" {
 #endif
 
-typedef struct IVP_ALIGN16 ivp_compact_poly_point {
+typedef struct ivp_compact_poly_point {
     float k[3];         /* vertex position */
     float hesse_val;    /* plane distance or client data */
 } ivp_compact_poly_point_t;

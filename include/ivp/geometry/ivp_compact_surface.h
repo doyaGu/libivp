@@ -78,6 +78,21 @@ static inline const ivp_compact_ledgetree_node_t *ivp_surface_get_ledgetree_root
 const ivp_compact_ledge_t *ivp_surface_get_single_convex(
     const ivp_compact_surface_t *s);
 
+/* Endian conversion of a complete compact surface blob (header, every
+ * ledgetree node, terminal ledges, compact hulls, triangles and every
+ * referenced point exactly once — shared/merged point arrays included).
+ * Every 32-bit word of the packed formats is byte reversed, 16-bit fields
+ * individually; box_sizes bytes are untouched.
+ *   data_is_foreign = true : the blob is in the opposite byte order and is
+ *                            converted to native order (offsets are swapped
+ *                            before they are followed);
+ *   data_is_foreign = false: a native blob is converted for the opposite
+ *                            byte order.
+ * Port of IVP_Compact_Surface::byte_swap_all (ivp_compact_surface.cxx:69);
+ * unlike the reconstructed reference it also swaps the terminal ledges.
+ * Returns false on allocation failure (blob left partially converted). */
+bool ivp_compact_surface_byte_swap_all(ivp_compact_surface_t *s, bool data_is_foreign);
+
 /* Free a compact surface allocated with ivp_alloc_aligned. */
 void ivp_compact_surface_free(const ivp_allocator_t *alloc,
                                ivp_compact_surface_t *s);

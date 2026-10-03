@@ -61,7 +61,7 @@ static inline void ivp_edge_set_start_point_index(ivp_compact_edge_t *e, int val
 }
 
 static inline void ivp_edge_set_opposite_index(ivp_compact_edge_t *e, int val) {
-    IVP_ASSERT(val >= -(1 << 14) && val < (1 << 14));
+    IVP_ASSERT(val >= -(1 << 14) + 1 && val < (1 << 14) - 1);   /* ivp_compact_ledge.hxx:63 */
     uint32_t masked = (uint32_t)(val & 0x7FFF) << 16;
     e->packed = (e->packed & 0x8000FFFFu) | masked;
 }

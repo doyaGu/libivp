@@ -139,7 +139,8 @@ static inline int ivp_ledge_get_client_data(const ivp_compact_ledge_t *l) {
 static inline void ivp_ledge_set_client_data(ivp_compact_ledge_t *l,
                                               int value) {
     IVP_ASSERT(ivp_ledge_is_terminal(l));
-    l->node_or_client = value;
+    if (ivp_ledge_is_terminal(l))   /* ivp_compact_ledge.hxx:245 */
+        l->node_or_client = value;
 }
 
 /* ── Deferred inline: ivp_edge_get_start_point ──────────────────────────── */
@@ -148,6 +149,7 @@ static inline const ivp_compact_poly_point_t *ivp_edge_get_start_point(
     const ivp_compact_edge_t *e,
     const ivp_compact_ledge_t *ledge)
 {
+    IVP_ASSERT(ledge == ivp_edge_get_compact_ledge(e));   /* ivp_compact_ledge.hxx:341 */
     return &ivp_ledge_get_point_array(ledge)[ivp_edge_get_start_point_index(e)];
 }
 
