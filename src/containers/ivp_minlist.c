@@ -5,6 +5,8 @@
  */
 #include <ivp/containers/ivp_minlist.h>
 #include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_legacy.h>
+#include <ivp/base/ivp_message.h>
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
@@ -99,8 +101,9 @@ static bool ivp_minlist_grow(ivp_minlist_t *ml, ivp_minlist_elem_t **out_e,
 /* ── Add ───────────────────────────────────────────────────────────────── */
 
 ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) {
+    /* search free element first */
+    IVP_ASSERT(value <= P_FLOAT_MAX);
     if (!ml || !ml->elems) return IVP_MINLIST_UNUSED;
-    if (ml->counter >= IVP_MINLIST_MAX_ALLOC) return IVP_MINLIST_UNUSED;
 
     ivp_minlist_elem_t *e;
     ivp_minlist_index_t return_index;
@@ -111,6 +114,15 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) 
         e = &ml->elems[ml->free_list];
         ml->free_list = e->next;
     } else {
+        /* If this assertion triggers, it's going to overflow... (a full list
+         * has counter == malloced_size == IVP_MINLIST_MAX_ALLOC) */
+        IVP_ASSERT(ml->malloced_size != IVP_MINLIST_MAX_ALLOC);
+        if (ml->malloced_size == IVP_MINLIST_MAX_ALLOC) {
+            ivp_message("Fatal error: IVP_U_Min_List reached maximum capacity (%u)\n",
+                        (unsigned int)IVP_MINLIST_MAX_ALLOC);
+            IVP_CORE();
+            return IVP_MINLIST_UNUSED;
+        }
         if (!ivp_minlist_grow(ml, &e, &return_index)) {
             return IVP_MINLIST_UNUSED;
         }
@@ -129,6 +141,7 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) 
             ml->elems[ml->first_element].prev = return_index;
         }
         ml->first_element = return_index;
+        IVP_ASSERT((ml->first_element == IVP_MINLIST_UNUSED) || (ml->first_element < ml->malloced_size));
         e->prev = IVP_MINLIST_UNUSED;
         return return_index;
     }
@@ -223,6 +236,7 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index) {
         }
     } else {
         ml->first_element = next;
+        IVP_ASSERT((ml->first_element == IVP_MINLIST_UNUSED) || (ml->first_element < ml->malloced_size));
         if (next != IVP_MINLIST_UNUSED) {
             ml->elems[next].prev = prev;
             ml->min_value = ml->elems[next].value;

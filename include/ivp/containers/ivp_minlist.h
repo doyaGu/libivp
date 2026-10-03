@@ -63,7 +63,9 @@ void ivp_minlist_destroy(ivp_minlist_t *ml);
 /* ── Operations ────────────────────────────────────────────────────────── */
 
 /* Add an element with a sort value. Returns index for later removal,
- * or IVP_MINLIST_UNUSED if allocation/capacity fails. */
+ * or IVP_MINLIST_UNUSED if allocation fails or the list is full (the
+ * reference prints "Fatal error: IVP_U_Min_List reached maximum capacity"
+ * through ivp_message and COREs there, so does this port: IVP_CORE). */
 ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value);
 
 /* Remove element by index. */

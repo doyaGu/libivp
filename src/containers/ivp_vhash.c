@@ -11,6 +11,32 @@
  *  ivp_vhash_t — element-is-key variant
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* IVP_VHash::check (ivu_vhash.cxx:252): order consistency of the table,
+ * called from IVP_IF(0) blocks only */
+static void ivp_vhash_check(const ivp_vhash_t *h) {
+    int pos;
+    int last_index = 0;
+    int ideal_pos_of_last_element = h->size_mm; /* find index position of rightest element */
+    if (h->elems[h->size_mm].elem) {
+        ideal_pos_of_last_element = (int)(h->elems[h->size_mm].hash_index & (uint32_t)h->size_mm);
+    }
+
+    for (pos = 0; pos <= h->size_mm; pos++) { /* search till first null or exact */
+        const ivp_vhash_elem_t *en = &h->elems[pos];
+        if (!en->elem) continue;
+        int index = (int)(en->hash_index & (uint32_t)h->size_mm);
+        if (index >= ideal_pos_of_last_element) {
+            if (pos <= (h->size_mm >> 1)) continue; /* skip wrapped elements */
+        }
+        IVP_ASSERT(index <= pos);
+        if (index != pos) { /* shifted element */
+            IVP_ASSERT(index >= last_index);
+        }
+        last_index = index;
+    }
+    IVP_USE(last_index);
+}
+
 static void ivp_vhash_rehash(ivp_vhash_t *h, int new_size) {
     ivp_vhash_elem_t *old = h->elems;
     int old_size = h->size_mm + 1;
@@ -45,7 +71,13 @@ void ivp_vhash_init(ivp_vhash_t *h, const ivp_allocator_t *alloc,
     h->alloc = alloc ? alloc : ivp_default_allocator();
 
     IVP_ASSERT(compare != NULL);
-    IVP_ASSERT(capacity > 0 && (capacity & (capacity - 1)) == 0);
+    IVP_IF(1) {
+        int x = capacity;
+        if (x) { /* (the reference loops forever on 0) */
+            while (!(x & 1)) x = x >> 1;
+        }
+        IVP_ASSERT(x == 1); /* size must be 2**x */
+    }
     if (!compare || capacity <= 0 || (capacity & (capacity - 1)) != 0) return;
 
     h->size_mm = capacity - 1;
@@ -74,6 +106,10 @@ void ivp_vhash_add(ivp_vhash_t *h, const void *elem, uint32_t hash_index) {
         /* If rehash failed (OOM), table may be full — drop insert to avoid infinite loop */
         if (h->nelems + h->nelems > h->size_mm) return;
     }
+    IVP_IF(1) {
+        /* check(); */
+        IVP_ASSERT(!ivp_vhash_find(h, elem, hash_index));
+    }
 
     int capacity = h->size_mm + 1;
     int index = (int)(hash_index & (uint32_t)h->size_mm);
@@ -97,6 +133,9 @@ void ivp_vhash_add(ivp_vhash_t *h, const void *elem, uint32_t hash_index) {
     }
     h->elems[pos].elem = elem;
     h->elems[pos].hash_index = hash_index;
+    IVP_IF(0) {
+        ivp_vhash_check(h);
+    }
 }
 
 void *ivp_vhash_find(const ivp_vhash_t *h, const void *elem, uint32_t hash_index) {
@@ -111,6 +150,17 @@ void *ivp_vhash_find(const ivp_vhash_t *h, const void *elem, uint32_t hash_index
             return (void *)e->elem;
         }
     }
+
+    /* search by hand */
+    IVP_IF(0) {
+        for (pos = h->size_mm; pos >= 0; pos--) {
+            const ivp_vhash_elem_t *e = &h->elems[pos];
+            if (!e->elem) break;
+            if ((e->hash_index | IVP_VHASH_TOUCH_BIT) == hash_index) IVP_CORE();
+            if (!h->compare(e->elem, elem)) continue;
+            IVP_CORE();
+        }
+    }
     return NULL;
 }
 
@@ -122,7 +172,10 @@ void *ivp_vhash_remove(ivp_vhash_t *h, const void *elem, uint32_t hash_index) {
     ivp_vhash_elem_t *e = NULL;
     for (int searched = 0; searched < h->size_mm + 1; searched++, pos = (pos + 1) & h->size_mm) {
         e = &h->elems[pos];
-        if (!e->elem) return NULL;
+        if (!e->elem) {
+            IVP_CORE(); /* reference: CORE; // return 0;  (element not in the hash) */
+            return NULL;
+        }
         if ((e->hash_index | IVP_VHASH_TOUCH_BIT) != hash_index) continue;
         if (h->compare(e->elem, elem)) break;
     }
@@ -162,6 +215,10 @@ void *ivp_vhash_remove(ivp_vhash_t *h, const void *elem, uint32_t hash_index) {
     }
     h->elems[last_pos].elem = NULL;
     h->elems[last_pos].hash_index = 0;
+    IVP_IF(0) {
+        ivp_vhash_check(h);
+        IVP_ASSERT(!ivp_vhash_find(h, removed, hash_index));
+    }
 
     return (void *)removed;
 }
@@ -203,6 +260,33 @@ void ivp_vhash_gc(ivp_vhash_t *h, int preferred_size) {
  *  ivp_vhash_store_t — key-value variant (pointer equality)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* IVP_VHash_Store::check (ivu_vhash.cxx:578), called from IVP_IF(0) blocks */
+static void ivp_vhash_store_check(const ivp_vhash_store_t *h) {
+    int pos;
+    int last_index = 0;
+    int ideal_pos_of_last_element = h->size_mm; /* find index position of rightest element */
+    if (h->elems[h->size_mm].key_elem) {
+        ideal_pos_of_last_element = (int)(h->elems[h->size_mm].hash_index & (uint32_t)h->size_mm);
+    }
+
+    for (pos = 0; pos < h->size; pos++) { /* search till first null or exact */
+        const ivp_vhash_store_elem_t *en = &h->elems[pos];
+        if (!en->key_elem) continue;
+        int index = (int)(en->hash_index & (uint32_t)h->size_mm);
+        if (index >= ideal_pos_of_last_element) {
+            if (pos < h->size / 2) {
+                continue; /* skip wrapped elements */
+            }
+        }
+        IVP_ASSERT(index <= pos);
+        if (index != pos) { /* shifted element */
+            IVP_ASSERT(index >= last_index);
+        }
+        last_index = index;
+    }
+    IVP_USE(last_index);
+}
+
 static void ivp_vhash_store_rehash(ivp_vhash_store_t *h, int new_size) {
     ivp_vhash_store_elem_t *old = h->elems;
     int old_size = h->size;
@@ -237,7 +321,13 @@ void ivp_vhash_store_init(ivp_vhash_store_t *h, const ivp_allocator_t *alloc,
     h->nelems = 0;
     h->alloc = alloc ? alloc : ivp_default_allocator();
 
-    IVP_ASSERT(capacity > 0 && (capacity & (capacity - 1)) == 0);
+    IVP_IF(1) {
+        int x = capacity;
+        if (x) { /* (the reference loops forever on 0) */
+            while (!(x & 1)) x = x >> 1;
+        }
+        IVP_ASSERT(x == 1); /* size must be 2**x */
+    }
     if (capacity <= 0 || (capacity & (capacity - 1)) != 0) return;
 
     h->size = capacity;
@@ -275,6 +365,10 @@ void ivp_vhash_store_add_hash(ivp_vhash_store_t *h, void *key, void *value,
         /* If rehash failed (OOM), table may be full — drop insert to avoid infinite loop */
         if (h->nelems + h->nelems >= h->size) return;
     }
+    IVP_IF(1) {
+        /* check(); */
+        IVP_ASSERT(!ivp_vhash_store_find(h, key));
+    }
 
     int index = (int)(hash_index & (uint32_t)h->size_mm);
     int pos = index;
@@ -300,6 +394,9 @@ void ivp_vhash_store_add_hash(ivp_vhash_store_t *h, void *key, void *value,
     h->elems[pos].key_elem = key;
     h->elems[pos].elem = value;
     h->elems[pos].hash_index = hash_index;
+    IVP_IF(0) {
+        ivp_vhash_store_check(h);
+    }
 }
 
 void *ivp_vhash_store_find(ivp_vhash_store_t *h, void *key) {
@@ -318,6 +415,17 @@ void *ivp_vhash_store_find_hash(ivp_vhash_store_t *h, void *key,
         if ((e->hash_index | IVP_VHASH_TOUCH_BIT) != hash_index) continue;
         if (e->key_elem == key) return e->elem;
     }
+
+    /* search by hand */
+    IVP_IF(0) {
+        for (pos = h->size - 1; pos >= 0; pos--) {
+            ivp_vhash_store_elem_t *e = &h->elems[pos];
+            if (!e->key_elem) break;
+            if ((e->hash_index | IVP_VHASH_TOUCH_BIT) == hash_index) IVP_CORE();
+            if (e->key_elem != key) continue; /* compare_store_hash */
+            IVP_CORE();
+        }
+    }
     return NULL;
 }
 
@@ -334,6 +442,7 @@ void *ivp_vhash_store_remove_hash(ivp_vhash_store_t *h, void *key,
     ivp_vhash_store_elem_t *e;
     for (int searched = 0; searched < h->size; searched++, pos = (pos + 1) & h->size_mm) {
         e = &h->elems[pos];
+        IVP_ASSERT(e->elem); /* was e->key_elem */
         if (!e->key_elem) return NULL;
         if ((e->hash_index | IVP_VHASH_TOUCH_BIT) != hash_index) continue;
         if (e->key_elem == key) break;
@@ -374,6 +483,10 @@ void *ivp_vhash_store_remove_hash(ivp_vhash_store_t *h, void *key,
     h->elems[last_pos].key_elem = NULL;
     h->elems[last_pos].elem = NULL;
     h->elems[last_pos].hash_index = 0;
+    IVP_IF(0) {
+        ivp_vhash_store_check(h);
+        IVP_ASSERT(!ivp_vhash_store_find_hash(h, key, hash_index));
+    }
 
     return removed;
 }
@@ -392,7 +505,8 @@ void ivp_vhash_store_change(ivp_vhash_store_t *h, void *key, void *new_value) {
             return;
         }
     }
-    IVP_ASSERT(0);
+    IVP_ASSERT(0 == 1);
+    return; /* not found */
 }
 
 void *ivp_vhash_store_touch(ivp_vhash_store_t *h, void *key,

@@ -58,7 +58,9 @@ void ivp_vhash_add(ivp_vhash_t *h, const void *elem, uint32_t hash_index);
 /* Find an element. Returns the stored element or NULL. */
 void *ivp_vhash_find(const ivp_vhash_t *h, const void *elem, uint32_t hash_index);
 
-/* Remove an element. Returns the removed element or NULL. */
+/* Remove an element. Returns the removed element.  Removing an element that
+ * is not in the hash is an error: IVP_CORE (reference CORE in
+ * IVP_VHash::remove_elem), then NULL. */
 void *ivp_vhash_remove(ivp_vhash_t *h, const void *elem, uint32_t hash_index);
 
 /* Find and touch an element. Returns the element or NULL. */
