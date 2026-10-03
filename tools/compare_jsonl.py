@@ -66,9 +66,13 @@ def quat_geodesic(q1, q2):
     """
     dot = sum(a * b for a, b in zip(q1, q2))
     # Handle double cover: q and -q represent same rotation
-    dot = abs(dot)
-    dot = min(dot, 1.0)  # clamp for numerical safety
-    return 2.0 * math.acos(dot)
+    s = 1.0 if dot >= 0.0 else -1.0
+    # 4*atan2(|q1 - q2|, |q1 + q2|) equals 2*acos(|q1.q2|) for unit
+    # quaternions but is exactly 0 for identical ones (acos of a dot product
+    # rounded slightly below 1 reports ~1e-8 rad for bit-identical inputs).
+    diff = math.sqrt(sum((a - s * b) ** 2 for a, b in zip(q1, q2)))
+    summ = math.sqrt(sum((a + s * b) ** 2 for a, b in zip(q1, q2)))
+    return 4.0 * math.atan2(diff, summ)
 
 
 def load_jsonl(path):
