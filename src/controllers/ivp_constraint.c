@@ -1,8 +1,9 @@
 /* ivp_constraint.c -- Constraint system implementation
  *
- * Uses sequential impulse solver with Baumgarte stabilization.
- * Each constraint type applies corrective impulses to enforce
- * the constraint condition.
+ * All constraint types are thin wrappers around the reference
+ * IVP_Constraint_Local solver (ivp_constraint_local_core.c), configured the
+ * way IVP_Template_Constraint::set_* configures it
+ * (ivp_controller/ivp_template_constraint.{hxx,cxx}).
  */
 
 #include <ivp/controllers/ivp_constraint.h>
@@ -14,22 +15,35 @@
 #include <ivp/math/ivp_mat3.h>
 #include <string.h>
 
-/* ── Default parameters ─────────────────────────────────────────────────── */
-
-#define IVP_CONSTRAINT_DEFAULT_TAU          IVP_REAL(0.20)
+/* Reference IVP_Template_Constraint defaults (ivp_template_constraint.cxx:6-28) */
+#define IVP_CONSTRAINT_DEFAULT_TAU          IVP_REAL(1.0)
 #define IVP_CONSTRAINT_DEFAULT_DAMPING      IVP_REAL(1.0)
-#define IVP_CONSTRAINT_DEFAULT_ITERATIONS   12
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
-static void init_common(ivp_constraint_state_t *state)
+static void init_common(ivp_constraint_state_t *state, ivp_constraint_type_t type,
+                        ivp_object_t *obj_r, ivp_object_t *obj_a)
 {
-    state->tau              = IVP_CONSTRAINT_DEFAULT_TAU;
-    state->damping          = IVP_CONSTRAINT_DEFAULT_DAMPING;
-    state->solver_iterations = IVP_CONSTRAINT_DEFAULT_ITERATIONS;
-    state->active           = true;
-    state->accumulated_impulse = IVP_REAL(0.0);
-    memset(&state->limits, 0, sizeof(state->limits));
+    memset(state, 0, sizeof(*state));
+    state->type = type;
+    state->obj_a = obj_r;
+    state->obj_b = obj_a;
+    state->tau = IVP_CONSTRAINT_DEFAULT_TAU;
+    state->damping = IVP_CONSTRAINT_DEFAULT_DAMPING;
+    state->solver_iterations = 1;
+    state->active = true;
+    state->force_exceed_action = IVP_CFE_NONE;
+    state->limits.limit_stiffness = IVP_REAL(0.3);
+    state->ref_q_a = obj_r ? obj_r->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
+    state->ref_q_b = obj_a ? obj_a->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
+}
+
+static void finish_init(ivp_constraint_state_t *state, ivp_constraint_template_t *t)
+{
+    t->force_factor = state->tau;
+    t->damp_factor = state->damping;
+    ivp_constraint_local_core_init(&state->core, t);
+    state->core_ready = true;
 }
 
 void ivp_constraint_init_ball_socket(ivp_constraint_state_t *state,
@@ -38,13 +52,44 @@ void ivp_constraint_init_ball_socket(ivp_constraint_state_t *state,
                                       ivp_object_t *obj_b,
                                       const ivp_vec3r_t *anchor_b_os)
 {
-    memset(state, 0, sizeof(*state));
-    state->type        = IVP_CONSTRAINT_BALL_SOCKET;
-    state->obj_a       = obj_a;
-    state->obj_b       = obj_b;
+    init_common(state, IVP_CONSTRAINT_BALL_SOCKET, obj_a, obj_b);
     state->anchor_a_os = *anchor_a_os;
     state->anchor_b_os = *anchor_b_os;
-    init_common(state);
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_constraint_Ros(&t, obj_a, anchor_a_os, NULL, 3, 0, obj_b, NULL);
+    ivp_constraint_template_set_attached_Aos(&t, anchor_b_os, NULL, -1);
+    finish_init(state, &t);
+}
+
+void ivp_constraint_init_ball_socket_ws(ivp_constraint_state_t *state,
+                                        ivp_object_t *obj_r,
+                                        const ivp_vec3r_t *anchor_ws,
+                                        ivp_object_t *obj_a)
+{
+    init_common(state, IVP_CONSTRAINT_BALL_SOCKET, obj_r, obj_a);
+    if (obj_r) ivp_transform_inv_point(&state->anchor_a_os, &obj_r->physical_core->m_world_f_core_last_psi, anchor_ws);
+    else state->anchor_a_os = *anchor_ws;
+    if (obj_a) ivp_transform_inv_point(&state->anchor_b_os, &obj_a->physical_core->m_world_f_core_last_psi, anchor_ws);
+    else state->anchor_b_os = *anchor_ws;
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_ballsocket_ws(&t, obj_r, anchor_ws, obj_a);
+    finish_init(state, &t);
+}
+
+void ivp_constraint_init_ball_socket_tense_Ros(ivp_constraint_state_t *state,
+                                               ivp_object_t *obj_r,
+                                               const ivp_vec3r_t *anchor_Ros,
+                                               ivp_object_t *obj_a,
+                                               const ivp_vec3r_t *distanceAR_Ros)
+{
+    init_common(state, IVP_CONSTRAINT_BALL_SOCKET_TENSE, obj_r, obj_a);
+    state->anchor_a_os = *anchor_Ros;
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_ballsocket_tense_Ros(&t, obj_r, anchor_Ros, obj_a, distanceAR_Ros);
+    finish_init(state, &t);
 }
 
 void ivp_constraint_init_hinge(ivp_constraint_state_t *state,
@@ -55,22 +100,59 @@ void ivp_constraint_init_hinge(ivp_constraint_state_t *state,
                                  const ivp_vec3r_t *anchor_b_os,
                                  const ivp_vec3r_t *axis_b_os)
 {
-    memset(state, 0, sizeof(*state));
-    state->type        = IVP_CONSTRAINT_HINGE;
-    state->obj_a       = obj_a;
-    state->obj_b       = obj_b;
+    init_common(state, IVP_CONSTRAINT_HINGE, obj_a, obj_b);
     state->anchor_a_os = *anchor_a_os;
     state->anchor_b_os = *anchor_b_os;
-    state->axis_a_os   = *axis_a_os;
-    state->axis_b_os   = *axis_b_os;
+    state->axis_a_os = *axis_a_os;
+    state->axis_b_os = *axis_b_os;
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    /* hinge: transdim 3, rotdim 2, free axis = Rfs Z */
+    ivp_constraint_template_set_constraint_Ros(&t, obj_a, anchor_a_os, axis_a_os, 3, 2, obj_b, NULL);
+    ivp_constraint_template_set_attached_Aos(&t, anchor_b_os, axis_b_os, 2);
+    finish_init(state, &t);
+}
 
-    /* Store reference orientations for hinge-angle limits */
-    if (obj_a) state->ref_q_a = obj_a->core.q_world_f_core_last_psi;
-    else       state->ref_q_a = ivp_quatr_identity();
-    if (obj_b) state->ref_q_b = obj_b->core.q_world_f_core_last_psi;
-    else       state->ref_q_b = ivp_quatr_identity();
+void ivp_constraint_init_hinge_ws(ivp_constraint_state_t *state,
+                                  ivp_object_t *obj_r,
+                                  const ivp_vec3r_t *anchor_ws,
+                                  const ivp_vec3r_t *free_axis_ws,
+                                  ivp_object_t *obj_a)
+{
+    init_common(state, IVP_CONSTRAINT_HINGE, obj_r, obj_a);
+    if (obj_r) {
+        ivp_transform_inv_point(&state->anchor_a_os, &obj_r->physical_core->m_world_f_core_last_psi, anchor_ws);
+        ivp_transform_inv_dir(&state->axis_a_os, &obj_r->physical_core->m_world_f_core_last_psi, free_axis_ws);
+    } else {
+        state->anchor_a_os = *anchor_ws;
+        state->axis_a_os = *free_axis_ws;
+    }
+    if (obj_a) {
+        ivp_transform_inv_point(&state->anchor_b_os, &obj_a->physical_core->m_world_f_core_last_psi, anchor_ws);
+        ivp_transform_inv_dir(&state->axis_b_os, &obj_a->physical_core->m_world_f_core_last_psi, free_axis_ws);
+    } else {
+        state->anchor_b_os = *anchor_ws;
+        state->axis_b_os = *free_axis_ws;
+    }
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_hinge_ws(&t, obj_r, anchor_ws, free_axis_ws, obj_a);
+    finish_init(state, &t);
+}
 
-    init_common(state);
+void ivp_constraint_init_cardan_ws(ivp_constraint_state_t *state,
+                                   ivp_object_t *obj_r,
+                                   const ivp_vec3r_t *anchor_ws,
+                                   const ivp_vec3r_t *fixed_axis_ws,
+                                   ivp_object_t *obj_a)
+{
+    init_common(state, IVP_CONSTRAINT_CARDAN, obj_r, obj_a);
+    if (obj_r) ivp_transform_inv_point(&state->anchor_a_os, &obj_r->physical_core->m_world_f_core_last_psi, anchor_ws);
+    else state->anchor_a_os = *anchor_ws;
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_cardanjoint_ws(&t, obj_r, anchor_ws, fixed_axis_ws, obj_a);
+    finish_init(state, &t);
 }
 
 void ivp_constraint_init_fixed(ivp_constraint_state_t *state,
@@ -79,20 +161,54 @@ void ivp_constraint_init_fixed(ivp_constraint_state_t *state,
                                  ivp_object_t *obj_b,
                                  const ivp_vec3r_t *anchor_b_os)
 {
-    memset(state, 0, sizeof(*state));
-    state->type        = IVP_CONSTRAINT_FIXED;
-    state->obj_a       = obj_a;
-    state->obj_b       = obj_b;
+    init_common(state, IVP_CONSTRAINT_FIXED, obj_a, obj_b);
     state->anchor_a_os = *anchor_a_os;
     state->anchor_b_os = *anchor_b_os;
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_constraint_Ros(&t, obj_a, anchor_a_os, NULL, 3, 3, obj_b, NULL);
+    ivp_constraint_template_set_attached_Aos(&t, anchor_b_os, NULL, -1);
+    finish_init(state, &t);
+}
 
-    /* Record current relative orientation as reference */
-    if (obj_a) state->ref_q_a = obj_a->core.q_world_f_core_last_psi;
-    else       state->ref_q_a = ivp_quatr_identity();
-    if (obj_b) state->ref_q_b = obj_b->core.q_world_f_core_last_psi;
-    else       state->ref_q_b = ivp_quatr_identity();
+void ivp_constraint_init_fixed_ws(ivp_constraint_state_t *state,
+                                  ivp_object_t *obj_r,
+                                  ivp_object_t *obj_a)
+{
+    init_common(state, IVP_CONSTRAINT_FIXED, obj_r, obj_a);
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_fixed(&t, obj_r, obj_a);
+    finish_init(state, &t);
+}
 
-    init_common(state);
+void ivp_constraint_init_general_ws(ivp_constraint_state_t *state,
+                                    ivp_object_t *obj_r,
+                                    const ivp_vec3r_t *anchor_ws,
+                                    const ivp_vec3r_t *known_axis_ws,
+                                    unsigned fixed_trans_dim,
+                                    unsigned fixed_rot_dim,
+                                    ivp_object_t *obj_a)
+{
+    init_common(state, IVP_CONSTRAINT_GENERAL, obj_r, obj_a);
+    ivp_constraint_template_t t;
+    ivp_constraint_template_init(&t);
+    ivp_constraint_template_set_constraint_ws(&t, obj_r, anchor_ws, known_axis_ws,
+                                              fixed_trans_dim > 3 ? 3u : fixed_trans_dim,
+                                              fixed_rot_dim > 3 ? 3u : fixed_rot_dim,
+                                              obj_a, NULL);
+    finish_init(state, &t);
+}
+
+void ivp_constraint_init_from_template(ivp_constraint_state_t *state,
+                                       const ivp_constraint_template_t *tmpl)
+{
+    init_common(state, IVP_CONSTRAINT_GENERAL, tmpl->obj_r, tmpl->obj_a);
+    state->tau = tmpl->force_factor;
+    state->damping = tmpl->damp_factor;
+    state->limits.limit_stiffness = tmpl->limited_axis_stiffness;
+    ivp_constraint_local_core_init(&state->core, tmpl);
+    state->core_ready = true;
 }
 
 void ivp_constraint_set_limits(ivp_constraint_state_t *state,
@@ -106,325 +222,60 @@ void ivp_constraint_set_limits(ivp_constraint_state_t *state,
     state->limits.max_angle       = max_angle;
     state->limits.limit_stiffness = stiffness;
     state->limits.limit_damping   = damping;
+    if (state->core_ready) ivp_constraint_local_core_wake(&state->core);
 }
 
-/* ── Helper: compute virtual mass for positional constraint ─────────────── */
-
-static ivp_real_t compute_positional_virtual_mass(
-    const ivp_core_t *ca, const ivp_vec3r_t *r_a_ws,
-    const ivp_core_t *cb, const ivp_vec3r_t *r_b_ws,
-    const ivp_vec3r_t *direction)
+int ivp_constraint_discovery(void *ctx, ivp_environment_t *env,
+                             ivp_object_handle_t *out_handles, int max_handles)
 {
-    ivp_real_t inv_vm = ivp_controller_compute_positional_inv_vm(
-        ca, r_a_ws, cb, r_b_ws, direction);
-
-    return (inv_vm > IVP_REAL_EPS) ? (IVP_REAL(1.0) / inv_vm) : IVP_REAL(0.0);
+    (void)env;
+    const ivp_constraint_state_t *s = (const ivp_constraint_state_t *)ctx;
+    if (!s) return 0;
+    ivp_object_t *objs[2] = { s->obj_a, s->obj_b };
+    return ivp_controller_discover_objects(objs, 2, out_handles, max_handles);
 }
 
-/* ── Helper: apply positional impulse to both objects ───────────────────── */
-
-static void apply_positional_impulse(ivp_core_t *ca, const ivp_vec3r_t *r_a_ws,
-                                      ivp_core_t *cb, const ivp_vec3r_t *r_b_ws,
-                                      const ivp_vec3r_t *direction,
-                                      ivp_real_t impulse)
+/* Push the user-visible parameters into the reference solver core. */
+static void sync_core(ivp_constraint_state_t *state)
 {
-    ivp_controller_apply_positional_impulse(
-        ca, r_a_ws, cb, r_b_ws, direction, impulse);
-}
+    ivp_constraint_local_core_t *c = &state->core;
+    ivp_constraint_local_core_set_factors(c, state->tau, state->damping);
 
-/* ── Solve positional constraint ────────────────────────────────────────── */
-
-static void solve_position(ivp_constraint_state_t *state, ivp_real_t dt)
-{
-    if (dt <= IVP_REAL_EPS) return;
-
-    ivp_vec3r_t pos_a_ws, pos_b_ws;
-    ivp_controller_get_anchor_ws(state->obj_a, &state->anchor_a_os, &pos_a_ws);
-    ivp_controller_get_anchor_ws(state->obj_b, &state->anchor_b_os, &pos_b_ws);
-
-    /* Position error: B_anchor - A_anchor (should be zero) */
-    ivp_vec3r_t error;
-    ivp_vec3r_sub(&error, &pos_b_ws, &pos_a_ws);
-
-    /* Offset from CoM */
-    ivp_vec3r_t r_a_ws, r_b_ws;
-    if (state->obj_a) {
-        ivp_vec3r_sub(&r_a_ws, &pos_a_ws, &state->obj_a->core.pos_world_f_core_last_psi);
-    } else {
-        ivp_vec3r_set_zero(&r_a_ws);
-    }
-    ivp_vec3r_sub(&r_b_ws, &pos_b_ws, &state->obj_b->core.pos_world_f_core_last_psi);
-
-    ivp_core_t *ca = state->obj_a ? &state->obj_a->core : NULL;
-    ivp_core_t *cb = &state->obj_b->core;
-
-    /* Solve translation on all 3 world axes (reference-style 3DOF joint solve).
-     * The old scalar solve along error direction only could leave tangential
-     * anchor drift and inject energy in chained constraints. */
-    static const ivp_vec3r_t axes[3] = {
-        {.k = {IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0)}},
-        {.k = {IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0)}},
-        {.k = {IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(1.0)}}
-    };
-
-    ivp_vec3r_t vel_a_ws, vel_b_ws, rel_v_ws;
-    ivp_controller_get_point_velocity_ws(state->obj_a, &pos_a_ws, &vel_a_ws);
-    ivp_controller_get_point_velocity_ws(state->obj_b, &pos_b_ws, &vel_b_ws);
-    ivp_vec3r_sub(&rel_v_ws, &vel_b_ws, &vel_a_ws);
-
-    for (int i = 0; i < 3; i++) {
-        const ivp_vec3r_t *axis = &axes[i];
-        ivp_real_t pos_err = ivp_vec3r_dot(&error, axis);
-        ivp_real_t rel_vel = ivp_vec3r_dot(&rel_v_ws, axis);
-
-        if (ivp_fabs(pos_err) < IVP_REAL_EPS && ivp_fabs(rel_vel) < IVP_REAL_EPS) {
-            continue;
+    if (state->type == IVP_CONSTRAINT_HINGE) {
+        /* free hinge axis = rotation Z of the reference frame */
+        if (state->limits.limited) {
+            /* the FIXED bit of a limited axis is recomputed every PSI */
+            c->fixed[5] = IVP_CONSTRAINT_AXIS_LIMITED;
+            c->borderleft_Rfs[5] = state->limits.min_angle;
+            c->borderright_Rfs[5] = state->limits.max_angle;
+            c->limited_axis_stiffness = state->limits.limit_stiffness;
+        } else {
+            c->fixed[5] = IVP_CONSTRAINT_AXIS_FREE;
         }
-
-        ivp_real_t vm = compute_positional_virtual_mass(ca, &r_a_ws, cb, &r_b_ws, axis);
-        if (vm < IVP_REAL_EPS) {
-            continue;
-        }
-
-        ivp_real_t bias = state->tau / dt * pos_err;
-        ivp_real_t impulse = vm * (-(rel_vel * state->damping) - bias);
-
-        apply_positional_impulse(ca, &r_a_ws, cb, &r_b_ws, axis, impulse);
-        state->accumulated_impulse += ivp_fabs(impulse);
-
-        /* Recompute relative point velocity after each axis solve (sequential impulse). */
-        ivp_controller_get_point_velocity_ws(state->obj_a, &pos_a_ws, &vel_a_ws);
-        ivp_controller_get_point_velocity_ws(state->obj_b, &pos_b_ws, &vel_b_ws);
-        ivp_vec3r_sub(&rel_v_ws, &vel_b_ws, &vel_a_ws);
+        ivp_constraint_local_core_sort_mappings(c);
     }
-}
 
-/* ── Helper: apply angular impulse along world-space axis ───────────────── */
-
-static void apply_angular_impulse_on_axis(ivp_core_t *ca, ivp_core_t *cb,
-                                            const ivp_vec3r_t *axis_ws,
-                                            ivp_real_t impulse)
-{
-    ivp_controller_apply_angular_impulse(ca, cb, axis_ws, impulse);
-}
-
-/* ── Helper: angular inverse virtual mass on an axis ────────────────────── */
-
-static ivp_real_t angular_inv_vm(const ivp_core_t *ca, const ivp_core_t *cb,
-                                   const ivp_vec3r_t *axis_ws)
-{
-    return ivp_controller_compute_angular_inv_vm(ca, cb, axis_ws);
-}
-
-/* ── Solve angular constraint (hinge axis alignment + limits) ───────────── */
-
-static void solve_hinge_axis(ivp_constraint_state_t *state, ivp_real_t dt)
-{
-    /* Get hinge axes in world space */
-    ivp_vec3r_t axis_a_ws, axis_b_ws;
-    if (state->obj_a) {
-        ivp_transform_dir(&axis_a_ws,
-                           &state->obj_a->core.m_world_f_core_last_psi,
-                           &state->axis_a_os);
-    } else {
-        axis_a_ws = state->axis_a_os;
-    }
-    ivp_transform_dir(&axis_b_ws,
-                       &state->obj_b->core.m_world_f_core_last_psi,
-                       &state->axis_b_os);
-
-    ivp_core_t *ca = state->obj_a ? &state->obj_a->core : NULL;
-    ivp_core_t *cb = &state->obj_b->core;
-
-    /* ── Part 1: Align axes (remove 2 angular DOF) ─────────────────────── */
-    {
-        ivp_vec3r_t cross;
-        ivp_vec3r_cross(&cross, &axis_b_ws, &axis_a_ws);
-
-        ivp_real_t error_len = ivp_vec3r_length(&cross);
-        if (error_len > IVP_REAL_EPS) {
-            ivp_vec3r_t correction_axis;
-            ivp_vec3r_scale(&correction_axis, &cross, IVP_REAL(1.0) / error_len);
-
-            ivp_real_t inv_vm = angular_inv_vm(ca, cb, &correction_axis);
-            if (inv_vm > IVP_REAL_EPS) {
-                ivp_real_t angular_impulse = error_len * state->tau / inv_vm;
-                apply_angular_impulse_on_axis(ca, cb, &correction_axis, angular_impulse);
+    if (state->force_exceed_action != IVP_CFE_NONE &&
+        (state->break_force_threshold > IVP_REAL(0.0) || state->break_torque_threshold > IVP_REAL(0.0))) {
+        c->use_maxforce = true;
+        for (int i = 0; i < 3; i++) {
+            if (state->break_force_threshold > IVP_REAL(0.0)) {
+                c->halfimpulse[i] = state->break_force_threshold;
+                c->maxforce_type[i] = state->force_exceed_action;
+            } else {
+                c->halfimpulse[i] = (ivp_real_t)IVP_FLOAT_MAX;
+                c->maxforce_type[i] = IVP_CFE_NONE;
+            }
+            if (state->break_torque_threshold > IVP_REAL(0.0)) {
+                c->halfimpulse[i + 3] = state->break_torque_threshold;
+                c->maxforce_type[i + 3] = state->force_exceed_action;
+            } else {
+                c->halfimpulse[i + 3] = (ivp_real_t)IVP_FLOAT_MAX;
+                c->maxforce_type[i + 3] = IVP_CFE_NONE;
             }
         }
-    }
-
-    /* ── Part 2: Angular limits on the hinge rotation axis ─────────────── */
-    if (state->limits.limited) {
-        /* Compute current hinge angle:
-         * Use relative orientation projected onto the hinge axis.
-         * angle = decompose relative rotation around axis_a_ws. */
-        ivp_quatr_t q_a, q_b;
-        if (state->obj_a) {
-            q_a = state->obj_a->core.q_world_f_core_last_psi;
-        } else {
-            q_a = ivp_quatr_identity();
-        }
-        q_b = state->obj_b->core.q_world_f_core_last_psi;
-
-        /* q_rel = conj(q_a) * q_b */
-        ivp_quatr_t q_a_inv = {-q_a.x, -q_a.y, -q_a.z, q_a.w};
-        ivp_quatr_t q_rel;
-        ivp_quat_mult(&q_rel, &q_a_inv, &q_b);
-
-        /* Reference relative: conj(ref_q_a) * ref_q_b */
-        ivp_quatr_t ref_a_inv = {-state->ref_q_a.x, -state->ref_q_a.y,
-                                  -state->ref_q_a.z,  state->ref_q_a.w};
-        ivp_quatr_t q_ref;
-        ivp_quat_mult(&q_ref, &ref_a_inv, &state->ref_q_b);
-
-        /* q_err = conj(q_ref) * q_rel  — relative rotation from reference */
-        ivp_quatr_t q_ref_inv = {-q_ref.x, -q_ref.y, -q_ref.z, q_ref.w};
-        ivp_quatr_t q_err;
-        ivp_quat_mult(&q_err, &q_ref_inv, &q_rel);
-
-        /* Project onto hinge axis (in A's body space → use axis_a_os)
-         * angle = 2 * atan2(dot(quat_vec, axis), quat_w) */
-        ivp_vec3r_t q_vec = {{q_err.x, q_err.y, q_err.z}};
-        ivp_real_t proj = ivp_vec3r_dot(&q_vec, &state->axis_a_os);
-        ivp_real_t angle = IVP_REAL(2.0) * ivp_atan2(proj, q_err.w);
-
-        /* Wrap angle to [-pi, pi] */
-        while (angle >  IVP_PI) angle -= IVP_REAL(2.0) * IVP_PI;
-        while (angle < -IVP_PI) angle += IVP_REAL(2.0) * IVP_PI;
-
-        /* Check limits */
-        ivp_real_t violation = IVP_REAL(0.0);
-        if (angle < state->limits.min_angle) {
-            violation = angle - state->limits.min_angle;
-        } else if (angle > state->limits.max_angle) {
-            violation = angle - state->limits.max_angle;
-        }
-
-        if (ivp_fabs(violation) > IVP_REAL_EPS) {
-            ivp_real_t inv_vm = angular_inv_vm(ca, cb, &axis_a_ws);
-            if (inv_vm > IVP_REAL_EPS) {
-                /* Spring-damper limit: impulse = (stiffness * violation + damping * omega_on_axis) / inv_vm */
-                ivp_vec3r_t omega_b_ws;
-                ivp_vec3r_t rot_speed_r;
-                rot_speed_r.k[0] = (ivp_real_t)cb->rot_speed.k[0];
-                rot_speed_r.k[1] = (ivp_real_t)cb->rot_speed.k[1];
-                rot_speed_r.k[2] = (ivp_real_t)cb->rot_speed.k[2];
-                ivp_transform_dir(&omega_b_ws, &cb->m_world_f_core_last_psi, &rot_speed_r);
-                ivp_real_t omega_on_axis = ivp_vec3r_dot(&omega_b_ws, &axis_a_ws);
-
-                ivp_real_t limit_impulse =
-                    (state->limits.limit_stiffness * violation +
-                     state->limits.limit_damping * omega_on_axis) * dt / inv_vm;
-
-                apply_angular_impulse_on_axis(ca, cb, &axis_a_ws, limit_impulse);
-            }
-        }
-    }
-}
-
-/* ── Solve fixed orientation constraint ─────────────────────────────────── */
-
-static void solve_fixed_orientation(ivp_constraint_state_t *state, ivp_real_t dt)
-{
-
-    /* Compute relative orientation error.
-     * Current relative: q_rel = inv(q_a) * q_b
-     * Reference relative: q_ref = inv(ref_q_a) * ref_q_b
-     * Error: q_err = inv(q_ref) * q_rel */
-    ivp_quatr_t q_a, q_b;
-    if (state->obj_a) {
-        q_a = state->obj_a->core.q_world_f_core_last_psi;
-    } else {
-        q_a = ivp_quatr_identity();
-    }
-    q_b = state->obj_b->core.q_world_f_core_last_psi;
-
-    /* q_rel_current = conjugate(q_a) * q_b */
-    ivp_quatr_t q_a_inv = {-q_a.x, -q_a.y, -q_a.z, q_a.w};
-    ivp_quatr_t q_rel;
-    ivp_quat_mult(&q_rel, &q_a_inv, &q_b);
-
-    /* q_rel_ref = conjugate(ref_q_a) * ref_q_b */
-    ivp_quatr_t ref_a_inv = {-state->ref_q_a.x, -state->ref_q_a.y,
-                              -state->ref_q_a.z,  state->ref_q_a.w};
-    ivp_quatr_t q_ref;
-    ivp_quat_mult(&q_ref, &ref_a_inv, &state->ref_q_b);
-
-    /* q_err = conjugate(q_ref) * q_rel */
-    ivp_quatr_t q_ref_inv = {-q_ref.x, -q_ref.y, -q_ref.z, q_ref.w};
-    ivp_quatr_t q_err;
-    ivp_quat_mult(&q_err, &q_ref_inv, &q_rel);
-
-    /* Error axis = normalized vector part of q_err, angle = 2*asin(|v|)
-     * For small angles: error ≈ 2 * (x, y, z) */
-    ivp_vec3r_t error_axis;
-    error_axis.k[0] = q_err.x * IVP_REAL(2.0);
-    error_axis.k[1] = q_err.y * IVP_REAL(2.0);
-    error_axis.k[2] = q_err.z * IVP_REAL(2.0);
-
-    /* Ensure shortest path */
-    if (q_err.w < IVP_REAL(0.0)) {
-        error_axis.k[0] = -error_axis.k[0];
-        error_axis.k[1] = -error_axis.k[1];
-        error_axis.k[2] = -error_axis.k[2];
-    }
-
-    ivp_real_t err_mag = ivp_vec3r_length(&error_axis);
-    if (err_mag < IVP_REAL_EPS) return;
-
-    /* Apply angular correction on each axis */
-    ivp_core_t *ca = state->obj_a ? &state->obj_a->core : NULL;
-    ivp_core_t *cb = &state->obj_b->core;
-
-    for (int axis = 0; axis < 3; axis++) {
-        if (ivp_fabs(error_axis.k[axis]) < IVP_REAL_EPS) continue;
-
-        ivp_vec3r_t dir = {.k = {0, 0, 0}};
-        dir.k[axis] = IVP_REAL(1.0);
-
-        /* Transform to world space via A's orientation */
-        ivp_vec3r_t dir_ws;
-        if (state->obj_a) {
-            ivp_mat3r_vmult(&dir_ws, &state->obj_a->core.m_world_f_core_last_psi.rot, &dir);
-        } else {
-            dir_ws = dir;
-        }
-
-        ivp_real_t inv_vm = IVP_REAL(0.0);
-        if (ca && !ca->physical_unmoveable) {
-            ivp_vec3r_t ax_cs;
-            ivp_mat3r_vimult(&ax_cs, &ca->m_world_f_core_last_psi.rot, &dir_ws);
-            inv_vm += ax_cs.k[0] * ax_cs.k[0] * ca->inv_rot_inertia.k[0] +
-                      ax_cs.k[1] * ax_cs.k[1] * ca->inv_rot_inertia.k[1] +
-                      ax_cs.k[2] * ax_cs.k[2] * ca->inv_rot_inertia.k[2];
-        }
-        if (!cb->physical_unmoveable) {
-            ivp_vec3r_t ax_cs;
-            ivp_mat3r_vimult(&ax_cs, &cb->m_world_f_core_last_psi.rot, &dir_ws);
-            inv_vm += ax_cs.k[0] * ax_cs.k[0] * cb->inv_rot_inertia.k[0] +
-                      ax_cs.k[1] * ax_cs.k[1] * cb->inv_rot_inertia.k[1] +
-                      ax_cs.k[2] * ax_cs.k[2] * cb->inv_rot_inertia.k[2];
-        }
-
-        if (inv_vm < IVP_REAL_EPS) continue;
-
-        ivp_real_t angular_impulse = error_axis.k[axis] * state->tau / inv_vm;
-
-        if (ca && !ca->physical_unmoveable) {
-            ivp_vec3r_t ax_cs;
-            ivp_mat3r_vimult(&ax_cs, &ca->m_world_f_core_last_psi.rot, &dir_ws);
-            ca->rot_speed.k[0] -= (float)(ax_cs.k[0] * ca->inv_rot_inertia.k[0] * angular_impulse);
-            ca->rot_speed.k[1] -= (float)(ax_cs.k[1] * ca->inv_rot_inertia.k[1] * angular_impulse);
-            ca->rot_speed.k[2] -= (float)(ax_cs.k[2] * ca->inv_rot_inertia.k[2] * angular_impulse);
-        }
-        if (!cb->physical_unmoveable) {
-            ivp_vec3r_t ax_cs;
-            ivp_mat3r_vimult(&ax_cs, &cb->m_world_f_core_last_psi.rot, &dir_ws);
-            cb->rot_speed.k[0] += (float)(ax_cs.k[0] * cb->inv_rot_inertia.k[0] * angular_impulse);
-            cb->rot_speed.k[1] += (float)(ax_cs.k[1] * cb->inv_rot_inertia.k[1] * angular_impulse);
-            cb->rot_speed.k[2] += (float)(ax_cs.k[2] * cb->inv_rot_inertia.k[2] * angular_impulse);
-        }
+    } else if (state->type != IVP_CONSTRAINT_GENERAL) {
+        c->use_maxforce = false;
     }
 }
 
@@ -434,69 +285,37 @@ void ivp_controller_constraint(const ivp_event_sim_t *event_sim,
                                  ivp_object_t *obj,
                                  void *ctx)
 {
-    const ivp_real_t dt = event_sim->delta_time;
     ivp_constraint_state_t *state = (ivp_constraint_state_t *)ctx;
-    if (!state || !state->active) return;
+    if (!state || !state->active || !state->core_ready) return;
 
-    /* Only execute once per step on the first dynamic body.
-     * This also covers constraints where obj_a is static. */
-    ivp_object_t *exec_obj = NULL;
-    if (state->obj_a && !state->obj_a->core.physical_unmoveable) {
-        exec_obj = state->obj_a;
-    } else if (state->obj_b && !state->obj_b->core.physical_unmoveable) {
-        exec_obj = state->obj_b;
-    }
+    ivp_object_t *ends[2] = { state->obj_a, state->obj_b };
+    ivp_object_t *exec_obj = ivp_controller_pick_exec_object(ends, 2);
     if (!exec_obj || obj != exec_obj) return;
 
-    state->accumulated_impulse = IVP_REAL(0.0);
+    sync_core(state);
+    state->core.enabled = true;
+    bool broke = ivp_constraint_local_core_simulate(&state->core, event_sim);
 
-    for (int iter = 0; iter < state->solver_iterations; iter++) {
-        /* Positional constraint (all types) */
-        solve_position(state, dt);
+    const ivp_real_t *li = state->core.last_impulse;
+    state->accumulated_impulse =
+        ivp_sqrt(li[0] * li[0] + li[1] * li[1] + li[2] * li[2]) +
+        ivp_sqrt(li[3] * li[3] + li[4] * li[4] + li[5] * li[5]);
 
-        /* Angular constraints (type-dependent) */
-        switch (state->type) {
-        case IVP_CONSTRAINT_HINGE:
-            solve_hinge_axis(state, dt);
-            break;
-        case IVP_CONSTRAINT_FIXED:
-            solve_fixed_orientation(state, dt);
-            break;
-        case IVP_CONSTRAINT_BALL_SOCKET:
-        default:
-            break; /* no angular constraint for ball socket */
-        }
-    }
-
-    /* Break detection (reference: IVP_Constraint_Local_MaxImpulse + IVP_CFE_BREAK).
-     * After solving, compare accumulated impulse against threshold.
-     * When force_exceed_action is IVP_CFE_BREAK, deactivate and fire event.
-     * When IVP_CFE_CLIP, the impulse was already applied — we just mark
-     * the threshold was exceeded (a future iteration could clamp). */
-    if (state->force_exceed_action != IVP_CFE_NONE) {
-        const ivp_real_t threshold = state->break_force_threshold;
-        if (threshold > IVP_REAL(0.0) &&
-            state->accumulated_impulse > threshold) {
-            if (state->force_exceed_action == IVP_CFE_BREAK) {
-                state->active = false;
-                state->is_broken = true;
-                /* Fire event through the sim event system if environment is available. */
-                if (event_sim->environment) {
-                    extern void ivp_environment_emit_event_internal(
-                        struct ivp_environment *env,
-                        ivp_event_type_t type,
-                        ivp_real_t dt,
-                        int object_index,
-                        int controller_id);
-                    int obj_idx = exec_obj ? exec_obj->dense_index : -1;
-                    ivp_environment_emit_event_internal(
-                        event_sim->environment,
-                        IVP_EVENT_CONSTRAINT_BROKEN,
-                        dt,
-                        obj_idx,
-                        0);
-                }
-            }
+    if (broke) {
+        /* Reference: fire_event_constraint_broken(this); deactivate(); */
+        state->active = false;
+        state->is_broken = true;
+        if (event_sim->environment) {
+            extern void ivp_environment_emit_event_internal(
+                struct ivp_environment *env,
+                ivp_event_type_t type,
+                ivp_real_t dt,
+                int object_index,
+                int controller_id);
+            ivp_environment_emit_event_internal(event_sim->environment,
+                                                IVP_EVENT_CONSTRAINT_BROKEN,
+                                                event_sim->delta_time,
+                                                exec_obj->dense_index, 0);
         }
     }
 }

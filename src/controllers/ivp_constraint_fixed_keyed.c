@@ -1,14 +1,49 @@
 /* ivp_constraint_fixed_keyed.c — Keyframed fixed constraint
  *
- * Drives an attached object toward a target position and orientation
- * using spring-damper impulses with configurable force limits.
+ * Port of IVP_Constraint_Fixed_Keyframed
+ * (ivp_controller/ivp_constraint_fixed_keyed.cxx:51-232).
  */
 #include <ivp/controllers/ivp_constraint_fixed_keyed.h>
+#include <ivp/controllers/ivp_controller_util.h>
+#include <ivp/solver/ivp_solver_core_reaction.h>
+#include "solver/ivp_scr_internal.h"
+#include "controllers/ivp_controller_ref.h"
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_environment.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_mat3.h>
+#include "ivp_controller_ref_math.h"
+#include <ivp/base/ivp_message.h>
 #include <string.h>
+
+static ivp_time_t fk_now(const ivp_fixed_keyed_state_t *state)
+{
+    const ivp_object_t *o = state->reference_obj ? state->reference_obj : state->attached_obj;
+    return (o && o->owner) ? ivp_environment_get_time(o->owner) : (ivp_time_t)0;
+}
+
+static void fk_wake(ivp_fixed_keyed_state_t *state)
+{
+    ivp_controller_wake_object(state->reference_obj);
+    ivp_controller_wake_object(state->attached_obj);
+}
+
+/* IVP_Real_Object::get_m_world_f_object_AT (identity for NULL) */
+static void fk_world(const ivp_object_t *o, ivp_rm_m3_t rot, double pos[3])
+{
+    if (!o) {
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) rot[i][j] = (i == j) ? 1.0 : 0.0;
+            pos[i] = 0.0;
+        }
+        return;
+    }
+    ivp_transform_r_t m;
+    ivp_ctl_m_world_f_object_AT(o, &m);
+    ivp_rm_m3_from_transform(&m, rot);
+    for (int i = 0; i < 3; i++) pos[i] = (double)m.pos.k[i];
+}
 
 /* ── Initialization ────────────────────────────────────────────────────── */
 
@@ -21,229 +56,292 @@ void ivp_fixed_keyed_init(ivp_fixed_keyed_state_t *state,
 
     state->reference_obj = reference_obj;
     state->attached_obj  = attached_obj;
-    state->target_pos_ros = *offset_ros;
 
-    /* Default: match current relative orientation */
-    ivp_quatr_t q_ref = reference_obj
-        ? reference_obj->core.q_world_f_core_last_psi
-        : ivp_quatr_identity();
-    ivp_quatr_t q_att = attached_obj->core.q_world_f_core_last_psi;
+    /* m_Ros_f_Aos = m_world_f_Ros^-1 * m_world_f_Aos */
+    ivp_rm_m3_t rr, ra, rel;
+    double pr[3], pa[3];
+    fk_world(reference_obj, rr, pr);
+    fk_world(attached_obj, ra, pa);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            rel[i][j] = rr[0][i] * ra[0][j] + rr[1][i] * ra[1][j] + rr[2][i] * ra[2][j];
+    double d[3] = { pa[0] - pr[0], pa[1] - pr[1], pa[2] - pr[2] };
+    double p_ros[3];
+    for (int i = 0; i < 3; i++) p_ros[i] = rr[0][i] * d[0] + rr[1][i] * d[1] + rr[2][i] * d[2];
 
-    /* Store target as current relative: inv(q_ref) * q_att */
-    ivp_quatr_t q_ref_inv = {-q_ref.x, -q_ref.y, -q_ref.z, q_ref.w};
-    ivp_quat_mult(&state->target_orient_0, &q_ref_inv, &q_att);
+    if (offset_ros) {
+        state->target_pos_ros = *offset_ros;
+    } else {
+        ivp_vec3r_set(&state->target_pos_ros, (ivp_real_t)p_ros[0], (ivp_real_t)p_ros[1],
+                      (ivp_real_t)p_ros[2]);
+    }
+    ivp_vec3r_set_zero(&state->target_vel_ros);
+
+    double q[4];
+    ivp_rm_m3_to_quat(rel, q);
+    ivp_rm_quatr_from_quat(q, &state->target_orient_0);
     state->target_orient_1 = state->target_orient_0;
-    state->orient_blend = IVP_REAL(0.0);
     state->orient_keyed = false;
+    state->time_of_prime_orientation_0 = 0.0;
+    state->time_of_prime_position = 0.0;
 
-    state->force_factor       = IVP_REAL(1.0);
-    state->damp_factor        = IVP_REAL(0.9);
-    state->torque_factor      = IVP_REAL(1.0);
-    state->angular_damp_factor = IVP_REAL(0.9);
-
-    /* Large default limits (effectively unlimited) */
-    ivp_vec3r_set(&state->max_translation_force,
-                  IVP_REAL(1e8), IVP_REAL(1e8), IVP_REAL(1e8));
-    ivp_vec3r_set(&state->max_torque,
-                  IVP_REAL(1e8), IVP_REAL(1e8), IVP_REAL(1e8));
+    /* IVP_Template_Controller_Motion defaults */
+    state->force_factor        = IVP_REAL(0.8);
+    state->damp_factor         = IVP_REAL(1.0);
+    state->torque_factor       = IVP_REAL(0.8);
+    state->angular_damp_factor = IVP_REAL(1.0);
+    ivp_vec3r_set(&state->max_translation_force, IVP_REAL(1e6), IVP_REAL(1e6), IVP_REAL(1e6));
+    ivp_vec3r_set(&state->max_torque, IVP_REAL(1e6), IVP_REAL(1e6), IVP_REAL(1e6));
 
     state->active = true;
 }
 
-/* ── Orientation control ───────────────────────────────────────────────── */
+/* ── Target control ────────────────────────────────────────────────────── */
+
+void ivp_fixed_keyed_set_prime_position_Ros(ivp_fixed_keyed_state_t *state,
+                                            const ivp_vec3r_t *position_ros,
+                                            const ivp_vec3r_t *velocity_ros,
+                                            ivp_time_t time)
+{
+    state->time_of_prime_position = time;
+    state->target_pos_ros = *position_ros;
+    if (velocity_ros) {
+        /* velocity_Ros is an IVP_U_Float_Point */
+        ivp_vec3f_t v = ivp_ctl_f(velocity_ros);
+        state->target_vel_ros = ivp_ctl_r(&v);
+    } else {
+        ivp_vec3r_set_zero(&state->target_vel_ros);
+    }
+    fk_wake(state);
+}
+
+void ivp_fixed_keyed_set_prime_orientation_Ros(ivp_fixed_keyed_state_t *state,
+                                               const ivp_quatr_t *orientation0,
+                                               ivp_time_t time0,
+                                               const ivp_quatr_t *orientation1,
+                                               ivp_real_t dt)
+{
+    state->target_orient_0 = *orientation0;
+    if (orientation1) {
+        state->target_orient_1 = *orientation1;
+        if ((float)dt > P_FLOAT_EPS) {
+            /* IVP_FLOAT i_delta_prime_orientation_time = 1.0f / dt (IVP_FLOAT dt) */
+            state->i_delta_prime_orientation_time = (ivp_real_t)(1.0f / (float)dt);
+            state->orient_keyed = true;
+        } else {
+            state->i_delta_prime_orientation_time = IVP_REAL(0.0);
+            state->orient_keyed = false;
+        }
+    } else {
+        state->orient_keyed = false;
+    }
+    state->time_of_prime_orientation_0 = time0;
+    fk_wake(state);
+}
+
+void ivp_fixed_keyed_set_target_pos(ivp_fixed_keyed_state_t *state, const ivp_vec3r_t *pos_ros)
+{
+    ivp_vec3r_t vel = state->target_vel_ros;
+    ivp_fixed_keyed_set_prime_position_Ros(state, pos_ros, &vel, fk_now(state));
+}
+
+void ivp_fixed_keyed_set_target_vel(ivp_fixed_keyed_state_t *state, const ivp_vec3r_t *vel_ros)
+{
+    /* re-prime the currently extrapolated position at "now" */
+    ivp_time_t now = fk_now(state);
+    ivp_vec3r_t pos = state->target_pos_ros;
+    ivp_vec3r_add_scaled(&pos, &state->target_vel_ros,
+                         (ivp_real_t)(now - state->time_of_prime_position));
+    ivp_fixed_keyed_set_prime_position_Ros(state, &pos, vel_ros, now);
+}
 
 void ivp_fixed_keyed_set_orientation(ivp_fixed_keyed_state_t *state,
                                      const ivp_quatr_t *q0,
                                      const ivp_quatr_t *q1,
                                      ivp_real_t blend)
 {
-    state->target_orient_0 = *q0;
-    state->target_orient_1 = *q1;
+    double a[4], b[4], r[4];
+    ivp_rm_quat_from_quatr(q0, a);
+    ivp_rm_quat_from_quatr(q1, b);
+    ivp_rm_interpolate_smoothly(a, b, (double)blend, r);
+    ivp_quatr_t q;
+    ivp_rm_quatr_from_quat(r, &q);
     state->orient_blend = blend;
-    state->orient_keyed = true;
+    ivp_fixed_keyed_set_prime_orientation_Ros(state, &q, fk_now(state), NULL, IVP_REAL(1.0));
 }
 
 void ivp_fixed_keyed_set_orientation_single(ivp_fixed_keyed_state_t *state,
                                             const ivp_quatr_t *target_q)
 {
-    state->target_orient_0 = *target_q;
-    state->target_orient_1 = *target_q;
-    state->orient_blend = IVP_REAL(0.0);
-    state->orient_keyed = true;
+    ivp_fixed_keyed_set_prime_orientation_Ros(state, target_q, fk_now(state), NULL, IVP_REAL(1.0));
 }
 
-/* ── Helpers ───────────────────────────────────────────────────────────── */
-
-static ivp_real_t clamp_val(ivp_real_t v, ivp_real_t lo, ivp_real_t hi) {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
-
-/* Simple quaternion slerp for blend ∈ [0,1] */
-static ivp_quatr_t quat_slerp(const ivp_quatr_t *a, const ivp_quatr_t *b,
-                               ivp_real_t t)
+int ivp_fixed_keyed_discovery(void *ctx, ivp_environment_t *env,
+                              ivp_object_handle_t *out_handles, int max_handles)
 {
-    if (t <= IVP_REAL(0.0)) return *a;
-    if (t >= IVP_REAL(1.0)) return *b;
-
-    ivp_real_t dot = a->x * b->x + a->y * b->y + a->z * b->z + a->w * b->w;
-
-    /* Ensure shortest path */
-    ivp_quatr_t b2 = *b;
-    if (dot < IVP_REAL(0.0)) {
-        b2.x = -b2.x; b2.y = -b2.y; b2.z = -b2.z; b2.w = -b2.w;
-        dot = -dot;
-    }
-
-    if (dot > IVP_REAL(0.9999)) {
-        /* Nearly identical: use linear interpolation */
-        ivp_quatr_t r;
-        r.x = a->x + t * (b2.x - a->x);
-        r.y = a->y + t * (b2.y - a->y);
-        r.z = a->z + t * (b2.z - a->z);
-        r.w = a->w + t * (b2.w - a->w);
-        /* Normalize */
-        ivp_real_t len = ivp_sqrt(r.x*r.x + r.y*r.y + r.z*r.z + r.w*r.w);
-        if (len > IVP_REAL_EPS) {
-            ivp_real_t inv = IVP_REAL(1.0) / len;
-            r.x *= inv; r.y *= inv; r.z *= inv; r.w *= inv;
-        }
-        return r;
-    }
-
-    ivp_real_t theta = ivp_acos(dot);
-    ivp_real_t sin_theta = ivp_sin(theta);
-    ivp_real_t wa = ivp_sin((IVP_REAL(1.0) - t) * theta) / sin_theta;
-    ivp_real_t wb = ivp_sin(t * theta) / sin_theta;
-
-    ivp_quatr_t r;
-    r.x = wa * a->x + wb * b2.x;
-    r.y = wa * a->y + wb * b2.y;
-    r.z = wa * a->z + wb * b2.z;
-    r.w = wa * a->w + wb * b2.w;
-    return r;
+    (void)env;
+    const ivp_fixed_keyed_state_t *s = (const ivp_fixed_keyed_state_t *)ctx;
+    if (!s) return 0;
+    ivp_object_t *objs[2] = { s->reference_obj, s->attached_obj };
+    return ivp_controller_discover_objects(objs, 2, out_handles, max_handles);
 }
 
 /* ── Controller callback ───────────────────────────────────────────────── */
 
+static ivp_core_t *fk_core(ivp_object_t *o)
+{
+    return (!o || o->physical_core->physical_unmoveable) ? NULL : o->physical_core;
+}
+
+/* Reference IVP_Constraint_Fixed_Keyframed::do_simulation_controller
+ * (ivp_constraint_fixed_keyed.cxx:100-232): AT matrices of both objects,
+ * IVP_FLOAT factors, IVP_U_Float_Point angles / deltas / impulses and the
+ * float IVP_Solver_Core_Reaction. */
 void ivp_controller_fixed_keyed(const ivp_event_sim_t *event_sim,
                                 ivp_object_t *obj,
                                 void *ctx)
 {
-    const ivp_real_t dt = event_sim->delta_time;
     ivp_fixed_keyed_state_t *state = (ivp_fixed_keyed_state_t *)ctx;
-    if (!state || !state->active) return;
-    if (!state->attached_obj || state->attached_obj->core.physical_unmoveable) return;
-    if (dt <= IVP_REAL_EPS) return;
+    if (!state || !state->active || !state->attached_obj) return;
 
-    /* Only execute on the attached object */
-    if (obj != state->attached_obj) return;
+    ivp_object_t *ends[2] = { state->reference_obj, state->attached_obj };
+    if (obj != ivp_controller_pick_exec_object(ends, 2)) return;
 
-    ivp_core_t *att = &state->attached_obj->core;
-    ivp_core_t *ref = state->reference_obj ? &state->reference_obj->core : NULL;
+    const double d_time = (double)event_sim->delta_time;
+    const double i_dt = (double)event_sim->inverse_delta_time;
+    const ivp_time_t current_time = event_sim->environment
+        ? ivp_environment_get_time(event_sim->environment) : (ivp_time_t)0;
 
-    ivp_real_t inv_dt = IVP_REAL(1.0) / dt;
+    ivp_rm_m3_t m_Rws_f_Ros, m_Aws_f_Aos;
+    double pos_R[3], pos_A[3];
+    fk_world(state->reference_obj, m_Rws_f_Ros, pos_R);
+    fk_world(state->attached_obj, m_Aws_f_Aos, pos_A);
 
-    /* ── Translation ───────────────────────────────────────────────────── */
+    ivp_vec3f_t x_axis, y_axis, z_axis;
+    lvf_set3(&x_axis, 1.0f, 0.0f, 0.0f);
+    lvf_set3(&y_axis, 0.0f, 1.0f, 0.0f);
+    lvf_set3(&z_axis, 0.0f, 0.0f, 1.0f);
+
+    ivp_core_t *core_A = fk_core(state->reference_obj); /* reference */
+    ivp_core_t *core_B = fk_core(state->attached_obj);  /* attached */
+
+    /* orientation */
     {
-        /* Compute target world position:
-         * target_ws = ref_pos + ref_rot * (target_pos_ros + target_vel_ros * dt) */
-        ivp_vec3r_t target_ros = state->target_pos_ros;
-        target_ros.k[0] += state->target_vel_ros.k[0] * dt;
-        target_ros.k[1] += state->target_vel_ros.k[1] * dt;
-        target_ros.k[2] += state->target_vel_ros.k[2] * dt;
-
-        ivp_vec3r_t target_ws;
-        if (ref) {
-            ivp_transform_point(&target_ws, &ref->m_world_f_core_last_psi, &target_ros);
+        const float dt = (float)(current_time - state->time_of_prime_orientation_0);
+        double q0[4], q1[4], qt[4];
+        ivp_rm_quat_from_quatr(&state->target_orient_0, q0);
+        if (state->orient_keyed) {
+            ivp_rm_quat_from_quatr(&state->target_orient_1, q1);
+            ivp_rm_interpolate_smoothly(q0, q1, ((double)dt + d_time) *
+                                        (double)(float)state->i_delta_prime_orientation_time, qt);
         } else {
-            target_ws = target_ros;
+            for (int i = 0; i < 4; i++) qt[i] = q0[i];
+        }
+        ivp_rm_m3_t m_Ros_f_Rrs, m_Rws_f_Rrs, m;
+        ivp_rm_quat_to_m3(qt, m_Ros_f_Rrs);
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                m_Rws_f_Rrs[i][j] = m_Rws_f_Ros[i][0] * m_Ros_f_Rrs[0][j] +
+                                    m_Rws_f_Ros[i][1] * m_Ros_f_Rrs[1][j] +
+                                    m_Rws_f_Ros[i][2] * m_Ros_f_Rrs[2][j];
+        /* reference: m_Aws_f_Aos->mi2mult3(&m_Rws_f_Rrs) = Aws * Rws_f_Rrs^T */
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                m[i][j] = m_Aws_f_Aos[i][0] * m_Rws_f_Rrs[j][0] +
+                          m_Aws_f_Aos[i][1] * m_Rws_f_Rrs[j][1] +
+                          m_Aws_f_Aos[i][2] * m_Rws_f_Rrs[j][2];
+        double q[4];
+        ivp_rm_m3_to_quat(m, q);
+        ivp_vec3f_t drRA_rs;
+        drRA_rs.k[0] = 2.0f * (float)ivp_rm_fast_asin(q[0]);
+        drRA_rs.k[1] = 2.0f * (float)ivp_rm_fast_asin(q[1]);
+        drRA_rs.k[2] = 2.0f * (float)ivp_rm_fast_asin(q[2]);
+        if (q[3] > 0.0f) lvf_mult(&drRA_rs, (D)-1.0f);
+
+        ivp_scr_f_t tcb;
+        ivp_scr_f_init_rotation_ws(&tcb, core_B, core_A, &x_axis, &y_axis, &z_axis);
+        if (!ivp_scr_f_invert_3x3(&tcb)) {
+            ivp_debug_printf("do_constraint_system: Couldn't invert rot matrix!\n");
+            return;
         }
 
-        /* Position error */
-        ivp_vec3r_t pos_error;
-        ivp_vec3r_sub(&pos_error, &target_ws, &att->pos_world_f_core_last_psi);
+        ivp_vec3f_t delta_angles, rot_impulse_ws;
+        lvf_set_multiple(&delta_angles, &drRA_rs, (D)(i_dt * (double)(float)state->torque_factor));
+        lvf_add_multiple(&delta_angles, &tcb.delta_velocity_ds, (D)(-(double)(float)state->angular_damp_factor));
+        ivp_scr_f_vmult3(&tcb, &delta_angles, &rot_impulse_ws);
 
-        /* Desired velocity = (error / dt) * force_factor */
-        /* Current velocity of attached object */
-        /* Impulse = mass * (desired_vel - current_vel * damp_factor) */
-        ivp_real_t mass = (att->inv_mass > IVP_REAL_EPS)
-                        ? (IVP_REAL(1.0) / att->inv_mass)
-                        : IVP_REAL(0.0);
-        if (mass < IVP_REAL_EPS) return;
-
-        for (int a = 0; a < 3; a++) {
-            ivp_real_t desired_vel = pos_error.k[a] * inv_dt * state->force_factor;
-            ivp_real_t current_vel = att->speed.k[a];
-            ivp_real_t impulse = mass * (desired_vel - current_vel * state->damp_factor);
-
-            /* Clamp by force limit: impulse = force * dt */
-            ivp_real_t max_imp = state->max_translation_force.k[a] * dt;
-            impulse = clamp_val(impulse, -max_imp, max_imp);
-
-            att->speed.k[a] += impulse * att->inv_mass;
+        /* limit angular impulse so per-axis torque does not exceed the configured cap */
+        for (int i = 2; i >= 0; i--) {
+            const float max_torque_axis = (float)fabs((double)(float)state->max_torque.k[i]);
+            const float max_impulse_axis = (float)((double)max_torque_axis * d_time);
+            if (rot_impulse_ws.k[i] > max_impulse_axis) {
+                rot_impulse_ws.k[i] = max_impulse_axis;
+            } else if (rot_impulse_ws.k[i] < -max_impulse_axis) {
+                rot_impulse_ws.k[i] = -max_impulse_axis;
+            }
         }
+        ivp_scr_f_exert_angular_impulse_dim3(&tcb, core_B, core_A, &rot_impulse_ws);
     }
 
-    /* ── Rotation ──────────────────────────────────────────────────────── */
+    /* position */
     {
-        /* Compute target world orientation:
-         * target_q_ws = q_ref * target_orient (interpolated if keyed) */
-        ivp_quatr_t target_local;
-        if (state->orient_keyed) {
-            target_local = quat_slerp(&state->target_orient_0,
-                                       &state->target_orient_1,
-                                       state->orient_blend);
-        } else {
-            target_local = state->target_orient_0;
+        const float dt = (float)(current_time - state->time_of_prime_position);
+        /* new_target_position_Ros.add_multiple(&prime_position_Ros, &velocity_Ros, dt + delta_time) */
+        const double f = (double)dt + d_time;
+        double tp_ros[3];
+        for (int k = 0; k < 3; k++) {
+            double a = (double)(float)state->target_vel_ros.k[k] * f;
+            a += (double)state->target_pos_ros.k[k];
+            tp_ros[k] = a;
+        }
+        /* m_Rws_f_Ros->vmult4(&new_target_position_Ros, &target_pos_Ws) */
+        ivp_transform_r_t m_R;
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) m_R.rot.rows[i].k[j] = (ivp_real_t)m_Rws_f_Ros[i][j];
+            m_R.pos.k[i] = (ivp_real_t)pos_R[i];
+        }
+        ivp_vec3r_t tp_ros_r, target_pos_ws;
+        lvp_set3(&tp_ros_r, (D)tp_ros[0], (D)tp_ros[1], (D)tp_ros[2]);
+        lvm_vmult4(&m_R, &tp_ros_r, &target_pos_ws);
+
+        /* delta_position_ws.inline_subtract_and_mult(&target_pos_Ws, A pos, force_factor * i_dt) */
+        const double factor = (double)(float)state->force_factor * i_dt;
+        ivp_vec3f_t delta_position_ws;
+        for (int k = 0; k < 3; k++) {
+            double a = (double)target_pos_ws.k[k] - pos_A[k];
+            a *= factor;
+            delta_position_ws.k[k] = (float)a;
+        }
+        const double damp_factor = (double)(float)state->damp_factor;
+        if (state->reference_obj) {
+            ivp_vec3f_t vR = ivp_core_speed_f(state->reference_obj->physical_core);
+            lvf_add_multiple(&delta_position_ws, &vR, (D)damp_factor);
+        }
+        {
+            ivp_vec3f_t vA = ivp_core_speed_f(state->attached_obj->physical_core);
+            lvf_add_multiple(&delta_position_ws, &vA, (D)-damp_factor);
         }
 
-        ivp_quatr_t target_ws;
-        if (ref) {
-            ivp_quat_mult(&target_ws, &ref->q_world_f_core_last_psi, &target_local);
-        } else {
-            target_ws = target_local;
+        ivp_scr_f_t tcb;
+        ivp_scr_f_init_translation_ws(&tcb, core_B, core_A, &target_pos_ws, &x_axis, &y_axis, &z_axis);
+        if (!ivp_scr_f_invert_3x3(&tcb)) {
+            ivp_debug_printf("do_constraint_system: Couldn't invert rot matrix!\n");
+            return;
         }
 
-        /* Orientation error: q_err = inv(q_att) * target_ws
-         * This gives the rotation from current to target. */
-        ivp_quatr_t q_att_inv = {-att->q_world_f_core_last_psi.x,
-                                  -att->q_world_f_core_last_psi.y,
-                                  -att->q_world_f_core_last_psi.z,
-                                   att->q_world_f_core_last_psi.w};
-        ivp_quatr_t q_err;
-        ivp_quat_mult(&q_err, &q_att_inv, &target_ws);
+        ivp_vec3f_t impulse_ws;
+        ivp_scr_f_vmult3(&tcb, &delta_position_ws, &impulse_ws);
 
-        /* Ensure shortest path */
-        if (q_err.w < IVP_REAL(0.0)) {
-            q_err.x = -q_err.x; q_err.y = -q_err.y;
-            q_err.z = -q_err.z; q_err.w = -q_err.w;
+        /* limit linear impulse so per-axis force does not exceed the configured cap */
+        for (int i = 2; i >= 0; i--) {
+            const float max_force_axis = (float)fabs((double)(float)state->max_translation_force.k[i]);
+            const float max_impulse_axis = (float)((double)max_force_axis * d_time);
+            if (impulse_ws.k[i] > max_impulse_axis) {
+                impulse_ws.k[i] = max_impulse_axis;
+            } else if (impulse_ws.k[i] < -max_impulse_axis) {
+                impulse_ws.k[i] = -max_impulse_axis;
+            }
         }
-
-        /* Axis-angle approximation: error_axis ≈ 2 * vec(q_err) */
-        ivp_vec3r_t error_ws;
-        error_ws.k[0] = q_err.x * IVP_REAL(2.0);
-        error_ws.k[1] = q_err.y * IVP_REAL(2.0);
-        error_ws.k[2] = q_err.z * IVP_REAL(2.0);
-
-        /* Transform error to core space for applying angular impulse */
-        ivp_vec3r_t error_cs;
-        ivp_mat3r_vimult(&error_cs, &att->m_world_f_core_last_psi.rot, &error_ws);
-
-        for (int a = 0; a < 3; a++) {
-            if (att->inv_rot_inertia.k[a] < IVP_REAL_EPS) continue;
-
-            ivp_real_t inertia = IVP_REAL(1.0) / att->inv_rot_inertia.k[a];
-            ivp_real_t desired_omega = error_cs.k[a] * inv_dt * state->torque_factor;
-            ivp_real_t current_omega = (ivp_real_t)att->rot_speed.k[a];
-            ivp_real_t impulse = inertia * (desired_omega - current_omega * state->angular_damp_factor);
-
-            /* Clamp by torque limit */
-            ivp_real_t max_imp = state->max_torque.k[a] * dt;
-            impulse = clamp_val(impulse, -max_imp, max_imp);
-
-            att->rot_speed.k[a] += (float)(impulse * att->inv_rot_inertia.k[a]);
-        }
+        ivp_scr_f_exert_impulse_dim3(&tcb, core_B, core_A, &impulse_ws);
     }
 }

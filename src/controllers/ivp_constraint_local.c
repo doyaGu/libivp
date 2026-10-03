@@ -1,8 +1,11 @@
 /* ivp_constraint_local.c — General 6-DOF local constraint
  *
- * Solves a bilateral constraint with per-axis free/fixed/limited modes.
- * Uses sequential impulse with Baumgarte stabilization, similar to the
- * existing constraint solver but with configurable DOFs and force limits.
+ * Wrapper of the reference IVP_Constraint_Local solver
+ * (ivp_constraint_local_core.c, port of ivp_constraint_local.cxx).
+ * The per-axis configuration of the wrapper is mapped onto the reference
+ * template (axis types, borders, maximpulse + type) every PSI, which is how
+ * the reference runtime-change API (fix/free/limit_*_axis,
+ * change_max_*_impulse) updates the constraint.
  */
 #include <ivp/controllers/ivp_constraint_local.h>
 #include <ivp/controllers/ivp_controller_util.h>
@@ -12,11 +15,23 @@
 #include <ivp/math/ivp_mat3.h>
 #include <string.h>
 
-/* ── Default parameters ────────────────────────────────────────────────── */
+/* Reference IVP_Template_Constraint defaults (ivp_template_constraint.cxx:6-28) */
+#define IVP_CL_DEFAULT_TAU          IVP_REAL(1.0)
+#define IVP_CL_DEFAULT_DAMPING      IVP_REAL(1.0)
 
-#define IVP_CL_DEFAULT_TAU          IVP_REAL(0.2)
-#define IVP_CL_DEFAULT_DAMPING      IVP_REAL(0.9)
-#define IVP_CL_DEFAULT_ITERATIONS   4
+static void rebuild_core(ivp_constraint_local_state_t *state)
+{
+    ivp_constraint_template_t *t = &state->tmpl;
+    ivp_constraint_template_init(t);
+    /* reference frame at anchor_a (axes = R object axes) */
+    ivp_constraint_template_set_constraint_Ros(t, state->obj_a, &state->anchor_a_os, NULL,
+                                               3, 3, state->obj_b, NULL);
+    /* attached frame at anchor_b, axes following the current relative pose */
+    ivp_constraint_template_set_attached_Aos(t, &state->anchor_b_os, NULL, -1);
+    t->force_factor = state->tau;
+    t->damp_factor = state->damping;
+    ivp_constraint_local_core_init(&state->core, t);
+}
 
 /* ── Initialization ────────────────────────────────────────────────────── */
 
@@ -33,13 +48,10 @@ void ivp_constraint_local_init(ivp_constraint_local_state_t *state,
     state->anchor_a_os = *anchor_a_os;
     state->anchor_b_os = *anchor_b_os;
 
-    /* Record reference orientations */
-    if (obj_a) state->ref_q_a = obj_a->core.q_world_f_core_last_psi;
-    else       state->ref_q_a = ivp_quatr_identity();
-    if (obj_b) state->ref_q_b = obj_b->core.q_world_f_core_last_psi;
-    else       state->ref_q_b = ivp_quatr_identity();
+    state->ref_q_a = obj_a ? obj_a->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
+    state->ref_q_b = obj_b ? obj_b->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
 
-    /* Default: all axes FIXED */
+    /* Default: all axes FIXED, no impulse limit */
     for (int i = 0; i < 6; i++) {
         state->axes[i].mode        = IVP_CAXIS_FIXED;
         state->axes[i].border_min  = IVP_REAL(0.0);
@@ -50,61 +62,69 @@ void ivp_constraint_local_init(ivp_constraint_local_state_t *state,
 
     state->tau              = IVP_CL_DEFAULT_TAU;
     state->damping          = IVP_CL_DEFAULT_DAMPING;
-    state->solver_iterations = IVP_CL_DEFAULT_ITERATIONS;
+    state->limited_axis_stiffness = IVP_REAL(0.3);
+    state->solver_iterations = 1;
     state->active           = true;
     state->broken           = false;
+
+    rebuild_core(state);
 }
 
-/* ── Per-axis configuration ────────────────────────────────────────────── */
+/* ── Per-axis configuration (reference setters wake the constraint) ───── */
 
-void ivp_constraint_local_fix_translation(ivp_constraint_local_state_t *state,
-                                          int axis)
+static void cl_wake(ivp_constraint_local_state_t *state)
 {
-    if (axis >= 0 && axis < 3)
-        state->axes[axis].mode = IVP_CAXIS_FIXED;
+    ivp_constraint_local_core_wake(&state->core);
 }
 
-void ivp_constraint_local_free_translation(ivp_constraint_local_state_t *state,
-                                           int axis)
+static void set_axis(ivp_constraint_local_state_t *state, int idx,
+                     ivp_constraint_axis_mode_t mode, ivp_real_t mn, ivp_real_t mx)
 {
-    if (axis >= 0 && axis < 3)
-        state->axes[axis].mode = IVP_CAXIS_FREE;
+    if (idx < 0 || idx >= 6) return;
+    state->axes[idx].mode = mode;
+    if (mode == IVP_CAXIS_LIMITED) {
+        state->axes[idx].border_min = mn;
+        state->axes[idx].border_max = mx;
+    }
+    cl_wake(state);
 }
 
-void ivp_constraint_local_limit_translation(ivp_constraint_local_state_t *state,
-                                            int axis,
-                                            ivp_real_t border_min,
-                                            ivp_real_t border_max)
+void ivp_constraint_local_fix_translation(ivp_constraint_local_state_t *state, int axis)
 {
-    if (axis < 0 || axis >= 3) return;
-    state->axes[axis].mode       = IVP_CAXIS_LIMITED;
-    state->axes[axis].border_min = border_min;
-    state->axes[axis].border_max = border_max;
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, axis, IVP_CAXIS_FIXED, IVP_REAL(0.0), IVP_REAL(0.0));
 }
 
-void ivp_constraint_local_fix_rotation(ivp_constraint_local_state_t *state,
-                                       int axis)
+void ivp_constraint_local_free_translation(ivp_constraint_local_state_t *state, int axis)
 {
-    if (axis >= 0 && axis < 3)
-        state->axes[3 + axis].mode = IVP_CAXIS_FIXED;
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, axis, IVP_CAXIS_FREE, IVP_REAL(0.0), IVP_REAL(0.0));
 }
 
-void ivp_constraint_local_free_rotation(ivp_constraint_local_state_t *state,
-                                        int axis)
+void ivp_constraint_local_limit_translation(ivp_constraint_local_state_t *state, int axis,
+                                            ivp_real_t border_min, ivp_real_t border_max)
 {
-    if (axis >= 0 && axis < 3)
-        state->axes[3 + axis].mode = IVP_CAXIS_FREE;
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, axis, IVP_CAXIS_LIMITED, border_min, border_max);
 }
 
-void ivp_constraint_local_limit_rotation(ivp_constraint_local_state_t *state,
-                                         int axis,
-                                         ivp_real_t min_rad,
-                                         ivp_real_t max_rad)
+void ivp_constraint_local_fix_rotation(ivp_constraint_local_state_t *state, int axis)
 {
-    if (axis < 0 || axis >= 3) return;
-    state->axes[3 + axis].mode       = IVP_CAXIS_LIMITED;
-    state->axes[3 + axis].border_min = min_rad;
-    state->axes[3 + axis].border_max = max_rad;
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, 3 + axis, IVP_CAXIS_FIXED, IVP_REAL(0.0), IVP_REAL(0.0));
+}
+
+void ivp_constraint_local_free_rotation(ivp_constraint_local_state_t *state, int axis)
+{
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, 3 + axis, IVP_CAXIS_FREE, IVP_REAL(0.0), IVP_REAL(0.0));
+}
+
+void ivp_constraint_local_limit_rotation(ivp_constraint_local_state_t *state, int axis,
+                                         ivp_real_t min_rad, ivp_real_t max_rad)
+{
+    if (axis < 0 || axis > 2) return;
+    set_axis(state, 3 + axis, IVP_CAXIS_LIMITED, min_rad, max_rad);
 }
 
 void ivp_constraint_local_set_max_impulse(ivp_constraint_local_state_t *state,
@@ -115,239 +135,14 @@ void ivp_constraint_local_set_max_impulse(ivp_constraint_local_state_t *state,
     if (axis_index < 0 || axis_index >= 6) return;
     state->axes[axis_index].max_impulse = max_impulse;
     state->axes[axis_index].exceed_mode = mode;
-}
-
-/* ── Helpers ───────────────────────────────────────────────────────────── */
-
-/* Get a reference-frame axis direction in world space.
- * axis_idx: 0=X, 1=Y, 2=Z of the reference object's frame. */
-static void get_ref_axis_ws(const ivp_constraint_local_state_t *state,
-                            int axis_idx,
-                            ivp_vec3r_t *out)
-{
-    ivp_vec3r_t local = {.k = {0, 0, 0}};
-    local.k[axis_idx] = IVP_REAL(1.0);
-
-    if (state->obj_a) {
-        ivp_mat3r_vmult(out, &state->obj_a->core.m_world_f_core_last_psi.rot, &local);
-    } else {
-        *out = local;
-    }
-}
-
-/* Compute relative orientation error as a 3-vector (axis-angle approx).
- * Uses the same approach as the fixed constraint: q_err = inv(q_ref) * q_rel */
-static void compute_orientation_error(const ivp_constraint_local_state_t *state,
-                                      ivp_vec3r_t *error_out)
-{
-    ivp_quatr_t q_a, q_b;
-    if (state->obj_a)
-        q_a = state->obj_a->core.q_world_f_core_last_psi;
-    else
-        q_a = ivp_quatr_identity();
-    q_b = state->obj_b->core.q_world_f_core_last_psi;
-
-    /* q_rel = inv(q_a) * q_b */
-    ivp_quatr_t q_a_inv = {-q_a.x, -q_a.y, -q_a.z, q_a.w};
-    ivp_quatr_t q_rel;
-    ivp_quat_mult(&q_rel, &q_a_inv, &q_b);
-
-    /* q_ref = inv(ref_q_a) * ref_q_b */
-    ivp_quatr_t ref_a_inv = {-state->ref_q_a.x, -state->ref_q_a.y,
-                              -state->ref_q_a.z,  state->ref_q_a.w};
-    ivp_quatr_t q_ref;
-    ivp_quat_mult(&q_ref, &ref_a_inv, &state->ref_q_b);
-
-    /* q_err = inv(q_ref) * q_rel */
-    ivp_quatr_t q_ref_inv = {-q_ref.x, -q_ref.y, -q_ref.z, q_ref.w};
-    ivp_quatr_t q_err;
-    ivp_quat_mult(&q_err, &q_ref_inv, &q_rel);
-
-    /* axis-angle ≈ 2 * vec(q_err), ensure shortest path */
-    ivp_real_t sign = (q_err.w < IVP_REAL(0.0)) ? IVP_REAL(-2.0) : IVP_REAL(2.0);
-    error_out->k[0] = q_err.x * sign;
-    error_out->k[1] = q_err.y * sign;
-    error_out->k[2] = q_err.z * sign;
-}
-
-/* Compute angular inverse virtual mass on a world-space axis */
-static ivp_real_t angular_inv_vm(const ivp_core_t *ca, const ivp_core_t *cb,
-                                 const ivp_vec3r_t *axis_ws)
-{
-    return ivp_controller_compute_angular_inv_vm(ca, cb, axis_ws);
-}
-
-/* Compute positional inverse virtual mass along a direction */
-static ivp_real_t positional_inv_vm(const ivp_core_t *ca,
-                                    const ivp_vec3r_t *r_a_ws,
-                                    const ivp_core_t *cb,
-                                    const ivp_vec3r_t *r_b_ws,
-                                    const ivp_vec3r_t *dir)
-{
-    return ivp_controller_compute_positional_inv_vm(ca, r_a_ws, cb, r_b_ws, dir);
-}
-
-/* Apply positional impulse along a direction */
-static void apply_pos_impulse(ivp_core_t *ca, const ivp_vec3r_t *r_a_ws,
-                              ivp_core_t *cb, const ivp_vec3r_t *r_b_ws,
-                              const ivp_vec3r_t *dir, ivp_real_t impulse)
-{
-    ivp_controller_apply_positional_impulse(ca, r_a_ws, cb, r_b_ws, dir, impulse);
-}
-
-/* Apply angular impulse along a world-space axis */
-static void apply_angular_impulse(ivp_core_t *ca, ivp_core_t *cb,
-                                  const ivp_vec3r_t *axis_ws,
-                                  ivp_real_t impulse)
-{
-    ivp_controller_apply_angular_impulse(ca, cb, axis_ws, impulse);
-}
-
-/* Clamp impulse per axis config. Returns false if constraint should break. */
-static bool clamp_impulse(const ivp_constraint_axis_config_t *cfg,
-                          ivp_real_t *impulse)
-{
-    if (cfg->exceed_mode == IVP_CFORCE_NONE) return true;
-
-    ivp_real_t mag = ivp_fabs(*impulse);
-    if (mag <= cfg->max_impulse) return true;
-
-    switch (cfg->exceed_mode) {
-    case IVP_CFORCE_CLIP:
-        *impulse = (*impulse > IVP_REAL(0.0))
-                 ? cfg->max_impulse
-                 : -cfg->max_impulse;
-        return true;
-    case IVP_CFORCE_BREAK:
-        return false;
-    case IVP_CFORCE_BEND: {
-        /* Squared ratio: softer than CLIP.
-         * At 2x overshoot, CLIP gives 50% but BEND gives 25%. */
-        ivp_real_t ratio = cfg->max_impulse / mag;
-        ivp_real_t scale = ratio * ratio;
-        *impulse *= scale;
-        return true;
-    }
-    default:
-        return true;
-    }
-}
-
-/* ── Solve one iteration ───────────────────────────────────────────────── */
-
-static bool solve_one_iteration(ivp_constraint_local_state_t *state,
-                                ivp_real_t dt)
-{
-    if (dt <= IVP_REAL_EPS) return true;
-
-    ivp_core_t *ca = state->obj_a ? &state->obj_a->core : NULL;
-    ivp_core_t *cb = &state->obj_b->core;
-
-    /* ── Translation axes ──────────────────────────────────────────────── */
-    {
-        ivp_vec3r_t pos_a_ws, pos_b_ws;
-        ivp_controller_get_anchor_ws(state->obj_a, &state->anchor_a_os, &pos_a_ws);
-        ivp_controller_get_anchor_ws(state->obj_b, &state->anchor_b_os, &pos_b_ws);
-
-        /* Position error in world space */
-        ivp_vec3r_t error_ws;
-        ivp_vec3r_sub(&error_ws, &pos_b_ws, &pos_a_ws);
-
-        /* Offset from CoM */
-        ivp_vec3r_t r_a_ws, r_b_ws;
-        if (state->obj_a)
-            ivp_vec3r_sub(&r_a_ws, &pos_a_ws, &state->obj_a->core.pos_world_f_core_last_psi);
-        else
-            ivp_vec3r_set_zero(&r_a_ws);
-        ivp_vec3r_sub(&r_b_ws, &pos_b_ws, &state->obj_b->core.pos_world_f_core_last_psi);
-
-        /* Project error onto each reference axis */
-        for (int a = 0; a < 3; a++) {
-            const ivp_constraint_axis_config_t *cfg = &state->axes[a];
-            if (cfg->mode == IVP_CAXIS_FREE) continue;
-
-            ivp_vec3r_t axis_ws;
-            get_ref_axis_ws(state, a, &axis_ws);
-
-            ivp_real_t err = ivp_vec3r_dot(&error_ws, &axis_ws);
-
-            /* For LIMITED mode, only constrain when outside borders */
-            if (cfg->mode == IVP_CAXIS_LIMITED) {
-                if (err >= cfg->border_min && err <= cfg->border_max) {
-                    continue;  /* within range, no constraint */
-                }
-                if (err < cfg->border_min) err = err - cfg->border_min;
-                else                       err = err - cfg->border_max;
-            }
-
-            if (ivp_fabs(err) < IVP_REAL_EPS) continue;
-
-            ivp_real_t inv_vm = positional_inv_vm(ca, &r_a_ws, cb, &r_b_ws, &axis_ws);
-            if (inv_vm < IVP_REAL_EPS) continue;
-
-            /* Baumgarte bias */
-            ivp_real_t bias = state->tau / dt * err;
-
-            /* Relative velocity on this axis */
-            ivp_real_t rel_vel = IVP_REAL(0.0);
-            if (ca) rel_vel -= ivp_vec3r_dot(&ca->speed, &axis_ws);
-            rel_vel += ivp_vec3r_dot(&cb->speed, &axis_ws);
-
-            ivp_real_t impulse = (-rel_vel * state->damping - bias) / inv_vm;
-
-            if (!clamp_impulse(cfg, &impulse)) return false; /* BREAK */
-
-            apply_pos_impulse(ca, &r_a_ws, cb, &r_b_ws, &axis_ws, impulse);
-            state->accumulated_impulse[a] += ivp_fabs(impulse);
-        }
-    }
-
-    /* ── Rotation axes ─────────────────────────────────────────────────── */
-    {
-        ivp_vec3r_t rot_error;
-        compute_orientation_error(state, &rot_error);
-
-        for (int a = 0; a < 3; a++) {
-            const ivp_constraint_axis_config_t *cfg = &state->axes[3 + a];
-            if (cfg->mode == IVP_CAXIS_FREE) continue;
-
-            ivp_vec3r_t axis_ws;
-            get_ref_axis_ws(state, a, &axis_ws);
-
-            /* Project rotation error onto this axis */
-            ivp_real_t err = ivp_vec3r_dot(&rot_error, &axis_ws);
-
-            /* For LIMITED mode, only constrain outside borders */
-            if (cfg->mode == IVP_CAXIS_LIMITED) {
-                if (err >= cfg->border_min && err <= cfg->border_max) {
-                    continue;
-                }
-                if (err < cfg->border_min) err = err - cfg->border_min;
-                else                       err = err - cfg->border_max;
-            }
-
-            if (ivp_fabs(err) < IVP_REAL_EPS) continue;
-
-            ivp_real_t inv_vm = angular_inv_vm(ca, cb, &axis_ws);
-            if (inv_vm < IVP_REAL_EPS) continue;
-
-            ivp_real_t impulse = err * state->tau / inv_vm;
-
-            if (!clamp_impulse(cfg, &impulse)) return false; /* BREAK */
-
-            apply_angular_impulse(ca, cb, &axis_ws, impulse);
-            state->accumulated_impulse[3 + a] += ivp_fabs(impulse);
-        }
-    }
-
-    return true;
+    cl_wake(state);
 }
 
 /* ── Enable / Disable / Broken ─────────────────────────────────────────── */
 
-void ivp_constraint_local_set_active(ivp_constraint_local_state_t *state,
-                                      bool active)
+void ivp_constraint_local_set_active(ivp_constraint_local_state_t *state, bool active)
 {
+    if (active && !state->active) cl_wake(state);  /* reference activate() */
     state->active = active;
 }
 
@@ -361,12 +156,13 @@ bool ivp_constraint_local_is_broken(const ivp_constraint_local_state_t *state)
     return state->broken;
 }
 
-void ivp_constraint_local_reset_broken(ivp_constraint_local_state_t *state,
-                                        bool reactivate)
+void ivp_constraint_local_reset_broken(ivp_constraint_local_state_t *state, bool reactivate)
 {
     state->broken = false;
+    state->core.broken = false;
     if (reactivate) {
         state->active = true;
+        cl_wake(state);
     }
 }
 
@@ -378,49 +174,94 @@ void ivp_constraint_local_rebind_anchors(ivp_constraint_local_state_t *state,
 {
     state->anchor_a_os = *anchor_a_os;
     state->anchor_b_os = *anchor_b_os;
+    /* reference change_fixing_point_Ros + attached anchor: the frame axes
+     * keep following the pose recorded in the core */
+    ivp_cmatrix_t afs = state->core.m_Afs_f_Acs;
+    rebuild_core(state);
+    /* keep the attached orientation of the previous binding */
+    double v[3] = { (double)anchor_b_os->k[0], (double)anchor_b_os->k[1], (double)anchor_b_os->k[2] };
+    for (int i = 0; i < 3; i++) {
+        state->core.m_Afs_f_Acs.rows[i][0] = afs.rows[i][0];
+        state->core.m_Afs_f_Acs.rows[i][1] = afs.rows[i][1];
+        state->core.m_Afs_f_Acs.rows[i][2] = afs.rows[i][2];
+    }
+    for (int i = 0; i < 3; i++) {
+        state->core.m_Afs_f_Acs.vv[i] = -(afs.rows[i][0] * v[0] + afs.rows[i][1] * v[1] +
+                                          afs.rows[i][2] * v[2]);
+    }
+    cl_wake(state);
 }
 
 void ivp_constraint_local_rebind_reference(ivp_constraint_local_state_t *state)
 {
-    if (state->obj_a)
-        state->ref_q_a = state->obj_a->core.q_world_f_core_last_psi;
-    else
-        state->ref_q_a = ivp_quatr_identity();
+    state->ref_q_a = state->obj_a ? state->obj_a->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
+    state->ref_q_b = state->obj_b ? state->obj_b->physical_core->q_world_f_core_last_psi : ivp_quatr_identity();
+    rebuild_core(state);
+    cl_wake(state);
+}
 
-    if (state->obj_b)
-        state->ref_q_b = state->obj_b->core.q_world_f_core_last_psi;
-    else
-        state->ref_q_b = ivp_quatr_identity();
+void ivp_constraint_local_relax_attached(ivp_constraint_local_state_t *state)
+{
+    ivp_constraint_local_core_relax_attached(&state->core);
+}
+
+int ivp_constraint_local_discovery(void *ctx, ivp_environment_t *env,
+                                   ivp_object_handle_t *out_handles, int max_handles)
+{
+    (void)env;
+    const ivp_constraint_local_state_t *s = (const ivp_constraint_local_state_t *)ctx;
+    if (!s) return 0;
+    ivp_object_t *objs[2] = { s->obj_a, s->obj_b };
+    return ivp_controller_discover_objects(objs, 2, out_handles, max_handles);
 }
 
 /* ── Controller callback ───────────────────────────────────────────────── */
+
+static void sync_core(ivp_constraint_local_state_t *state)
+{
+    ivp_constraint_local_core_t *c = &state->core;
+    ivp_constraint_local_core_set_factors(c, state->tau, state->damping);
+    c->limited_axis_stiffness = state->limited_axis_stiffness;
+    c->use_maxforce = false;
+    for (int i = 0; i < 6; i++) {
+        const ivp_constraint_axis_config_t *cfg = &state->axes[i];
+        c->fixed[i] = (int)cfg->mode; /* FIXED bit of limited axes is recomputed per PSI */
+        c->borderleft_Rfs[i] = cfg->border_min;
+        c->borderright_Rfs[i] = cfg->border_max;
+        c->halfimpulse[i] = cfg->max_impulse;
+        c->maxforce_type[i] = cfg->exceed_mode;
+        if (cfg->exceed_mode != IVP_CFE_NONE) c->use_maxforce = true;
+    }
+    ivp_constraint_local_core_sort_mappings(c);
+}
 
 void ivp_controller_constraint_local(const ivp_event_sim_t *event_sim,
                                      ivp_object_t *obj,
                                      void *ctx)
 {
-    const ivp_real_t dt = event_sim->delta_time;
     ivp_constraint_local_state_t *state = (ivp_constraint_local_state_t *)ctx;
     if (!state || !state->active || state->broken) return;
 
-    /* Only execute on the first dynamic body */
-    ivp_object_t *exec_obj = NULL;
-    if (state->obj_a && !state->obj_a->core.physical_unmoveable) {
-        exec_obj = state->obj_a;
-    } else if (state->obj_b && !state->obj_b->core.physical_unmoveable) {
-        exec_obj = state->obj_b;
+    ivp_object_t *ends[2] = { state->obj_a, state->obj_b };
+    if (obj != ivp_controller_pick_exec_object(ends, 2)) return;
+
+    sync_core(state);
+    state->core.enabled = true;
+    bool broke = ivp_constraint_local_core_simulate(&state->core, event_sim);
+    for (int i = 0; i < 6; i++) {
+        state->accumulated_impulse[i] = ivp_fabs(state->core.last_impulse[i]);
     }
-    if (!exec_obj || obj != exec_obj) return;
-
-    /* Clear accumulated impulses */
-    for (int i = 0; i < 6; i++)
-        state->accumulated_impulse[i] = IVP_REAL(0.0);
-
-    for (int iter = 0; iter < state->solver_iterations; iter++) {
-        if (!solve_one_iteration(state, dt)) {
-            state->broken = true;
-            state->active = false;
-            return;
+    if (broke) {
+        state->broken = true;
+        state->active = false;
+        if (event_sim->environment) {
+            extern void ivp_environment_emit_event_internal(
+                struct ivp_environment *env, ivp_event_type_t type, ivp_real_t dt,
+                int object_index, int controller_id);
+            ivp_environment_emit_event_internal(event_sim->environment,
+                                                IVP_EVENT_CONSTRAINT_BROKEN,
+                                                event_sim->delta_time,
+                                                obj->dense_index, 0);
         }
     }
 }

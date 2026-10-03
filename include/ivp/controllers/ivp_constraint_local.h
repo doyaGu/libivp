@@ -7,9 +7,10 @@
  *   - LIMITED: free within min/max borders, hard-stops at limits
  *   - FREE:    unconstrained
  *
- * The constraint operates in local reference frames attached to each
- * object. Force limits (max impulse per step) can be set per axis,
- * with configurable behavior on exceed (clip, break, or bend).
+ * Solved by the reference IVP_Constraint_Local algorithm
+ * (ivp_constraint_types.h): one dense Gauss solve per PSI, force_factor
+ * (tau, default 1.0) and damp_factor (damping, default 1.0), per-axis
+ * MaxImpulse with the reference CLIP / BREAK / BEND semantics.
  *
  * Ported from ivp_constraint_local.hxx.
  */
@@ -20,27 +21,26 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
 #include <ivp/controllers/ivp_controller.h>
+#include <ivp/controllers/ivp_constraint_types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── Per-axis constraint mode ──────────────────────────────────────────── */
+/* ── Per-axis constraint mode (reference IVP_CONSTRAINT_AXIS_TYPE values) ─ */
 
 typedef enum ivp_constraint_axis_mode {
-    IVP_CAXIS_FREE    = 0,  /* unconstrained                    */
-    IVP_CAXIS_FIXED   = 1,  /* locked to reference value        */
-    IVP_CAXIS_LIMITED = 2   /* free within [min, max] borders   */
+    IVP_CAXIS_FREE    = IVP_CONSTRAINT_AXIS_FREE,     /* unconstrained */
+    IVP_CAXIS_FIXED   = IVP_CONSTRAINT_AXIS_FIXED,    /* locked to reference value */
+    IVP_CAXIS_LIMITED = IVP_CONSTRAINT_AXIS_LIMITED   /* free within [min, max] */
 } ivp_constraint_axis_mode_t;
 
-/* ── Force exceed behavior ─────────────────────────────────────────────── */
-
-typedef enum ivp_constraint_force_exceed {
-    IVP_CFORCE_CLIP  = 0,  /* clamp impulse to limit            */
-    IVP_CFORCE_BREAK = 1,  /* deactivate constraint if exceeded */
-    IVP_CFORCE_NONE  = 2,  /* no limit                          */
-    IVP_CFORCE_BEND  = 3   /* soft clamp: squared ratio falloff  */
-} ivp_constraint_force_exceed_t;
+/* Force exceed behaviour: aliases of the unified reference enum
+ * ivp_constraint_force_exceed_t (NONE, CLIP, BREAK, BEND). */
+#define IVP_CFORCE_NONE  IVP_CFE_NONE
+#define IVP_CFORCE_CLIP  IVP_CFE_CLIP
+#define IVP_CFORCE_BREAK IVP_CFE_BREAK
+#define IVP_CFORCE_BEND  IVP_CFE_BEND
 
 /* ── Per-axis configuration ────────────────────────────────────────────── */
 
@@ -48,7 +48,7 @@ typedef struct ivp_constraint_axis_config {
     ivp_constraint_axis_mode_t     mode;
     ivp_real_t                     border_min;     /* for LIMITED mode */
     ivp_real_t                     border_max;     /* for LIMITED mode */
-    ivp_real_t                     max_impulse;    /* per-step impulse limit */
+    ivp_real_t                     max_impulse;    /* reference maximpulse (impulse per PSI) */
     ivp_constraint_force_exceed_t  exceed_mode;
 } ivp_constraint_axis_config_t;
 
@@ -67,18 +67,24 @@ typedef struct ivp_constraint_local_state {
     ivp_quatr_t   ref_q_a;
     ivp_quatr_t   ref_q_b;
 
-    /* Per-axis config: indices 0-2 = translation X/Y/Z, 3-5 = rotation X/Y/Z */
+    /* Per-axis config: indices 0-2 = translation X/Y/Z, 3-5 = rotation X/Y/Z
+     * (axes of the reference object's frame) */
     ivp_constraint_axis_config_t axes[6];
 
     /* Solver parameters */
-    ivp_real_t    tau;              /* Baumgarte stabilization (0.1-0.3) */
-    ivp_real_t    damping;          /* velocity damping (0-1) */
-    int           solver_iterations;
+    ivp_real_t    tau;              /* reference force_factor (default 1.0) */
+    ivp_real_t    damping;          /* reference damp_factor (default 1.0) */
+    ivp_real_t    limited_axis_stiffness; /* reference default 0.3 */
+    int           solver_iterations; /* unused (one dense solve per PSI) */
 
     /* Runtime state */
     bool          active;
     bool          broken;           /* set when BREAK threshold exceeded */
-    ivp_real_t    accumulated_impulse[6]; /* debug: per-axis impulse this step */
+    ivp_real_t    accumulated_impulse[6]; /* per-axis |impulse| of the last PSI */
+
+    /* Reference solver */
+    ivp_constraint_template_t    tmpl;
+    ivp_constraint_local_core_t  core;
 } ivp_constraint_local_state_t;
 
 /* ── Initialization ────────────────────────────────────────────────────── */
@@ -152,6 +158,14 @@ void ivp_constraint_local_rebind_anchors(ivp_constraint_local_state_t *state,
 
 /* Re-record current object orientations as the reference (zero-error) pose. */
 void ivp_constraint_local_rebind_reference(ivp_constraint_local_state_t *state);
+
+/* Reference change_Aos_to_relaxe_constraint: the attached frame (anchor and
+ * axes) is moved to coincide with the reference frame at the current pose. */
+void ivp_constraint_local_relax_attached(ivp_constraint_local_state_t *state);
+
+/* Discovery function for ivp_environment_announce_dependent_controller(). */
+int ivp_constraint_local_discovery(void *ctx, ivp_environment_t *env,
+                                   ivp_object_handle_t *out_handles, int max_handles);
 
 /* ── Controller callback ───────────────────────────────────────────────── */
 
