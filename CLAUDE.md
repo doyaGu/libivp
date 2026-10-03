@@ -61,7 +61,7 @@ The library is structured into independent modules, each with a matching `src/<m
 
 ### Third-Party Dependencies
 
-- **qhull 2.6** (`deps/qhull_ivp/`): the reference engine's own qhull converted to C (global state, not reentrant: the convex builders are not thread safe). Compiled as `ivp_qhull_ivp` with strict FP; it reproduces the reference facet order, which the ledge layout depends on. Its error output goes to stderr and through `ivp_message`, as in the reference. The old `deps/qhull` submodule (qhull 2020) is no longer built.
+- **qhull 2.6** (`deps/qhull/`, Geometry Center 1999): the qhull version the reference compiles (`ivp_compact_builder/qhull*.cxx`), as C17 (global state, not reentrant: the convex builders are not thread safe). Compiled as `ivp_qhull` with strict FP; it reproduces the reference facet order, which the ledge layout depends on. Its error output goes to stderr and through `ivp_message`, as in the reference.
 - **SDL3**: Fetched via CMake FetchContent when not system-installed. Only needed for examples/render.
 
 ### Simulation Loop (PSI)
@@ -115,7 +115,7 @@ Examples built on `examples/demo_app.h` support a headless self-check: `example_
 
 ### Floating-Point Discipline
 
-All `ivp`, `ivp_qhull_ivp` and `test_scenarios` targets compile with strict FP flags (`-ffp-contract=off -fno-fast-math -frounding-math` / `/fp:strict /Oi-` on MSVC). The render module and examples relax these flags. Do not use fast-math or FMA contractions in library code.
+All `ivp`, `ivp_qhull` and `test_scenarios` targets compile with strict FP flags (`-ffp-contract=off -fno-fast-math -frounding-math` / `/fp:strict /Oi-` on MSVC). The render module and examples relax these flags. Do not use fast-math or FMA contractions in library code.
 
 ## Reference Documentation
 
