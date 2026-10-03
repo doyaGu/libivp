@@ -12,6 +12,11 @@ void ivp_set_assert_handler(ivp_assert_handler_t handler, void *userdata) {
     s_userdata = userdata;
 }
 
+void ivp_assert_report(const char *expr, const char *file, int line,
+                       const char *func) {
+    if (s_handler) s_handler(expr, file, line, func, NULL, s_userdata);
+}
+
 bool ivp_assert_fail(const char *expr, const char *file, int line,
                      const char *func, const char *msg) {
     if (s_handler) {

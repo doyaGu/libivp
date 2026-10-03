@@ -78,6 +78,10 @@ void ivp_free_aligned(const ivp_allocator_t *a, void *ptr) {
 
     ivp_aligned_header_t *hdr = ((ivp_aligned_header_t *)ptr) - 1;
     IVP_ASSERT(hdr->magic == IVP_ALIGNED_MAGIC);
+    IVP_IF(1) /* ivu_memory.cxx:186 */
+    {
+        hdr->magic = 0;
+    }
 
     char *raw = (char *)ptr - hdr->offset;
     a->free(raw, hdr->total_size, a->ctx);
