@@ -1,0 +1,122 @@
+{
+    "description": "Per-scenario validation thresholds for compare_jsonl.py",
+    "defaults": {
+        "pos_eps": 1e-3,
+        "orient_eps": 1e-3,
+        "vel_eps": 1e-2,
+        "angvel_eps": 1e-2,
+        "energy_eps": 0.1,
+        "energy_rel_eps": 0.01,
+        "time_eps": 1e-9
+    },
+    "scenarios": {
+        "freefall": {
+            "pos_eps": 1e-6,
+            "orient_eps": 1e-9,
+            "vel_eps": 1e-4,
+            "angvel_eps": 1e-9,
+            "energy_eps": 1e-3,
+            "energy_rel_eps": 1e-4
+        },
+        "two_balls": {
+            "pos_eps": 1e-3,
+            "orient_eps": 1e-3,
+            "vel_eps": 1e-2,
+            "energy_eps": 0.1
+        },
+        "slope_friction": {
+            "pos_eps": 1e-3,
+            "orient_eps": 1e-2,
+            "vel_eps": 5e-2,
+            "angvel_eps": 5e-2,
+            "energy_eps": 0.5,
+            "energy_rel_eps": 0.05
+        },
+        "springs": {
+            "pos_eps": 5e-3,
+            "orient_eps": 5e-3,
+            "vel_eps": 5e-2,
+            "angvel_eps": 5e-2,
+            "energy_eps": 1.0,
+            "energy_rel_eps": 0.05
+        },
+        "rope": {
+            "pos_eps": 5e-3,
+            "orient_eps": 5e-3,
+            "vel_eps": 5e-2,
+            "angvel_eps": 5e-2,
+            "energy_eps": 1.0,
+            "energy_rel_eps": 0.05
+        },
+        "motor": {
+            "pos_eps": 1e-2,
+            "orient_eps": 1e-2,
+            "vel_eps": 0.1,
+            "angvel_eps": 0.1,
+            "energy_eps": 5.0,
+            "energy_rel_eps": 0.1
+        },
+        "buoyancy": {
+            "pos_eps": 5e-3,
+            "orient_eps": 5e-3,
+            "vel_eps": 5e-2,
+            "angvel_eps": 5e-2,
+            "energy_eps": 1.0,
+            "energy_rel_eps": 0.05
+        },
+        "cubes": {
+            "pos_eps": 1e-2,
+            "orient_eps": 1e-2,
+            "vel_eps": 0.1,
+            "angvel_eps": 0.1,
+            "energy_eps": 5.0,
+            "energy_rel_eps": 0.1
+        },
+        "force_actuator": {
+            "pos_eps": 1e-3,
+            "orient_eps": 1e-3,
+            "vel_eps": 1e-2,
+            "energy_eps": 0.1
+        },
+        "forcefield": {
+            "pos_eps": 1e-3,
+            "orient_eps": 1e-3,
+            "vel_eps": 1e-2,
+            "energy_eps": 0.1
+        },
+        "stiff_spring": {
+            "pos_eps": 5e-3,
+            "orient_eps": 5e-3,
+            "vel_eps": 5e-2,
+            "energy_eps": 1.0
+        },
+        "check_distance": {
+            "pos_eps": 1e-3,
+            "vel_eps": 1e-3,
+            "energy_eps": 0.01
+        },
+        "collision_filter": {
+            "pos_eps": 1e-4,
+            "vel_eps": 1e-4,
+            "energy_eps": 0.01
+        },
+        "motion_controller": {
+            "pos_eps": 1e-3,
+            "vel_eps": 1e-2,
+            "energy_eps": 0.1
+        },
+        "phantom": {
+            "pos_eps": 1e-3,
+            "vel_eps": 1e-2,
+            "energy_eps": 0.1
+        },
+        "vehicle": {
+            "pos_eps": 1e-2,
+            "orient_eps": 1e-2,
+            "vel_eps": 0.1,
+            "angvel_eps": 0.1,
+            "energy_eps": 5.0,
+            "energy_rel_eps": 0.1
+        }
+    }
+}

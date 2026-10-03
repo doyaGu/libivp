@@ -1,40 +1,39 @@
 #!/bin/bash
-# Regenerate all golden references, scenario outputs, and baselines.
+# Regenerate libivp scenario outputs and the drift baselines
+# (tools/baselines/<scenario>.json = compare_jsonl metrics of libivp against
+# the legacy reference).  The references themselves
+# (tools/testdata/ref_<scenario>.jsonl) come from the legacy C++ engine:
+# regenerate them with tools/regen_reference.sh, never from libivp.
+#
+#   tools/regen_baselines.sh [build dir with test_scenarios]   (default: build)
 set -e
 cd "$(dirname "$0")/.."
+BUILD="${1:-build}"
 
-DT60="0.016666666666666666"
-DT180="0.005555555555555556"
+SCENARIOS=$(grep -v '^#' tools/scenarios.txt | awk 'NF {print $1}')
 
-SCENARIOS_60="freefall two_balls slope_friction"
-SCENARIOS_180="springs rope motor buoyancy cubes force_actuator forcefield stiff_spring check_distance collision_filter motion_controller phantom vehicle"
-
-mkdir -p build/scenario_output
-
-echo "=== Generating golden references ==="
-for s in $SCENARIOS_60; do
-  ./build/test_scenarios --scenario $s --steps 240 --dt $DT60 --output tools/testdata/ref_${s}.jsonl
-done
-for s in $SCENARIOS_180; do
-  ./build/test_scenarios --scenario $s --steps 480 --dt $DT180 --output tools/testdata/ref_${s}.jsonl
+mkdir -p "$BUILD/scenario_output" tools/baselines
+for s in $SCENARIOS; do
+  if [ ! -f "tools/testdata/ref_${s}.jsonl" ]; then
+    echo "missing tools/testdata/ref_${s}.jsonl: run tools/regen_reference.sh first" >&2
+    exit 1
+  fi
 done
 
 echo "=== Generating scenario outputs ==="
-for s in $SCENARIOS_60; do
-  ./build/test_scenarios --scenario $s --steps 240 --dt $DT60 --output build/scenario_output/${s}.jsonl
-done
-for s in $SCENARIOS_180; do
-  ./build/test_scenarios --scenario $s --steps 480 --dt $DT180 --output build/scenario_output/${s}.jsonl
+grep -v '^#' tools/scenarios.txt | while read -r s dt steps; do
+  [ -n "$s" ] || continue
+  "$BUILD/test_scenarios" --scenario "$s" --steps "$steps" --dt "$dt" --output "$BUILD/scenario_output/${s}.jsonl"
 done
 
 echo "=== Generating baselines ==="
-for s in $SCENARIOS_60 $SCENARIOS_180; do
+for s in $SCENARIOS; do
   python3 tools/compare_jsonl.py \
     tools/testdata/ref_${s}.jsonl \
-    build/scenario_output/${s}.jsonl \
+    "$BUILD/scenario_output"/${s}.jsonl \
     --adaptive \
-    --save-metrics build/scenario_output/metrics_${s}.json 2>/dev/null
-  cp build/scenario_output/metrics_${s}.json tools/baselines/${s}.json
+    --save-metrics "$BUILD/scenario_output"/metrics_${s}.json > /dev/null 2>&1 || true
+  cp "$BUILD/scenario_output"/metrics_${s}.json tools/baselines/${s}.json
 done
 
 echo "=== Done ==="

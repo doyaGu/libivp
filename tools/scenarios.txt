@@ -1,0 +1,54 @@
+# Parity scenarios: <name> <dt> <steps>
+# Read by CMakeLists.txt (scenario tests), tools/regen_reference.sh and
+# tools/regen_baselines.sh.  Every name must exist in both tests/test_scenarios.c
+# and the reference runner (ivp/tools/ivp_reference_runner).
+freefall            0.016666666666666666 240
+two_balls           0.016666666666666666 240
+slope_friction      0.016666666666666666 240
+springs             0.005555555555555556 480
+rope                0.005555555555555556 480
+motor               0.005555555555555556 480
+buoyancy            0.005555555555555556 480
+cubes               0.005555555555555556 480
+force_actuator      0.005555555555555556 480
+forcefield          0.005555555555555556 480
+stiff_spring        0.005555555555555556 480
+check_distance      0.005555555555555556 480
+collision_filter    0.005555555555555556 480
+motion_controller   0.005555555555555556 480
+phantom             0.005555555555555556 480
+vehicle             0.005555555555555556 480
+car_real_wheels     0.005555555555555556 720
+# geometry / collision
+concave_static      0.005555555555555556 480
+compound_dynamic    0.005555555555555556 480
+convex_hulls        0.005555555555555556 480
+grid_terrain        0.005555555555555556 480
+hull_pile           0.005555555555555556 720
+galton              0.005555555555555556 720
+fast_impacts        0.005555555555555556 480
+spawn_remove        0.005555555555555556 720
+long_range          0.016666666666666666 600
+# controllers
+torque              0.005555555555555556 480
+stabilizer          0.005555555555555556 480
+floating            0.005555555555555556 480
+world_friction      0.005555555555555556 480
+golem               0.005555555555555556 480
+fixed_keyed         0.005555555555555556 480
+hinge_limits        0.005555555555555556 480
+cardan_tense        0.005555555555555556 480
+slider_limits       0.005555555555555556 480
+constraint_break    0.005555555555555556 480
+attacher            0.005555555555555556 480
+actuator_extra      0.005555555555555556 480
+airboat             0.005555555555555556 720
+fake_jetski         0.005555555555555556 720
+raycast_car_drive   0.005555555555555556 720
+check_dist_events   0.005555555555555556 720
+golem_beam          0.005555555555555556 720
+universe_evict      0.005555555555555556 480
+# shared cores (merge_objects, IVP_Object_Attach, buoyancy of merged cores)
+merge_objects       0.005555555555555556 720
+object_attach       0.005555555555555556 720
+merge_buoyancy      0.005555555555555556 720
