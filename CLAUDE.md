@@ -6,6 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `libivp` is a C17 reimplementation of the IVP (Ipion Virtual Physics) engine, originally written in C++ by Ipion Software GmbH (1999–2000). It is a rigid-body physics simulation library with continuous collision detection, impulse-based constraint solving, and a rich controller/actuator system.
 
+## Setup on a New Machine
+
+The library, its unit tests and the examples need only this repository (CMake ≥ 3.20, a C17 compiler; the examples fetch SDL3). The parity workflow also needs the reference engine with the reference runner, checked out next to this repository:
+
+```bash
+git clone https://github.com/doyaGu/libivp.git
+git clone -b libivp-parity-runner https://github.com/doyaGu/ivp.git   # -> ../ivp, needs a C++17 compiler
+cd libivp
+tools/regen_reference.sh          # builds the strict reference, writes tools/testdata/ref_*.jsonl (gitignored)
+tools/parity/check.sh             # release + debug parity, expects "PARITY OK"
+```
+
+`IVP_REF_SRC=/path/to/ivp` overrides the `../ivp` default. Without the reference JSONL the parity tests skip. Bit-exact parity is verified on macOS arm64; other platforms' libm may differ.
+
+## Commit Conventions
+
+- Subject `area: lowercase imperative summary`, at most 72 characters, no trailing period. `area` is the module (`base`, `math`, `containers`, `geometry`, `builder`, `collision`, `solver`, `dynamics`, `events`, `utility`, `diagnostics`, `controllers`, `render`) or `engine` (several modules), `deps`, `build`, `tests`, `examples`, `tools`, `docs`. In the ivp repository the runner uses `[ivp_reference_runner] Summary`, following that repository's style.
+- Body: prose or a list wrapped at 72 columns, explaining what and why.
+- Fine-grained commits, one module or topic each. Author `doyaGu <10153309+doyaGu@users.noreply.github.com>`. No AI attribution lines (no `Co-Authored-By`, no "Generated with").
+- Run `tools/parity/check.sh` before committing engine changes; any deviation from the reference is a bug unless it is listed as deliberate in `docs/PARITY_GAP_INVENTORY.md`.
+
 ## Build Commands
 
 ```bash
