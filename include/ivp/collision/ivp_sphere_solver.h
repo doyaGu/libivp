@@ -3,8 +3,8 @@
  * Static spatial queries: does a query sphere overlap with the bounding
  * hierarchy of a compact surface?
  *
- * This is the object-level check. Environment-level broadphase queries
- * (checking against all objects) require the broadphase module.
+ * Object-level ledgetree checks plus the environment query
+ * (check_sphere_against_environment, an OV tree walk).
  *
  * Ported from ivp_sphere_solver.hxx / ivp_sphere_solver.cxx.
  */
@@ -66,6 +66,44 @@ bool ivp_sphere_overlaps_surface(
     const ivp_vec3r_t *center_os,
     ivp_real_t radius,
     int max_depth);
+
+/* ── Environment / object queries (IVP_Sphere_Solver) ──────────────────── */
+
+struct ivp_object;
+struct ivp_environment;
+
+/* IVP_Sphere_Solver_Template */
+typedef struct ivp_sphere_solver_template {
+    ivp_vec3r_t center;              /* world space */
+    ivp_real_t  radius;
+    int         max_traversal_depth; /* ledgetree depth used for culling */
+} ivp_sphere_solver_template_t;
+
+/* IVP_Sphere_Solver::check_sphere_against_object: query sphere (world
+ * space) against one object.  Polygons: the sphere is transformed into
+ * object space (object transform at the environment's current time) and
+ * tested against the ledgetree down to max_traversal_depth.  Balls: sphere
+ * vs. ball (core upper_limit_radius).  Note: like the reference
+ * (ivp_sphere_solver.cxx:93) the object space query center is compared
+ * with the ball's WORLD core position, so balls away from the world origin
+ * are usually not reported; kept for parity. */
+bool ivp_sphere_solver_check_object(const ivp_sphere_solver_template_t *tmpl,
+                                    const struct ivp_object *object);
+
+/* IVP_Sphere_Solver::check_sphere_against_environment: walks the
+ * environment's OV tree (recursively_collect_intruding_objects).  A node is
+ * entered when its cube overlaps the query sphere's bounding box; its
+ * objects (first to last) are reported when their core sphere (position at
+ * the last PSI, upper_limit_radius) overlaps the query sphere and they pass
+ * ivp_sphere_solver_check_object(); then the children are visited (first
+ * to last).  Objects without collision detection are not in the OV tree
+ * and are never reported; phantoms are reported like any other object.
+ * The output is in this traversal order.  Writes at most `capacity`
+ * objects and returns the total number of intruding objects. */
+int ivp_sphere_solver_check_environment(const ivp_sphere_solver_template_t *tmpl,
+                                        const struct ivp_environment *env,
+                                        struct ivp_object **intruding_objects,
+                                        int capacity);
 
 /* ── Sphere-sphere overlap ─────────────────────────────────────────────── */
 
