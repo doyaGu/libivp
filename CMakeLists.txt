@@ -666,6 +666,8 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_great_matrix_port tests/test_great_matrix_port.c)
     ivp_add_test(test_matrix_cache tests/test_matrix_cache.c)
     target_include_directories(test_matrix_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ivp_add_test(test_deferred_deletion tests/test_deferred_deletion.c)
+    target_include_directories(test_deferred_deletion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
 
     # P1 controller tests (stabilizer, suspension, constraint API)

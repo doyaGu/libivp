@@ -61,6 +61,8 @@ typedef struct ivp_env_pipeline {
 
     /* deferred object deletion (IVP_Real_Object::begin/end_deferred_deletion) */
     int                      deferred_deletion_depth;
+    bool                     deferred_deletion_draining;   /* end_deferred_deletion is deleting the queue */
+    struct ivp_object       *object_being_deleted;   /* its deletion is running */
     ivp_pvec_t               deferred_deletions;     /* ivp_object_t* */
 
     /* libivp controller slots attached to every core (run_for_all_cores) */

@@ -888,11 +888,19 @@ bool ivp_env_object_deletion_is_deferred(struct ivp_environment *env, const stru
 
 static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, bool check_vicinity);
 
+/* The queue stays deferred while it is drained (reference c90899a): a
+ * deletion callback that deletes another object appends it to the queue,
+ * and one that deletes the object being deleted is a no-op.  The state is
+ * per environment (the reference keeps it in process-wide statics). */
 void ivp_env_end_deferred_deletion(struct ivp_environment *env)
 {
     ivp_env_pipeline_t *pl = env->pl;
-    IVP_ASSERT(pl->deferred_deletion_depth > 0);
-    if (--pl->deferred_deletion_depth != 0) return;
+    if (pl->deferred_deletion_depth <= 0) {
+        IVP_ASSERT(pl->deferred_deletion_depth > 0);
+        return;
+    }
+    if (--pl->deferred_deletion_depth != 0 || pl->deferred_deletion_draining) return;
+    pl->deferred_deletion_draining = true;
     while (ivp_pvec_len(&pl->deferred_deletions) > 0) {
         ivp_object_t *object = (ivp_object_t *)ivp_pvec_at(&pl->deferred_deletions, 0);
         ivp_pvec_remove_at(&pl->deferred_deletions, 0);
@@ -901,6 +909,7 @@ void ivp_env_end_deferred_deletion(struct ivp_environment *env)
         object->check_vicinity_on_deferred_deletion = false;
         env_delete_object_now(env, object, check_vicinity);
     }
+    pl->deferred_deletion_draining = false;
 }
 
 /* phantom hooks: src/dynamics/ivp_phantom.c */
@@ -2128,6 +2137,8 @@ bool ivp_environment_discovery_reports_all_anchors(const ivp_environment_t *env)
 /* ~IVP_Real_Object (+ delete_and_check_vicinity when check_vicinity) */
 static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, bool check_vicinity)
 {
+    ivp_object_t *previous_being_deleted = env->pl->object_being_deleted;
+    env->pl->object_being_deleted = obj;
     if (check_vicinity) {
         ivp_core_t *my_core = obj->physical_core;   /* get_core() */
         if (!my_core->physical_unmoveable && my_core->sim_unit) ivp_sim_unit_ensure_in_simulation(my_core->sim_unit);
@@ -2167,6 +2178,7 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
     ivp_object_pipeline_destroy(env, obj);
     if (obj->parent_cluster) ivp_cluster_remove_child(obj->parent_cluster, obj); /* ~IVP_Object */
     IVP_ASSERT(obj->owner);   /* ~IVP_Object: environment */
+    env->pl->object_being_deleted = previous_being_deleted;
     if (obj == env->pl->static_object) {   /* not in the object system */
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
         return;
@@ -2180,7 +2192,10 @@ bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object
     ivp_object_t *obj = ivp_object_system_get_by_handle(env_object_system(env), handle);
     if (!obj) return false;
     ivp_env_pipeline_t *pl = env->pl;
-    if (pl->deferred_deletion_depth > 0) {
+    /* a deletion callback that deletes the object being deleted: the
+     * running deletion owns it */
+    if (obj == pl->object_being_deleted) return true;
+    if (pl->deferred_deletion_depth > 0 || pl->deferred_deletion_draining) {
         /* ivp_defer_object_deletion */
         if (!obj->object_deletion_deferred) {
             obj->object_deletion_deferred = true;
