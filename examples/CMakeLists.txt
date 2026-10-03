@@ -14,11 +14,41 @@ target_include_directories(ivp_example_inspect
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# ── Runtime files next to the example executables ───────────────────────────
+# The render shaders (and the SDL3 shared library, when SDL3 is built from
+# source / found as a shared target) are staged ONCE by this target.  Every
+# example depends on it.  (A POST_BUILD copy per example raced: with -j N
+# several examples copied into the same directory at the same time.)
+get_property(IVP_EXAMPLES_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (IVP_EXAMPLES_MULTI_CONFIG)
+    set(IVP_EXAMPLE_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>)
+else ()
+    set(IVP_EXAMPLE_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR})
+endif ()
+
+set(IVP_EXAMPLE_RUNTIME_COMMANDS
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${IVP_EXAMPLE_BIN_DIR}/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_BINARY_DIR}/shaders ${IVP_EXAMPLE_BIN_DIR}/shaders
+)
+if (TARGET SDL3::SDL3-shared)
+    list(APPEND IVP_EXAMPLE_RUNTIME_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL3::SDL3-shared> ${IVP_EXAMPLE_BIN_DIR}
+    )
+endif ()
+add_custom_target(ivp_example_runtime ALL
+    ${IVP_EXAMPLE_RUNTIME_COMMANDS}
+    COMMENT "Staging shaders / SDL3 next to the examples"
+    VERBATIM
+)
+add_dependencies(ivp_example_runtime ivp_render_shaders)
+
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
     add_executable(${NAME} ${SOURCE})
     target_link_libraries(${NAME} PRIVATE ivp_example_interaction ivp_example_inspect)
-    add_dependencies(${NAME} ivp_render_shaders)
+    add_dependencies(${NAME} ivp_example_runtime)
     if (UNIX AND NOT APPLE AND NOT MSVC)
         target_link_libraries(${NAME} PRIVATE m)
         # Apply floating-point strictness and relax example-specific warnings
@@ -32,26 +62,12 @@ function(ivp_add_example NAME SOURCE)
                 -Wno-conversion -Wno-double-promotion -Wno-sign-conversion
         )
     endif ()
-    # Copy SDL3 shared library next to the executable so it can be found at runtime.
-    if (TARGET SDL3::SDL3-shared)
-        add_custom_command(TARGET ${NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:SDL3::SDL3-shared>
-                $<TARGET_FILE_DIR:${NAME}>
-        )
-    endif ()
-
-    # Stage render shader assets next to example executables.
-    add_custom_command(TARGET ${NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            $<TARGET_FILE_DIR:${NAME}>/shaders
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_BINARY_DIR}/shaders
-            $<TARGET_FILE_DIR:${NAME}>/shaders
-    )
 endfunction()
 
 # ── Examples ──────────────────────────────────────────────────────────────────
+# All examples are built on demo_app.h: they open a window, or run headless
+# with `--headless [frames]` (IVP_EXAMPLE_HEADLESS=N) and finish with a
+# self-check (exit code 1 on failure).
 ivp_add_example(example_freefall example_freefall.c)
 ivp_add_example(example_cubes example_cubes.c)
 ivp_add_example(example_springs example_springs.c)
@@ -67,3 +83,19 @@ ivp_add_example(example_motion_controller example_motion_controller.c)
 ivp_add_example(example_phantom example_phantom.c)
 ivp_add_example(example_vehicle example_vehicle.c)
 ivp_add_example(example_3ds_import example_3ds_import.c)
+
+# ── Ports of the reference ivp_examples demos / quickstarts ──────────────────
+ivp_add_example(example_bridge example_bridge.c)
+ivp_add_example(example_domino example_domino.c)
+ivp_add_example(example_onthefly example_onthefly.c)
+ivp_add_example(example_raycasting example_raycasting.c)
+ivp_add_example(example_snowflake example_snowflake.c)
+ivp_add_example(example_universe example_universe.c)
+ivp_add_example(example_black_hole example_black_hole.c)
+ivp_add_example(example_active_value example_active_value.c)
+ivp_add_example(example_callback example_callback.c)
+ivp_add_example(example_cut example_cut.c)
+ivp_add_example(example_hinge example_hinge.c)
+ivp_add_example(example_maxforce example_maxforce.c)
+ivp_add_example(example_ring example_ring.c)
+ivp_add_example(example_push example_push.c)

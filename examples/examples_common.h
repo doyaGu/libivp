@@ -40,14 +40,36 @@ static inline void vec3r_to_float3(const ivp_vec3r_t *v, float out[3]) {
 
 /* ── Inertia helpers ──────────────────────────────────────────────── */
 
-/* Set box rotational inertia: I_x = (m/3)(hy^2 + hz^2), cyclic. */
+/* Set box rotational inertia to mass * the unit inertia that
+ * ivp_build_box_surface() stores in the compact surface, i.e. the reference
+ * IVP_Rot_Inertia_Solver value (ivp_rot_inertia_solver.cxx:236-248):
+ * with a = hx^2/3, b = hy^2/3, c = hz^2/3:
+ *   I_x = m sqrt(b^2 + c^2), I_y = m sqrt(a^2 + c^2), I_z = m sqrt(a^2 + b^2)
+ * (a cube gets sqrt(2)/3 m h^2, not the textbook 2/3 m h^2).  Once object
+ * creation reads the inertia from the surface manager (reference
+ * IVP_Real_Object::init_object_core) this helper becomes redundant. */
 static inline void set_box_inertia(ivp_object_template_t *t, ivp_real_t mass,
                                     ivp_real_t hx, ivp_real_t hy, ivp_real_t hz)
 {
-    ivp_real_t ix = (mass / IVP_REAL(3.0)) * (hy * hy + hz * hz);
-    ivp_real_t iy = (mass / IVP_REAL(3.0)) * (hx * hx + hz * hz);
-    ivp_real_t iz = (mass / IVP_REAL(3.0)) * (hx * hx + hy * hy);
+    ivp_real_t a = hx * hx / IVP_REAL(3.0);
+    ivp_real_t b = hy * hy / IVP_REAL(3.0);
+    ivp_real_t c = hz * hz / IVP_REAL(3.0);
+    ivp_real_t ix = mass * (ivp_real_t)sqrt((double)(b * b + c * c));
+    ivp_real_t iy = mass * (ivp_real_t)sqrt((double)(a * a + c * c));
+    ivp_real_t iz = mass * (ivp_real_t)sqrt((double)(a * a + b * b));
     ivp_vec3r_set(&t->rot_inertia, ix, iy, iz);
+    t->rot_inertia_is_factor = false; /* absolute inertia */
+}
+
+/* Set the rotational inertia from a compact surface's unit inertia. */
+static inline void set_inertia_from_surface(ivp_object_template_t *t, ivp_real_t mass,
+                                            const ivp_compact_surface_t *surface)
+{
+    ivp_vec3r_set(&t->rot_inertia,
+                  mass * (ivp_real_t)surface->rotation_inertia[0],
+                  mass * (ivp_real_t)surface->rotation_inertia[1],
+                  mass * (ivp_real_t)surface->rotation_inertia[2]);
+    t->rot_inertia_is_factor = false; /* absolute inertia */
 }
 
 /* Set sphere rotational inertia: I = (2/5) m r^2. */
@@ -56,6 +78,7 @@ static inline void set_sphere_inertia(ivp_object_template_t *t,
 {
     ivp_real_t I = IVP_REAL(0.4) * mass * radius * radius;
     ivp_vec3r_set(&t->rot_inertia, I, I, I);
+    t->rot_inertia_is_factor = false; /* absolute inertia */
 }
 
 /* ── Ground creation helper ──────────────────────────────────────── */
@@ -147,13 +170,13 @@ static inline void ivp_scene_snapshot_take(ivp_scene_snapshot_t *snap,
     int n = ivp_environment_get_object_count(env);
     for (int i = 0; i < n && snap->count < IVP_SCENE_SNAPSHOT_MAX; i++) {
         ivp_object_t *obj = ivp_environment_get_object(env, i);
-        if (!obj || obj->core.physical_unmoveable) continue;
+        if (!obj || obj->physical_core->physical_unmoveable) continue;
         ivp_scene_object_state_t *s = &snap->objects[snap->count];
         s->obj = obj;
         ivp_object_get_position(obj, &s->position);
         ivp_object_get_orientation(obj, &s->orientation);
         ivp_object_get_speed(obj, &s->speed);
-        s->rot_speed = obj->core.rot_speed;
+        s->rot_speed = obj->physical_core->rot_speed;
         snap->count++;
     }
 }
@@ -163,14 +186,14 @@ static inline void ivp_scene_snapshot_restore(const ivp_scene_snapshot_t *snap)
 {
     for (int i = 0; i < snap->count; i++) {
         const ivp_scene_object_state_t *s = &snap->objects[i];
-        ivp_core_set_pose(&s->obj->core, &s->position, &s->orientation);
-        s->obj->core.speed = s->speed;
-        s->obj->core.rot_speed = s->rot_speed;
+        ivp_core_set_pose(s->obj->physical_core, &s->position, &s->orientation);
+        s->obj->physical_core->speed = s->speed;
+        s->obj->physical_core->rot_speed = s->rot_speed;
         /* Clear accumulated forces and speed changes */
-        ivp_vec3r_set_zero(&s->obj->core.speed_change);
-        ivp_vec3r_set_zero(&s->obj->core.rot_speed_change);
+        ivp_vec3r_set_zero(&s->obj->physical_core->speed_change);
+        ivp_vec3r_set_zero(&s->obj->physical_core->rot_speed_change);
         /* Reset movement state to MOVING so the simulation picks them up */
-        s->obj->core.movement_state = IVP_MT_MOVING;
+        s->obj->physical_core->movement_state = IVP_MT_MOVING;
     }
 }
 

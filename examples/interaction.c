@@ -17,11 +17,11 @@ static void drag_controller_apply(const ivp_event_sim_t *event_sim,
     const ivp_real_t dt = event_sim->delta_time;
     ivp_example_dragger_t *dragger = (ivp_example_dragger_t *)ctx;
     if (!dragger || !dragger->active || obj != dragger->target) return;
-    if (obj->core.physical_unmoveable) return;
+    if (obj->physical_core->physical_unmoveable) return;
 
     ivp_vec3r_t dv;
-    ivp_vec3r_scale(&dv, &dragger->force, obj->core.inv_mass * dt);
-    ivp_vec3r_add(&obj->core.speed_change, &obj->core.speed_change, &dv);
+    ivp_vec3r_scale(&dv, &dragger->force, obj->physical_core->inv_mass * dt);
+    ivp_vec3r_add(&obj->physical_core->speed_change, &obj->physical_core->speed_change, &dv);
 }
 
 static bool ray_sphere_hit(const float ro[3], const float rd[3],
@@ -192,16 +192,16 @@ void ivp_example_dragger_update(ivp_example_dragger_t *dragger,
             int object_count = ivp_environment_get_object_count(env);
             for (int i = 0; i < object_count; i++) {
                 ivp_object_t *obj = ivp_environment_get_object(env, i);
-                if (!obj || obj->core.physical_unmoveable || obj->core.inv_mass <= IVP_REAL(0.0)) {
+                if (!obj || obj->physical_core->physical_unmoveable || obj->physical_core->inv_mass <= IVP_REAL(0.0)) {
                     continue;
                 }
 
                 float center[3] = {
-                    (float)obj->core.pos_world_f_core_last_psi.k[0],
-                    (float)obj->core.pos_world_f_core_last_psi.k[1],
-                    (float)obj->core.pos_world_f_core_last_psi.k[2]
+                    (float)obj->physical_core->pos_world_f_core_last_psi.k[0],
+                    (float)obj->physical_core->pos_world_f_core_last_psi.k[1],
+                    (float)obj->physical_core->pos_world_f_core_last_psi.k[2]
                 };
-                float radius = (float)obj->core.upper_limit_radius;
+                float radius = (float)obj->physical_core->upper_limit_radius;
                 if (radius < 0.05f) radius = 0.05f;
                 radius *= dragger->settings.pick_radius_scale;
 
@@ -282,7 +282,7 @@ static ivp_object_t *find_first_dynamic(ivp_environment_t *env)
     int object_count = ivp_environment_get_object_count(env);
     for (int i = 0; i < object_count; i++) {
         ivp_object_t *obj = ivp_environment_get_object(env, i);
-        if (obj && !obj->core.physical_unmoveable && obj->core.inv_mass > IVP_REAL(0.0)) {
+        if (obj && !obj->physical_core->physical_unmoveable && obj->physical_core->inv_mass > IVP_REAL(0.0)) {
             return obj;
         }
     }
@@ -309,7 +309,7 @@ static ivp_object_t *find_next_dynamic(ivp_environment_t *env,
         int idx = (start + step * n) % object_count;
         if (idx < 0) idx += object_count;
         ivp_object_t *obj = ivp_environment_get_object(env, idx);
-        if (obj && !obj->core.physical_unmoveable && obj->core.inv_mass > IVP_REAL(0.0)) {
+        if (obj && !obj->physical_core->physical_unmoveable && obj->physical_core->inv_mass > IVP_REAL(0.0)) {
             return obj;
         }
     }
