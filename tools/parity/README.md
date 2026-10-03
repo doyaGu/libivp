@@ -7,6 +7,16 @@ libivp 与原版引擎（默认 `../ivp`）在 `tools/scenarios.txt` 的全部�
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
+## 准备
+
+原版引擎和 runner 在 `https://github.com/doyaGu/ivp` 的分支 `libivp-parity-runner` 上，需要克隆到与本仓库同级的 `../ivp`：
+
+```bash
+git clone -b libivp-parity-runner https://github.com/doyaGu/ivp.git ../ivp
+```
+
+放在别处时用 `IVP_REF_SRC` 指定路径。构建原版需要 C++17 编译器，比较脚本需要 python3。
+
 ## 一键检查
 
 ```bash
