@@ -72,6 +72,7 @@ typedef struct ivp_u_memory {
     char   *block_start;         /* 32-byte aligned data start of last_elem    */
     size_t  pos;                 /* speicherbeginn - block_start               */
     size_t  end;                 /* speicherende - block_start                 */
+    size_t  first_block_size;    /* usable bytes retained across transactions  */
     int     transaction_in_use;
 #if IVP_U_MEMORY_RECYCLE_BLOCKS > 0
     char   *recycled[IVP_U_MEMORY_RECYCLE_BLOCKS]; /* freed blocks, LIFO      */
@@ -82,6 +83,13 @@ typedef struct ivp_u_memory {
 /* IVP_U_Memory() + init_mem_transaction_usage(): allocates the first block.
  * alloc may be NULL (default allocator). */
 ivp_result_t ivp_u_memory_init(ivp_u_memory_t *mem, const ivp_allocator_t *alloc);
+
+/* As above, but retain a smaller first block for scratch arenas that do not
+ * depend on the reference short-term-memory layout.  Overflow blocks keep
+ * the normal IVP_U_MEM_BLOCK_SIZE capacity. */
+ivp_result_t ivp_u_memory_init_first_block(ivp_u_memory_t *mem,
+                                            const ivp_allocator_t *alloc,
+                                            size_t first_block_size);
 
 /* free_mem(): releases every block. */
 void ivp_u_memory_destroy(ivp_u_memory_t *mem);

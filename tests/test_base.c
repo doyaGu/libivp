@@ -305,6 +305,34 @@ IVP_TEST(u_memory_counting_allocator) {
     ivp_counting_allocator_destroy(&ca);
 }
 
+IVP_TEST(u_memory_custom_first_block) {
+    ivp_allocator_t ca = ivp_counting_allocator_create(NULL);
+    ivp_u_memory_t m;
+    const size_t first_block_size = 0x1800u;
+    IVP_ASSERT_EQ(ivp_u_memory_init_first_block(&m, &ca,
+                                                first_block_size), IVP_OK);
+    IVP_ASSERT_EQ(m.first_block_size, first_block_size);
+
+    ivp_alloc_stats_t st;
+    ivp_counting_allocator_get_stats(&ca, &st);
+    IVP_ASSERT_TRUE(st.current_bytes < (int64_t)IVP_U_MEM_BLOCK_SIZE);
+
+    ivp_u_memory_start_transaction(&m);
+    ivp_u_memory_end_transaction(&m);
+    IVP_ASSERT_EQ(m.end, first_block_size);
+    char *first_start = m.block_start;
+    IVP_ASSERT_NOT_NULL(ivp_u_memory_get_mem(&m, first_block_size / 2u));
+    IVP_ASSERT_NOT_NULL(ivp_u_memory_get_mem(&m, first_block_size / 2u));
+    IVP_ASSERT_TRUE(m.block_start != first_start);
+    IVP_ASSERT_EQ(m.end, (size_t)IVP_U_MEM_BLOCK_SIZE - IVP_U_MEM_ELEM_SIZE);
+
+    ivp_u_memory_destroy(&m);
+    ivp_counting_allocator_get_stats(&ca, &st);
+    IVP_ASSERT_EQ(st.current_bytes, 0);
+    IVP_ASSERT_EQ(st.alloc_count, st.free_count);
+    ivp_counting_allocator_destroy(&ca);
+}
+
 /* ── Time tests ─────────────────────────────────────────────────────────── */
 
 IVP_TEST(time_calc_steps_basic) {
@@ -375,6 +403,7 @@ int main(void) {
     IVP_REGISTER(u_memory_layout);
     IVP_REGISTER(u_memory_overflow_blocks);
     IVP_REGISTER(u_memory_counting_allocator);
+    IVP_REGISTER(u_memory_custom_first_block);
     IVP_REGISTER(time_calc_steps_basic);
     IVP_REGISTER(time_calc_steps_zero_dt);
     IVP_REGISTER(time_calc_steps_exact);

@@ -122,7 +122,10 @@ static char *u_mem_acquire_block(ivp_u_memory_t *mem, size_t total)
 /* IVP_U_Memory::neuer_sp_block */
 static void *u_mem_new_block(ivp_u_memory_t *mem, size_t groesse)
 {
-    size_t ng = (size_t)IVP_U_MEM_BLOCK_SIZE - (size_t)IVP_U_MEM_ELEM_SIZE;
+    size_t block_size = mem->first_elem
+        ? (size_t)IVP_U_MEM_BLOCK_SIZE
+        : mem->first_block_size;
+    size_t ng = block_size - (size_t)IVP_U_MEM_ELEM_SIZE;
     if (groesse > SIZE_MAX / 2) return NULL;
     groesse = u_mem_round(groesse);
     if (groesse > ng) ng = groesse;
@@ -141,9 +144,22 @@ static void *u_mem_new_block(ivp_u_memory_t *mem, size_t groesse)
 
 ivp_result_t ivp_u_memory_init(ivp_u_memory_t *mem, const ivp_allocator_t *alloc)
 {
+    return ivp_u_memory_init_first_block(mem, alloc,
+                                          (size_t)IVP_U_MEM_BLOCK_SIZE);
+}
+
+ivp_result_t ivp_u_memory_init_first_block(ivp_u_memory_t *mem,
+                                            const ivp_allocator_t *alloc,
+                                            size_t first_block_size)
+{
     if (!mem) return IVP_ERR_INVALID_ARG;
+    if (first_block_size <= (size_t)IVP_U_MEM_ELEM_SIZE ||
+        first_block_size > (size_t)IVP_U_MEM_BLOCK_SIZE) {
+        return IVP_ERR_INVALID_ARG;
+    }
     memset(mem, 0, sizeof(*mem));
     mem->alloc = alloc ? alloc : ivp_default_allocator();
+    mem->first_block_size = first_block_size;
     /* init_mem_transaction_usage(): transaction_in_use = 0; neuer_sp_block(0) */
     mem->transaction_in_use = 0;
     if (!u_mem_new_block(mem, 0)) return IVP_ERR_OUT_OF_MEMORY;
@@ -209,7 +225,7 @@ void ivp_u_memory_end_transaction(ivp_u_memory_t *mem)
     }
     mem->block_start = u_mem_data_start(mem->first_elem);
     mem->pos = 0;
-    mem->end = (size_t)IVP_U_MEM_BLOCK_SIZE;
+    mem->end = mem->first_block_size;
     mem->last_elem = mem->first_elem;
     u_mem_guard(mem->first_elem, mem->end);
 }

@@ -121,10 +121,16 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
 
 /* ── sim unit transaction memory (IVP_U_Memory) ─────────────────────── */
 
+/* Sim-unit scratch does not depend on the reference short-term arena's exact
+ * 0x7fe0-byte layout.  Keep its resident block modest for small worlds;
+ * overflow blocks still use IVP_U_MEM_BLOCK_SIZE for large contact systems. */
+#define IVP_SIM_MEM_FIRST_BLOCK_SIZE 0x1800u
+
 static ivp_result_t sim_mem_init(ivp_sim_mem_t *m, const ivp_allocator_t *alloc)
 {
     m->depth = 0;
-    return ivp_u_memory_init(&m->arena, alloc);
+    return ivp_u_memory_init_first_block(&m->arena, alloc,
+                                          IVP_SIM_MEM_FIRST_BLOCK_SIZE);
 }
 
 static void sim_mem_destroy(ivp_sim_mem_t *m)
