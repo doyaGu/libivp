@@ -3,6 +3,7 @@
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/controllers/ivp_constraint.h>
 #include <ivp/diagnostics/ivp_performance_counter.h>
+#include <ivp/diagnostics/ivp_statistic_manager.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/geometry/ivp_surman.h>
@@ -49,6 +50,12 @@ typedef struct bench_measurement {
     int64_t psis;
     double simulated_seconds;
     int64_t phase_ns[PHASE_COUNT];
+    uint64_t state_hash;
+    int mindists_generated;
+    int mindists_deleted;
+    int range_intra_exceeded;
+    int range_world_exceeded;
+    int impacts;
     int valid;
 } bench_measurement_t;
 
@@ -78,6 +85,45 @@ static int64_t now_ns(void)
 #endif
 }
 
+static uint64_t hash_bytes(uint64_t hash, const void *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *)data;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t hash_object(uint64_t hash, const ivp_object_t *obj)
+{
+    const ivp_core_t *core = obj->physical_core;
+    hash = hash_bytes(hash, &obj->type, sizeof(obj->type));
+    hash = hash_bytes(hash, &obj->object_movement_state, sizeof(obj->object_movement_state));
+    hash = hash_bytes(hash, &obj->collision_detection_enabled,
+                      sizeof(obj->collision_detection_enabled));
+    if (!core) return hash;
+    hash = hash_bytes(hash, &core->movement_state, sizeof(core->movement_state));
+    hash = hash_bytes(hash, core->pos_world_f_core_last_psi.k,
+                      sizeof(core->pos_world_f_core_last_psi.k));
+    hash = hash_bytes(hash, &core->q_world_f_core_last_psi,
+                      sizeof(core->q_world_f_core_last_psi));
+    hash = hash_bytes(hash, core->speed.k, sizeof(core->speed.k));
+    hash = hash_bytes(hash, core->rot_speed.k, sizeof(core->rot_speed.k));
+    return hash;
+}
+
+static uint64_t hash_environment(const ivp_environment_t *env)
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    const int count = ivp_environment_get_object_count(env);
+    hash = hash_bytes(hash, &count, sizeof(count));
+    for (int i = 0; i < count; ++i) {
+        hash = hash_object(hash, ivp_environment_get_object(env, i));
+    }
+    return hash;
+}
+
 static int parse_positive_int(const char *s, int *out)
 {
     char *end = NULL;
@@ -101,7 +147,7 @@ static int parse_positive_double(const char *s, double *out)
 static void usage(const char *exe)
 {
     fprintf(stderr,
-            "Usage: %s [--profile quick|standard] [--case NAME] [--samples N]\n"
+            "Usage: %s [--profile quick|standard|large] [--case NAME] [--samples N]\n"
             "          [--min-sample-ms MS] [--format text|jsonl] [--output PATH]\n"
             "          [--check] [--list]\n", exe);
 }
@@ -140,10 +186,19 @@ static void collect_phases(ivp_environment_t *env, bench_measurement_t *m)
     ivp_performance_counter_simple_t *pc = (ivp_performance_counter_simple_t *)base;
     for (int i = 0; i < PHASE_COUNT; ++i)
         m->phase_ns[i] += (int64_t)((double)pc->counter[i] * 1000.0);
+
+    ivp_statistic_manager_t *sm = ivp_environment_get_statistic_manager(env);
+    if (sm) {
+        m->mindists_generated = sm->mindists_generated;
+        m->mindists_deleted = sm->mindists_deleted;
+        m->range_intra_exceeded = sm->range_intra_exceeded;
+        m->range_world_exceeded = sm->range_world_exceeded;
+        m->impacts = sm->impact_counter;
+    }
 }
 
 static ivp_environment_t *make_env(const ivp_allocator_t *allocator, double dt,
-                                   int gravity, int group_filter)
+                                   int gravity, int group_filter, int instrumented)
 {
     ivp_environment_config_t cfg;
     ivp_environment_config_init(&cfg);
@@ -151,14 +206,15 @@ static ivp_environment_t *make_env(const ivp_allocator_t *allocator, double dt,
     cfg.delta_psi_time = (ivp_real_t)dt;
     if (!gravity) ivp_vec3r_set_zero(&cfg.gravity);
     if (group_filter) cfg.collision_filter = ivp_collision_filter_group();
+    cfg.disable_performance_counter = !instrumented;
     return ivp_environment_create(&cfg);
 }
 
 static int run_active(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                      bench_measurement_t *m)
+                      bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0);
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0, instrumented);
     if (!env) return 0;
     ivp_object_t *probe = NULL;
     for (int i = 0; i < cfg->scale; ++i) {
@@ -178,6 +234,7 @@ static int run_active(const bench_config_t *cfg, const ivp_allocator_t *allocato
     m->psis = cfg->steps;
     m->simulated_seconds = cfg->steps * cfg->dt;
     m->valid = probe && object_finite(probe);
+    m->state_hash = hash_environment(env);
     collect_phases(env, m);
     ivp_environment_destroy(env);
     m->total_ns = now_ns() - total_start;
@@ -185,10 +242,10 @@ static int run_active(const bench_config_t *cfg, const ivp_allocator_t *allocato
 }
 
 static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                       bench_measurement_t *m)
+                       bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, cfg->dt, 1, 0);
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 1, 0, instrumented);
     if (!env) return 0;
     ivp_compact_surface_t *surface = ivp_build_box_surface(allocator, 20.0f, 0.5f, 20.0f);
     if (!surface) { ivp_environment_destroy(env); return 0; }
@@ -220,6 +277,7 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
     m->operations = m->psis = cfg->steps;
     m->simulated_seconds = cfg->steps * cfg->dt;
     m->valid = probe && object_finite(probe);
+    m->state_hash = hash_environment(env);
     collect_phases(env, m);
     ivp_environment_destroy(env);
     ivp_compact_surface_free(allocator, surface);
@@ -228,10 +286,10 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
 }
 
 static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                          bench_measurement_t *m)
+                          bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, cfg->dt, 1, 1);
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 1, 1, instrumented);
     if (!env) return 0;
     ivp_object_t **objects = (ivp_object_t **)ivp_alloc(allocator, (size_t)cfg->scale * sizeof(*objects));
     ivp_constraint_state_t *constraints = (ivp_constraint_state_t *)ivp_alloc(
@@ -257,6 +315,7 @@ static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allo
     m->operations = m->psis = cfg->steps;
     m->simulated_seconds = cfg->steps * cfg->dt;
     m->valid = object_finite(objects[cfg->scale - 1]);
+    m->state_hash = hash_environment(env);
     collect_phases(env, m);
     ivp_environment_destroy(env);
     ivp_free(allocator, constraints, (size_t)cfg->scale * sizeof(*constraints));
@@ -266,10 +325,10 @@ static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allo
 }
 
 static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                       bench_measurement_t *m)
+                       bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0);
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0, instrumented);
     if (!env) return 0;
     ivp_object_t *probe = NULL;
     for (int i = 0; i < cfg->scale; ++i) {
@@ -291,6 +350,7 @@ static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocat
     m->operations = m->psis = cfg->steps;
     m->simulated_seconds = cfg->steps * cfg->dt;
     m->valid = probe && object_finite(probe);
+    m->state_hash = hash_environment(env);
     collect_phases(env, m);
     ivp_environment_destroy(env);
     m->total_ns = now_ns() - total_start;
@@ -298,14 +358,16 @@ static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocat
 }
 
 static int run_churn(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                     bench_measurement_t *m)
+                     bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, IVP_REAL(1.0 / 180.0), 0, 0);
+    ivp_environment_t *env = make_env(allocator, IVP_REAL(1.0 / 180.0), 0, 0,
+                                      instrumented);
     if (!env) return 0;
     ivp_object_t **objects = (ivp_object_t **)ivp_alloc(allocator, (size_t)cfg->scale * sizeof(*objects));
     if (!objects) { ivp_environment_destroy(env); return 0; }
     const int cycles = 16;
+    uint64_t state_hash = UINT64_C(1469598103934665603);
     int64_t start = now_ns();
     for (int cycle = 0; cycle < cycles; ++cycle) {
         for (int i = 0; i < cfg->scale; ++i) {
@@ -314,6 +376,8 @@ static int run_churn(const bench_config_t *cfg, const ivp_allocator_t *allocator
             if (!objects[i]) { m->valid = 0; goto done_churn; }
         }
         ivp_environment_simulate_one_psi(env);
+        for (int i = 0; i < cfg->scale; ++i)
+            state_hash = hash_object(state_hash, objects[i]);
         for (int i = 0; i < cfg->scale; ++i) ivp_environment_destroy_object(env, objects[i]);
     }
     m->valid = 1;
@@ -322,6 +386,7 @@ done_churn:
     m->operations = (int64_t)cfg->scale * cycles;
     m->psis = cycles;
     m->simulated_seconds = cycles / 180.0;
+    m->state_hash = state_hash;
     collect_phases(env, m);
     ivp_free(allocator, objects, (size_t)cfg->scale * sizeof(*objects));
     ivp_environment_destroy(env);
@@ -330,10 +395,10 @@ done_churn:
 }
 
 static int run_sleeping(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                        bench_measurement_t *m)
+                        bench_measurement_t *m, int instrumented)
 {
     int64_t total_start = now_ns();
-    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0);
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0, instrumented);
     if (!env) return 0;
     ivp_object_t *probe = NULL;
     for (int i = 0; i < cfg->scale; ++i) {
@@ -341,13 +406,27 @@ static int run_sleeping(const bench_config_t *cfg, const ivp_allocator_t *alloca
                           (ivp_real_t)(((i / 32) % 32) * 2), (ivp_real_t)((i / 1024) * 2));
         if (!probe) { ivp_environment_destroy(env); return 0; }
     }
-    for (int i = 0; i < 120; ++i) ivp_environment_simulate_one_psi(env);
+    int all_frozen = 0;
+    for (int warmup = 0; warmup < 600 && !all_frozen; ++warmup) {
+        ivp_environment_simulate_one_psi(env);
+        all_frozen = 1;
+        const int count = ivp_environment_get_object_count(env);
+        for (int i = 0; i < count; ++i) {
+            const ivp_object_t *obj = ivp_environment_get_object(env, i);
+            if (!obj->physical_core->physical_unmoveable && !ivp_object_is_frozen(obj)) {
+                all_frozen = 0;
+                break;
+            }
+        }
+    }
+    if (!all_frozen) { ivp_environment_destroy(env); return 0; }
     int64_t start = now_ns();
     for (int i = 0; i < cfg->steps; ++i) ivp_environment_simulate_one_psi(env);
     m->operation_ns = now_ns() - start;
     m->operations = m->psis = cfg->steps;
     m->simulated_seconds = cfg->steps * cfg->dt;
     m->valid = probe && object_finite(probe);
+    m->state_hash = hash_environment(env);
     collect_phases(env, m);
     ivp_environment_destroy(env);
     m->total_ns = now_ns() - total_start;
@@ -355,8 +434,9 @@ static int run_sleeping(const bench_config_t *cfg, const ivp_allocator_t *alloca
 }
 
 static int run_convex(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                      bench_measurement_t *m)
+                      bench_measurement_t *m, int instrumented)
 {
+    (void)instrumented;
     int64_t total_start = now_ns();
     double *points = (double *)ivp_alloc(allocator, (size_t)cfg->scale * 3 * sizeof(*points));
     if (!points) return 0;
@@ -374,24 +454,29 @@ static int run_convex(const bench_config_t *cfg, const ivp_allocator_t *allocato
     m->operation_ns = now_ns() - start;
     m->operations = 1;
     m->valid = surface != NULL;
-    if (surface) ivp_compact_surface_free(allocator, surface);
+    if (surface) {
+        int byte_size = ivp_surface_get_byte_size(surface);
+        m->state_hash = hash_bytes(UINT64_C(1469598103934665603), surface,
+                                   (size_t)byte_size);
+        ivp_compact_surface_free(allocator, surface);
+    }
     ivp_free(allocator, points, (size_t)cfg->scale * 3 * sizeof(*points));
     m->total_ns = now_ns() - total_start;
     return m->valid;
 }
 
 static int run_once(const bench_config_t *cfg, const ivp_allocator_t *allocator,
-                    bench_measurement_t *m)
+                    bench_measurement_t *m, int instrumented)
 {
     memset(m, 0, sizeof(*m));
     switch (cfg->kind) {
-        case BENCH_ACTIVE: return run_active(cfg, allocator, m);
-        case BENCH_CONTACT: return run_contact(cfg, allocator, m);
-        case BENCH_CONSTRAINT: return run_constraint(cfg, allocator, m);
-        case BENCH_IMPACTS: return run_impacts(cfg, allocator, m);
-        case BENCH_CHURN: return run_churn(cfg, allocator, m);
-        case BENCH_SLEEPING: return run_sleeping(cfg, allocator, m);
-        case BENCH_CONVEX: return run_convex(cfg, allocator, m);
+        case BENCH_ACTIVE: return run_active(cfg, allocator, m, instrumented);
+        case BENCH_CONTACT: return run_contact(cfg, allocator, m, instrumented);
+        case BENCH_CONSTRAINT: return run_constraint(cfg, allocator, m, instrumented);
+        case BENCH_IMPACTS: return run_impacts(cfg, allocator, m, instrumented);
+        case BENCH_CHURN: return run_churn(cfg, allocator, m, instrumented);
+        case BENCH_SLEEPING: return run_sleeping(cfg, allocator, m, instrumented);
+        case BENCH_CONVEX: return run_convex(cfg, allocator, m, instrumented);
     }
     return 0;
 }
@@ -427,10 +512,11 @@ static const char *phase_name(int phase)
 static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FILE *out)
 {
     double normalized[MAX_SAMPLES];
-    int64_t phase_ns[PHASE_COUNT] = {0};
+    uint64_t expected_hash = 0;
     for (int warmup = 0; warmup < 1; ++warmup) {
         bench_measurement_t ignored;
-        if (!run_once(cfg, ivp_default_allocator(), &ignored)) return 0;
+        if (!run_once(cfg, ivp_default_allocator(), &ignored, 0)) return 0;
+        expected_hash = ignored.state_hash;
     }
     for (int sample = 0; sample < opt->samples; ++sample) {
         bench_measurement_t aggregate;
@@ -438,16 +524,13 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
         int iterations = 0;
         do {
             bench_measurement_t one;
-            if (!run_once(cfg, ivp_default_allocator(), &one) || !one.valid) return 0;
+            if (!run_once(cfg, ivp_default_allocator(), &one, 0) || !one.valid ||
+                one.state_hash != expected_hash) return 0;
             aggregate.operation_ns += one.operation_ns;
             aggregate.total_ns += one.total_ns;
             aggregate.operations += one.operations;
             aggregate.psis += one.psis;
             aggregate.simulated_seconds += one.simulated_seconds;
-            for (int i = 0; i < PHASE_COUNT; ++i) {
-                aggregate.phase_ns[i] += one.phase_ns[i];
-                phase_ns[i] += one.phase_ns[i];
-            }
             ++iterations;
         } while (aggregate.operation_ns < (int64_t)(opt->min_sample_ms * 1000000.0));
         normalized[sample] = (double)aggregate.operation_ns / (double)aggregate.operations;
@@ -466,13 +549,18 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
 
     ivp_allocator_t counting = ivp_counting_allocator_create(NULL);
     bench_measurement_t memory_run;
-    if (!run_once(cfg, &counting, &memory_run)) {
+    if (!run_once(cfg, &counting, &memory_run, 0) ||
+        memory_run.state_hash != expected_hash) {
         ivp_counting_allocator_destroy(&counting);
         return 0;
     }
     ivp_alloc_stats_t stats;
     ivp_counting_allocator_get_stats(&counting, &stats);
     ivp_counting_allocator_destroy(&counting);
+
+    bench_measurement_t diagnostic;
+    if (!run_once(cfg, ivp_default_allocator(), &diagnostic, 1) ||
+        diagnostic.state_hash != expected_hash) return 0;
 
     double median = percentile(normalized, opt->samples, 0.5);
     double p95 = percentile(normalized, opt->samples, 0.95);
@@ -482,6 +570,7 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
     if (opt->check) {
         if (cfg->kind == BENCH_CHURN) gate_ok = p95 < 10000000.0;
         else if (cfg->kind == BENCH_CONVEX) gate_ok = p95 < 500000000.0;
+        else if (!strcmp(opt->profile, "large")) gate_ok = p95 < cfg->dt * 1.0e9;
         else gate_ok = p95 < cfg->dt * 4.0e9;
         if (stats.current_bytes != 0) gate_ok = 0;
     }
@@ -493,14 +582,23 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 "\"median_ns_per_op\":%.3f,\"p95_ns_per_op\":%.3f,"
                 "\"min_ns_per_op\":%.3f,\"max_ns_per_op\":%.3f,"
                 "\"alloc_count\":%lld,\"bytes_allocated\":%lld,"
-                "\"peak_bytes\":%lld,\"residual_bytes\":%lld,\"gate_ok\":%s,\"phases_ns\":{",
+                "\"peak_bytes\":%lld,\"residual_bytes\":%lld,"
+                "\"state_hash\":\"%016llx\",\"gate_ok\":%s,"
+                "\"statistics\":{\"mindists_generated\":%d,\"mindists_deleted\":%d,"
+                "\"range_intra_exceeded\":%d,\"range_world_exceeded\":%d,"
+                "\"impacts\":%d},\"phases_ns\":{",
                 BENCH_SCHEMA, cfg->name, cfg->scale, median, p95, minimum, maximum,
                 (long long)stats.alloc_count, (long long)stats.bytes_allocated,
                 (long long)stats.peak_bytes, (long long)stats.current_bytes,
-                gate_ok ? "true" : "false");
+                (unsigned long long)expected_hash,
+                gate_ok ? "true" : "false",
+                diagnostic.mindists_generated, diagnostic.mindists_deleted,
+                diagnostic.range_intra_exceeded, diagnostic.range_world_exceeded,
+                diagnostic.impacts);
         for (int i = 0; i < PHASE_COUNT; ++i) {
             if (i) fputc(',', out);
-            fprintf(out, "\"%s\":%lld", phase_name(i), (long long)phase_ns[i]);
+            fprintf(out, "\"%s\":%lld", phase_name(i),
+                    (long long)diagnostic.phase_ns[i]);
         }
         fprintf(out, "}}\n");
     } else {
@@ -546,6 +644,16 @@ static const bench_config_t standard_configs[] = {
     {"convex_build", BENCH_CONVEX, 512, 1, 0.0}
 };
 
+static const bench_config_t large_configs[] = {
+    {"active_bodies", BENCH_ACTIVE, 4096, 240, 1.0 / 180.0},
+    {"contact_pile", BENCH_CONTACT, 1024, 360, 1.0 / 180.0},
+    {"constraint_chain", BENCH_CONSTRAINT, 1024, 360, 1.0 / 180.0},
+    {"fast_impacts", BENCH_IMPACTS, 512, 180, 1.0 / 180.0},
+    {"object_churn", BENCH_CHURN, 1024, 16, 1.0 / 180.0},
+    {"sleeping_world", BENCH_SLEEPING, 16384, 600, 1.0 / 60.0},
+    {"convex_build", BENCH_CONVEX, 2048, 1, 0.0}
+};
+
 int main(int argc, char **argv)
 {
     options_t opt = {"quick", NULL, "text", NULL, 0, 0.0, 0, 0};
@@ -561,20 +669,33 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--list")) { opt.list = 1; continue; }
         usage(argv[0]); return 2;
     }
-    if (strcmp(opt.profile, "quick") && strcmp(opt.profile, "standard")) { usage(argv[0]); return 2; }
+    if (strcmp(opt.profile, "quick") && strcmp(opt.profile, "standard") &&
+        strcmp(opt.profile, "large")) { usage(argv[0]); return 2; }
     if (strcmp(opt.format, "text") && strcmp(opt.format, "jsonl")) { usage(argv[0]); return 2; }
     if (opt.list) {
         for (size_t i = 0; i < sizeof(quick_configs) / sizeof(quick_configs[0]); ++i)
             puts(quick_configs[i].name);
         return 0;
     }
-    if (!opt.samples) opt.samples = !strcmp(opt.profile, "quick") ? 5 : 7;
+    if (!opt.samples) opt.samples = !strcmp(opt.profile, "standard") ? 7 : 5;
     if (opt.samples > MAX_SAMPLES) { fprintf(stderr, "--samples must be <= %d\n", MAX_SAMPLES); return 2; }
-    if (opt.min_sample_ms == 0.0) opt.min_sample_ms = !strcmp(opt.profile, "quick") ? 200.0 : 250.0;
-    const bench_config_t *configs = !strcmp(opt.profile, "quick") ? quick_configs : standard_configs;
-    size_t count = !strcmp(opt.profile, "quick")
-        ? sizeof(quick_configs) / sizeof(quick_configs[0])
-        : sizeof(standard_configs) / sizeof(standard_configs[0]);
+    if (opt.min_sample_ms == 0.0) {
+        if (!strcmp(opt.profile, "quick")) opt.min_sample_ms = 200.0;
+        else if (!strcmp(opt.profile, "standard")) opt.min_sample_ms = 250.0;
+        else opt.min_sample_ms = 500.0;
+    }
+    const bench_config_t *configs;
+    size_t count;
+    if (!strcmp(opt.profile, "quick")) {
+        configs = quick_configs;
+        count = sizeof(quick_configs) / sizeof(quick_configs[0]);
+    } else if (!strcmp(opt.profile, "standard")) {
+        configs = standard_configs;
+        count = sizeof(standard_configs) / sizeof(standard_configs[0]);
+    } else {
+        configs = large_configs;
+        count = sizeof(large_configs) / sizeof(large_configs[0]);
+    }
     FILE *out = stdout;
     if (opt.output_path) {
         out = fopen(opt.output_path, "w");
