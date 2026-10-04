@@ -15,8 +15,7 @@
 /* IVP_U_Memory transaction memory (sim_unit_mem): allocations live until the
  * matching end of transaction.  Memory is zero-initialised. */
 typedef struct ivp_sim_mem {
-    ivp_pvec_t blocks;      /* void* allocations          */
-    int        marks[64];   /* blocks.n at each begin      */
+    ivp_u_memory_t arena;
     int        depth;
 } ivp_sim_mem_t;
 

@@ -121,25 +121,16 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
 
 /* ── sim unit transaction memory (IVP_U_Memory) ─────────────────────── */
 
-static void sim_mem_init(ivp_sim_mem_t *m)
+static ivp_result_t sim_mem_init(ivp_sim_mem_t *m, const ivp_allocator_t *alloc)
 {
-    ivp_pvec_init(&m->blocks);
     m->depth = 0;
-}
-
-static void sim_mem_release_to(ivp_sim_mem_t *m, int n)
-{
-    while (ivp_pvec_len(&m->blocks) > n) {
-        int last = ivp_pvec_len(&m->blocks) - 1;
-        free(ivp_pvec_at(&m->blocks, last));
-        ivp_pvec_remove_at(&m->blocks, last);
-    }
+    return ivp_u_memory_init(&m->arena, alloc);
 }
 
 static void sim_mem_destroy(ivp_sim_mem_t *m)
 {
-    sim_mem_release_to(m, 0);
-    ivp_pvec_clear(&m->blocks);
+    ivp_u_memory_destroy(&m->arena);
+    m->depth = 0;
 }
 
 struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env)
@@ -151,15 +142,14 @@ void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
 {
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
     IVP_ASSERT(env->pl->sim_unit_mem.depth == 1);
-    void *p = calloc(1, size ? size : 1);
-    if (p) ivp_pvec_add(&env->pl->sim_unit_mem.blocks, p);
-    return p;
+    const size_t request = size ? size : 1;
+    return ivp_u_memory_get_mem(&env->pl->sim_unit_mem.arena, request);
 }
 
 void ivp_env_sim_mem_begin(struct ivp_environment *env)
 {
     ivp_sim_mem_t *m = &env->pl->sim_unit_mem;
-    if (m->depth < (int)(sizeof(m->marks) / sizeof(m->marks[0]))) m->marks[m->depth] = ivp_pvec_len(&m->blocks);
+    if (m->depth == 0) ivp_u_memory_start_transaction(&m->arena);
     m->depth++;
 }
 
@@ -168,10 +158,9 @@ void ivp_env_sim_mem_end(struct ivp_environment *env)
     ivp_sim_mem_t *m = &env->pl->sim_unit_mem;
     if (m->depth <= 0) return;
     m->depth--;
-    /* IVP_U_Memory::end_memory_transaction frees everything only when the
-     * outermost transaction ends; inner ends keep the memory (it is still
-     * referenced by tmp_contact_info pointers). */
-    if (m->depth == 0) sim_mem_release_to(m, 0);
+    /* Inner transactions share the outer allocation lifetime because
+     * tmp_contact_info may still reference their memory. */
+    if (m->depth == 0) ivp_u_memory_end_transaction(&m->arena);
 }
 
 /* ── IVP_Environment accessors (ivp_env_internal.h) ───────────────────── */
@@ -1887,7 +1876,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_pvec_init(&pl->obj_callback_tables);
     ivp_pvec_init(&pl->global_collision_listeners);
     ivp_pvec_init(&pl->coll_callback_tables);
-    sim_mem_init(&pl->sim_unit_mem);
+    if (sim_mem_init(&pl->sim_unit_mem, env->allocator) != IVP_OK) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
