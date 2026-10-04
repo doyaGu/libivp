@@ -23,6 +23,7 @@
 #include "collision/ivp_mindist_debug.h"
 #include "collision/ivp_mindist_event_internal.h"
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 
 
 /* g_pCurrentMindist / g_fDeferDeleteMindist (ivp_mindist.cxx) */

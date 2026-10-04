@@ -11,6 +11,7 @@
 #include <ivp/math/ivp_transform.h>
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_env_hot.h"
 
 void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_object,
                               double max_distance_attached_object_to_parent)

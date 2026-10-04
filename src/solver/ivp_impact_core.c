@@ -20,6 +20,7 @@
 #include <ivp/geometry/ivp_compact_edge.h>
 #include "collision/ivp_lvec.h"
 #include "solver/ivp_friction_internal.h"
+#include "dynamics/ivp_env_hot.h"
 
 #define IVP_SAFETY_FACTOR_FOR_DELAY      1.2f
 #define IVP_INV_SAFETY_FACTOR_FOR_DELAY  (1.0f / IVP_SAFETY_FACTOR_FOR_DELAY)

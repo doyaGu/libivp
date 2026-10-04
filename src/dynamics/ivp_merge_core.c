@@ -19,6 +19,7 @@
 #include <ivp/math/ivp_transform.h>
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_env_hot.h"
 
 /* ── IVP_Merge_Core ────────────────────────────────────────────────────── */
 

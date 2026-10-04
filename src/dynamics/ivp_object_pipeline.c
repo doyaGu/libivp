@@ -15,6 +15,7 @@
 #include <ivp/geometry/ivp_surman.h>
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_env_hot.h"
 #include "solver/ivp_friction_internal.h"
 #include <ivp/dynamics/ivp_cache_object.h>
 #include <ivp/dynamics/ivp_anchor.h>

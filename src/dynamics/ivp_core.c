@@ -18,6 +18,7 @@
 #include <ivp/dynamics/ivp_object.h>
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_sim_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include "solver/ivp_friction_internal.h"
 #include "controllers/ivp_car_wheel_physics.h"
 
@@ -1284,4 +1285,3 @@ void ivp_core_apply_velocity_limit(ivp_core_t *core)
         }
     }
 }
-

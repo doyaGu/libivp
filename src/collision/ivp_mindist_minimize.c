@@ -16,6 +16,7 @@
 #include "collision/ivp_lvec.h"
 #include "collision/ivp_mindist_debug.h"
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 
 #define IVP_MAX_MINIMIZE_BEFORE_HASH_CHECK 20
 #define IVP_MAX_PIERCINGS 2

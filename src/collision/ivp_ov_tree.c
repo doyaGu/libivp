@@ -4,6 +4,7 @@
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #ifdef IVP_HOME_BUILD

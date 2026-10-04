@@ -19,6 +19,7 @@
 #include <ivp/geometry/ivp_surman.h>
 #include "collision/ivp_cls_internal.h"
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include "solver/ivp_friction_internal.h"
 
 /* env->get_debug_manager() */

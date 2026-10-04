@@ -8,6 +8,7 @@
 #include <ivp/base/ivp_message.h>
 #include <ivp/dynamics/ivp_sim_unit.h>
 #include "dynamics/ivp_sim_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include "solver/ivp_friction_internal.h"
 
 static inline ivp_core_t *su_core_at(const ivp_sim_unit_t *su, int i) {

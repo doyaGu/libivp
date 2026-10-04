@@ -10,6 +10,7 @@
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/containers/ivp_min_hash.h>
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include <ivp/geometry/ivp_compact_ledge_geom.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/dynamics/ivp_object.h>

@@ -31,6 +31,7 @@
 #include "solver/ivp_friction_internal.h"
 #include "controllers/ivp_car_wheel_physics.h"
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 
 /* sizeof(IVP_Contact_Point *) of the 64-bit reference (arena allocation size) */
 #define IVP_FR_REF_POINTER_SIZE 8u

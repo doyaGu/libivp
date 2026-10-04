@@ -12,6 +12,7 @@
 #include "collision/ivp_lvec.h"
 #include "collision/ivp_cls_internal.h"
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 #include "collision/ivp_matrix_cache.h"
 
 #ifdef IVP_REAL_DOUBLE

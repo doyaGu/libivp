@@ -14,6 +14,7 @@
 #include <ivp/dynamics/ivp_cache_object.h>
 #include <ivp/base/ivp_assert.h>
 #include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_hot.h"
 
 #include <math.h>
 
