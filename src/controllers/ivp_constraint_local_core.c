@@ -811,6 +811,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     IVP_ASSERT(!coreA || coreA->physical_unmoveable || coreA->movement_state != IVP_MT_NOT_SIM);
 
     const bool fast_ball_socket =
+        coreR && coreA && !core_static(coreR) && !core_static(coreA) &&
         !c->force_generic_path && !c->has_rot && !c->use_maxforce &&
         c->fixedtrans_dim == 3 && c->fixedrot_dim == 0 &&
         c->limitedtrans_dim == 0 && c->limitedrot_dim == 0 &&

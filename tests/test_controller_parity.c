@@ -480,6 +480,7 @@ IVP_TEST(constraint_ball_socket_ws_holds_pendulum) {
     ivp_object_t *b = make_ball(env, IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_t anchor = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_constraint_state_t c;
+    /* World/static endpoints stay on the generic path. */
     ivp_constraint_init_ball_socket_ws(&c, NULL, &anchor, b);
     ivp_environment_announce_dependent_controller(env, 0, ivp_controller_constraint, &c,
                                                   ivp_constraint_discovery);
@@ -1019,5 +1020,3 @@ int main(void) {
     IVP_REGISTER(torque_axis_is_float_normized_core_axis);
     IVP_RUN_ALL();
 }
-
-
