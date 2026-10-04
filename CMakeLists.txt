@@ -756,6 +756,9 @@ if (IVP_BUILD_TESTS)
         add_test(NAME test_benchmark_tool
                  COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_tool.py)
         set_tests_properties(test_benchmark_tool PROPERTIES LABELS "unit;perf")
+        add_test(NAME test_profile_benchmark
+                 COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_profile_benchmark.py)
+        set_tests_properties(test_profile_benchmark PROPERTIES LABELS "unit;perf")
         if (IVP_BUILD_BENCHMARKS)
             add_test(NAME test_benchmark_runner
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py

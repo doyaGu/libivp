@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Sample native benchmark stacks and separate simulation from world lifecycle."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+import datetime as dt
+import json
+import math
+from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+import benchmark
+
+PROFILE_SCHEMA = "libivp-hotspots-v1"
+DEFAULT_CASES = ("active_bodies", "contact_pile", "constraint_chain", "fast_impacts",
+                 "object_churn", "sleeping_world", "convex_build")
+
+
+def sample_stacks(text: str, *, locations: bool = False) -> list:
+    """Convert sample's inclusive call tree to weighted exclusive stacks.
+
+    Indentation includes branch punctuation. Subtract direct children only;
+    adding every tree row would double-count callers and recursive frames.
+    """
+    nodes = []
+    active = []
+    started = False
+    for line in text.splitlines():
+        if line == "Call graph:":
+            started = True
+            continue
+        if not started:
+            continue
+        if line.startswith(("Total number in stack", "Sort by top", "Binary Images:")):
+            break
+        match = re.match(r"^([ +!:.|`-]*)(\d+) (.+)$", line)
+        if not match:
+            continue
+        prefix, count, detail = match.groups()
+        depth = len(prefix)
+        is_thread = bool(re.match(r"Thread_\d+", detail))
+        if is_thread:
+            symbol = "[thread]"
+            # Only the engine's main thread; utility threads are not workloads.
+            main_thread = "com.apple.main-thread" in detail
+        else:
+            if "  (in " not in detail:
+                continue
+            symbol = detail.split("  (in ", 1)[0]
+            main_thread = active[-1][1]["main"] if active else False
+        while active and active[-1][0] >= depth:
+            active.pop()
+        node = {"count": int(count), "children": 0, "main": main_thread,
+                "stack": (active[-1][1]["stack"] if active else ()) + (symbol,)}
+        source = re.search(r"\]\s+(/.+):(\d+)\s*$", detail)
+        node["source"] = f"{source[1]}:{source[2]}" if source and source[2] != "0" else None
+        if active:
+            active[-1][1]["children"] += int(count)
+        nodes.append(node)
+        active.append((depth, node))
+    if not nodes:
+        raise benchmark.BenchmarkError("sample report has no symbolized call graph")
+    stacks = []
+    for node in nodes:
+        weight = node["count"] - node["children"]
+        if weight < 0:
+            raise benchmark.BenchmarkError("sample call tree has inconsistent child counts")
+        if weight and node["main"]:
+            stacks.append((weight, node["stack"], node["source"]) if locations
+                          else (weight, node["stack"]))
+    if not stacks:
+        raise benchmark.BenchmarkError("sample report has no main-thread stacks")
+    return stacks
+
+
+def perf_stacks(text: str) -> list[tuple[int, tuple[str, ...]]]:
+    """Read `perf script` call chains (leaf first, one event per blank block)."""
+    stacks = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        symbols = []
+        for line in block.splitlines():
+            match = re.match(r"^\s+[0-9a-f]+\s+(.+?)\s+\(.+\)\s*$", line)
+            if match:
+                symbols.append(re.sub(r"\+0x[0-9a-f]+$", "", match[1]))
+        if symbols:
+            stacks.append((1, tuple(reversed(symbols))))
+    if not stacks:
+        raise benchmark.BenchmarkError("perf script has no symbolized call chains")
+    return stacks
+
+
+def scope_for(stack: tuple[str, ...]) -> str:
+    if any(s == "bench_simulate" for s in stack):
+        return "simulation"
+    if "hash_environment" in stack or "hash_object" in stack:
+        return "validation"
+    if "bench_sleep_warmup" in stack:
+        return "settling"
+    if "bench_destroy" in stack:
+        return "teardown"
+    if any(s.startswith("ivp_build_convex_surface") for s in stack):
+        return "convex_build"
+    if "run_once" in stack:
+        return "setup_or_churn"
+    return "harness"
+
+
+def aggregate_stacks(stacks: list[tuple[int, tuple[str, ...]]]) -> dict:
+    counts = Counter()
+    exclusive = defaultdict(Counter)
+    inclusive = defaultdict(Counter)
+    chains = defaultdict(Counter)
+    unresolved = Counter()
+    locations = defaultdict(lambda: defaultdict(Counter))
+    for entry in stacks:
+        weight, stack = entry[:2]
+        scope = scope_for(stack)
+        counts[scope] += weight
+        exclusive[scope][stack[-1]] += weight
+        for symbol in set(stack):
+            inclusive[scope][symbol] += weight
+        chains[scope][stack] += weight
+        if len(entry) > 2 and entry[2]:
+            locations[scope][stack[-1]][entry[2]] += weight
+        if stack[-1] in ("???", "[unknown]") or stack[-1].startswith("0x"):
+            unresolved[scope] += weight
+    total = sum(counts.values())
+    output = {}
+    for scope, count in counts.items():
+        functions = []
+        for name in inclusive[scope]:
+            self_count = exclusive[scope][name]
+            share = self_count / count
+            functions.append({
+                "function": name, "self_samples": self_count,
+                "inclusive_samples": inclusive[scope][name],
+                "self_percent": share * 100,
+                "inclusive_percent": inclusive[scope][name] / count * 100,
+                "approx_self_percent_95_error": 196 * math.sqrt(share * (1 - share) / count),
+                "max_speedup_if_self_eliminated": 1 / (1 - share) if share < 1 else None,
+                "self_locations": [{"source": source, "samples": samples}
+                                   for source, samples in locations[scope][name].most_common()],
+            })
+        output[scope] = {
+            "samples": count, "process_percent": count / total * 100,
+            "unresolved_leaf_samples": unresolved[scope],
+            "functions": sorted(functions, key=lambda f: (-f["self_samples"], f["function"])),
+            "stacks": [{"samples": n, "stack": list(stack)}
+                       for stack, n in chains[scope].most_common(20)],
+        }
+    return {"samples": total, "scopes": output}
+
+
+def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
+    raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
+    command = [str(runner), "--profile", args.profile, "--case", case,
+               "--hotspot-ms", str((args.seconds + 2) * 1000), "--format", "jsonl"]
+    if args.scale:
+        command += ["--scale", str(args.scale)]
+    if args.backend == "sample":
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            profiler = subprocess.run(
+                ["sample", str(process.pid), str(args.seconds), "1", "-mayDie",
+                 "-fullPaths", "-file", str(raw)], capture_output=True, text=True)
+            if profiler.returncode:
+                raise benchmark.BenchmarkError(f"sample failed: {profiler.stderr.strip()}")
+            stdout, stderr = process.communicate(timeout=args.seconds * 5 + 60)
+            if process.returncode:
+                raise benchmark.BenchmarkError(f"profile runner failed: {stderr.strip()}")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        stacks = sample_stacks(raw.read_text(encoding="utf-8", errors="replace"), locations=True)
+    else:
+        stdout = benchmark.run(
+            ["perf", "record", "-F", "997", "-g", "--call-graph", "dwarf",
+             "-o", str(raw), "--", *command], cwd=runner.parent, capture=True)
+        script = benchmark.run(["perf", "script", "-i", str(raw)], cwd=runner.parent, capture=True)
+        raw.with_suffix(".txt").write_text(script, encoding="utf-8")
+        stacks = perf_stacks(script)
+    record = benchmark.parse_jsonl(stdout, case)
+    if len(record) != 1 or record[0].get("kind") != "native-profile":
+        raise benchmark.BenchmarkError(f"{case}: expected one native-profile record")
+    report = aggregate_stacks(stacks)
+    report.update({"case": case, "scale": record[0]["scale"], "workload": record[0], "raw": str(raw)})
+    target = ("convex_build" if case == "convex_build" else
+              "setup_or_churn" if case == "object_churn" else "simulation")
+    scoped = report["scopes"].get(target, {})
+    report["adequate_samples"] = (scoped.get("samples", 0) >= args.min_samples
+                                  and scoped.get("unresolved_leaf_samples", 0)
+                                  <= scoped.get("samples", 0) * 0.10)
+    verify = [str(runner), "--profile", args.profile, "--case", case,
+              "--samples", "1", "--min-sample-ms", "1", "--format", "jsonl"]
+    if args.scale:
+        verify += ["--scale", str(args.scale)]
+    expected = benchmark.parse_jsonl(benchmark.run(verify, cwd=runner.parent, capture=True), case)[-1]
+    if expected.get("state_hash") != record[0]["state_hash"] or expected.get("residual_bytes") != 0:
+        raise benchmark.BenchmarkError(f"{case}: profiling hash/residual allocation verification failed")
+    report["state_hash_verified"] = True
+    if counts_runner:
+        verify[0] = str(counts_runner)
+        counted = benchmark.parse_jsonl(benchmark.run(verify, cwd=counts_runner.parent, capture=True), case)[-1]
+        if counted.get("state_hash") != record[0]["state_hash"] or counted.get("residual_bytes") != 0:
+            raise benchmark.BenchmarkError(f"{case}: operation-count run changed state or leaked memory")
+        counts = counted.get("minlist_operations")
+        if not counts or counts["adds"] != counts["tree_adds"] + counts["skip_adds"] + counts["fallback_adds"] or counts["adds"] != sum(counts["population_buckets"]):
+            raise benchmark.BenchmarkError(f"{case}: missing/inconsistent operation counts")
+        report["minlist_operations"] = counts
+    return report
+
+
+def print_report(result: dict, top: int) -> None:
+    for case in result["cases"]:
+        print(f"\n{case['case']} n={case['scale']} main-thread samples={case['samples']}")
+        for scope, item in sorted(case["scopes"].items(), key=lambda p: -p[1]["samples"]):
+            print(f"  {scope}: {item['process_percent']:.1f}% of process samples ({item['samples']})")
+            if scope not in ("simulation", "convex_build", "setup_or_churn", "teardown"):
+                continue
+            for function in item["functions"][:top]:
+                print(f"    self={function['self_percent']:5.1f}% "
+                      f"inclusive={function['inclusive_percent']:5.1f}%  {function['function']}")
+                if function["self_locations"]:
+                    print(f"      {function['self_locations'][0]['source']}")
+        if not case["adequate_samples"]:
+            print("  INSUFFICIENT: increase --seconds; too few scoped samples or unresolved symbols")
+        if "minlist_operations" in case:
+            c = case["minlist_operations"]
+            adds = c["adds"]
+            print(f"  minlist (separate intrusive run): adds={adds}, tree={c['tree_adds']}, "
+                  f"skip={c['skip_adds']}, fallback={c['fallback_adds']}, max population={c['max_population']}")
+            print(f"    comparisons/add={c['search_comparisons'] / adds if adds else 0:.1f}, "
+                  f"max comparisons={c['max_search_comparisons']}, population buckets={c['population_buckets']}")
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=("quick", "standard", "large"), default="large")
+    parser.add_argument("--case", action="append", choices=DEFAULT_CASES, dest="cases")
+    parser.add_argument("--scale", type=int)
+    parser.add_argument("--seconds", type=int, default=5)
+    parser.add_argument("--backend", choices=("auto", "sample", "perf"), default="auto")
+    parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--min-samples", type=int, default=200)
+    parser.add_argument("--top", type=int, default=8)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--operation-counts", action="store_true")
+    args = parser.parse_args(argv)
+    if args.seconds < 1 or args.min_samples < 1 or args.top < 1 or (args.scale is not None and args.scale < 1):
+        parser.error("seconds, min-samples, top and scale must be positive")
+    if args.scale and (not args.cases or len(args.cases) != 1):
+        parser.error("--scale requires exactly one --case")
+    if args.profile == "standard" and not args.scale:
+        parser.error("standard profiling requires --case and --scale to isolate one configuration")
+    if args.backend == "auto":
+        args.backend = "sample" if sys.platform == "darwin" else "perf"
+    if not shutil.which(args.backend):
+        raise benchmark.BenchmarkError(f"{args.backend} is unavailable; install the OS profiler")
+    root = Path(__file__).resolve().parents[1]
+    base = root / "build" / "benchmark" / "hotspots"
+    directory = base / dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    directory.mkdir(parents=True, exist_ok=True)
+    build = root / "build" / "benchmark" / "profile-lib"
+    if not args.no_build:
+        benchmark.run(["cmake", "-S", str(root), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
+                       "-DIVP_BUILD_BENCHMARKS=ON", "-DIVP_BUILD_TESTS=OFF",
+                       "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g -fno-omit-frame-pointer -fno-optimize-sibling-calls"], cwd=root)
+        benchmark.run(["cmake", "--build", str(build), "--target", "ivp_benchmark", "-j", "8"], cwd=root)
+    runner = build / "ivp_benchmark"
+    if not runner.exists():
+        raise benchmark.BenchmarkError(f"missing profiling runner: {runner}")
+    counts_runner = None
+    if args.operation_counts:
+        count_build = root / "build" / "benchmark" / "operation-lib"
+        if not args.no_build:
+            benchmark.run(["cmake", "-S", str(root), "-B", str(count_build),
+                           "-DCMAKE_BUILD_TYPE=Release", "-DIVP_BUILD_TESTS=OFF",
+                           "-DIVP_BUILD_BENCHMARKS=ON", "-DIVP_BENCHMARK_DIAGNOSTICS=ON"], cwd=root)
+            benchmark.run(["cmake", "--build", str(count_build), "--target", "ivp_benchmark", "-j", "8"], cwd=root)
+        counts_runner = count_build / "ivp_benchmark"
+        if not counts_runner.exists():
+            raise benchmark.BenchmarkError(f"missing operation-count runner: {counts_runner}")
+    result = {
+        "schema": PROFILE_SCHEMA, "profile": args.profile, "backend": args.backend,
+        "seconds": args.seconds, "metadata": {"libivp": benchmark.git_info(root),
+        "system": platform.system(), "architecture": platform.machine(),
+        "cpu": benchmark.cpu_name(),
+        "compiler": benchmark.read_compiler(build / "CMakeCache.txt")},
+        "cases": [],
+    }
+    for case in args.cases or DEFAULT_CASES:
+        print(f"Sampling {case} for {args.seconds}s...", file=sys.stderr, flush=True)
+        result["cases"].append(capture(runner, args, case, directory, counts_runner))
+    path = args.output or base / "results.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print_report(result, args.top)
+    print(f"\nHotspot report: {path}")
+    return 0 if all(case["adequate_samples"] for case in result["cases"]) else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except benchmark.BenchmarkError as exc:
+        print(f"profile: {exc}", file=sys.stderr)
+        raise SystemExit(1)

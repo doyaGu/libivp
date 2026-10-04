@@ -12,6 +12,7 @@ import statistics
 import subprocess
 import sys
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,17 @@ QUICK_SCENARIOS = (
 
 class BenchmarkError(RuntimeError):
     pass
+
+
+def run_native(command: list[str], *, cwd: Path, source: str) -> list[dict[str, Any]]:
+    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+    if result.returncode not in (0, 1) or not result.stdout.strip():
+        raise BenchmarkError(f"{source}: runner failed ({result.returncode}): {result.stderr.strip()}")
+    records = parse_jsonl(result.stdout, source)
+    if result.returncode and not any(r.get("kind") == "native-summary" and
+                                     r.get("gate_ok") is False for r in records):
+        raise BenchmarkError(f"{source}: runner failed without a reported absolute gate")
+    return records
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None,
@@ -67,6 +79,13 @@ def cpu_name() -> str:
         )
         if result.stdout.strip():
             return result.stdout.strip()
+        return "unknown"
+    if sys.platform.startswith("linux"):
+        cpuinfo = Path("/proc/cpuinfo")
+        if cpuinfo.exists():
+            for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith(("model name", "Hardware")):
+                    return line.split(":", 1)[-1].strip()
     return platform.processor() or platform.machine()
 
 
@@ -78,6 +97,25 @@ def read_compiler(cache: Path) -> dict[str, str]:
         for key in ("CMAKE_C_COMPILER", "CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION"):
             if line.startswith(key + ":"):
                 result[key.lower()] = line.split("=", 1)[-1]
+        if line.startswith(("CMAKE_BUILD_TYPE:", "CMAKE_C_FLAGS:", "CMAKE_C_FLAGS_RELEASE:",
+                            "IVP_REAL_DOUBLE:", "IVP_ENABLE_ASSERTS:", "IVP_ENABLE_STATS:",
+                            "IVP_CONTAINER_DEBUG:", "IVP_ENABLE_ASAN:", "IVP_ENABLE_UBSAN:")):
+            result[line.split(":", 1)[0].lower()] = line.split("=", 1)[-1]
+        if line.startswith("IVP_BENCHMARK_DIAGNOSTICS:"):
+            result["ivp_benchmark_diagnostics"] = line.split("=", 1)[-1]
+    # Compiler id/version are normally in this file, not CMakeCache.txt.
+    for path in sorted((cache.parent / "CMakeFiles").glob("*/CMakeCCompiler.cmake")):
+        for key, value in re.findall(
+                r'set\((CMAKE_C_COMPILER_(?:ID|VERSION)) "([^"]+)"\)',
+                path.read_text(encoding="utf-8")):
+            result[key.lower()] = value
+    for target in ("ivp", "ivp_benchmark"):
+        flags = cache.parent / "CMakeFiles" / f"{target}.dir" / "flags.make"
+        if flags.exists():
+            for line in flags.read_text(encoding="utf-8").splitlines():
+                if line.startswith(("C_FLAGS = ", "C_DEFINES = ")):
+                    key, value = line.split(" = ", 1)
+                    result[f"{target}_{key.lower()}"] = value
     return result
 
 
@@ -120,6 +158,9 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         lambda: defaultdict(list)
     )
     native_diagnostics: dict[tuple[str, str, str, int], list[dict[str, Any]]] = defaultdict(list)
+    lifetime_values = defaultdict(list)
+    outside_fractions = defaultdict(list)
+    timing_contracts = defaultdict(set)
     for record in records:
         if record["kind"] == "native":
             key = ("native", record["implementation"], record["case"], int(record["scale"]))
@@ -135,6 +176,14 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             continue
         groups[key][int(record.get("run", 0))].append(value)
+        timing_contracts[key].add(record.get("timing_contract", "native-v1"))
+        measured = record["operation_ns"] if record["kind"] == "native" else record["simulate_ns"]
+        if "total_ns" in record:
+            total = float(record["total_ns"])
+            if total < measured or measured <= 0:
+                raise BenchmarkError(f"invalid timing boundary for {key[2]}/{key[3]}")
+            lifetime_values[key].append(value * total / measured)
+            outside_fractions[key].append((total - measured) / total)
 
     output: list[dict[str, Any]] = []
     for (kind, implementation, name, scale), values_by_run in sorted(groups.items()):
@@ -154,7 +203,15 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "min_ns": min(values),
             "max_ns": max(values),
             "coefficient_of_variation": statistics.pstdev(values) / mean if mean else 0.0,
+            "p95_scope": "batch-average",
         }
+        key = (kind, implementation, name, scale)
+        if len(timing_contracts[key]) != 1:
+            raise BenchmarkError(f"mixed timing contracts: {name}/{scale}")
+        item["timing_contract"] = next(iter(timing_contracts[key]))
+        if lifetime_values[key]:
+            item["median_total_ns_per_op"] = statistics.median(lifetime_values[key])
+            item["outside_operation_percent"] = statistics.median(outside_fractions[key]) * 100
         diagnostics = native_diagnostics.get((kind, implementation, name, scale), [])
         if diagnostics:
             state_hashes = {record.get("state_hash") for record in diagnostics}
@@ -165,7 +222,42 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "peak_bytes": max(int(record["peak_bytes"]) for record in diagnostics),
                 "residual_bytes": max(int(record["residual_bytes"]) for record in diagnostics),
             })
+            scoped = [r for r in diagnostics if r.get("phase_scope") == "simulation"]
+            for record in scoped:
+                wall = int(record["diagnostic_operation_ns"])
+                if wall <= 0 or sum(record["phases_ns"].values()) > wall:
+                    raise BenchmarkError(f"diagnostic phases exceed measured operation: {name}/{scale}")
+            if scoped:
+                item["diagnostics"] = [{key: r[key] for key in (
+                    "diagnostic_operation_ns", "diagnostic_total_ns", "phases_ns",
+                    "windows", "psi_latency_ns", "latency_operation_ns", "latency_total_ns",
+                    "steps_per_world", "dt", "phase_scope") if key in r}
+                    for r in scoped]
+                item["phase_percent"] = {
+                    phase: statistics.fmean(r["phases_ns"][phase] / r["diagnostic_operation_ns"] * 100
+                                            for r in scoped)
+                    for phase in scoped[0]["phases_ns"]
+                }
         output.append(item)
+    return output
+
+
+def scaling_analysis(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = defaultdict(list)
+    for item in summary:
+        if item["kind"] == "native":
+            groups[(item["implementation"], item["name"])].append(item)
+    output = []
+    for (implementation, name), items in sorted(groups.items()):
+        items.sort(key=lambda r: r["scale"])
+        for before, after in zip(items, items[1:]):
+            size_ratio = after["scale"] / before["scale"]
+            time_ratio = after["median_ns"] / before["median_ns"]
+            output.append({"implementation": implementation, "case": name,
+                           "from_scale": before["scale"], "to_scale": after["scale"],
+                           "time_ratio": time_ratio,
+                           "exponent": math.log(time_ratio) / math.log(size_ratio),
+                           "unit": "ns/object-cycle" if name == "object_churn" else "ns/operation"})
     return output
 
 
@@ -203,6 +295,8 @@ def baseline_comparison(current: dict[str, Any], baseline_path: Path) -> dict[st
         previous = old.get(key)
         if not previous:
             continue
+        if item.get("timing_contract", "native-v1") != previous.get("timing_contract", "native-v1"):
+            raise BenchmarkError(f"baseline timing contract differs: {item['name']}/{item['scale']}; regenerate baseline")
         ratio = item["median_ns"] / previous["median_ns"] if previous["median_ns"] else None
         deltas.append({
             "kind": item["kind"], "implementation": item["implementation"],
@@ -231,6 +325,9 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
 
     current_meta = current["metadata"]
     baseline_meta = baseline.get("metadata", {})
+    cpu = current_meta.get("machine", {}).get("cpu")
+    if not cpu or cpu in ("unknown", "arm", "arm64", "x86_64"):
+        raise BenchmarkError("checked baseline requires a detected CPU model")
     for field in ("machine", "compiler", "build_type", "ivp_real_double"):
         if current_meta.get(field) != baseline_meta.get(field):
             raise BenchmarkError(f"checked baseline metadata differs: {field}")
@@ -252,6 +349,8 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
     speedups: dict[str, float] = {}
     for key, item in now.items():
         previous = before[key]
+        if item.get("timing_contract", "native-v1") != previous.get("timing_contract", "native-v1"):
+            raise BenchmarkError(f"baseline timing contract differs: {key[0]}/{key[1]}")
         if item.get("state_hash") != previous.get("state_hash"):
             raise BenchmarkError(f"state hash differs for {key[0]}/{key[1]}")
         if int(item.get("residual_bytes", -1)) != 0:
@@ -291,8 +390,22 @@ def print_report(result: dict[str, Any]) -> None:
             continue
         print(f"  {item['name']:<18} n={item['scale']:<5} "
               f"median={item['median_ns'] / 1000:9.3f} us/op "
-              f"p95={item['p95_ns'] / 1000:9.3f} us/op "
+              f"batch-p95={item['p95_ns'] / 1000:9.3f} us/op "
               f"cv={item['coefficient_of_variation'] * 100:5.1f}%")
+        if "outside_operation_percent" in item:
+            print(f"    outside operation={item['outside_operation_percent']:.1f}% of lifecycle wall time")
+        if "phase_percent" in item:
+            phases = sorted(item["phase_percent"].items(), key=lambda pair: -pair[1])[:3]
+            print("    simulation phases: " + ", ".join(f"{p}={v:.1f}%" for p, v in phases))
+            psi = [d["psi_latency_ns"] for d in item["diagnostics"] if "psi_latency_ns" in d]
+            if psi:
+                print(f"    diagnostic PSI p95={statistics.median(p['p95'] for p in psi) / 1000:.1f} us "
+                      f"max={max(p['max'] for p in psi) / 1000:.1f} us ({psi[0]['scope']})")
+    if result.get("scaling"):
+        print("\nScale growth (per-operation exponent; churn is normalized per object)")
+        for row in result["scaling"]:
+            print(f"  {row['case']:<18} {row['from_scale']}->{row['to_scale']}: "
+                  f"time {row['time_ratio']:.2f}x, exponent {row['exponent']:.2f}")
     scenario_rows = [r for r in result["comparisons"]]
     if scenario_rows:
         print("\nScenario comparison")
@@ -313,7 +426,7 @@ def print_report(result: dict[str, Any]) -> None:
         for item in baseline["deltas"]:
             print(f"  {item['name']:<20} n={item['scale']:<5} {item['delta_percent']:+7.2f}%")
     checked = result.get("checked_baseline")
-    if checked:
+    if checked and checked.get("passed"):
         print("\nChecked baseline: PASS")
         if checked["large_geometric_mean"] is not None:
             print(f"  large geometric mean: {checked['large_geometric_mean']:.3f}x")
@@ -330,11 +443,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", action="append", dest="cases")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--native-only", action="store_true")
+    parser.add_argument("--scale", type=int)
     args = parser.parse_args(argv)
     if args.runs <= 0:
         parser.error("--runs must be positive")
     if args.profile == "large" and args.compare_reference:
         parser.error("large is a native-only profile; use standard for reference comparison")
+    if args.scale is not None and (args.scale <= 0 or not args.cases or len(args.cases) != 1):
+        parser.error("--scale must be positive and requires exactly one native --case")
+    if args.native_only and args.compare_reference:
+        parser.error("--native-only cannot be used with --compare-reference")
 
     root = Path(__file__).resolve().parents[1]
     build_root = root / "build" / "benchmark"
@@ -374,29 +493,30 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.check or args.check_baseline:
         native_command.append("--check")
+    if args.scale:
+        native_command += ["--scale", str(args.scale)]
     native_filters = [case for case in (args.cases or []) if case in {
         "active_bodies", "contact_pile", "constraint_chain", "fast_impacts",
         "object_churn", "sleeping_world", "convex_build",
     }]
+    if args.scale and not native_filters:
+        parser.error("--scale requires a native --case")
     records: list[dict[str, Any]] = []
     for run_index in range(args.runs):
+        print(f"Native run {run_index + 1}/{args.runs} ({args.profile})", file=sys.stderr, flush=True)
         native_records: list[dict[str, Any]] = []
         if native_filters:
             for case in native_filters:
-                native_records.extend(parse_jsonl(
-                    run(native_command + ["--case", case], cwd=root, capture=True), case
-                ))
+                native_records.extend(run_native(native_command + ["--case", case], cwd=root, source=case))
         elif not args.cases:
-            native_records.extend(parse_jsonl(
-                run(native_command, cwd=root, capture=True), "ivp_benchmark"
-            ))
+            native_records.extend(run_native(native_command, cwd=root, source="ivp_benchmark"))
         for record in native_records:
             record["run"] = run_index
         records.extend(native_records)
 
     all_scenarios = scenarios(root / "tools" / "scenarios.txt")
     chosen_names = set(
-        () if args.profile == "large"
+        () if args.profile == "large" or args.native_only or args.scale
         else (QUICK_SCENARIOS if args.profile == "quick" else (s[0] for s in all_scenarios))
     )
     if args.cases:
@@ -426,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     if not records:
         raise BenchmarkError("no native case or scenario matched --case")
     summary = summarize(records)
+    compiler = read_compiler(lib_build / "CMakeCache.txt")
     metadata: dict[str, Any] = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "machine": {
@@ -433,10 +554,10 @@ def main(argv: list[str] | None = None) -> int:
             "architecture": platform.machine(), "cpu": cpu_name(),
         },
         "python": platform.python_version(),
-        "compiler": read_compiler(lib_build / "CMakeCache.txt"),
+        "compiler": compiler,
         "libivp": git_info(root),
-        "build_type": "Release",
-        "ivp_real_double": True,
+        "build_type": compiler.get("cmake_build_type", "unknown"),
+        "ivp_real_double": compiler.get("ivp_real_double") == "ON",
     }
     if args.compare_reference:
         metadata["reference"] = git_info(reference_root)
@@ -448,15 +569,26 @@ def main(argv: list[str] | None = None) -> int:
         "records": records,
         "summary": summary,
         "comparisons": comparisons(summary),
+        "scaling": scaling_analysis(summary),
+        "absolute_gate_failures": [{"case": r["case"], "scale": r["scale"], "run": r["run"]}
+                                   for r in records if r["kind"] == "native-summary" and
+                                   r.get("gate_ok") is False],
     }
     if args.baseline:
         result["baseline"] = baseline_comparison(result, args.baseline)
     if args.check_baseline:
-        result["checked_baseline"] = enforce_baseline(result, args.check_baseline)
+        try:
+            result["checked_baseline"] = enforce_baseline(result, args.check_baseline)
+        except BenchmarkError as exc:
+            result["checked_baseline"] = {"passed": False, "error": str(exc)}
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print_report(result)
     print(f"\nRaw result: {output_path}")
-    return 0
+    if result["absolute_gate_failures"]:
+        print(f"Absolute gates FAILED: {result['absolute_gate_failures']}", file=sys.stderr)
+    if result.get("checked_baseline", {}).get("passed") is False:
+        print(f"Checked baseline FAILED: {result['checked_baseline']['error']}", file=sys.stderr)
+    return 1 if result["absolute_gate_failures"] or result.get("checked_baseline", {}).get("passed") is False else 0
 
 
 if __name__ == "__main__":
