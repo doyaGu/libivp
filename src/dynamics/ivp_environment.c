@@ -17,6 +17,7 @@
 #include <ivp/collision/ivp_hull_mgr.h>
 #include <ivp/controllers/ivp_actuator_check_dist.h>
 #include <ivp/controllers/ivp_actuator_extra.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/controllers/ivp_actuator_force.h>
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
@@ -969,10 +970,14 @@ static void slot_ctrl_detach_all(ivp_environment_t *env, slot_ctrl_t *sc, bool s
  * reference destructor's remove_controller_from_environment) and stays
  * registered without cores until it is removed.  Other controllers just
  * forget the core. */
+static void env_unlink_controller_anchors(ivp_environment_t *env, ivp_controller_handle_t h);
+
 static void slot_core_deleted(ivp_sim_ctrl_t *c, ivp_core_t *core)
 {
     slot_ctrl_t *sc = (slot_ctrl_t *)c;
     if (sc->dependent && ivp_pvec_index_of(&sc->assoc_cores, core) >= 0) {
+        /* ~IVP_Actuator_Two_Point: the anchors leave their objects */
+        env_unlink_controller_anchors(sc->env, sc->handle);
         ivp_ctrl_mgr_remove_controller_from_environment(sc->env, &sc->base, true);
         ivp_pvec_remove_all(&sc->assoc_cores);
         sc->deleted_with_core = true;
@@ -1148,7 +1153,60 @@ typedef struct env_builtin_ctrl {
     bool (*on_add)(void *ctx, ivp_environment_t *env);   /* reference constructor work */
     void (*on_remove)(void *ctx);                        /* reference destructor work  */
     void (*reset_time)(void *ctx, ivp_time_t offset);    /* IVP_Controller::reset_time */
+    void (*anchors)(void *ctx, bool link);               /* link / unlink the IVP_Anchors */
 } env_builtin_ctrl_t;
+
+/* IVP_Anchor::init_anchor (insert_anchor) while the actuator is registered,
+ * remove_anchor when it is removed or deleted with a core */
+static void env_link_anchor(ivp_anchor_t *a, ivp_vec3r_t *core_pos, bool link)
+{
+    if (link) {
+        ivp_anchor_link(a, core_pos);
+    } else {
+        ivp_anchor_unlink(a);
+    }
+}
+static void env_force_anchors(void *ctx, bool link)
+{
+    ivp_force_actuator_state_t *st = (ivp_force_actuator_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
+static void env_rot_mot_anchors(void *ctx, bool link)
+{
+    ivp_rot_mot_state_t *st = (ivp_rot_mot_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
+static void env_extra_anchors(void *ctx, bool link)
+{
+    ivp_actuator_extra_state_t *st = (ivp_actuator_extra_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
+static void env_stabilizer_anchors(void *ctx, bool link)
+{
+    ivp_stabilizer_state_t *st = (ivp_stabilizer_state_t *)ctx;
+    for (int i = 0; i < 4; i++) env_link_anchor(&st->anchors[i], &st->anchor_os[i], link);
+}
+static void env_spring_anchors(void *ctx, bool link)
+{
+    ivp_spring_state_t *st = (ivp_spring_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
+static void env_suspension_anchors(void *ctx, bool link)
+{
+    ivp_suspension_state_t *st = (ivp_suspension_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
+static void env_stiff_spring_anchors(void *ctx, bool link)
+{
+    ivp_stiff_spring_state_t *st = (ivp_stiff_spring_state_t *)ctx;
+    env_link_anchor(&st->anchors[0], &st->anchor_a_os, link);
+    env_link_anchor(&st->anchors[1], &st->anchor_b_os, link);
+}
 
 static bool env_check_dist_on_add(void *ctx, ivp_environment_t *env)
 {
@@ -1170,35 +1228,43 @@ static void env_golem_reset_time(void *ctx, ivp_time_t offset) { ivp_golem_reset
 static const env_builtin_ctrl_t *env_find_builtin_controller(ivp_controller_event_fn_t event_fn)
 {
     static const env_builtin_ctrl_t table[] = {
-        { ivp_controller_forcefield, IVP_CP_ACTUATOR, NULL, NULL, NULL, NULL },
-        { ivp_controller_buoyancy, IVP_CP_FORCEFIELDS, NULL, NULL, NULL, NULL },
-        { ivp_controller_force_actuator, IVP_CP_ACTUATOR, ivp_force_actuator_discovery, NULL, env_force_on_remove, NULL },
-        { ivp_controller_torque_actuator, IVP_CP_ACTUATOR, ivp_torque_actuator_discovery, NULL, env_torque_on_remove, NULL },
-        { ivp_controller_rot_mot, IVP_CP_ACTUATOR, ivp_rot_mot_discovery, NULL, env_rot_mot_on_remove, NULL },
-        { ivp_controller_actuator_extra, IVP_CP_ACTUATOR, ivp_actuator_extra_discovery, NULL, env_extra_on_remove, NULL },
-        { ivp_controller_check_dist, IVP_CP_ACTUATOR, NULL, env_check_dist_on_add, env_check_dist_on_remove, NULL },
-        { ivp_controller_stabilizer, IVP_CP_ACTUATOR, ivp_stabilizer_discovery, NULL, NULL, NULL },
-        { ivp_controller_spring, IVP_CP_ACTUATOR, ivp_spring_discovery, NULL, env_spring_on_remove, NULL }, /* IVP_Actuator::get_controller_priority */
-        { ivp_controller_suspension, IVP_CP_ACTUATOR, ivp_suspension_discovery, NULL, NULL, NULL },
-        { ivp_controller_stiff_spring, IVP_CP_STIFF_SPRINGS, ivp_stiff_spring_discovery, NULL, env_stiff_spring_on_remove, NULL },
-        { ivp_controller_floating, IVP_CP_FLOATING, NULL, NULL, NULL, NULL },
-        { ivp_controller_motion, IVP_CP_MOTION, NULL, NULL, NULL, NULL },
-        { ivp_controller_golem, IVP_CP_MOTION, NULL, NULL, NULL, env_golem_reset_time },
-        { ivp_controller_constraint, IVP_CP_CONSTRAINTS, ivp_constraint_discovery, NULL, NULL, NULL },
-        { ivp_controller_constraint_local, IVP_CP_CONSTRAINTS, ivp_constraint_local_discovery, NULL, NULL, NULL },
-        { ivp_controller_fixed_keyed, IVP_CP_CONSTRAINTS, ivp_fixed_keyed_discovery, NULL, NULL, NULL },
-        { ivp_controller_car_system, IVP_CP_CONSTRAINTS, NULL, NULL, NULL, NULL }, /* ivp_constraint_car.hxx:88 */
-        { ivp_controller_world_friction, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL },
-        { ivp_controller_raycast_car, IVP_CP_CONSTRAINTS_MAX, ivp_car_discovery, NULL, NULL, NULL },
-        { ivp_controller_fake_jetski, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL },
-        { ivp_controller_airboat, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL },
-        { ivp_controller_phantom, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL },
+        { ivp_controller_forcefield, IVP_CP_ACTUATOR, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_buoyancy, IVP_CP_FORCEFIELDS, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_force_actuator, IVP_CP_ACTUATOR, ivp_force_actuator_discovery, NULL, env_force_on_remove, NULL, env_force_anchors },
+        { ivp_controller_torque_actuator, IVP_CP_ACTUATOR, ivp_torque_actuator_discovery, NULL, env_torque_on_remove, NULL, NULL },
+        { ivp_controller_rot_mot, IVP_CP_ACTUATOR, ivp_rot_mot_discovery, NULL, env_rot_mot_on_remove, NULL, env_rot_mot_anchors },
+        { ivp_controller_actuator_extra, IVP_CP_ACTUATOR, ivp_actuator_extra_discovery, NULL, env_extra_on_remove, NULL, env_extra_anchors },
+        { ivp_controller_check_dist, IVP_CP_ACTUATOR, NULL, env_check_dist_on_add, env_check_dist_on_remove, NULL, NULL },
+        { ivp_controller_stabilizer, IVP_CP_ACTUATOR, ivp_stabilizer_discovery, NULL, NULL, NULL, env_stabilizer_anchors },
+        { ivp_controller_spring, IVP_CP_ACTUATOR, ivp_spring_discovery, NULL, env_spring_on_remove, NULL, env_spring_anchors }, /* IVP_Actuator::get_controller_priority */
+        { ivp_controller_suspension, IVP_CP_ACTUATOR, ivp_suspension_discovery, NULL, NULL, NULL, env_suspension_anchors },
+        { ivp_controller_stiff_spring, IVP_CP_STIFF_SPRINGS, ivp_stiff_spring_discovery, NULL, env_stiff_spring_on_remove, NULL, env_stiff_spring_anchors },
+        { ivp_controller_floating, IVP_CP_FLOATING, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_motion, IVP_CP_MOTION, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_golem, IVP_CP_MOTION, NULL, NULL, NULL, env_golem_reset_time, NULL },
+        { ivp_controller_constraint, IVP_CP_CONSTRAINTS, ivp_constraint_discovery, NULL, NULL, NULL, NULL },
+        { ivp_controller_constraint_local, IVP_CP_CONSTRAINTS, ivp_constraint_local_discovery, NULL, NULL, NULL, NULL },
+        { ivp_controller_fixed_keyed, IVP_CP_CONSTRAINTS, ivp_fixed_keyed_discovery, NULL, NULL, NULL, NULL },
+        { ivp_controller_car_system, IVP_CP_CONSTRAINTS, NULL, NULL, NULL, NULL, NULL }, /* ivp_constraint_car.hxx:88 */
+        { ivp_controller_world_friction, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_raycast_car, IVP_CP_CONSTRAINTS_MAX, ivp_car_discovery, NULL, NULL, NULL, NULL },
+        { ivp_controller_fake_jetski, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_airboat, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL, NULL },
+        { ivp_controller_phantom, IVP_CP_CONSTRAINTS_MAX, NULL, NULL, NULL, NULL, NULL },
     };
     if (!event_fn) return NULL;
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (table[i].fn == event_fn) return &table[i];
     }
     return NULL;
+}
+
+static void env_unlink_controller_anchors(ivp_environment_t *env, ivp_controller_handle_t h)
+{
+    ivp_controller_slot_t *slot = env_get_controller_slot(env, h);
+    if (!slot) return;
+    const env_builtin_ctrl_t *b = env_find_builtin_controller(slot->event_fn);
+    if (b && b->anchors) b->anchors(slot->ctx, false);
 }
 
 static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *env, int priority,
@@ -1259,7 +1325,10 @@ ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env, i
     } else {
         h = env_add_controller_internal(env, b->priority, fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
     }
-    if (ivp_controller_handle_is_valid(h) && b->on_add) (void)b->on_add(ctx, env);
+    if (ivp_controller_handle_is_valid(h)) {
+        if (b->anchors) b->anchors(ctx, true);
+        if (b->on_add) (void)b->on_add(ctx, env);
+    }
     return h;
 }
 
@@ -1285,7 +1354,10 @@ ivp_controller_handle_t ivp_environment_announce_dependent_controller(ivp_enviro
 {
     if (!env || !fn || !discovery_fn) return ivp_controller_handle_invalid();
     const env_builtin_ctrl_t *b = env_find_builtin_controller(fn);
-    return env_add_controller_internal(env, b ? b->priority : priority, fn, ctx, IVP_CONTROLLER_DEPENDENT, discovery_fn);
+    ivp_controller_handle_t h =
+        env_add_controller_internal(env, b ? b->priority : priority, fn, ctx, IVP_CONTROLLER_DEPENDENT, discovery_fn);
+    if (ivp_controller_handle_is_valid(h) && b && b->anchors) b->anchors(ctx, true);
+    return h;
 }
 
 bool ivp_environment_remove_dependent_controller(ivp_environment_t *env, ivp_controller_handle_t controller_handle,
@@ -1296,6 +1368,7 @@ bool ivp_environment_remove_dependent_controller(ivp_environment_t *env, ivp_con
     if (!slot) return false;
     {
         const env_builtin_ctrl_t *b = env_find_builtin_controller(slot->event_fn);
+        if (b && b->anchors) b->anchors(slot->ctx, false);
         if (b && b->on_remove) b->on_remove(slot->ctx);
     }
     slot_ctrl_t *sc = slot_ctrl_of(slot);
@@ -2146,6 +2219,9 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
     }
     /* ~IVP_Real_Object */
     env_remove_controllers_of_object(env, obj);
+    /* clear_internal_references: anchors of actuators that stay registered
+     * (more than 64 controllers of the object) leave the object */
+    while (obj->anchors) ivp_anchor_unlink(obj->anchors);
     ivp_object_pipeline_clear_references(env, obj);
     fire_object_event_global(env, obj, OBJ_EV_DELETED);     /* global 'object deleted' */
     ivp_env_fire_collision_private(env, obj, COLL_OBJ_DELETED, (const void *)obj); /* local collision listeners */
