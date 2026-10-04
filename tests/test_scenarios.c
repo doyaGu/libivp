@@ -109,6 +109,7 @@ enum {
     SCENARIO_MERGE_OBJECTS     = 600,
     SCENARIO_OBJECT_ATTACH     = 601,
     SCENARIO_MERGE_BUOYANCY    = 602,
+    SCENARIO_ANCHOR_FOLLOW     = 603,
 
     SCENARIO_CONCAVE_STATIC   = 200,
     SCENARIO_COMPOUND_DYNAMIC = 201,
@@ -162,6 +163,7 @@ static const char *scenario_name_from_id(int scenario_id)
         case SCENARIO_MERGE_OBJECTS: return "merge_objects";
         case SCENARIO_OBJECT_ATTACH: return "object_attach";
         case SCENARIO_MERGE_BUOYANCY: return "merge_buoyancy";
+        case SCENARIO_ANCHOR_FOLLOW: return "anchor_follow";
         case SCENARIO_CONCAVE_STATIC: return "concave_static";
         case SCENARIO_COMPOUND_DYNAMIC: return "compound_dynamic";
         case SCENARIO_CONVEX_HULLS: return "convex_hulls";
@@ -5677,7 +5679,10 @@ static int run_golem_beam(FILE *out, int steps, double dt, invariant_result_t *i
  * the frozen box (whose core keeps the ball attached to it).
  * merge_buoyancy: the buoyancy attacher on a merged raft (box + box + ball)
  * and on a box that gets a ball attached (buoyancy and dampening for every
- * object of the core). */
+ * object of the core).
+ * anchor_follow: springs on an attached box and its parent; reposition_object_Ros
+ * and detach_object move the box into a new core space, and the springs'
+ * anchors follow it (IVP_Real_Object::set_new_m_object_f_core). */
 
 /* reference mg_box / mg_ball: create_dynamic_box / ball, woken only when wake */
 static ivp_object_t *mg_box(c2_scene_t *sc, double friction, double elasticity,
@@ -6069,6 +6074,77 @@ static int run_merge_buoyancy(FILE *out, int steps, double dt, invariant_result_
     return rc;
 }
 
+/* ── anchor_follow ────────────────────────────────────────────────────── */
+
+typedef struct mg_anchor_follow {
+    ivp_object_t *parent, *box, *hook;
+    ivp_spring_state_t spring_box, spring_parent;
+    int done;
+} mg_anchor_follow_t;
+
+static void mg_anchor_follow_hook(int step, ivp_environment_t *env, void *ctx)
+{
+    (void)step;
+    mg_anchor_follow_t *s = (mg_anchor_follow_t *)ctx;
+    const double t = (double)ivp_environment_get_time(env);
+    if (s->done == 0 && t >= 0.1) {
+        s->done = 1;
+        ivp_object_attach_object(s->parent, s->box, (double)-1.0f);
+        /* after the attach: the springs act on the parent's core through the box's anchors */
+        c2_spring(env, &s->spring_box, s->hook, 0.0, 0.1, 0.0, s->box, 0.1, -0.2, 0.05, 30.0, 1.5, 0.6);
+        c2_spring(env, &s->spring_parent, s->hook, 0.3, 0.1, 0.0, s->parent, -0.4, 0.0, 0.1, 15.0, 1.0, 0.9);
+    } else if (s->done == 1 && t >= 0.5) {
+        s->done = 2;
+        ivp_quatr_t q = c2_quat(0.0, 1.0, 0.0, 0.6);
+        ivp_vec3r_t shift = ivp_vec3r(IVP_REAL(0.6), IVP_REAL(-0.15), IVP_REAL(0.25));
+        (void)ivp_object_reposition_object_Ros(s->parent, s->box, &q, &shift, false);
+    } else if (s->done == 2 && t >= 1.0) {
+        s->done = 3;
+        ivp_object_template_t templ;
+        mg_template(&templ, 0.5, 0.2, 1.1, 0.03, 0.03, 0.03);
+        ivp_object_detach_object(s->box, &templ);
+    }
+}
+
+static int run_anchor_follow(FILE *out, int steps, double dt, invariant_result_t *inv)
+{
+    c2_scene_t sc;
+    if (!c2_scene_init(&sc, dt)) return 1;
+    mg_anchor_follow_t s;
+    memset(&s, 0, sizeof(s));
+
+    c2_add(&sc, mg_static(&sc, 0.7, 0.1, 20.0, 0.5, 20.0, 0.0, 3.0, 0.0, NULL), "ground");
+
+    ivp_quatr_t qp = c2_quat(1.0, 0.0, 0.0, 0.2);
+    ivp_object_t *parent = mg_box(&sc, 0.5, 0.2, 0.6, 0.2, 0.4, 3.0, 0.2, 0.52, 0.4, 0.0, 0.8, 0.0, &qp, true);
+    if (parent) {
+        c2_set_speed(parent, 0.5f, -1.0f, 0.0f);
+        c2_set_rot_speed(parent, 0.0f, 1.0f, 0.3f);
+    }
+    ivp_quatr_t qb = c2_quat(0.0, 0.0, 1.0, 0.3);
+    ivp_object_t *box = mg_box(&sc, 0.5, 0.2, 0.2, 0.2, 0.2, 1.0, 0.027, 0.027, 0.027, 1.2, 0.5, 0.3, &qb, true);
+    ivp_object_t *hook = mg_static(&sc, 0.7, 0.1, 0.1, 0.1, 0.1, 1.0, -1.5, 0.2, NULL);
+
+    s.parent = parent;
+    s.box = box;
+    s.hook = hook;
+    c2_add(&sc, parent, "parent");
+    c2_add(&sc, box, "box");
+    c2_add(&sc, hook, "hook");
+
+    int rc = (parent && box && hook) ? c2_run(&sc, out, SCENARIO_ANCHOR_FOLLOW, steps, dt, mg_anchor_follow_hook, &s) : 1;
+    if (rc == 0 && inv) {
+        c2_check_finite(&sc, inv, "anchor_follow");
+        if (s.done >= 3) {
+            inv_check(inv, box->physical_core != parent->physical_core, "anchor_follow: the box is detached");
+            inv_check(inv, s.spring_box.anchors[1].linked && s.spring_box.anchors[1].l_anchor_object == box,
+                      "anchor_follow: the box spring stays anchored to the box");
+        }
+    }
+    c2_scene_destroy(&sc);
+    return rc;
+}
+
 /* ── CLI ────────────────────────────────────────────────────────────────── */
 
 static int parse_scenario_name(const char *name, int *scenario_out)
@@ -6120,6 +6196,7 @@ static int parse_scenario_name(const char *name, int *scenario_out)
     else if (!strcmp(name, "merge_objects")) *scenario_out = SCENARIO_MERGE_OBJECTS;
     else if (!strcmp(name, "object_attach")) *scenario_out = SCENARIO_OBJECT_ATTACH;
     else if (!strcmp(name, "merge_buoyancy")) *scenario_out = SCENARIO_MERGE_BUOYANCY;
+    else if (!strcmp(name, "anchor_follow")) *scenario_out = SCENARIO_ANCHOR_FOLLOW;
     else return 0;
     return 1;
 }
@@ -6135,7 +6212,7 @@ static void print_usage(const char *exe)
             "airboat|fake_jetski|"
             "raycast_car_drive|check_dist_events|golem_beam|"
             "concave_static|compound_dynamic|convex_hulls|grid_terrain|hull_pile|galton|fast_impacts|"
-            "spawn_remove|long_range|universe_evict|merge_objects|object_attach|merge_buoyancy "
+            "spawn_remove|long_range|universe_evict|merge_objects|object_attach|merge_buoyancy|anchor_follow "
             "[--steps N] [--dt seconds] [--output file.jsonl] [--check-invariants] [--assert-continue]\n"
             "Outputs JSONL snapshots (to file or stdout).\n"
             "With --check-invariants, runs physics correctness checks after simulation.\n", exe);
@@ -6276,6 +6353,7 @@ int main(int argc, char **argv)
         case SCENARIO_MERGE_OBJECTS:  rc = run_merge_objects(out, steps, dt, inv);  break;
         case SCENARIO_OBJECT_ATTACH:  rc = run_object_attach(out, steps, dt, inv);  break;
         case SCENARIO_MERGE_BUOYANCY: rc = run_merge_buoyancy(out, steps, dt, inv); break;
+        case SCENARIO_ANCHOR_FOLLOW:  rc = run_anchor_follow(out, steps, dt, inv);  break;
         default:                      rc = 1;                                       break;
     }
 
