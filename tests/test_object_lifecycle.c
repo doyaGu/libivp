@@ -12,6 +12,8 @@
 #include <ivp/dynamics/ivp_cluster.h>
 #include <ivp/events/ivp_listener_object.h>
 #include <ivp/math/ivp_transform.h>
+#include <ivp/controllers/ivp_actuator_spring.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include "dynamics/ivp_sim_internal.h"
 #include <math.h>
 #include <string.h>
@@ -293,6 +295,76 @@ IVP_TEST(merged_core_from_two_cores_has_valid_next_psi_quat) {
     ivp_environment_destroy(env);
 }
 
+/* IVP_Anchor: the anchors of a registered actuator are in the object's
+ * anchor list; set_new_m_object_f_core (reposition_object_Ros, detach)
+ * recomputes their core_pos, so the anchor stays at the same object point. */
+static void anchor_world_from_core(const ivp_object_t *o, const ivp_vec3r_t *core_pos, ivp_vec3r_t *out) {
+    ivp_transform_point(out, &o->physical_core->m_world_f_core_last_psi, core_pos);
+}
+
+static void anchor_world_from_object(const ivp_object_t *o, const ivp_vec3r_t *object_pos, ivp_vec3r_t *out) {
+    ivp_transform_r_t m;
+    ivp_object_get_m_world_f_object_AT(o, &m);
+    ivp_transform_point(out, &m, object_pos);
+}
+
+IVP_TEST(actuator_anchor_follows_reposition_and_detach) {
+    ivp_environment_t *env = create_test_env();
+    ivp_object_t *parent = create_test_object(env, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *child = create_test_object(env, IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_attach_object(parent, child, IVP_OBJECT_ATTACH_CURRENT_DISTANCE);
+    ivp_spring_state_t spring;
+    ivp_vec3r_t pa = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-1.0), IVP_REAL(0.0));
+    ivp_vec3r_t pb = ivp_vec3r(IVP_REAL(0.25), IVP_REAL(-0.5), IVP_REAL(0.125));
+    ivp_spring_state_setup(&spring, NULL, &pa, child, &pb, IVP_REAL(10.0), IVP_REAL(1.0), IVP_REAL(1.0));
+    ivp_controller_handle_t h = ivp_environment_add_controller(env, 0, ivp_controller_spring, &spring);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
+    IVP_ASSERT_TRUE(spring.anchors[1].linked && child->anchors == &spring.anchors[1]);
+    IVP_ASSERT_FALSE(spring.anchors[0].linked);   /* world anchor: static object, never moved */
+
+    /* move the child inside the parent's core space */
+    /* 0.7 rad about y */
+    ivp_quatr_t q = ivp_quatr_make(IVP_REAL(0.0), (ivp_real_t)sin(0.35), IVP_REAL(0.0), (ivp_real_t)cos(0.35));
+    ivp_vec3r_t shift = ivp_vec3r(IVP_REAL(1.5), IVP_REAL(0.5), IVP_REAL(-0.5));
+    IVP_ASSERT_EQ(ivp_object_reposition_object_Ros(parent, child, &q, &shift, false), IVP_OK);
+    ivp_vec3r_t w_core, w_obj;
+    anchor_world_from_core(child, &spring.anchor_b_os, &w_core);
+    anchor_world_from_object(child, &pb, &w_obj);
+    for (int k = 0; k < 3; k++) IVP_ASSERT_NEAR(w_core.k[k], w_obj.k[k], 1e-4);
+
+    /* the child gets its own core: the anchor is in the new core space */
+    ivp_object_template_t t;
+    detach_template(&t, IVP_REAL(1.0));
+    ivp_object_detach_object(child, &t);
+    IVP_ASSERT_TRUE(child->physical_core != parent->physical_core);
+    anchor_world_from_core(child, &spring.anchor_b_os, &w_core);
+    anchor_world_from_object(child, &pb, &w_obj);
+    for (int k = 0; k < 3; k++) IVP_ASSERT_NEAR(w_core.k[k], w_obj.k[k], 1e-4);
+
+    /* removing the actuator takes its anchors out of the object */
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, h));
+    IVP_ASSERT_FALSE(spring.anchors[1].linked);
+    IVP_ASSERT_TRUE(child->anchors == NULL);
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(actuator_anchor_unlinked_when_object_deleted) {
+    ivp_environment_t *env = create_test_env();
+    ivp_object_t *a = create_test_object(env, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = create_test_object(env, IVP_REAL(3.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_spring_state_t spring;
+    ivp_vec3r_t zero = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_spring_state_setup(&spring, a, &zero, b, &zero, IVP_REAL(10.0), IVP_REAL(1.0), IVP_REAL(3.0));
+    (void)ivp_environment_add_controller(env, 0, ivp_controller_spring, &spring);
+    IVP_ASSERT_TRUE(a->anchors == &spring.anchors[0] && b->anchors == &spring.anchors[1]);
+    /* the actuator is removed with its object, both anchors leave their objects */
+    ivp_environment_destroy_object(env, a);
+    IVP_ASSERT_FALSE(spring.anchors[0].linked);
+    IVP_ASSERT_FALSE(spring.anchors[1].linked);
+    IVP_ASSERT_TRUE(b->anchors == NULL);
+    ivp_environment_destroy(env);
+}
+
 /* ========== environment teardown order (~IVP_Environment) ========== */
 
 typedef struct deleted_log {
@@ -446,6 +518,8 @@ int main(void) {
     IVP_REGISTER(merge_objects_more_than_six);
     IVP_REGISTER(attach_object_ignores_null_and_self);
     IVP_REGISTER(merged_core_from_two_cores_has_valid_next_psi_quat);
+    IVP_REGISTER(actuator_anchor_follows_reposition_and_detach);
+    IVP_REGISTER(actuator_anchor_unlinked_when_object_deleted);
 
     /* ~IVP_Environment */
     IVP_REGISTER(environment_teardown_cluster_order);
