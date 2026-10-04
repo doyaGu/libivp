@@ -19,6 +19,7 @@ option(IVP_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(IVP_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(IVP_BUILD_TESTS "Build unit tests" ON)
 option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_BUILD_TESTS})
+option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
 # ── Strict floating-point and warnings will be applied to ivp targets only,
@@ -611,8 +612,16 @@ endif ()
 if (IVP_BUILD_BENCHMARKS)
     add_executable(ivp_benchmark benchmarks/ivp_benchmark.c)
     target_link_libraries(ivp_benchmark PRIVATE ivp)
+    if (IVP_BENCHMARK_DIAGNOSTICS)
+        target_compile_definitions(ivp PRIVATE IVP_BENCHMARK_DIAGNOSTICS)
+        target_compile_definitions(ivp_benchmark PRIVATE IVP_BENCHMARK_DIAGNOSTICS)
+        target_include_directories(ivp_benchmark PRIVATE src/containers)
+    endif ()
     if (NOT MSVC)
         target_link_libraries(ivp_benchmark PRIVATE m)
+        target_compile_options(ivp_benchmark PRIVATE -ffp-contract=off -fno-fast-math -frounding-math)
+    else ()
+        target_compile_options(ivp_benchmark PRIVATE /fp:strict /Oi-)
     endif ()
 endif ()
 
@@ -747,6 +756,12 @@ if (IVP_BUILD_TESTS)
         add_test(NAME test_benchmark_tool
                  COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_tool.py)
         set_tests_properties(test_benchmark_tool PROPERTIES LABELS "unit;perf")
+        if (IVP_BUILD_BENCHMARKS)
+            add_test(NAME test_benchmark_runner
+                     COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py
+                             $<TARGET_FILE:ivp_benchmark>)
+            set_tests_properties(test_benchmark_runner PROPERTIES LABELS "unit;perf" TIMEOUT 30)
+        endif ()
     endif ()
 
     # ── CTest labels ──────────────────────────────────────────────────────

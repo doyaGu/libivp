@@ -11,6 +11,22 @@
 #include <ivp/base/ivp_message.h>
 
 #include <math.h>
+#include "ivp_minlist_diagnostics.h"
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+static ivp_minlist_diagnostics_t minlist_diagnostics;
+static uint64_t search_comparisons;
+void ivp_minlist_diagnostics_reset(void)
+{
+    minlist_diagnostics = (ivp_minlist_diagnostics_t){0};
+}
+ivp_minlist_diagnostics_t ivp_minlist_diagnostics_get(void)
+{
+    return minlist_diagnostics;
+}
+#define COUNT_COMPARISON() (++search_comparisons)
+#else
+#define COUNT_COMPARISON() ((void)0)
+#endif
 
 #define IVP_MINLIST_RED UINT32_C(0x80000000)
 #define IVP_MINLIST_PARENT_MASK UINT32_C(0x7fffffff)
@@ -395,6 +411,7 @@ static void find_tree_neighbors(const ivp_minlist_t *ml, float value,
     uint32_t next = IVP_MINLIST_UNUSED;
     uint32_t current = ml->tree_root;
     while (current != IVP_MINLIST_TREE_UNUSED) {
+        COUNT_COMPARISON();
         if (rb_key_before(value, &ml->elems[current])) {
             next = current;
             current = ml->elems[current].tree_left;
@@ -443,6 +460,7 @@ static void link_with_reference_skip_search(ivp_minlist_t *ml, uint32_t index)
     uint32_t long_index = ml->first_long;
     int max_compare_length = 3;
     while (long_index != IVP_MINLIST_UNUSED) {
+        COUNT_COMPARISON();
         ivp_minlist_elem_t *long_elem = &ml->elems[long_index];
         if (long_elem->value >= e->value) break;
         max_compare_length++;
@@ -454,6 +472,7 @@ static void link_with_reference_skip_search(ivp_minlist_t *ml, uint32_t index)
     int comparisons = 0;
     uint32_t current = ml->elems[last].next;
     while (current != IVP_MINLIST_UNUSED) {
+        COUNT_COMPARISON();
         comparisons++;
         if (e->value > ml->elems[current].value) {
             last = current;
@@ -500,6 +519,7 @@ static void link_with_linear_reference_search(ivp_minlist_t *ml, uint32_t index)
     uint32_t last = ml->first_element;
     uint32_t current = ml->elems[last].next;
     while (current != IVP_MINLIST_UNUSED) {
+        COUNT_COMPARISON();
         if (e->value > ml->elems[current].value) {
             last = current;
             current = ml->elems[current].next;
@@ -538,6 +558,18 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value)
     e->value = value;
 
     const bool finite = isfinite(value) != 0;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    search_comparisons = 0;
+    minlist_diagnostics.adds++;
+    if (ml->counter > minlist_diagnostics.max_population)
+        minlist_diagnostics.max_population = ml->counter;
+    uint32_t size = ml->counter;
+    int bucket = size < 16 ? 0 : size < 64 ? 1 : size < 256 ? 2 : size < 1024 ? 3 : size < 4096 ? 4 : 5;
+    minlist_diagnostics.population_buckets[bucket]++;
+    if (!ml->tree_active) minlist_diagnostics.skip_adds++;
+    else if (finite && ml->nonfinite_count == 0) minlist_diagnostics.tree_adds++;
+    else minlist_diagnostics.fallback_adds++;
+#endif
     if (!ml->tree_active) {
         link_with_reference_skip_search(ml, index);
     } else if (finite && ml->nonfinite_count == 0) {
@@ -559,6 +591,11 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value)
         ml->nonfinite_count++;
     }
     ml->counter++;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    minlist_diagnostics.comparisons += search_comparisons;
+    if (search_comparisons > minlist_diagnostics.max_comparisons)
+        minlist_diagnostics.max_comparisons = search_comparisons;
+#endif
     ml->min_value = ml->elems[ml->first_element].value;
     return index;
 }
@@ -568,6 +605,9 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index)
     if (!ml || !ml->elems) return;
     IVP_ASSERT(index < ml->malloced_size);
     if (index >= ml->malloced_size || ml->counter == 0) return;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    minlist_diagnostics.removes++;
+#endif
     ivp_minlist_elem_t *e = &ml->elems[index];
     uint32_t prev = e->prev;
     uint32_t next = e->next;
