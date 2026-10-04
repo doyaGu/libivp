@@ -933,11 +933,14 @@ typedef struct slot_ctrl {
     ivp_sim_ctrl_t          base;
     ivp_environment_t      *env;
     ivp_controller_handle_t handle;
+    ivp_controller_slot_t  *slot;            /* registry slots are individually allocated */
     int                     priority;
     bool                    dependent;
     bool                    all_cores;
+    bool                    cache_assoc_objects;
     ivp_pvec_t              assoc_cores;     /* dependent: associated cores (announced) */
     ivp_object_handle_t    *assoc_handles;
+    ivp_object_t          **assoc_objects;   /* built-in dependent controllers only */
     int                     assoc_count;
     bool                    deleted_with_core; /* a core of a dependent controller was deleted */
 } slot_ctrl_t;
@@ -990,7 +993,7 @@ static void slot_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t *
 {
     slot_ctrl_t *sc = (slot_ctrl_t *)c;
     ivp_environment_t *env = sc->env;
-    ivp_controller_slot_t *slot = ivp_controller_system_get_by_handle(env_controller_system(env), sc->handle);
+    ivp_controller_slot_t *slot = sc->slot;
     if (!slot || !slot->enabled || !slot->event_fn) return;
     ivp_event_sim_t pub;
     slot_fill_event_sim(sc, es, &pub);
@@ -999,7 +1002,9 @@ static void slot_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t *
         /* the first associated object with a movable core */
         ivp_object_t *dispatch_obj = NULL;
         for (int i = 0; i < sc->assoc_count && !dispatch_obj; i++) {
-            ivp_object_t *o = ivp_object_system_get_by_handle(os, sc->assoc_handles[i]);
+            ivp_object_t *o = sc->cache_assoc_objects
+                                  ? sc->assoc_objects[i]
+                                  : ivp_object_system_get_by_handle(os, sc->assoc_handles[i]);
             if (o && o->physical_core && !o->physical_core->physical_unmoveable) dispatch_obj = o;
         }
         if (dispatch_obj) slot->event_fn(&pub, dispatch_obj, slot->ctx);
@@ -1052,6 +1057,7 @@ static void slot_ctrl_free(ivp_environment_t *env, slot_ctrl_t *sc)
     (void)ivp_pvec_remove_if_present(&env->pl->slot_ctrls, sc);
     ivp_pvec_clear(&sc->assoc_cores);
     free(sc->assoc_handles);
+    free(sc->assoc_objects);
     free(sc);
 }
 
@@ -1077,13 +1083,28 @@ static void slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
         ivp_pvec_remove_all(&sc->assoc_cores);
         for (int i = 0; i < ivp_pvec_len(&cores); i++) ivp_pvec_add(&sc->assoc_cores, ivp_pvec_at(&cores, i));
         free(sc->assoc_handles);
+        free(sc->assoc_objects);
         sc->assoc_handles = NULL;
+        sc->assoc_objects = NULL;
         sc->assoc_count = 0;
         if (n > 0) {
             sc->assoc_handles = (ivp_object_handle_t *)malloc((size_t)n * sizeof(ivp_object_handle_t));
-            if (sc->assoc_handles) {
+            if (sc->cache_assoc_objects) {
+                sc->assoc_objects = (ivp_object_t **)malloc((size_t)n * sizeof(ivp_object_t *));
+            }
+            if (sc->assoc_handles && (!sc->cache_assoc_objects || sc->assoc_objects)) {
                 memcpy(sc->assoc_handles, handles, (size_t)n * sizeof(ivp_object_handle_t));
+                if (sc->cache_assoc_objects) {
+                    for (int i = 0; i < n; i++) {
+                        sc->assoc_objects[i] = ivp_object_system_get_by_handle(os, handles[i]);
+                    }
+                }
                 sc->assoc_count = n;
+            } else {
+                free(sc->assoc_handles);
+                free(sc->assoc_objects);
+                sc->assoc_handles = NULL;
+                sc->assoc_objects = NULL;
             }
         }
         if (ivp_pvec_len(&sc->assoc_cores) > 0) ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
@@ -1293,8 +1314,10 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     sc->base.vt = &slot_vt;
     sc->env = env;
     sc->handle = out;
+    sc->slot = slot;
     sc->priority = normalized_priority;
     sc->dependent = (mode == IVP_CONTROLLER_DEPENDENT);
+    sc->cache_assoc_objects = env_find_builtin_controller(event_fn) != NULL;
     ivp_pvec_init(&sc->assoc_cores);
     slot->sim_ctrl = sc;
     ivp_pvec_add(&env->pl->slot_ctrls, sc);
