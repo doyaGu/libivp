@@ -1102,6 +1102,15 @@ static void slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
     ivp_pvec_clear(&cores);
 }
 
+typedef struct env_builtin_ctrl env_builtin_ctrl_t;
+static const env_builtin_ctrl_t *env_find_builtin_controller(ivp_controller_event_fn_t event_fn);
+
+/* Dependent user controllers follow the cores of the objects their
+ * discovery function reports.  Built-in controllers keep the cores they
+ * were announced with, like the reference (IVP_Actuator::
+ * actuator_controlled_cores is set in the constructor): an object that
+ * moves to another core (detach_object) keeps its actuators on the old
+ * core, and a deleted core deletes them (slot_core_deleted). */
 static void env_refresh_controller_associations(ivp_environment_t *env)
 {
     ivp_controller_system_t *cs = env_controller_system(env);
@@ -1109,6 +1118,7 @@ static void env_refresh_controller_associations(ivp_environment_t *env)
         ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, i);
         slot_ctrl_t *sc = slot_ctrl_of(slot);
         if (!sc || !sc->dependent) continue;
+        if (env_find_builtin_controller(slot->event_fn)) continue;
         slot_ctrl_refresh_dependent(env, sc, slot);
     }
 }
@@ -1146,7 +1156,7 @@ static ivp_controller_slot_t *env_get_controller_slot(ivp_environment_t *env, iv
  * get_priority() and, for IVP_Controller_Dependent subclasses that act on a
  * fixed set of cores (actuators, constraints, springs, cars), the function
  * returning those cores. */
-typedef struct env_builtin_ctrl {
+struct env_builtin_ctrl {
     ivp_controller_event_fn_t     fn;
     int                           priority;
     ivp_controller_discovery_fn_t discovery; /* NULL: attached to every core */
@@ -1154,7 +1164,7 @@ typedef struct env_builtin_ctrl {
     void (*on_remove)(void *ctx);                        /* reference destructor work  */
     void (*reset_time)(void *ctx, ivp_time_t offset);    /* IVP_Controller::reset_time */
     void (*anchors)(void *ctx, bool link);               /* link / unlink the IVP_Anchors */
-} env_builtin_ctrl_t;
+};
 
 /* IVP_Anchor::init_anchor (insert_anchor) while the actuator is registered,
  * remove_anchor when it is removed or deleted with a core */
