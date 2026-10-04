@@ -9,10 +9,10 @@ libivp 与原版引擎（默认 `../ivp`）在 `tools/scenarios.txt` 的全部�
 
 ## 准备
 
-原版引擎和 runner 在 `https://github.com/doyaGu/ivp` 的分支 `libivp-parity-runner` 上（引擎为 `8b81109`，分支在其上只加 runner 的提交），需要克隆到与本仓库同级的 `../ivp`：
+原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上（对照的引擎版本为 `8b81109`，其后只有 runner 的提交），需要克隆到与本仓库同级的 `../ivp`：
 
 ```bash
-git clone -b libivp-parity-runner https://github.com/doyaGu/ivp.git ../ivp
+git clone https://github.com/doyaGu/ivp.git ../ivp
 ```
 
 放在别处时用 `IVP_REF_SRC` 指定路径。构建原版需要 C++17 编译器，比较脚本需要 python3。
