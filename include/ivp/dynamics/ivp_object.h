@@ -150,6 +150,7 @@ typedef struct ivp_object {
     bool                    object_deletion_deferred;
     bool                    check_vicinity_on_deferred_deletion;
     bool                    object_listener_exists; /* flags.object_listener_exists */
+    struct ivp_anchor      *anchors;           /* anchors of registered actuators (ivp_anchor.h) */
 } ivp_object_t;
 
 /* IVP_Real_Object::get_core: the current (physical) core.  Several objects

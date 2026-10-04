@@ -17,6 +17,7 @@
 #include "dynamics/ivp_env_pipeline.h"
 #include "solver/ivp_friction_internal.h"
 #include <ivp/dynamics/ivp_cache_object.h>
+#include <ivp/dynamics/ivp_anchor.h>
 
 void ivp_core_free_friction_info_hash(ivp_core_t *core);   /* ivp_contact_point.c */
 
@@ -461,8 +462,36 @@ bool ivp_object_disable_simulation(ivp_object_t *obj)
     return true;
 }
 
-/* IVP_Real_Object::set_new_m_object_f_core (libivp has no IVP_Anchor list:
- * controllers keep their anchors in core space of the object's core at setup) */
+/* IVP_Real_Object::insert_anchor / remove_anchor (ivp_object.cxx:443-471) */
+void ivp_anchor_link(ivp_anchor_t *anchor, ivp_vec3r_t *core_pos)
+{
+    ivp_object_t *obj = anchor->l_anchor_object;
+    if (!obj || anchor->linked) return;
+    anchor->core_pos = core_pos;
+    anchor->anchor_prev_in_object = NULL;
+    anchor->anchor_next_in_object = obj->anchors;
+    if (obj->anchors) obj->anchors->anchor_prev_in_object = anchor;
+    obj->anchors = anchor;
+    anchor->linked = true;
+}
+
+void ivp_anchor_unlink(ivp_anchor_t *anchor)
+{
+    if (!anchor->linked) return;
+    ivp_anchor_t *previous = anchor->anchor_prev_in_object;
+    ivp_anchor_t *following = anchor->anchor_next_in_object;
+    if (previous) {
+        previous->anchor_next_in_object = following;
+    } else {
+        anchor->l_anchor_object->anchors = following;
+    }
+    if (following) following->anchor_prev_in_object = previous;
+    anchor->anchor_next_in_object = anchor->anchor_prev_in_object = NULL;
+    anchor->core_pos = NULL;
+    anchor->linked = false;
+}
+
+/* IVP_Real_Object::set_new_m_object_f_core */
 void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r_t *new_m_object_f_core)
 {
     /* new_m_core_f_object = transpose(new_m_object_f_core) */
@@ -473,6 +502,12 @@ void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r
     ivp_vec3r_t neg;
     lvp_set_negative(&neg, &new_m_object_f_core->pos);
     lvm_vmult3(&m, &neg, &m.pos);
+    /* new_m_core_f_object.vmult4(&a->object_pos, &a->core_pos) */
+    for (ivp_anchor_t *a = obj->anchors; a; a = a->anchor_next_in_object) {
+        ivp_vec3f_t core_pos;
+        lvm_vmult4_ff(&m, &a->object_pos, &core_pos);
+        lvp_set_f(a->core_pos, &core_pos);
+    }
     if (lvp_quad_length(&m.pos) < (D)(P_RES_EPS * P_RES_EPS)) {
         obj->shift_core_f_object_is_zero = true;
         ivp_vec3r_set_zero(&obj->shift_core_f_object);
