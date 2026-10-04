@@ -287,6 +287,45 @@ IVP_TEST(minlist_index_activates_for_finite_values) {
     ivp_minlist_destroy(&ml);
 }
 
+IVP_TEST(minlist_indexed_zero_and_nonfinite_keys) {
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    for (int i = 0; i < 2048; ++i)
+        ivp_minlist_add(&ml, (void *)(uintptr_t)(i + 1), (float)(i + 1));
+    IVP_ASSERT_TRUE(ml.tree_active);
+    ivp_minlist_index_t a = ivp_minlist_add(&ml, &dummy_a, -0.0f);
+    ivp_minlist_index_t b = ivp_minlist_add(&ml, &dummy_b, 0.0f);
+    ivp_minlist_index_t c = ivp_minlist_add(&ml, &dummy_c, -0.0f);
+    ivp_minlist_enumerator_t en;
+    ivp_minlist_enum_init(&en, &ml);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_c);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_b);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_a);
+    IVP_ASSERT_TRUE(signbit(ivp_minlist_find_min_value(&ml)) != 0);
+    ivp_minlist_remove(&ml, b);
+    ivp_minlist_index_t reused = ivp_minlist_add(&ml, &dummy_d, 0.0f);
+    IVP_ASSERT_EQ(reused, b);
+    ivp_minlist_index_t nan_index = ivp_minlist_add(&ml, &dummy_e, NAN);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 1);
+    ivp_minlist_index_t negative = ivp_minlist_add(&ml, &dummy_b, -1.0f);
+    IVP_ASSERT_TRUE(ivp_minlist_find_min_elem(&ml) == &dummy_b);
+    ivp_minlist_remove(&ml, nan_index);
+    ivp_minlist_remove(&ml, negative);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 0);
+    ivp_minlist_enum_init(&en, &ml);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_d);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_c);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_a);
+    ivp_minlist_index_t infinity = ivp_minlist_add(&ml, &dummy_e, INFINITY);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 1);
+    ivp_minlist_remove(&ml, infinity);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 0);
+    ivp_minlist_remove(&ml, a);
+    ivp_minlist_remove(&ml, c);
+    ivp_minlist_remove(&ml, reused);
+    ivp_minlist_destroy(&ml);
+}
+
 typedef struct minlist_model_entry {
     float value;
     uint32_t sequence;
@@ -670,6 +709,7 @@ int main(void) {
     IVP_REGISTER(minlist_equal_zero_and_index_reuse);
     IVP_REGISTER(minlist_nonfinite_values_use_reference_fallback);
     IVP_REGISTER(minlist_index_activates_for_finite_values);
+    IVP_REGISTER(minlist_indexed_zero_and_nonfinite_keys);
     IVP_REGISTER(minlist_randomized_differential);
 
     /* Vhash tests */
