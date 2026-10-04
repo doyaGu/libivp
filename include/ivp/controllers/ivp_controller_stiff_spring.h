@@ -17,6 +17,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
 #include <ivp/utility/ivp_active_value.h>
@@ -40,6 +41,7 @@ typedef struct ivp_stiff_spring_state {
      * setup takes object-space coordinates, world coordinates for NULL. */
     ivp_vec3r_t   anchor_a_os;
     ivp_vec3r_t   anchor_b_os;
+    ivp_anchor_t  anchors[2];       /* IVP_Actuator_Two_Point::anchors (object_pos, object list) */
 
     /* Spring parameters (reference template defaults: all 0) */
     ivp_real_t    stiffness;        /* spring_constant [0..1] (dimensionless) */

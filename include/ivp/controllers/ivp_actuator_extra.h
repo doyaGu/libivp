@@ -21,6 +21,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/utility/ivp_active_value.h>
@@ -64,6 +65,7 @@ typedef struct ivp_actuator_extra_state {
     ivp_object_t  *obj_b;              /* anchor 1 */
     ivp_vec3r_t    anchor_a_os;        /* core space */
     ivp_vec3r_t    anchor_b_os;
+    ivp_anchor_t   anchors[2];         /* IVP_Actuator_Two_Point::anchors (object_pos, object list) */
     ivp_extra_info_t info;
 
     ivp_vec3d_t    current_float_cam_pos;  /* IVP_U_Point */

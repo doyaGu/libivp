@@ -16,6 +16,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/utility/ivp_active_value.h>
 
@@ -45,6 +46,7 @@ typedef struct ivp_spring_state {
      * object, i.e. world space, for a NULL object). */
     ivp_vec3r_t   anchor_a_os;
     ivp_vec3r_t   anchor_b_os;
+    ivp_anchor_t  anchors[2];       /* IVP_Actuator_Two_Point::anchors (object_pos, object list) */
 
     /* Spring parameters (already multiplied with spring_values_factor) */
     ivp_real_t    stiffness;        /* spring constant k (N/m) */

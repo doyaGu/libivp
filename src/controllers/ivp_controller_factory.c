@@ -274,13 +274,15 @@ static void fac_environment_deleted(ivp_listener_object_t *self, struct ivp_envi
 
 /* The anchor object as stored in libivp actuator states (NULL for the
  * static object) and the anchor's core_pos (float exact). */
-static ivp_object_t *fac_anchor(ivp_environment_t *env, const ivp_template_anchor_t *ta, ivp_vec3r_t *core_pos)
+static ivp_object_t *fac_anchor(ivp_environment_t *env, const ivp_template_anchor_t *ta, ivp_vec3r_t *core_pos,
+                                ivp_anchor_t *anchor)
 {
     ivp_object_t *obj = ta->object;
     if (obj == ivp_environment_get_static_object(env)) obj = NULL;
-    ivp_vec3f_t cp;
-    ivp_ctl_anchor_core_pos_ws(obj, &ta->coords_world, &cp);
+    ivp_vec3f_t cp, object_pos;
+    ivp_ctl_anchor_core_pos_ws(obj, &ta->coords_world, &cp, &object_pos);
     lvp_set_f(core_pos, &cp);
+    ivp_ctl_anchor_set(anchor, obj, &object_pos);
     return obj;
 }
 
@@ -309,8 +311,8 @@ ivp_force_actuator_state_t *ivp_controller_factory_create_force(ivp_environment_
     fac_entry_t *e = fac_find_entry(fac_find_registry(env), st);
     ivp_force_actuator_state_init(st);
     /* IVP_Actuator_Two_Point: anchors, controlled cores, announce */
-    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os);
-    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os);
+    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os, &st->anchors[0]);
+    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os, &st->anchors[1]);
     fac_add_object(e, st->obj_a);
     fac_add_object(e, st->obj_b);
     /* IVP_Actuator_Force */
@@ -339,8 +341,8 @@ ivp_torque_actuator_state_t *ivp_controller_factory_create_torque(ivp_environmen
     fac_entry_t *e = fac_find_entry(fac_find_registry(env), st);
     ivp_torque_actuator_state_init(st);
     ivp_vec3r_t cp0, cp1;
-    ivp_object_t *obj0 = fac_anchor(env, templ->anchors[0], &cp0);
-    ivp_object_t *obj1 = fac_anchor(env, templ->anchors[1], &cp1);
+    ivp_object_t *obj0 = fac_anchor(env, templ->anchors[0], &cp0, NULL);
+    ivp_object_t *obj1 = fac_anchor(env, templ->anchors[1], &cp1, NULL);
     fac_add_object(e, obj0);
     fac_add_object(e, obj1);
     st->obj = obj0; /* the torque acts on anchor 0's object */
@@ -385,8 +387,8 @@ ivp_rot_mot_state_t *ivp_controller_factory_create_rotmot(ivp_environment_t *env
     if (!st) return NULL;
     fac_entry_t *e = fac_find_entry(fac_find_registry(env), st);
     ivp_rot_mot_state_init(st);
-    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os);
-    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os);
+    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os, &st->anchors[0]);
+    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os, &st->anchors[1]);
     fac_add_object(e, st->obj_a);
     fac_add_object(e, st->obj_b);
     st->max_rotation_speed = (ivp_real_t)templ->max_rotation_speed;
@@ -437,8 +439,8 @@ ivp_spring_state_t *ivp_controller_factory_create_spring(ivp_environment_t *env,
     if (!st) return NULL;
     fac_entry_t *e = fac_find_entry(fac_find_registry(env), st);
     ivp_spring_state_init(st);
-    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os);
-    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os);
+    st->obj_a = fac_anchor(env, templ->anchors[0], &st->anchor_a_os, &st->anchors[0]);
+    st->obj_b = fac_anchor(env, templ->anchors[1], &st->anchor_b_os, &st->anchors[1]);
     fac_add_object(e, st->obj_a);
     fac_add_object(e, st->obj_b);
     st->rest_length = (ivp_real_t)templ->spring_len;
@@ -473,8 +475,8 @@ ivp_suspension_state_t *ivp_controller_factory_create_suspension(ivp_environment
     if (!st) return NULL;
     fac_entry_t *e = fac_find_entry(fac_find_registry(env), st);
     ivp_suspension_state_init(st);
-    st->obj_a = fac_anchor(env, templ->spring.anchors[0], &st->anchor_a_os);
-    st->obj_b = fac_anchor(env, templ->spring.anchors[1], &st->anchor_b_os);
+    st->obj_a = fac_anchor(env, templ->spring.anchors[0], &st->anchor_a_os, &st->anchors[0]);
+    st->obj_b = fac_anchor(env, templ->spring.anchors[1], &st->anchor_b_os, &st->anchors[1]);
     fac_add_object(e, st->obj_a);
     fac_add_object(e, st->obj_b);
     float factor = 1.0f;
@@ -509,7 +511,7 @@ ivp_stabilizer_state_t *ivp_controller_factory_create_stabilizer(ivp_environment
     ivp_stabilizer_state_init(st);
     /* IVP_Actuator_Four_Point: anchors only, the controller is not announced */
     for (int i = 0; i < 4; i++) {
-        st->obj[i] = fac_anchor(env, templ->anchors[i], &st->anchor_os[i]);
+        st->obj[i] = fac_anchor(env, templ->anchors[i], &st->anchor_os[i], &st->anchors[i]);
         fac_add_object(e, st->obj[i]);
     }
     st->stabi_constant = (ivp_real_t)templ->stabi_constant;

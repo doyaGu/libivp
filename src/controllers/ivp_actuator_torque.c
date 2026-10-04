@@ -72,8 +72,8 @@ void ivp_torque_actuator_state_setup_anchors(ivp_torque_actuator_state_t *state,
     {
         ivp_environment_t *env = obj ? obj->owner : NULL;
         ivp_vec3r_t cp0, cp1;
-        ivp_ctl_anchor_setup_os(obj, env, anchor0_os, &cp0);
-        ivp_ctl_anchor_setup_os(obj, env, anchor1_os, &cp1);
+        ivp_ctl_anchor_setup_os(obj, env, anchor0_os, &cp0, NULL);
+        ivp_ctl_anchor_setup_os(obj, env, anchor1_os, &cp1, NULL);
         ivp_vec3f_t c0 = ivp_ctl_f(&cp0), c1 = ivp_ctl_f(&cp1), axis_cs;
         lvf_subtract2(&axis_cs, &c1, &c0);
         (void)lvf_normize(&axis_cs);

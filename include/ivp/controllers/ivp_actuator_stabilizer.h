@@ -11,6 +11,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/controllers/ivp_controller.h>
 
 #ifdef __cplusplus
@@ -24,6 +25,7 @@ typedef struct ivp_stabilizer_state {
     ivp_object_t *obj[4];
     ivp_vec3r_t   anchor_os[4];    /* IVP_Anchor::core_pos (float-exact); setup takes
                                       object-space coordinates */
+    ivp_anchor_t  anchors[4];      /* IVP_Actuator_Four_Point::anchors (object_pos, object list) */
 
     /* Parameters */
     ivp_real_t    stabi_constant;  /* [N/m] */

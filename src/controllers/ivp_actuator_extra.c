@@ -62,6 +62,18 @@ void ivp_actuator_extra_init(ivp_actuator_extra_state_t *state, const ivp_templa
         ivp_vec3f_t c0 = ivp_ctl_f(&templ->anchors_cs[0]), c1 = ivp_ctl_f(&templ->anchors_cs[1]);
         state->anchor_a_os = ivp_ctl_r(&c0);
         state->anchor_b_os = ivp_ctl_r(&c1);
+        /* the template gives core coordinates: object_pos = m_object_f_core * core_pos */
+        ivp_object_t *objs[2] = { state->obj_a, state->obj_b };
+        const ivp_vec3f_t *cs[2] = { &c0, &c1 };
+        for (int i = 0; i < 2; i++) {
+            ivp_vec3f_t object_pos = *cs[i];
+            if (objs[i]) {
+                ivp_transform_r_t m_core_f_object;
+                ivp_ctl_calc_m_core_f_object(objs[i], &m_core_f_object);
+                lvm_vimult4_ff(&m_core_f_object, cs[i], &object_pos);
+            }
+            ivp_ctl_anchor_set(&state->anchors[i], objs[i], &object_pos);
+        }
     }
     state->info = templ->info;
 

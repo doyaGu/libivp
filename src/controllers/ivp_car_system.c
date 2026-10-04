@@ -86,18 +86,36 @@ static inline bool car_wheel_ok(const ivp_car_system_t *car, int w)
 
 static inline float car_f(ivp_real_t v) { return (float)v; }
 
-/* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor:
- * returns the anchor's core_pos (IVP_U_Float_Point); shared with the
- * actuator ports (ivp_controller_ref.h) */
-static void car_anchor_os(ivp_object_t *obj, const ivp_vec3f_t *coords_os, ivp_vec3f_t *core_pos)
+/* An initialised IVP_Anchor: its object, core_pos and object_pos
+ * (IVP_U_Float_Point) */
+typedef struct car_anchor {
+    ivp_object_t *obj;
+    ivp_vec3f_t   core_pos;
+    ivp_vec3f_t   object_pos;
+} car_anchor_t;
+
+/* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor
+ * (shared with the actuator ports, ivp_controller_ref.h) */
+static void car_anchor_os(ivp_object_t *obj, const ivp_vec3f_t *coords_os, car_anchor_t *a)
 {
-    ivp_ctl_anchor_core_pos_os(obj, coords_os, core_pos);
+    a->obj = obj;
+    ivp_ctl_anchor_core_pos_os(obj, coords_os, &a->core_pos, &a->object_pos);
 }
 
 /* IVP_Template_Anchor::set_anchor_position_cs */
-static void car_anchor_cs(ivp_object_t *obj, const ivp_vec3f_t *coords_cs, ivp_vec3f_t *core_pos)
+static void car_anchor_cs(ivp_object_t *obj, const ivp_vec3f_t *coords_cs, car_anchor_t *a)
 {
-    ivp_ctl_anchor_core_pos_cs(obj, coords_cs, core_pos);
+    a->obj = obj;
+    ivp_ctl_anchor_core_pos_cs(obj, coords_cs, &a->core_pos, &a->object_pos);
+}
+
+/* an anchor of a libivp actuator state from an initialised anchor */
+static ivp_vec3r_t car_state_anchor(const car_anchor_t *a, ivp_anchor_t *anchor)
+{
+    ivp_ctl_anchor_set(anchor, a->obj, &a->object_pos);
+    ivp_vec3r_t r;
+    lvp_set_f(&r, &a->core_pos);
+    return r;
 }
 
 static inline ivp_vec3r_t car_vr(const ivp_vec3f_t *v)
@@ -109,11 +127,11 @@ static inline ivp_vec3r_t car_vr(const ivp_vec3f_t *v)
 
 /* IVP_Actuator_Torque: axis = normized(anchor1.core_pos - anchor0.core_pos) */
 static void car_create_torque(ivp_car_system_t *car, ivp_torque_actuator_state_t *st, ivp_controller_handle_t *h,
-                              ivp_object_t *obj, const ivp_vec3f_t *core_pos0, const ivp_vec3f_t *core_pos1,
+                              ivp_object_t *obj, const car_anchor_t *anchor0, const car_anchor_t *anchor1,
                               float max_rotation_speed)
 {
     ivp_vec3f_t axis;
-    lvf_subtract2(&axis, core_pos1, core_pos0);
+    lvf_subtract2(&axis, &anchor1->core_pos, &anchor0->core_pos);
     (void)lvf_normize(&axis);
     ivp_vec3r_t axis_r = car_vr(&axis);
     ivp_torque_actuator_state_init(st);
@@ -124,15 +142,15 @@ static void car_create_torque(ivp_car_system_t *car, ivp_torque_actuator_state_t
 
 /* IVP_Actuator_Force with push_first_object / !push_second_object */
 static void car_create_force(ivp_car_system_t *car, ivp_force_actuator_state_t *st, ivp_controller_handle_t *h,
-                             ivp_object_t *obj0, const ivp_vec3f_t *core_pos0, ivp_object_t *obj1,
-                             const ivp_vec3f_t *core_pos1, float force)
+                             ivp_object_t *obj0, const car_anchor_t *anchor0, ivp_object_t *obj1,
+                             const car_anchor_t *anchor1, float force)
 {
-    ivp_vec3r_t a0 = car_vr(core_pos0), a1 = car_vr(core_pos1);
+    ivp_vec3r_t a0 = car_vr(&anchor0->core_pos), a1 = car_vr(&anchor1->core_pos);
     ivp_force_actuator_state_init(st);
     ivp_force_actuator_state_setup(st, obj0, &a0, obj1, &a1, (ivp_real_t)force, true, false);
-    /* the anchors are already resolved (IVP_Anchor::core_pos) */
-    st->anchor_a_os = a0;
-    st->anchor_b_os = a1;
+    /* the anchors are already resolved (IVP_Anchor::init_anchor) */
+    st->anchor_a_os = car_state_anchor(anchor0, &st->anchors[0]);
+    st->anchor_b_os = car_state_anchor(anchor1, &st->anchors[1]);
     *h = ivp_environment_add_controller(car->environment, IVP_CP_ACTUATOR, ivp_controller_force_actuator, st);
 }
 
@@ -448,8 +466,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
     car->env_listener = ivp_environment_add_event_listener(env, car_env_event, car);
 
     /*** springs / shock absorbers, rotation motors ***/
-    ivp_vec3f_t anchor_body[IVP_CAR_SYSTEM_MAX_WHEELS];
-    ivp_vec3f_t anchor_wheel[IVP_CAR_SYSTEM_MAX_WHEELS];
+    car_anchor_t anchor_body[IVP_CAR_SYSTEM_MAX_WHEELS];
+    car_anchor_t anchor_wheel[IVP_CAR_SYSTEM_MAX_WHEELS];
     for (int wheel_nr = 0; wheel_nr < car->n_wheels; wheel_nr++) {
         float spring_len = 500.0f; /* be careful with car sizes around 500m ;-) */
 
@@ -463,22 +481,22 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         spring_len -= car_f(templ->spring_pre_tension[wheel_nr]);
 
         ivp_suspension_state_t *sp = &car->car_spring[wheel_nr];
-        ivp_vec3r_t a0 = car_vr(&anchor_body[wheel_nr]), a1 = car_vr(&anchor_wheel[wheel_nr]);
+        ivp_vec3r_t a0 = car_vr(&anchor_body[wheel_nr].core_pos), a1 = car_vr(&anchor_wheel[wheel_nr].core_pos);
         ivp_suspension_state_init(sp);
         ivp_suspension_state_setup(sp, car->body, car->car_wheel[wheel_nr], &a0, &a1,
                                    (ivp_real_t)car_f(templ->spring_constant[wheel_nr]),
                                    (ivp_real_t)car_f(templ->spring_damping[wheel_nr]),
                                    (ivp_real_t)car_f(templ->spring_damping_compression[wheel_nr]),
                                    (ivp_real_t)spring_len);
-        /* the anchors are already resolved (IVP_Anchor::core_pos) */
-        sp->anchor_a_os = a0;
-        sp->anchor_b_os = a1;
+        /* the anchors are already resolved (IVP_Anchor::init_anchor) */
+        sp->anchor_a_os = car_state_anchor(&anchor_body[wheel_nr], &sp->anchors[0]);
+        sp->anchor_b_os = car_state_anchor(&anchor_wheel[wheel_nr], &sp->anchors[1]);
         sp->max_body_force = (ivp_real_t)car_f(templ->max_body_force[wheel_nr]);
         car->h_spring[wheel_nr] =
             ivp_environment_add_controller(env, IVP_CP_ACTUATOR, ivp_controller_suspension, sp);
 
         /* rotation motor (wheel drive) */
-        ivp_vec3f_t left, right;
+        car_anchor_t left, right;
         lvf_zero(&hp);
         hp.k[cs_car->x_idx] = car_f(templ->wheel_reversed_sign[wheel_nr]);
         car_anchor_os(car->car_wheel[wheel_nr], &hp, &left);
@@ -491,7 +509,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
 
     /*** wheel rotation counter torque on the body ***/
     {
-        ivp_vec3f_t hp, left, right;
+        ivp_vec3f_t hp;
+        car_anchor_t left, right;
         lvf_zero(&hp);
         hp.k[cs_car->x_idx] = 1.0f;
         car_anchor_os(car->body, &hp, &left);
@@ -511,17 +530,18 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
             int wheel0 = i * wheels_per_axis;
             int wheel1 = wheel0 + 1;
             if (wheel1 >= car->n_wheels) break;
-            ivp_vec3r_t b0 = car_vr(&anchor_body[wheel0]), w0 = car_vr(&anchor_wheel[wheel0]);
-            ivp_vec3r_t b1 = car_vr(&anchor_body[wheel1]), w1 = car_vr(&anchor_wheel[wheel1]);
+            ivp_vec3r_t b0 = car_vr(&anchor_body[wheel0].core_pos), w0 = car_vr(&anchor_wheel[wheel0].core_pos);
+            ivp_vec3r_t b1 = car_vr(&anchor_body[wheel1].core_pos), w1 = car_vr(&anchor_wheel[wheel1].core_pos);
             ivp_stabilizer_state_init(&car->car_stabilizer[i]);
             ivp_stabilizer_state_setup(&car->car_stabilizer[i], car->body, car->car_wheel[wheel0], car->body,
                                        car->car_wheel[wheel1], &b0, &w0, &b1, &w1,
                                        (ivp_real_t)car_f(templ->stabilizer_constant[i]));
-            /* the anchors are already resolved (IVP_Anchor::core_pos) */
-            car->car_stabilizer[i].anchor_os[0] = b0;
-            car->car_stabilizer[i].anchor_os[1] = w0;
-            car->car_stabilizer[i].anchor_os[2] = b1;
-            car->car_stabilizer[i].anchor_os[3] = w1;
+            /* the anchors are already resolved (IVP_Anchor::init_anchor) */
+            ivp_stabilizer_state_t *stab = &car->car_stabilizer[i];
+            stab->anchor_os[0] = car_state_anchor(&anchor_body[wheel0], &stab->anchors[0]);
+            stab->anchor_os[1] = car_state_anchor(&anchor_wheel[wheel0], &stab->anchors[1]);
+            stab->anchor_os[2] = car_state_anchor(&anchor_body[wheel1], &stab->anchors[2]);
+            stab->anchor_os[3] = car_state_anchor(&anchor_wheel[wheel1], &stab->anchors[3]);
             car->car_stabilizer_exists[i] = true;
         }
     }
@@ -531,7 +551,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
     ivp_vec3r_t gravity;
     ivp_environment_get_gravity(env, &gravity);
     {
-        ivp_vec3f_t hp, center, down;
+        ivp_vec3f_t hp;
+        car_anchor_t center, down;
         lvf_zero(&hp);
         hp.k[cs_car->y_idx] += car_f(templ->body_down_force_vertical_offset); /* offset for arbitrary rotation */
         car_anchor_cs(car->body, &hp, &center);
@@ -544,7 +565,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
 
     /*** extra gravity ***/
     {
-        ivp_vec3f_t center, hp, center_cp, down;
+        ivp_vec3f_t center, hp;
+        car_anchor_t center_cp, down;
         lvf_zero(&center);
         center.k[cs_car->y_idx] = car_f(templ->extra_gravity_height_offset);
         car_anchor_cs(car->body, &center, &center_cp);
@@ -558,7 +580,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
 
     /*** powerslides ***/
     {
-        ivp_vec3f_t hp, left, right;
+        ivp_vec3f_t hp;
+        car_anchor_t left, right;
         lvf_zero(&hp);
         hp.k[cs_car->x_idx] = -1.0f;
         hp.k[cs_car->z_idx] = 2.0f;
@@ -754,7 +777,8 @@ void ivp_car_system_set_booster_acceleration(ivp_car_system_t *car, ivp_real_t a
             ivp_constraint_solver_car_t *pCarConstraint = car->car_constraint_solver;
             ivp_object_t *pStaticObject = ivp_environment_get_static_object(car->environment);
 
-            ivp_vec3f_t frontPoint, backPoint, a0, a1;
+            ivp_vec3f_t frontPoint, backPoint;
+            car_anchor_t a0, a1;
             lvf_zero(&frontPoint);
             lvf_zero(&backPoint);
             frontPoint.k[pCarConstraint->z_idx] = 1.0f;

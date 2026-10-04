@@ -41,8 +41,8 @@ void ivp_rot_mot_state_setup(ivp_rot_mot_state_t *state,
     ivp_object_t *o0 = obj_a ? obj_a : obj_b;
     ivp_object_t *o1 = obj_b ? obj_b : obj_a;
     ivp_environment_t *env = ivp_ctl_env_of2(o0, o1);
-    ivp_ctl_anchor_setup_os(o0, env, anchor_a_os, &state->anchor_a_os);
-    ivp_ctl_anchor_setup_os(o1, env, anchor_b_os, &state->anchor_b_os);
+    ivp_ctl_anchor_setup_os(o0, env, anchor_a_os, &state->anchor_a_os, &state->anchors[0]);
+    ivp_ctl_anchor_setup_os(o1, env, anchor_b_os, &state->anchor_b_os, &state->anchors[1]);
     /* IVP_Actuator_Rot_Mot constructor (ivp_actuator.cxx:514) */
     if (o0 && o1 && o0->original_core != o1->original_core) {
         ivp_debug_printf("Rot Mot Actuation has to be fixed on one object\n");

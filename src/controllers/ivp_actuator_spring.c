@@ -42,8 +42,8 @@ void ivp_spring_state_setup(ivp_spring_state_t *state,
     state->obj_b       = obj_b;
     /* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor */
     ivp_environment_t *env = ivp_ctl_env_of2(obj_a, obj_b);
-    ivp_ctl_anchor_setup_os(obj_a, env, anchor_a_os, &state->anchor_a_os);
-    ivp_ctl_anchor_setup_os(obj_b, env, anchor_b_os, &state->anchor_b_os);
+    ivp_ctl_anchor_setup_os(obj_a, env, anchor_a_os, &state->anchor_a_os, &state->anchors[0]);
+    ivp_ctl_anchor_setup_os(obj_b, env, anchor_b_os, &state->anchor_b_os, &state->anchors[1]);
     /* IVP_Template_Spring / IVP_Actuator_Spring members are IVP_FLOAT */
     state->stiffness   = spring_fl(stiffness);
     state->damping     = spring_fl(damping);

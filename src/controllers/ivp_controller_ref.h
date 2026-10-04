@@ -30,6 +30,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/math/ivp_quat.h>
 
 /* Like the reference pipeline sources (CMake IVP_REFERENCE_PIPELINE_SOURCES),
@@ -93,13 +94,15 @@ static inline const ivp_transform_r_t *ivp_ctl_cache_m_world_f_object(ivp_object
 
 /* ── IVP_Anchor ──────────────────────────────────────────────────────────── */
 
-/* IVP_Anchor::init_anchor with IVP_Template_Anchor::coords_world. */
+/* IVP_Anchor::init_anchor with IVP_Template_Anchor::coords_world: the
+ * anchor's object_pos (IVP_U_Float_Point, may be NULL) and core_pos. */
 static inline void ivp_ctl_anchor_core_pos_ws(ivp_object_t *obj, const ivp_vec3r_t *coords_world,
-                                              ivp_vec3f_t *core_pos)
+                                              ivp_vec3f_t *core_pos, ivp_vec3f_t *object_pos_out)
 {
     if (!obj) {
         /* static object frame == world frame */
         lvf_set_p(core_pos, coords_world);
+        if (object_pos_out) *object_pos_out = *core_pos;
         return;
     }
     ivp_transform_r_t m_core_f_object, tmp;
@@ -110,31 +113,43 @@ static inline void ivp_ctl_anchor_core_pos_ws(ivp_object_t *obj, const ivp_vec3r
     ivp_vec3f_t object_pos;
     lvf_set_p(&object_pos, &obj_pos);
     lvm_vmult4_ff(&m_core_f_object, &object_pos, core_pos);
+    if (object_pos_out) *object_pos_out = object_pos;
 }
 
 /* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor. */
 static inline void ivp_ctl_anchor_core_pos_os(ivp_object_t *obj, const ivp_vec3f_t *coords_os,
-                                              ivp_vec3f_t *core_pos)
+                                              ivp_vec3f_t *core_pos, ivp_vec3f_t *object_pos_out)
 {
     if (!obj) {
         *core_pos = *coords_os;
+        if (object_pos_out) *object_pos_out = *coords_os;
         return;
     }
     ivp_vec3r_t coords_world;
     ivp_transform_r_t tmp;
     lvm_vmult4_fp(ivp_ctl_cache_m_world_f_object(obj, &tmp), coords_os, &coords_world);
-    ivp_ctl_anchor_core_pos_ws(obj, &coords_world, core_pos);
+    ivp_ctl_anchor_core_pos_ws(obj, &coords_world, core_pos, object_pos_out);
 }
 
 /* IVP_Template_Anchor::set_anchor_position_cs + IVP_Anchor::init_anchor. */
 static inline void ivp_ctl_anchor_core_pos_cs(ivp_object_t *obj, const ivp_vec3f_t *coords_cs,
-                                              ivp_vec3f_t *core_pos)
+                                              ivp_vec3f_t *core_pos, ivp_vec3f_t *object_pos_out)
 {
     ivp_transform_r_t mat;
     ivp_ctl_calc_m_core_f_object(obj, &mat);
     ivp_vec3f_t coords_os;
     lvm_vimult4_ff(&mat, coords_cs, &coords_os);
-    ivp_ctl_anchor_core_pos_os(obj, &coords_os, core_pos);
+    ivp_ctl_anchor_core_pos_os(obj, &coords_os, core_pos, object_pos_out);
+}
+
+/* The object and object_pos of an IVP_Anchor (linked when the actuator is
+ * registered, see ivp_anchor.h).  A world anchor (obj NULL) belongs to the
+ * static object, which never moves: it is not linked. */
+static inline void ivp_ctl_anchor_set(ivp_anchor_t *anchor, ivp_object_t *obj, const ivp_vec3f_t *object_pos)
+{
+    if (!anchor) return;
+    anchor->l_anchor_object = obj;
+    anchor->object_pos = *object_pos;
 }
 
 /* Actuator setup helper: anchor given in the object space of obj
@@ -143,12 +158,14 @@ static inline void ivp_ctl_anchor_core_pos_cs(ivp_object_t *obj, const ivp_vec3f
  * static object of env, whose object space is world space).  Writes the
  * anchor's core_pos (float-exact) into core_pos_out. */
 static inline void ivp_ctl_anchor_setup_os(ivp_object_t *obj, const ivp_environment_t *env,
-                                           const ivp_vec3r_t *coords, ivp_vec3r_t *core_pos_out)
+                                           const ivp_vec3r_t *coords, ivp_vec3r_t *core_pos_out,
+                                           ivp_anchor_t *anchor)
 {
-    ivp_vec3f_t c, core_pos;
+    ivp_vec3f_t c, core_pos, object_pos;
     lvf_set_p(&c, coords);
-    ivp_ctl_anchor_core_pos_os(ivp_ctl_anchor_object(obj, env), &c, &core_pos);
+    ivp_ctl_anchor_core_pos_os(ivp_ctl_anchor_object(obj, env), &c, &core_pos, &object_pos);
     lvp_set_f(core_pos_out, &core_pos);
+    ivp_ctl_anchor_set(anchor, obj, &object_pos);
 }
 
 /* Environment of an actuator from its anchor objects. */

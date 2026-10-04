@@ -42,8 +42,8 @@ void ivp_suspension_state_setup(ivp_suspension_state_t *state,
     state->obj_b              = wheel;
     /* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor */
     ivp_environment_t *env = ivp_ctl_env_of2(body, wheel);
-    ivp_ctl_anchor_setup_os(body, env, anchor_body_os, &state->anchor_a_os);
-    ivp_ctl_anchor_setup_os(wheel, env, anchor_wheel_os, &state->anchor_b_os);
+    ivp_ctl_anchor_setup_os(body, env, anchor_body_os, &state->anchor_a_os, &state->anchors[0]);
+    ivp_ctl_anchor_setup_os(wheel, env, anchor_wheel_os, &state->anchor_b_os, &state->anchors[1]);
     /* IVP_Actuator_Suspension constructor: IVP_FLOAT members (the template
      * values are taken as given, i.e. spring_values_are_relative == FALSE) */
     state->stiffness          = susp_fl(stiffness);

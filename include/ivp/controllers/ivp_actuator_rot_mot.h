@@ -21,6 +21,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/math/ivp_vec3.h>
+#include <ivp/dynamics/ivp_anchor.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/utility/ivp_active_value.h>
 
@@ -38,6 +39,7 @@ typedef struct ivp_rot_mot_state {
     /* Axis definition via two anchor points */
     ivp_vec3r_t anchor_a_os;        /* anchor 0 core_pos (float-exact, core space) */
     ivp_vec3r_t anchor_b_os;        /* anchor 1 core_pos (float-exact, core space) */
+    ivp_anchor_t anchors[2];        /* IVP_Actuator_Two_Point::anchors (object_pos, object list) */
     /* The rotation axis (core space of the driven object) is
      * normalize(anchor_1 - anchor_0). */
 

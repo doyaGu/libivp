@@ -41,7 +41,7 @@ void ivp_stabilizer_state_setup(ivp_stabilizer_state_t *state,
     const ivp_vec3r_t *anchors[4] = { anchor0, anchor1, anchor2, anchor3 };
     ivp_environment_t *env = ivp_ctl_env_of(state->obj, 4);
     for (int i = 0; i < 4; i++) {
-        ivp_ctl_anchor_setup_os(state->obj[i], env, anchors[i], &state->anchor_os[i]);
+        ivp_ctl_anchor_setup_os(state->obj[i], env, anchors[i], &state->anchor_os[i], &state->anchors[i]);
     }
     state->stabi_constant = (ivp_real_t)(float)stabi_constant; /* IVP_FLOAT */
 }

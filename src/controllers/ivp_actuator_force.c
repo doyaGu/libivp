@@ -44,8 +44,8 @@ void ivp_force_actuator_state_setup(ivp_force_actuator_state_t *state,
     state->obj_b = obj_b;
     /* IVP_Template_Anchor::set_anchor_position_os + IVP_Anchor::init_anchor */
     ivp_environment_t *env = ivp_ctl_env_of2(obj_a, obj_b);
-    ivp_ctl_anchor_setup_os(obj_a, env, anchor_a_os, &state->anchor_a_os);
-    ivp_ctl_anchor_setup_os(obj_b, env, anchor_b_os, &state->anchor_b_os);
+    ivp_ctl_anchor_setup_os(obj_a, env, anchor_a_os, &state->anchor_a_os, &state->anchors[0]);
+    ivp_ctl_anchor_setup_os(obj_b, env, anchor_b_os, &state->anchor_b_os, &state->anchors[1]);
     state->force = (ivp_real_t)(float)force; /* IVP_FLOAT */
     state->push_first_object = push_first;
     state->push_second_object = push_second;
