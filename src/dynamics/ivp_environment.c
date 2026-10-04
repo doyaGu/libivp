@@ -1663,18 +1663,16 @@ static void env_simulate_psi(ivp_environment_t *env)
     env_refresh_controller_associations(env);
     env_emit_phase(env, IVP_PSI_PHASE_PRE_CONTROLLERS, dt);
     env_emit_phase(env, IVP_PSI_PHASE_CONTROLLERS, dt);
-    ivp_pvec_t touched_cores;
-    ivp_pvec_init(&touched_cores);
-    ivp_sim_units_mgr_simulate_sim_units_psi(&pl->sim_units_manager, &touched_cores);
+    ivp_pvec_remove_all(&pl->touched_cores);
+    ivp_sim_units_mgr_simulate_sim_units_psi(&pl->sim_units_manager, &pl->touched_cores);
     env_emit_phase(env, IVP_PSI_PHASE_INTEGRATE, dt);
-    ivp_pvec_t active_hulls;
-    ivp_pvec_init(&active_hulls);
+    ivp_pvec_remove_all(&pl->active_hulls);
     ivp_env_pcount(env, IVP_PE_PSI_INTEGRATORS);
-    ivp_cnps_commit_all_calc_next_psi_matrix(env, &touched_cores, &active_hulls);
+    ivp_cnps_commit_all_calc_next_psi_matrix(env, &pl->touched_cores, &pl->active_hulls);
     env_emit_phase(env, IVP_PSI_PHASE_COLLISION_BROADPHASE, dt);
     ivp_env_pcount(env, IVP_PE_PSI_HULL);
     pl->state = IVP_ES_PSI_HULL;
-    ivp_cnps_commit_all_hull_managers(env, &active_hulls);
+    ivp_cnps_commit_all_hull_managers(env, &pl->active_hulls);
     env_emit_phase(env, IVP_PSI_PHASE_COLLISION_NARROWPHASE, dt);
     ivp_env_pcount(env, IVP_PE_PSI_SHORT_MINDISTS);
     pl->state = IVP_ES_PSI_SHORT;
@@ -1684,8 +1682,6 @@ static void env_simulate_psi(ivp_environment_t *env)
     pl->state = IVP_ES_PSI_CRITIC;
     ivp_mindist_mgr_recalc_all_exact_mindists_events(&pl->mindist_mgr);
     ivp_env_pcount(env, IVP_PE_PSI_END);
-    ivp_pvec_clear(&touched_cores);
-    ivp_pvec_clear(&active_hulls);
     env_emit_phase(env, IVP_PSI_PHASE_MANAGER_EVENTS, dt);
     env_emit_phase(env, IVP_PSI_PHASE_MOVEMENT_STATE, dt);
     env_emit_phase(env, IVP_PSI_PHASE_SIM_UNIT_END, dt);
@@ -1869,6 +1865,8 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     pl->state = IVP_ES_PSI;
     pl->rand_seed = 1;
     ivp_pvec_init(&pl->core_revive_list);
+    ivp_pvec_init(&pl->touched_cores);
+    ivp_pvec_init(&pl->active_hulls);
     ivp_pvec_init(&pl->deferred_deletions);
     ivp_pvec_init(&pl->all_core_ctrls);
     ivp_pvec_init(&pl->slot_ctrls);
@@ -2093,6 +2091,8 @@ void ivp_environment_destroy(ivp_environment_t *env)
             s = n;
         }
         ivp_pvec_clear(&pl->core_revive_list);
+        ivp_pvec_clear(&pl->touched_cores);
+        ivp_pvec_clear(&pl->active_hulls);
         ivp_pvec_clear(&pl->deferred_deletions);
         ivp_pvec_clear(&pl->all_core_ctrls);
         ivp_pvec_clear(&pl->slot_ctrls);

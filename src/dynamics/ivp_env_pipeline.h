@@ -50,6 +50,9 @@ typedef struct ivp_env_pipeline {
     int                      rand_seed;
 
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */
+    /* High-water scratch vectors reused by the non-reentrant PSI pipeline. */
+    ivp_pvec_t               touched_cores;          /* ivp_core_t* */
+    ivp_pvec_t               active_hulls;           /* ivp_hull_mgr_t* */
 
     /* IVP_Standard_Gravity_Controller */
     ivp_sim_ctrl_t           gravity_ctrl;
