@@ -551,6 +551,9 @@ void ivp_mindist_mgr_init(ivp_mindist_mgr_t *mm, struct ivp_environment *env)
     mm->exact_mindists = NULL;
     mm->invalid_mindists = NULL;
     ivp_pvec_init(&mm->wheel_look_ahead_mindists);
+    ivp_pvec_init(&mm->recheck_colliding_elements);
+    ivp_pvec_init(&mm->recheck_new_objects);
+    mm->recheck_depth = 0;
 }
 
 void ivp_mindist_mgr_destroy(ivp_mindist_mgr_t *mm)
@@ -565,6 +568,8 @@ void ivp_mindist_mgr_destroy(ivp_mindist_mgr_t *mm)
         ivp_collision_delete(&md->coll);
     }
     ivp_pvec_clear(&mm->wheel_look_ahead_mindists);
+    ivp_pvec_clear(&mm->recheck_colliding_elements);
+    ivp_pvec_clear(&mm->recheck_new_objects);
 }
 
 /* IVP_Diff_Hash replacement: same resulting order (found -> swapped to n_found) */
@@ -1607,6 +1612,14 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
 {
     ivp_ov_element_t *elem = object->ov_element;
     if (!elem) return;
+    const bool top_level = mm->recheck_depth++ == 0;
+    ivp_pvec_t local_colliding_elements = IVP_PVEC_INIT;
+    ivp_pvec_t local_new_objects = IVP_PVEC_INIT;
+    ivp_pvec_t *colliding_elements = top_level ? &mm->recheck_colliding_elements
+                                                : &local_colliding_elements;
+    ivp_pvec_t *new_objects = top_level ? &mm->recheck_new_objects : &local_new_objects;
+    ivp_pvec_remove_all(colliding_elements);
+    ivp_pvec_remove_all(new_objects);
     struct ivp_environment *env = mm->environment;
     struct ivp_core *core = object->physical_core;
     ivp_ov_tree_t *ovt = ivp_env_get_ov_tree(env);
@@ -1614,7 +1627,6 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
     ivp_env_get_statistic_manager(env)->range_world_exceeded++;   /* ivp_mindist.cxx:787 (every build) */
     lvf_set_p(&elem->center, &core->m_world_f_core_last_psi.pos);   /* core->get_position_PSI() */
     ivp_hull_mgr_t *hm = object->hull_manager;
-    ivp_pvec_t colliding_elements = IVP_PVEC_INIT;
     if (!mm->scanning_universe) {
         double hull_time = ivp_env_get_coll_range_in_world(env, object);
         double real_check_sphere = hull_time + (double)core->upper_limit_radius;
@@ -1625,14 +1637,19 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
                 mm->scanning_universe = false;
             }
         }
-        double radius = ivp_ov_tree_insert_ov_element(ovt, elem, real_check_sphere, real_check_sphere, &colliding_elements);
+        ivp_pvec_t *saved_collision_partners = ovt->collision_partners;
+        double radius = ivp_ov_tree_insert_ov_element(ovt, elem, real_check_sphere, real_check_sphere,
+                                                      colliding_elements);
+        ovt->collision_partners = saved_collision_partners;
         double real_hull_time = radius - (double)core->upper_limit_radius;
         ivp_ov_element_add_to_hull_manager(elem, hm, real_hull_time);
     } else {
         double real_check_sphere = (double)core->upper_limit_radius;
+        ivp_pvec_t *saved_collision_partners = ovt->collision_partners;
         ivp_ov_tree_insert_ov_element(ovt, elem, real_check_sphere, real_check_sphere, NULL);
+        ovt->collision_partners = saved_collision_partners;
         ivp_ov_element_add_to_hull_manager(elem, hm, (double)P_DOUBLE_EPS);
-        return;
+        goto cleanup;
     }
 #ifdef IVP_DEBUG_BUILD
     /* IVP_Diff_Hash constructor: IVP_OO_CMP::calc_hash_index(c, object) of
@@ -1645,9 +1662,8 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
     }
 #endif
     diff_hash_t dh = { &elem->collision_fvector, 0 };
-    ivp_pvec_t new_objects = IVP_PVEC_INIT;
-    for (int i = ivp_pvec_len(&colliding_elements) - 1; i >= 0; i--) {
-        ivp_ov_element_t *el = (ivp_ov_element_t *)ivp_pvec_at(&colliding_elements, i);
+    for (int i = ivp_pvec_len(colliding_elements) - 1; i >= 0; i--) {
+        ivp_ov_element_t *el = (ivp_ov_element_t *)ivp_pvec_at(colliding_elements, i);
         ivp_object_t *obj0 = object;
         ivp_object_t *obj1 = el->real_object;
         if (!IVP_MTIS_CAN_COLLIDE(obj0->object_movement_state) && !IVP_MTIS_CAN_COLLIDE(obj1->object_movement_state))
@@ -1659,7 +1675,7 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
             continue;
         if (!ivp_env_check_objects_for_collision_detection(env, obj0, obj1)) continue;
         if (diff_hash_check_object(&dh, obj1)) continue;
-        ivp_pvec_add(&new_objects, obj1);
+        ivp_pvec_add(new_objects, obj1);
     }
     /* delete unused collisions */
     for (int x = elem->collision_fvector.n - 1; x >= dh.n_found_objects; x--) {
@@ -1673,16 +1689,24 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
         }
     }
     /* create new ones */
-    for (int x = ivp_pvec_len(&new_objects) - 1; x >= 0; x--) {
-        ivp_object_t *obj1 = (ivp_object_t *)ivp_pvec_at(&new_objects, x);
+    for (int x = ivp_pvec_len(new_objects) - 1; x >= 0; x--) {
+        ivp_object_t *obj1 = (ivp_object_t *)ivp_pvec_at(new_objects, x);
         for (int k = ivp_env_get_collision_delegator_root_count(env) - 1; k >= 0; k--) {
             ivp_collision_delegator_root_t *cdr = ivp_env_get_collision_delegator_root(env, k);
             ivp_collision_t *coll = cdr->rvt->delegate_collisions_for_object(cdr, object, obj1);
             if (coll) break;
         }
     }
-    ivp_pvec_clear(&new_objects);
-    ivp_pvec_clear(&colliding_elements);
+cleanup:
+    if (top_level) {
+        ivp_pvec_remove_all(&mm->recheck_new_objects);
+        ivp_pvec_remove_all(&mm->recheck_colliding_elements);
+    } else {
+        ivp_pvec_clear(&local_new_objects);
+        ivp_pvec_clear(&local_colliding_elements);
+    }
+    IVP_ASSERT(mm->recheck_depth > 0);
+    mm->recheck_depth--;
 }
 
 void ivp_mindist_mgr_enable_collision_detection_for_object(ivp_mindist_mgr_t *mm, struct ivp_object *object)

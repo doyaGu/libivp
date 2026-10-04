@@ -388,6 +388,11 @@ typedef struct ivp_mindist_mgr {
     ivp_mindist_t         *exact_mindists;
     ivp_pvec_t             wheel_look_ahead_mindists;
     ivp_mindist_t         *invalid_mindists;
+    /* Top-level OV rechecks retain their high-water temporary storage.
+     * Recursive rechecks use local vectors so traversal order is unchanged. */
+    ivp_pvec_t             recheck_colliding_elements;
+    ivp_pvec_t             recheck_new_objects;
+    unsigned               recheck_depth;
 } ivp_mindist_mgr_t;
 
 void ivp_mindist_mgr_init(ivp_mindist_mgr_t *mm, struct ivp_environment *env);
