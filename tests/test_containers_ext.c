@@ -198,6 +198,26 @@ IVP_TEST(minlist_grow_many) {
     ivp_minlist_destroy(&ml);
 }
 
+IVP_TEST(minlist_supports_32bit_indices) {
+    enum { COUNT = 70000 };
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+
+    ivp_minlist_index_t high = IVP_MINLIST_UNUSED;
+    for (uint32_t i = 0; i < COUNT; i++) {
+        ivp_minlist_index_t index = ivp_minlist_add(
+            &ml, (void *)(uintptr_t)(i + 1u), (float)(COUNT - i));
+        IVP_ASSERT_TRUE(index != IVP_MINLIST_UNUSED);
+        if (index > UINT16_MAX) high = index;
+    }
+    IVP_ASSERT_TRUE(high > UINT16_MAX);
+    IVP_ASSERT_EQ(ivp_minlist_count(&ml), (uint32_t)COUNT);
+
+    for (uint32_t i = 0; i < COUNT; i++) ivp_minlist_remove(&ml, i);
+    IVP_ASSERT_FALSE(ivp_minlist_has_elements(&ml));
+    ivp_minlist_destroy(&ml);
+}
+
 /* ========== Vhash Tests ========== */
 
 IVP_TEST(vhash_init_destroy) {
@@ -483,6 +503,7 @@ int main(void) {
     IVP_REGISTER(minlist_enumerator);
     IVP_REGISTER(minlist_enum_next_lt);
     IVP_REGISTER(minlist_grow_many);
+    IVP_REGISTER(minlist_supports_32bit_indices);
 
     /* Vhash tests */
     IVP_REGISTER(vhash_init_destroy);

@@ -13,10 +13,10 @@
 void ivp_minlist_init(ivp_minlist_t *ml, const ivp_allocator_t *alloc, int start_size) {
     if (!ml) return;
     if (!alloc) alloc = ivp_default_allocator();
-    if (start_size > IVP_MINLIST_MAX_ALLOC) {
-        start_size = IVP_MINLIST_MAX_ALLOC;
-    }
     if (start_size < 4) start_size = 4;
+    if ((uint32_t)start_size > IVP_MINLIST_MAX_ALLOC) {
+        start_size = (int)IVP_MINLIST_MAX_ALLOC;
+    }
 
     ml->alloc = alloc;
     ml->malloced_size = 0;
@@ -32,12 +32,12 @@ void ivp_minlist_init(ivp_minlist_t *ml, const ivp_allocator_t *alloc, int start
     if (!ml->elems) {
         return;
     }
-    ml->malloced_size = (uint16_t)start_size;
+    ml->malloced_size = (uint32_t)start_size;
 
     /* Build free list */
     ml->free_list = 0;
     for (int i = 0; i < start_size; i++) {
-        ml->elems[i].next = (uint16_t)(i + 1);
+        ml->elems[i].next = (uint32_t)(i + 1);
     }
     ml->elems[start_size - 1].next = IVP_MINLIST_UNUSED;
 }
@@ -63,21 +63,20 @@ static bool ivp_minlist_grow(ivp_minlist_t *ml, ivp_minlist_elem_t **out_e,
                              ivp_minlist_index_t *out_index) {
     if (ml->malloced_size >= IVP_MINLIST_MAX_ALLOC) return false;
 
-    int new_size = ml->malloced_size * 2 + 1;
-    if (new_size > IVP_MINLIST_MAX_ALLOC) {
-        new_size = IVP_MINLIST_MAX_ALLOC;
-    }
+    uint64_t grown_size = (uint64_t)ml->malloced_size * 2u + 1u;
+    uint32_t new_size = grown_size > IVP_MINLIST_MAX_ALLOC
+        ? IVP_MINLIST_MAX_ALLOC : (uint32_t)grown_size;
 
     ivp_minlist_elem_t *new_elems = (ivp_minlist_elem_t *)ivp_alloc(ml->alloc,
         (size_t)new_size * sizeof(ivp_minlist_elem_t));
     if (!new_elems) return false;
 
-    for (int i = 0; i < ml->malloced_size; i++) {
+    for (uint32_t i = 0; i < ml->malloced_size; i++) {
         new_elems[i] = ml->elems[i];
     }
 
-    uint16_t old_size = ml->malloced_size;
-    ml->malloced_size = (uint16_t)new_size;
+    uint32_t old_size = ml->malloced_size;
+    ml->malloced_size = new_size;
 
     ivp_free(ml->alloc, ml->elems,
               (size_t)old_size * sizeof(ivp_minlist_elem_t));
@@ -85,11 +84,11 @@ static bool ivp_minlist_grow(ivp_minlist_t *ml, ivp_minlist_elem_t **out_e,
 
     *out_index = old_size;
     *out_e = &ml->elems[old_size];
-    if ((int)old_size + 1 < ml->malloced_size) {
-        uint16_t i = (uint16_t)(old_size + 1);
+    if (old_size + 1u < ml->malloced_size) {
+        uint32_t i = old_size + 1u;
         ml->free_list = i;
         for (; i < ml->malloced_size; i++) {
-            ml->elems[i].next = (uint16_t)(i + 1);
+            ml->elems[i].next = i + 1u;
         }
         ml->elems[ml->malloced_size - 1].next = IVP_MINLIST_UNUSED;
     } else {
@@ -149,8 +148,8 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) 
     IVP_ASSERT(ml->first_element != IVP_MINLIST_UNUSED);
 
     /* Use long-jump skip list to find insertion region */
-    int lastj = ml->first_element;
-    int lo = ml->first_long;
+    uint32_t lastj = ml->first_element;
+    uint32_t lo = ml->first_long;
     int max_cmp_len = 3;
     while (lo != IVP_MINLIST_UNUSED) {
         ivp_minlist_elem_t *flong = &ml->elems[lo];
@@ -160,12 +159,12 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) 
         lo = flong->long_next;
     }
 
-    int firstj_after = lastj;
+    uint32_t firstj_after = lastj;
     int count_cmp = 0;
 
     /* Linear search from lastj */
     ivp_minlist_elem_t *f = &ml->elems[lastj];
-    int j;
+    uint32_t j;
     for (j = f->next; j != IVP_MINLIST_UNUSED; j = f->next) {
         f = &ml->elems[j];
         count_cmp++;
@@ -177,41 +176,41 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value) 
         ivp_minlist_elem_t *l = &ml->elems[lastj];
         e->next = l->next;
         ml->elems[j].prev = return_index;
-        e->prev = (uint16_t)lastj;
+        e->prev = lastj;
         l->next = return_index;
         goto end;
     }
     /* Insert at end */
-    e->next = (uint16_t)j;
-    e->prev = (uint16_t)lastj;
+    e->next = j;
+    e->prev = lastj;
     f->next = return_index;
 
 end:
     /* Insert long-jump node if search was too long */
     if (count_cmp > max_cmp_len) {
-        int new_long_pos = firstj_after;
+        uint32_t new_long_pos = firstj_after;
         for (int k = 2; k < max_cmp_len; k++) {
             new_long_pos = ml->elems[new_long_pos].next;
         }
 
-        uint16_t next_of_first = ml->elems[firstj_after].long_next;
+        uint32_t next_of_first = ml->elems[firstj_after].long_next;
         ivp_minlist_elem_t *nl = &ml->elems[new_long_pos];
         IVP_ASSERT(nl->long_next == IVP_MINLIST_LONG_UNUSED);
 
         if (next_of_first != IVP_MINLIST_LONG_UNUSED) {
             nl->long_next = next_of_first;
-            nl->long_prev = (uint16_t)firstj_after;
+            nl->long_prev = firstj_after;
             if (next_of_first != IVP_MINLIST_UNUSED) {
-                ml->elems[next_of_first].long_prev = (uint16_t)new_long_pos;
+                ml->elems[next_of_first].long_prev = new_long_pos;
             }
-            ml->elems[firstj_after].long_next = (uint16_t)new_long_pos;
+            ml->elems[firstj_after].long_next = new_long_pos;
         } else {
             nl->long_next = ml->first_long;
             nl->long_prev = IVP_MINLIST_UNUSED;
             if (ml->first_long != IVP_MINLIST_UNUSED) {
-                ml->elems[ml->first_long].long_prev = (uint16_t)new_long_pos;
+                ml->elems[ml->first_long].long_prev = new_long_pos;
             }
-            ml->first_long = (uint16_t)new_long_pos;
+            ml->first_long = new_long_pos;
         }
     }
 
@@ -226,8 +225,8 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index) {
     if (index >= ml->malloced_size || ml->counter == 0) return;
 
     ivp_minlist_elem_t *e = &ml->elems[index];
-    uint16_t prev = e->prev;
-    uint16_t next = e->next;
+    uint32_t prev = e->prev;
+    uint32_t next = e->next;
 
     if (prev != IVP_MINLIST_UNUSED) {
         ml->elems[prev].next = next;
@@ -246,9 +245,9 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index) {
     }
 
     /* Remove from skip-list if this node is a long-jump node */
-    uint16_t long_next = e->long_next;
+    uint32_t long_next = e->long_next;
     if (long_next != IVP_MINLIST_LONG_UNUSED) {
-        uint16_t long_prev = e->long_prev;
+        uint32_t long_prev = e->long_prev;
         if (long_next != IVP_MINLIST_UNUSED) {
             ml->elems[long_next].long_prev = long_prev;
         }

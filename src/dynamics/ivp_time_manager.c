@@ -50,7 +50,7 @@ void ivp_time_manager_update_event(ivp_time_manager_t *tm, ivp_time_event_t *ev,
 
 int ivp_time_manager_get_event_count(const ivp_time_manager_t *tm)
 {
-    return tm->min_hash.counter;
+    return (int)tm->min_hash.counter;
 }
 
 void ivp_time_manager_event_loop(ivp_time_manager_t *tm, struct ivp_environment *env, ivp_time_t time)
