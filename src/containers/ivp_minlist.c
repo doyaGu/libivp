@@ -555,7 +555,7 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value)
     }
     if (finite && ml->tree_active) {
         rb_insert(ml, index);
-    } else {
+    } else if (!finite) {
         ml->nonfinite_count++;
     }
     ml->counter++;

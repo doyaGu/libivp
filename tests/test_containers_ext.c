@@ -266,6 +266,27 @@ IVP_TEST(minlist_nonfinite_values_use_reference_fallback) {
     ivp_minlist_destroy(&ml);
 }
 
+IVP_TEST(minlist_index_activates_for_finite_values) {
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    for (int i = 0; i < 2048; ++i)
+        ivp_minlist_add(&ml, (void *)(uintptr_t)(i + 1), (float)(i % 71));
+    IVP_ASSERT_EQ(ml.nonfinite_count, 0);
+    IVP_ASSERT_TRUE(ml.tree_active);
+    ivp_minlist_destroy(&ml);
+
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    ivp_minlist_index_t nan_index = ivp_minlist_add(&ml, &dummy_a, NAN);
+    for (int i = 0; i < 2048; ++i)
+        ivp_minlist_add(&ml, (void *)(uintptr_t)(i + 1), (float)i);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 1);
+    IVP_ASSERT_FALSE(ml.tree_active);
+    ivp_minlist_remove(&ml, nan_index);
+    IVP_ASSERT_EQ(ml.nonfinite_count, 0);
+    IVP_ASSERT_TRUE(ml.tree_active);
+    ivp_minlist_destroy(&ml);
+}
+
 typedef struct minlist_model_entry {
     float value;
     uint32_t sequence;
@@ -648,6 +669,7 @@ int main(void) {
     IVP_REGISTER(minlist_supports_32bit_indices);
     IVP_REGISTER(minlist_equal_zero_and_index_reuse);
     IVP_REGISTER(minlist_nonfinite_values_use_reference_fallback);
+    IVP_REGISTER(minlist_index_activates_for_finite_values);
     IVP_REGISTER(minlist_randomized_differential);
 
     /* Vhash tests */
