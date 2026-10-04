@@ -1558,8 +1558,7 @@ int main(void) {
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);
-    /* TODO: re-enable after cross-unit controller dispatch is fixed */
-    /* IVP_REGISTER(force_actuator_executes_once_per_psi); */
+    IVP_REGISTER(force_actuator_executes_once_per_psi);
     IVP_REGISTER(rot_mot_executes_once_per_psi);
 
     /* Multiple objects */

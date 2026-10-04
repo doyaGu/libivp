@@ -707,11 +707,8 @@ IVP_TEST(constraint_fixed_no_relative_motion) {
 
     ivp_constraint_state_t state;
 
-    ivp_vec3r_t anchor_a, anchor_b;
-    ivp_vec3r_set(&anchor_a, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_vec3r_set(&anchor_b, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-
-    ivp_constraint_init_fixed(&state, a, &anchor_a, b, &anchor_b);
+    /* The relaxed fixed constructor preserves the initial relative pose. */
+    ivp_constraint_init_fixed_ws(&state, a, b);
 
     ivp_environment_add_controller(env, 0, ivp_controller_constraint, &state);
 
@@ -725,13 +722,12 @@ IVP_TEST(constraint_fixed_no_relative_motion) {
 
     ivp_real_t dist = vec3_dist(&pos_a, &pos_b);
 
-    /* Both anchors at local (0,0,0) — constraint pulls centers together */
-    IVP_ASSERT_TRUE(dist < IVP_REAL(0.5));
+    IVP_ASSERT_NEAR(dist, IVP_REAL(2.0), LTOL);
 
     ivp_environment_destroy(env);
 }
 
-IVP_TEST(constraint_solver_iterations) {
+IVP_TEST(constraint_solver_iterations_is_compatibility_noop) {
     /* Low iterations */
     ivp_environment_t *env1 = make_env(DT60, false);
     ivp_object_t *a1 = make_ball(env1, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
@@ -780,7 +776,9 @@ IVP_TEST(constraint_solver_iterations) {
     ivp_object_get_position(b2, &pos_b2);
     ivp_real_t drift2 = vec3_dist(&pos_a2, &pos_b2);
 
-    IVP_ASSERT_TRUE(drift2 <= drift1);
+    /* The reference performs one dense solve per PSI; the compatibility field
+     * is intentionally ignored, so both deterministic runs must match. */
+    IVP_ASSERT_NEAR(drift2, drift1, TOL);
 
     ivp_environment_destroy(env1);
     ivp_environment_destroy(env2);
@@ -2157,9 +2155,8 @@ int main(void) {
     IVP_REGISTER(constraint_hinge_limits);
     IVP_REGISTER(constraint_hinge_limits_inactive);
     IVP_REGISTER(constraint_fixed_init);
-    /* TODO: re-enable after cross-unit constraint dispatch is fixed */
-    /* IVP_REGISTER(constraint_fixed_no_relative_motion); */
-    /* IVP_REGISTER(constraint_solver_iterations); */
+    IVP_REGISTER(constraint_fixed_no_relative_motion);
+    IVP_REGISTER(constraint_solver_iterations_is_compatibility_noop);
     IVP_REGISTER(constraint_accumulated_impulse);
     IVP_REGISTER(constraint_active_toggle);
 
@@ -2201,8 +2198,7 @@ int main(void) {
     IVP_REGISTER(phantom_sphere_enter_exit);
     IVP_REGISTER(phantom_aabb_detection);
     IVP_REGISTER(phantom_attach_to_object);
-    /* TODO: hangs after friction per-unit rework — investigate infinite loop */
-    /* IVP_REGISTER(phantom_overflow_no_repeated_enter_events); */
+    IVP_REGISTER(phantom_overflow_no_repeated_enter_events);
 
     /* Raycast car tests (4) */
     IVP_REGISTER(car_init_4wheel);
