@@ -44,6 +44,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
+#include <string.h>
 
 #ifdef IVP_REAL_DOUBLE
   #define TOL  1e-6
@@ -549,6 +550,56 @@ IVP_TEST(constraint_ball_socket_holds) {
     IVP_ASSERT_FALSE(isnan(pos_b.k[0]));
 
     ivp_environment_destroy(env);
+}
+
+static bool constraint_core_state_equal(const ivp_core_t *a, const ivp_core_t *b)
+{
+    if (a->movement_state != b->movement_state) return false;
+    if (memcmp(a->speed.k, b->speed.k, 3u * sizeof(a->speed.k[0])) != 0) return false;
+    if (memcmp(a->rot_speed.k, b->rot_speed.k, 3u * sizeof(a->rot_speed.k[0])) != 0) return false;
+    if (memcmp(a->pos_world_f_core_last_psi.k, b->pos_world_f_core_last_psi.k,
+               3u * sizeof(a->pos_world_f_core_last_psi.k[0])) != 0) return false;
+    if (memcmp(a->delta_world_f_core_psis.k, b->delta_world_f_core_psis.k,
+               3u * sizeof(a->delta_world_f_core_psis.k[0])) != 0) return false;
+    if (memcmp(&a->q_world_f_core_last_psi, &b->q_world_f_core_last_psi,
+               sizeof(a->q_world_f_core_last_psi)) != 0) return false;
+    return memcmp(&a->q_world_f_core_next_psi, &b->q_world_f_core_next_psi,
+                  sizeof(a->q_world_f_core_next_psi)) == 0;
+}
+
+IVP_TEST(constraint_ball_socket_fast_matches_generic_bitwise) {
+    ivp_environment_t *fast_env = make_env(DT60, false);
+    ivp_environment_t *generic_env = make_env(DT60, false);
+    ivp_object_t *fast_a = make_ball(fast_env, IVP_REAL(1.3), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *fast_b = make_ball(fast_env, IVP_REAL(0.7), IVP_REAL(3.0), IVP_REAL(0.2), IVP_REAL(-0.1));
+    ivp_object_t *generic_a = make_ball(generic_env, IVP_REAL(1.3), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *generic_b = make_ball(generic_env, IVP_REAL(0.7), IVP_REAL(3.0), IVP_REAL(0.2), IVP_REAL(-0.1));
+    ivp_vec3r_t speed = ivp_vec3r(IVP_REAL(2.0), IVP_REAL(-1.0), IVP_REAL(0.5));
+    fast_b->physical_core->speed = speed;
+    generic_b->physical_core->speed = speed;
+    fast_b->physical_core->rot_speed.k[0] = generic_b->physical_core->rot_speed.k[0] = 0.2f;
+    fast_b->physical_core->rot_speed.k[1] = generic_b->physical_core->rot_speed.k[1] = -0.3f;
+    fast_b->physical_core->rot_speed.k[2] = generic_b->physical_core->rot_speed.k[2] = 0.4f;
+
+    ivp_vec3r_t anchor_a = ivp_vec3r(IVP_REAL(0.3), IVP_REAL(-0.2), IVP_REAL(0.1));
+    ivp_vec3r_t anchor_b = ivp_vec3r(IVP_REAL(-0.4), IVP_REAL(0.25), IVP_REAL(-0.15));
+    ivp_constraint_state_t fast_state, generic_state;
+    ivp_constraint_init_ball_socket(&fast_state, fast_a, &anchor_a, fast_b, &anchor_b);
+    ivp_constraint_init_ball_socket(&generic_state, generic_a, &anchor_a, generic_b, &anchor_b);
+    generic_state.core.force_generic_path = true;
+    (void)ivp_environment_add_controller(fast_env, 0, ivp_controller_constraint, &fast_state);
+    (void)ivp_environment_add_controller(generic_env, 0, ivp_controller_constraint, &generic_state);
+
+    for (int i = 0; i < 120; i++) {
+        ivp_environment_simulate_one_psi(fast_env);
+        ivp_environment_simulate_one_psi(generic_env);
+        IVP_ASSERT_TRUE(constraint_core_state_equal(fast_a->physical_core, generic_a->physical_core));
+        IVP_ASSERT_TRUE(constraint_core_state_equal(fast_b->physical_core, generic_b->physical_core));
+        IVP_ASSERT_TRUE(memcmp(fast_state.core.last_impulse, generic_state.core.last_impulse,
+                               sizeof(fast_state.core.last_impulse)) == 0);
+    }
+    ivp_environment_destroy(fast_env);
+    ivp_environment_destroy(generic_env);
 }
 
 IVP_TEST(constraint_ball_socket_world) {
@@ -2149,6 +2200,7 @@ int main(void) {
     /* Constraint tests (12) */
     IVP_REGISTER(constraint_ball_socket_init);
     IVP_REGISTER(constraint_ball_socket_holds);
+    IVP_REGISTER(constraint_ball_socket_fast_matches_generic_bitwise);
     IVP_REGISTER(constraint_ball_socket_world);
     IVP_REGISTER(constraint_hinge_init);
     IVP_REGISTER(constraint_hinge_rotation_axis);

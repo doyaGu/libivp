@@ -810,6 +810,17 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     IVP_ASSERT(!coreR || coreR->physical_unmoveable || coreR->movement_state != IVP_MT_NOT_SIM);
     IVP_ASSERT(!coreA || coreA->physical_unmoveable || coreA->movement_state != IVP_MT_NOT_SIM);
 
+    const bool fast_ball_socket =
+        !c->force_generic_path && !c->has_rot && !c->use_maxforce &&
+        c->fixedtrans_dim == 3 && c->fixedrot_dim == 0 &&
+        c->limitedtrans_dim == 0 && c->limitedrot_dim == 0 &&
+        c->fixed[0] == IVP_CONSTRAINT_AXIS_FIXED &&
+        c->fixed[1] == IVP_CONSTRAINT_AXIS_FIXED &&
+        c->fixed[2] == IVP_CONSTRAINT_AXIS_FIXED &&
+        c->fixed[3] == IVP_CONSTRAINT_AXIS_FREE &&
+        c->fixed[4] == IVP_CONSTRAINT_AXIS_FREE &&
+        c->fixed[5] == IVP_CONSTRAINT_AXIS_FREE;
+
     ivp_cmatrix_t m_ws_f_Rcs, m_ws_f_Acs;
     core_psi_matrix(c->obj_r, &m_ws_f_Rcs);
     core_psi_matrix(c->obj_a, &m_ws_f_Acs);
@@ -831,7 +842,13 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     double drRA_now_rs[3] = { 0.0, 0.0, 0.0 };
     const int rotdims = c->fixedrot_dim + c->limitedrot_dim;
 
-    if (rotdims == 1) {
+    if (fast_ball_socket) {
+        /* Rotation axes are all free.  The attached rotation frame is still
+         * built because the generic path transforms its exact zero impulse
+         * through it before adding it to the core. */
+        m3_mi2mult(pm_rs_f_Rcs, m_ws_f_Rcs.rows, m_rs_f_ws);
+        m3_mmult(m_rs_f_ws, m_ws_f_Acs.rows, m_rs_f_Acs);
+    } else if (rotdims == 1) {
         /* cardan joint */
         pm_rs_f_Rcs = m_rs_f_Rcs_buffer;
         double fixed_axisArs_Acs[3], fixed_axisArs_ws[3], fixed_axisArs_Rcs[3], fixed_axisRrs_Rcs[3];
@@ -963,41 +980,49 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         for (int k = 0; k < 3; k++) dvRA_fs[k] *= mf;
 
         /* rotation */
-        double rR_rs[3] = { 0.0, 0.0, 0.0 }, rA_rs[3] = { 0.0, 0.0, 0.0 };
-        if (coreR) {
-            double v[3], w[3];
-            core_speeds(coreR, v, w);
-            m3_vmult(m_rs_f_Rcs, w, rR_rs);
-        }
-        if (coreA) {
-            double v[3], w[3];
-            core_speeds(coreA, v, w);
-            m3_vmult(m_rs_f_Acs, w, rA_rs);
-        }
-        for (int k = 0; k < 3; k++) { rR_rs[k] = FP(rR_rs[k]); rA_rs[k] = FP(rA_rs[k]); }
-        double drs_rs[3];
-        for (int k = 0; k < 3; k++) {
-            drs_rs[k] = fsub(rA_rs[k], rR_rs[k]);
-            drRA_rs[k] = drRA_now_rs[k] + drs_rs[k] * ddf;
-        }
-        for (int i = 0; i < 3; i++) {
-            if (c->fixed[i + 3] & IVP_CONSTRAINT_AXIS_LIMITED) {
-                if (drRA_rs[i] < (double)(float)c->borderleft_Rfs[i + 3]) {
-                    drRA_rs[i] = (drRA_now_rs[i] - (double)(float)c->borderleft_Rfs[i + 3]) * (double)(float)c->limited_axis_stiffness + drs_rs[i] * d_time;
-                    c->fixed[i + 3] |= IVP_CONSTRAINT_AXIS_FIXED;
-                } else if (drRA_rs[i] > (double)(float)c->borderright_Rfs[i + 3]) {
-                    drRA_rs[i] = (drRA_now_rs[i] - (double)(float)c->borderright_Rfs[i + 3]) * (double)(float)c->limited_axis_stiffness + drs_rs[i] * d_time;
-                    c->fixed[i + 3] |= IVP_CONSTRAINT_AXIS_FIXED;
-                } else {
-                    c->fixed[i + 3] &= ~IVP_CONSTRAINT_AXIS_FIXED;
+        if (fast_ball_socket) {
+            drRA_rs[0] = drRA_rs[1] = drRA_rs[2] = 0.0;
+        } else {
+            double rR_rs[3] = { 0.0, 0.0, 0.0 }, rA_rs[3] = { 0.0, 0.0, 0.0 };
+            if (coreR) {
+                double v[3], w[3];
+                core_speeds(coreR, v, w);
+                m3_vmult(m_rs_f_Rcs, w, rR_rs);
+            }
+            if (coreA) {
+                double v[3], w[3];
+                core_speeds(coreA, v, w);
+                m3_vmult(m_rs_f_Acs, w, rA_rs);
+            }
+            for (int k = 0; k < 3; k++) { rR_rs[k] = FP(rR_rs[k]); rA_rs[k] = FP(rA_rs[k]); }
+            double drs_rs[3];
+            for (int k = 0; k < 3; k++) {
+                drs_rs[k] = fsub(rA_rs[k], rR_rs[k]);
+                drRA_rs[k] = drRA_now_rs[k] + drs_rs[k] * ddf;
+            }
+            for (int i = 0; i < 3; i++) {
+                if (c->fixed[i + 3] & IVP_CONSTRAINT_AXIS_LIMITED) {
+                    if (drRA_rs[i] < (double)(float)c->borderleft_Rfs[i + 3]) {
+                        drRA_rs[i] = (drRA_now_rs[i] - (double)(float)c->borderleft_Rfs[i + 3]) * (double)(float)c->limited_axis_stiffness + drs_rs[i] * d_time;
+                        c->fixed[i + 3] |= IVP_CONSTRAINT_AXIS_FIXED;
+                    } else if (drRA_rs[i] > (double)(float)c->borderright_Rfs[i + 3]) {
+                        drRA_rs[i] = (drRA_now_rs[i] - (double)(float)c->borderright_Rfs[i + 3]) * (double)(float)c->limited_axis_stiffness + drs_rs[i] * d_time;
+                        c->fixed[i + 3] |= IVP_CONSTRAINT_AXIS_FIXED;
+                    } else {
+                        c->fixed[i + 3] &= ~IVP_CONSTRAINT_AXIS_FIXED;
+                    }
                 }
             }
+            for (int k = 0; k < 3; k++) drRA_rs[k] *= mf;
         }
-        for (int k = 0; k < 3; k++) drRA_rs[k] *= mf;
     }
 
-    c->matrix_size = 0;
-    for (int i = 0; i < 6; i++) c->matrix_size += c->fixed[i] & IVP_CONSTRAINT_AXIS_FIXED;
+    if (fast_ball_socket) {
+        c->matrix_size = 3;
+    } else {
+        c->matrix_size = 0;
+        for (int i = 0; i < 6; i++) c->matrix_size += c->fixed[i] & IVP_CONSTRAINT_AXIS_FIXED;
+    }
 
     if (c->fixedrot_dim == 1) {
         /* cardan joints: reduce forces when both R-spaces form angles [90..180] */
@@ -1046,16 +1071,20 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         double dv_pointR_fs[3], dv_pointA_fs[3];
         m3_vmult(m_fs_f_ws, dv_pointR_ws, dv_pointR_fs);
         m3_vmult(m_fs_f_ws, dv_pointA_ws, dv_pointA_fs);
-        double drR_rs[3], drA_rs[3];
-        m3_vmult(m_rs_f_Rcs, drR_Rcs, drR_rs);
-        m3_vmult(m_rs_f_Acs, drA_Acs, drA_rs);
         for (int k = 0; k < 3; k++) {
             testnext_dvRA_fs[i][k] = fsub(FP(dv_pointA_fs[k]), FP(dv_pointR_fs[k]));
-            testnext_drRA_rs[i][k] = fsub(FP(drA_rs[k]), FP(drR_rs[k]));
+        }
+        if (!fast_ball_socket) {
+            double drR_rs[3], drA_rs[3];
+            m3_vmult(m_rs_f_Rcs, drR_Rcs, drR_rs);
+            m3_vmult(m_rs_f_Acs, drA_Acs, drA_rs);
+            for (int k = 0; k < 3; k++) {
+                testnext_drRA_rs[i][k] = fsub(FP(drA_rs[k]), FP(drR_rs[k]));
+            }
         }
     }
 
-    for (int i = 3; i < 6; i++) {
+    for (int i = fast_ball_socket ? 6 : 3; i < 6; i++) {
         if (!(c->fixed[i] & IVP_CONSTRAINT_AXIS_FIXED)) continue;
         double tR_rs[3] = { 0.0, 0.0, 0.0 }, tA_rs[3];
         tR_rs[i - 3] = 1.0;
@@ -1094,7 +1123,12 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     memset(A, 0, sizeof(A));
     memset(b, 0, sizeof(b));
     memset(x, 0, sizeof(x));
-    {
+    if (fast_ball_socket) {
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) A[j][i] = testnext_dvRA_fs[i][j];
+            b[i] = dvRA_fs[i];
+        }
+    } else {
         int pos_i = 0;
         for (int i = 0; i < 6; i++) {
             if (!(c->fixed[i] & IVP_CONSTRAINT_AXIS_FIXED)) continue;
@@ -1127,9 +1161,13 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
             if (c->fixed[i] & IVP_CONSTRAINT_AXIS_FIXED) impulseR_fs[i] = FP(x[pos_i++]);
             else impulseR_fs[i] = 0.0;
         }
-        for (int j = 3; j < 6; j++) {
-            if (c->fixed[j] & IVP_CONSTRAINT_AXIS_FIXED) impulserotR_rs[j - 3] = FP(x[pos_i++]);
-            else impulserotR_rs[j - 3] = 0.0;
+        if (fast_ball_socket) {
+            impulserotR_rs[0] = impulserotR_rs[1] = impulserotR_rs[2] = 0.0;
+        } else {
+            for (int j = 3; j < 6; j++) {
+                if (c->fixed[j] & IVP_CONSTRAINT_AXIS_FIXED) impulserotR_rs[j - 3] = FP(x[pos_i++]);
+                else impulserotR_rs[j - 3] = 0.0;
+            }
         }
     }
 

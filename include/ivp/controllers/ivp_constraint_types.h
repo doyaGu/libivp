@@ -169,6 +169,7 @@ typedef struct ivp_constraint_local_core {
 
     bool          enabled;
     bool          broken;               /* BREAK fired (constraint deactivated) */
+    bool          force_generic_path;   /* differential-test override */
     ivp_real_t    last_impulse[6];      /* impulses of the last PSI (R side) */
 } ivp_constraint_local_core_t;
 
