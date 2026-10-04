@@ -1,8 +1,8 @@
 /* ivp_actuator_stabilizer.h -- Anti-roll bar stabilizer actuator
  *
- * Connects 4 objects as 2 pairs. Computes the distance within each pair,
- * then applies a corrective force proportional to the distance difference
- * to equalize them. Used for anti-roll bar behavior in vehicle suspensions.
+ * Connects 4 objects as 2 pairs and applies the legacy IVP stabilizer law.
+ * Despite the name, the reference force direction increases an existing
+ * distance difference between the pairs; libivp preserves that behavior.
  *
  * Ported from ivp_actuator.cxx (IVP_Actuator_Stabilizer).
  */

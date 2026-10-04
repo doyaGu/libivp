@@ -130,18 +130,22 @@ IVP_TEST(stabilizer_setup_params) {
     ivp_environment_destroy(env);
 }
 
-IVP_TEST(stabilizer_equalizes_pair_distances) {
-    /* Pair 0: distance=1, Pair 1: distance=3.
-     * Stabilizer should push pair 0 apart and pair 1 together. */
+IVP_TEST(stabilizer_matches_reference_force_direction) {
+    /* Pair 0: distance=2, Pair 1: distance=3.
+     * The legacy reference sign pushes pair 0 together and pair 1 apart. */
     ivp_environment_t *env = make_env(DT60, false);
     IVP_ASSERT_NOT_NULL(env);
 
-    /* Pair 0: 1m apart along X */
+    /* Pair 0: 2m apart along X, clear of ball-ball contact. */
     ivp_object_t *o0 = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_object_t *o1 = make_ball(env, IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *o1 = make_ball(env, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
     /* Pair 1: 3m apart along X */
     ivp_object_t *o2 = make_ball(env, IVP_REAL(1.0), IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *o3 = make_ball(env, IVP_REAL(1.0), IVP_REAL(8.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_set_collision_group(o0, 1);
+    ivp_object_set_collision_group(o1, 1);
+    ivp_object_set_collision_group(o2, 1);
+    ivp_object_set_collision_group(o3, 1);
 
     ivp_vec3r_t zero_anchor;
     ivp_vec3r_set_zero(&zero_anchor);
@@ -164,7 +168,9 @@ IVP_TEST(stabilizer_equalizes_pair_distances) {
     ivp_real_t dist1_before = vec3_dist(&p2, &p3);
     ivp_real_t diff_before = ivp_fabs(dist1_before - dist0_before);
 
-    step(env, 30);
+    /* The controller queues asynchronous pushes in the first PSI; positions
+     * reflect them during the following PSI. */
+    step(env, 2);
 
     /* Measure difference after simulation */
     ivp_object_get_position(o0, &p0);
@@ -175,8 +181,12 @@ IVP_TEST(stabilizer_equalizes_pair_distances) {
     ivp_real_t dist1_after = vec3_dist(&p2, &p3);
     ivp_real_t diff_after = ivp_fabs(dist1_after - dist0_after);
 
-    /* Distance difference should have decreased */
-    IVP_ASSERT_TRUE(diff_after < diff_before);
+    /* The reference implementation is counter-intuitively destabilizing. */
+    IVP_ASSERT_TRUE(diff_after > diff_before);
+    IVP_ASSERT_TRUE(o0->physical_core->speed.k[0] > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o1->physical_core->speed.k[0] < IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o2->physical_core->speed.k[0] < IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o3->physical_core->speed.k[0] > IVP_REAL(0.0));
 
     ivp_environment_destroy(env);
 }
@@ -225,14 +235,18 @@ IVP_TEST(stabilizer_zero_constant_no_effect) {
     ivp_environment_destroy(env);
 }
 
-IVP_TEST(stabilizer_set_constant_runtime) {
+IVP_TEST(stabilizer_set_constant_runtime_wakes_and_applies) {
     ivp_environment_t *env = make_env(DT60, false);
     IVP_ASSERT_NOT_NULL(env);
 
     ivp_object_t *o0 = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_object_t *o1 = make_ball(env, IVP_REAL(1.0), IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *o1 = make_ball(env, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *o2 = make_ball(env, IVP_REAL(1.0), IVP_REAL(5.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_object_t *o3 = make_ball(env, IVP_REAL(1.0), IVP_REAL(8.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_set_collision_group(o0, 1);
+    ivp_object_set_collision_group(o1, 1);
+    ivp_object_set_collision_group(o2, 1);
+    ivp_object_set_collision_group(o3, 1);
 
     ivp_vec3r_t zero_anchor;
     ivp_vec3r_set_zero(&zero_anchor);
@@ -256,19 +270,14 @@ IVP_TEST(stabilizer_set_constant_runtime) {
     ivp_stabilizer_set_constant(&state, IVP_REAL(500.0));
     IVP_ASSERT_NEAR(state.stabi_constant, IVP_REAL(500.0), TOL);
 
-    step(env, 20);
+    step(env, 1);
 
-    /* Pair distances should be converging */
-    ivp_vec3r_t p0, p1, p2, p3;
-    ivp_object_get_position(o0, &p0);
-    ivp_object_get_position(o1, &p1);
-    ivp_object_get_position(o2, &p2);
-    ivp_object_get_position(o3, &p3);
-
-    ivp_real_t d0 = vec3_dist(&p0, &p1);
-    ivp_real_t d1 = vec3_dist(&p2, &p3);
-    /* The diff should be less than the original 2.0 */
-    IVP_ASSERT_TRUE(ivp_fabs(d1 - d0) < IVP_REAL(2.0));
+    /* Runtime activation follows the same reference force direction. */
+    IVP_ASSERT_NEAR(state.current_diff_dist, IVP_REAL(1.0), IVP_REAL(0.01));
+    IVP_ASSERT_TRUE(o0->physical_core->speed.k[0] > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o1->physical_core->speed.k[0] < IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o2->physical_core->speed.k[0] < IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(o3->physical_core->speed.k[0] > IVP_REAL(0.0));
 
     ivp_environment_destroy(env);
 }
@@ -696,11 +705,9 @@ int main(void) {
     /* Stabilizer */
     IVP_REGISTER(stabilizer_init_defaults);
     IVP_REGISTER(stabilizer_setup_params);
-    /* TODO: re-enable after sim unit controller dispatch rework */
-    /* IVP_REGISTER(stabilizer_equalizes_pair_distances); */
+    IVP_REGISTER(stabilizer_matches_reference_force_direction);
     IVP_REGISTER(stabilizer_zero_constant_no_effect);
-    /* TODO: re-enable after sim unit controller dispatch rework */
-    /* IVP_REGISTER(stabilizer_set_constant_runtime); */
+    IVP_REGISTER(stabilizer_set_constant_runtime_wakes_and_applies);
 
     /* Suspension */
     IVP_REGISTER(suspension_init_defaults);

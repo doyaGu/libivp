@@ -1,7 +1,8 @@
 /* ivp_actuator_stabilizer.c -- Anti-roll bar stabilizer implementation
  *
- * 4 anchor points as 2 pairs. Applies force proportional to
- * (dist[1] - dist[0]) * stabi_constant to equalize pair distances.
+ * 4 anchor points as 2 pairs. Applies the reference force proportional to
+ * (dist[1] - dist[0]) * stabi_constant.  Its sign increases an existing
+ * distance difference; this counter-intuitive legacy behavior is intentional.
  */
 
 #include <ivp/controllers/ivp_actuator_stabilizer.h>
