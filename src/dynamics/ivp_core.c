@@ -1115,6 +1115,20 @@ static void cnps_calc_psi_rotation_axis(ivp_core_t *core, const ivp_quatr_t *q_c
     core->max_surface_rot_speed = (float)core->max_surface_deviation * core->abs_omega;
 }
 
+static bool cnps_has_identity_rotation(const ivp_core_t *core)
+{
+    return core->rot_speed.k[0] == 0.0f && !signbit(core->rot_speed.k[0]) &&
+           core->rot_speed.k[1] == 0.0f && !signbit(core->rot_speed.k[1]) &&
+           core->rot_speed.k[2] == 0.0f && !signbit(core->rot_speed.k[2]) &&
+           core->q_world_f_core_next_psi.x == IVP_REAL(0.0) &&
+           !signbit(core->q_world_f_core_next_psi.x) &&
+           core->q_world_f_core_next_psi.y == IVP_REAL(0.0) &&
+           !signbit(core->q_world_f_core_next_psi.y) &&
+           core->q_world_f_core_next_psi.z == IVP_REAL(0.0) &&
+           !signbit(core->q_world_f_core_next_psi.z) &&
+           core->q_world_f_core_next_psi.w == IVP_REAL(1.0);
+}
+
 void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, ivp_pvec_t *active_hull_managers_out)
 {
     struct ivp_environment *env = ivp_core_env(core);
@@ -1139,7 +1153,12 @@ void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, iv
     float simulation_delta_time = (float)event_sim->delta_time;
     core->i_delta_time = (float)event_sim->i_delta_time;
     ivp_quatr_t q_core_f_core;
-    cnps_calc_rotation_matrix(core, simulation_delta_time, &q_core_f_core);
+    const bool identity_rotation = cnps_has_identity_rotation(core);
+    if (identity_rotation) {
+        q_core_f_core = ivp_quatr_identity();
+    } else {
+        cnps_calc_rotation_matrix(core, simulation_delta_time, &q_core_f_core);
+    }
     {
         ivp_time_t now = ivp_env_get_current_time(env);
         double d_last_time = ivp_time_diff(now, core->time_of_last_psi);
@@ -1148,10 +1167,19 @@ void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, iv
         ivp_vec3f_t sp = ivp_core_speed_f(core);
         lvp_set_f(&core->delta_world_f_core_psis, &sp);
         core->q_world_f_core_last_psi = core->q_world_f_core_next_psi;
-        ivp_quat_mult(&core->q_world_f_core_next_psi, &core->q_world_f_core_next_psi, &q_core_f_core);
-        ivp_quat_fast_normalize(&core->q_world_f_core_next_psi);
+        if (!identity_rotation) {
+            ivp_quat_mult(&core->q_world_f_core_next_psi,
+                          &core->q_world_f_core_next_psi, &q_core_f_core);
+            ivp_quat_fast_normalize(&core->q_world_f_core_next_psi);
+        }
     }
-    cnps_calc_psi_rotation_axis(core, &q_core_f_core);
+    if (identity_rotation) {
+        core->abs_omega = 0.0f;
+        lvf_set3(&core->rotation_axis_world_space, 1.0f, 0.0f, 0.0f);
+        core->max_surface_rot_speed = 0.0f;
+    } else {
+        cnps_calc_psi_rotation_axis(core, &q_core_f_core);
+    }
     double new_speed = (double)core->max_surface_rot_speed + (double)core->current_speed;
     for (int c = ivp_core_n_objects(core) - 1; c >= 0; c--) {
         ivp_object_t *r_obj = ivp_core_object_at(core, c);
