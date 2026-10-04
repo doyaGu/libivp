@@ -260,32 +260,36 @@ void ivp_object_set_pinned(ivp_object_t *obj, bool pinned);
 
 /* IVP_Real_Object::recheck_collision_filter: re-evaluate the collision filter
  * for all pairs of this object (drops mindists the filter now rejects and
- * creates the ones it now accepts).  Call it after changing the environment's
- * collision filter, the collision group, the layer mask or exclusive pairs,
- * which by themselves only affect pairs created later. */
+ * creates the ones it now accepts).  The object setters below call this
+ * automatically; call it directly after changing the environment's filter,
+ * exclusive pairs, or the public fields without using those setters. */
 void ivp_object_recheck_collision_filter(ivp_object_t *obj);
 
 /* Set collision group. Objects in the same non-zero group skip collision.
- * Existing pairs keep their state until ivp_object_recheck_collision_filter. */
+ * Existing pairs are re-evaluated immediately. */
 static inline void ivp_object_set_collision_group(ivp_object_t *obj, int group) {
     obj->collision_group = group;
+    ivp_object_recheck_collision_filter(obj);
 }
 
 /* Set collision layer mask. Pairs with no overlapping bits skip collision.
- * Existing pairs keep their state until ivp_object_recheck_collision_filter. */
+ * Existing pairs are re-evaluated immediately. */
 static inline void ivp_object_set_layer_mask(ivp_object_t *obj, uint32_t mask) {
     obj->layer_mask = mask;
+    ivp_object_recheck_collision_filter(obj);
 }
 
-/* Enable collisions (restore default layer mask, clear group). */
+/* Enable collisions immediately (restore default layer mask, clear group). */
 static inline void ivp_object_enable_collision(ivp_object_t *obj) {
     obj->collision_group = 0;
     obj->layer_mask = 0xFFFFFFFF;
+    ivp_object_recheck_collision_filter(obj);
 }
 
-/* Disable all collisions for this object (clears layer mask). */
+/* Disable all collisions for this object immediately (clears layer mask). */
 static inline void ivp_object_disable_collision(ivp_object_t *obj) {
     obj->layer_mask = 0;
+    ivp_object_recheck_collision_filter(obj);
 }
 
 /* ── IVP_Real_Object helpers ───────────────────────────────────────────── */

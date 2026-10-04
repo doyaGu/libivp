@@ -20,10 +20,9 @@
  * creates a new object pair (when two objects come near each other), so:
  *   - a pair filter toggle applies to the next approach of the two cubes
  *     (hence the re-drop);
- *   - collision_group / layer_mask are set right after the creation of the
- *     objects, but the creation of an object already pairs it with the
- *     objects near it (libivp has no public recheck_collision_filter): the
- *     cubes of a zone start 4 m apart.
+ *   - the collision_group / layer_mask setters immediately recheck existing
+ *     pairs.  The cubes start 4 m apart so the pass-through behavior remains
+ *     visually clear.
  * (The pair filter used to be set up but never added to the environment,
  *  and the zone 2 and 3 cubes started 1 m apart, red and blue cubes even
  *  interpenetrating.)
@@ -258,8 +257,10 @@ int main(int argc, char **argv)
     /* ═══ Zone 2 (CENTER, x=0): group filter ════════════════════════════ *
      * A column, 4 m apart: red, red (group 1), blue, blue (group 2). */
     s->z2_start = s->n_obj;
-    for (int i = 0; i < 4; i++)
-        add_cube(&app, 0.6, 0.0, -1.3 - 4.0 * i)->collision_group = i < 2 ? 1 : 2;
+    for (int i = 0; i < 4; i++) {
+        ivp_object_t *cube = add_cube(&app, 0.6, 0.0, -1.3 - 4.0 * i);
+        ivp_object_set_collision_group(cube, i < 2 ? 1 : 2);
+    }
 
     /* ═══ Zone 3 (RIGHT, x=12): layer mask filter ═══════════════════════ *
      * A column, 4 m apart: green, yellow, yellow, green.  Green cubes on
@@ -269,8 +270,10 @@ int main(int argc, char **argv)
      * cube it ignores, and then sinks through it -- the legacy engine
      * does exactly the same with an IVP_Collision_Filter_Exclusive_Pair.) */
     s->z3_start = s->n_obj;
-    for (int i = 0; i < 4; i++)
-        add_cube(&app, 0.6, 12.0, -1.3 - 4.0 * i)->layer_mask = (i == 0 || i == 3) ? 0x01 : 0x02;
+    for (int i = 0; i < 4; i++) {
+        ivp_object_t *cube = add_cube(&app, 0.6, 12.0, -1.3 - 4.0 * i);
+        ivp_object_set_layer_mask(cube, (i == 0 || i == 3) ? 0x01 : 0x02);
+    }
 
     app.update   = filter_update;
     app.on_reset = filter_reset;

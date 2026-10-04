@@ -20,9 +20,19 @@ static ivp_object_t *make_ball(ivp_environment_t *env, ivp_real_t x) {
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
     tmpl.type = IVP_OBJECT_BALL;
+    tmpl.ball_radius = IVP_REAL(0.5);
     tmpl.mass = IVP_REAL(1.0);
+    tmpl.speed_damp_factor = IVP_REAL(0.0);
+    ivp_vec3r_set(&tmpl.rot_speed_damp_factor,
+                  IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
     ivp_vec3r_set(&tmpl.position, x, IVP_REAL(0.0), IVP_REAL(0.0));
     return ivp_environment_create_object(env, &tmpl, NULL);
+}
+
+static void step(ivp_environment_t *env, int count) {
+    for (int i = 0; i < count; ++i) {
+        ivp_environment_simulate_one_psi(env);
+    }
 }
 
 IVP_TEST(allow_all_default) {
@@ -192,6 +202,64 @@ IVP_TEST(custom_callback_filter) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(runtime_layer_mask_setter_rechecks_existing_pair) {
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    /* Start close enough that the broad phase creates a mindist, then let it
+     * schedule the approaching pair before changing the filter state. */
+    ivp_object_t *a = make_ball(env, IVP_REAL(-0.75));
+    ivp_object_t *b = make_ball(env, IVP_REAL(0.75));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+    ivp_vec3r_set(&a->physical_core->speed,
+                  IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->physical_core->speed,
+                  IVP_REAL(-1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    step(env, 1);
+
+    ivp_object_set_layer_mask(a, 0);
+    step(env, 60);
+
+    ivp_vec3r_t pa, pb;
+    ivp_object_get_position(a, &pa);
+    ivp_object_get_position(b, &pb);
+    IVP_ASSERT_TRUE(pa.k[0] > pb.k[0]);
+    IVP_ASSERT_TRUE(a->physical_core->speed.k[0] > IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(b->physical_core->speed.k[0] < IVP_REAL(0.0));
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(runtime_collision_group_setter_recreates_filtered_pair) {
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_t *a = make_ball(env, IVP_REAL(-0.75));
+    ivp_object_t *b = make_ball(env, IVP_REAL(0.75));
+    IVP_ASSERT_NOT_NULL(a);
+    IVP_ASSERT_NOT_NULL(b);
+    ivp_vec3r_set(&a->physical_core->speed,
+                  IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_vec3r_set(&b->physical_core->speed,
+                  IVP_REAL(-1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+
+    ivp_object_set_collision_group(a, 1);
+    ivp_object_set_collision_group(b, 1);
+    step(env, 1);
+    ivp_object_set_collision_group(b, 2);
+    step(env, 60);
+
+    ivp_vec3r_t pa, pb;
+    ivp_object_get_position(a, &pa);
+    ivp_object_get_position(b, &pb);
+    IVP_ASSERT_TRUE(pa.k[0] < pb.k[0]);
+    IVP_ASSERT_TRUE(a->physical_core->speed.k[0] < IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(b->physical_core->speed.k[0] > IVP_REAL(0.0));
+
+    ivp_environment_destroy(env);
+}
+
 /* ── Registration ──────────────────────────────────────────────────────── */
 
 int main(void) {
@@ -202,5 +270,7 @@ int main(void) {
     IVP_REGISTER(exclusive_pair_filter_hash_collision_regression);
     IVP_REGISTER(meta_filter);
     IVP_REGISTER(custom_callback_filter);
+    IVP_REGISTER(runtime_layer_mask_setter_rechecks_existing_pair);
+    IVP_REGISTER(runtime_collision_group_setter_recreates_filtered_pair);
     IVP_RUN_ALL();
 }
