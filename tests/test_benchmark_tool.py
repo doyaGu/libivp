@@ -46,6 +46,46 @@ class BenchmarkToolTests(unittest.TestCase):
         self.assertFalse(result["machine_match"])
         self.assertAlmostEqual(result["deltas"][0]["delta_percent"], 10.0)
 
+    def test_summarize_uses_median_of_run_medians_and_state_hash(self):
+        records = [
+            {"kind": "native", "implementation": "libivp", "case": "x", "scale": 4,
+             "run": 0, "operation_ns": 10, "operations": 1},
+            {"kind": "native", "implementation": "libivp", "case": "x", "scale": 4,
+             "run": 0, "operation_ns": 20, "operations": 1},
+            {"kind": "native", "implementation": "libivp", "case": "x", "scale": 4,
+             "run": 1, "operation_ns": 100, "operations": 1},
+            {"kind": "native-summary", "implementation": "libivp", "case": "x", "scale": 4,
+             "run": 0, "state_hash": "abcd", "peak_bytes": 10, "residual_bytes": 0},
+            {"kind": "native-summary", "implementation": "libivp", "case": "x", "scale": 4,
+             "run": 1, "state_hash": "abcd", "peak_bytes": 12, "residual_bytes": 0},
+        ]
+        item = benchmark.summarize(records)[0]
+        self.assertEqual(item["runs"], 2)
+        self.assertEqual(item["run_medians_ns"], [15.0, 100.0])
+        self.assertEqual(item["median_ns"], 57.5)
+        self.assertEqual(item["state_hash"], "abcd")
+        self.assertEqual(item["peak_bytes"], 12)
+
+    def test_checked_baseline_rejects_state_change(self):
+        metadata = {
+            "machine": {"cpu": "same"}, "compiler": {"id": "c"},
+            "build_type": "Release", "ivp_real_double": True,
+            "libivp": {"dirty": False},
+        }
+        item = {"kind": "native", "implementation": "libivp", "name": "case",
+                "scale": 1, "median_ns": 50.0, "state_hash": "new",
+                "peak_bytes": 10, "residual_bytes": 0}
+        current = {"schema": benchmark.SCHEMA, "profile": "standard", "runs": 3,
+                   "metadata": metadata, "summary": [item]}
+        old_item = dict(item, median_ns=100.0, state_hash="old")
+        baseline = {"schema": benchmark.SCHEMA, "profile": "standard", "runs": 3,
+                    "metadata": metadata, "summary": [old_item]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(baseline), encoding="utf-8")
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "state hash differs"):
+                benchmark.enforce_baseline(current, path)
+
 
 if __name__ == "__main__":
     unittest.main()

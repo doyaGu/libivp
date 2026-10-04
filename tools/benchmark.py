@@ -11,6 +11,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -115,7 +116,10 @@ def percentile(values: list[float], probability: float) -> float:
 
 
 def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, str, str, int], list[float]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, int], dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    native_diagnostics: dict[tuple[str, str, str, int], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         if record["kind"] == "native":
             key = ("native", record["implementation"], record["case"], int(record["scale"]))
@@ -124,25 +128,44 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             key = ("scenario", record["implementation"], record["scenario"], 0)
             denominator = int(record["worlds"]) * int(record["steps_per_world"])
             value = float(record["simulate_ns"]) / denominator
+        elif record["kind"] == "native-summary":
+            key = ("native", record["implementation"], record["case"], int(record["scale"]))
+            native_diagnostics[key].append(record)
+            continue
         else:
             continue
-        groups[key].append(value)
+        groups[key][int(record.get("run", 0))].append(value)
 
     output: list[dict[str, Any]] = []
-    for (kind, implementation, name, scale), values in sorted(groups.items()):
+    for (kind, implementation, name, scale), values_by_run in sorted(groups.items()):
+        values = [value for run_values in values_by_run.values() for value in run_values]
+        run_medians = [statistics.median(run_values) for run_values in values_by_run.values()]
         mean = statistics.fmean(values)
-        output.append({
+        item = {
             "kind": kind,
             "implementation": implementation,
             "name": name,
             "scale": scale,
             "samples": len(values),
-            "median_ns": statistics.median(values),
+            "runs": len(values_by_run),
+            "run_medians_ns": run_medians,
+            "median_ns": statistics.median(run_medians),
             "p95_ns": percentile(values, 0.95),
             "min_ns": min(values),
             "max_ns": max(values),
             "coefficient_of_variation": statistics.pstdev(values) / mean if mean else 0.0,
-        })
+        }
+        diagnostics = native_diagnostics.get((kind, implementation, name, scale), [])
+        if diagnostics:
+            state_hashes = {record.get("state_hash") for record in diagnostics}
+            if None in state_hashes or len(state_hashes) != 1:
+                raise BenchmarkError(f"native state hash changed across runs: {name}/{scale}")
+            item.update({
+                "state_hash": next(iter(state_hashes)),
+                "peak_bytes": max(int(record["peak_bytes"]) for record in diagnostics),
+                "residual_bytes": max(int(record["residual_bytes"]) for record in diagnostics),
+            })
+        output.append(item)
     return output
 
 
@@ -197,6 +220,69 @@ def baseline_comparison(current: dict[str, Any], baseline_path: Path) -> dict[st
     }
 
 
+def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, Any]:
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if baseline.get("schema") != SCHEMA:
+        raise BenchmarkError(f"baseline has unsupported schema: {baseline.get('schema')!r}")
+    if current.get("profile") != baseline.get("profile"):
+        raise BenchmarkError("checked baseline profile does not match current profile")
+    if int(current.get("runs", 0)) < 3 or int(baseline.get("runs", 0)) < 3:
+        raise BenchmarkError("checked baselines require at least three runs")
+
+    current_meta = current["metadata"]
+    baseline_meta = baseline.get("metadata", {})
+    for field in ("machine", "compiler", "build_type", "ivp_real_double"):
+        if current_meta.get(field) != baseline_meta.get(field):
+            raise BenchmarkError(f"checked baseline metadata differs: {field}")
+    if current_meta.get("libivp", {}).get("dirty") or baseline_meta.get("libivp", {}).get("dirty"):
+        raise BenchmarkError("checked baselines require clean libivp worktrees")
+
+    def native_index(result: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
+        return {
+            (item["name"], int(item["scale"])): item
+            for item in result.get("summary", [])
+            if item["kind"] == "native" and item["implementation"] == "libivp"
+        }
+
+    now = native_index(current)
+    before = native_index(baseline)
+    if set(now) != set(before):
+        raise BenchmarkError("checked baseline native case/scale set differs")
+
+    speedups: dict[str, float] = {}
+    for key, item in now.items():
+        previous = before[key]
+        if item.get("state_hash") != previous.get("state_hash"):
+            raise BenchmarkError(f"state hash differs for {key[0]}/{key[1]}")
+        if int(item.get("residual_bytes", -1)) != 0:
+            raise BenchmarkError(f"residual allocation bytes for {key[0]}/{key[1]}")
+        previous_peak = int(previous.get("peak_bytes", 0))
+        if previous_peak and int(item.get("peak_bytes", 0)) > previous_peak * 1.30:
+            raise BenchmarkError(f"peak allocation regression exceeds 30% for {key[0]}/{key[1]}")
+        speedup = float(previous["median_ns"]) / float(item["median_ns"])
+        speedups[key[0]] = speedup
+        if speedup < (1.0 / 1.05):
+            raise BenchmarkError(f"performance regression exceeds 5% for {key[0]}/{key[1]}")
+
+    if current["profile"] == "large":
+        key_cases = ("active_bodies", "contact_pile", "constraint_chain", "fast_impacts")
+        for name in key_cases:
+            if speedups.get(name, 0.0) < 1.25:
+                raise BenchmarkError(f"large target below 1.25x for {name}")
+        geometric_mean = math.prod(speedups[name] for name in key_cases) ** (1.0 / len(key_cases))
+        if geometric_mean < 2.0:
+            raise BenchmarkError(f"large geometric mean target below 2.0x: {geometric_mean:.3f}x")
+    else:
+        geometric_mean = None
+
+    return {
+        "path": str(baseline_path),
+        "passed": True,
+        "speedups": speedups,
+        "large_geometric_mean": geometric_mean,
+    }
+
+
 def print_report(result: dict[str, Any]) -> None:
     print(f"libivp benchmark ({result['profile']})")
     print("\nNative workloads")
@@ -226,18 +312,29 @@ def print_report(result: dict[str, Any]) -> None:
         print(f"\nBaseline comparison ({label})")
         for item in baseline["deltas"]:
             print(f"  {item['name']:<20} n={item['scale']:<5} {item['delta_percent']:+7.2f}%")
+    checked = result.get("checked_baseline")
+    if checked:
+        print("\nChecked baseline: PASS")
+        if checked["large_geometric_mean"] is not None:
+            print(f"  large geometric mean: {checked['large_geometric_mean']:.3f}x")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("quick", "standard"), default="quick")
+    parser.add_argument("--profile", choices=("quick", "standard", "large"), default="quick")
     parser.add_argument("--compare-reference", action="store_true")
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--check-baseline", type=Path)
+    parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--case", action="append", dest="cases")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
+    if args.runs <= 0:
+        parser.error("--runs must be positive")
+    if args.profile == "large" and args.compare_reference:
+        parser.error("large is a native-only profile; use standard for reference comparison")
 
     root = Path(__file__).resolve().parents[1]
     build_root = root / "build" / "benchmark"
@@ -269,39 +366,62 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare_reference and not reference_runner.exists():
         raise BenchmarkError(f"missing reference runner: {reference_runner}")
 
-    samples = 5 if args.profile == "quick" else 7
-    minimum_ms = 200 if args.profile == "quick" else 250
+    samples = 7 if args.profile == "standard" else 5
+    minimum_ms = 200 if args.profile == "quick" else (250 if args.profile == "standard" else 500)
     native_command = [
         str(native_runner), "--profile", args.profile, "--format", "jsonl",
         "--samples", str(samples), "--min-sample-ms", str(minimum_ms),
     ]
-    if args.check:
+    if args.check or args.check_baseline:
         native_command.append("--check")
     native_filters = [case for case in (args.cases or []) if case in {
         "active_bodies", "contact_pile", "constraint_chain", "fast_impacts",
         "object_churn", "sleeping_world", "convex_build",
     }]
     records: list[dict[str, Any]] = []
-    if native_filters:
-        for case in native_filters:
-            records.extend(parse_jsonl(run(native_command + ["--case", case], cwd=root, capture=True), case))
-    elif not args.cases:
-        records.extend(parse_jsonl(run(native_command, cwd=root, capture=True), "ivp_benchmark"))
+    for run_index in range(args.runs):
+        native_records: list[dict[str, Any]] = []
+        if native_filters:
+            for case in native_filters:
+                native_records.extend(parse_jsonl(
+                    run(native_command + ["--case", case], cwd=root, capture=True), case
+                ))
+        elif not args.cases:
+            native_records.extend(parse_jsonl(
+                run(native_command, cwd=root, capture=True), "ivp_benchmark"
+            ))
+        for record in native_records:
+            record["run"] = run_index
+        records.extend(native_records)
 
     all_scenarios = scenarios(root / "tools" / "scenarios.txt")
-    chosen_names = set(QUICK_SCENARIOS if args.profile == "quick" else (s[0] for s in all_scenarios))
+    chosen_names = set(
+        () if args.profile == "large"
+        else (QUICK_SCENARIOS if args.profile == "quick" else (s[0] for s in all_scenarios))
+    )
     if args.cases:
         chosen_names.intersection_update(args.cases)
     chosen = [item for item in all_scenarios if item[0] in chosen_names]
-    for name, delta, steps in chosen:
-        command = [
-            "--scenario", name, "--dt", delta, "--steps", str(steps),
-            "--benchmark", "--samples", str(samples), "--warmup", "1",
-            "--min-sample-ms", str(minimum_ms),
-        ]
-        records.extend(parse_jsonl(run([str(scenario_runner), *command], cwd=root, capture=True), f"libivp:{name}"))
-        if args.compare_reference:
-            records.extend(parse_jsonl(run([str(reference_runner), *command], cwd=root, capture=True), f"reference:{name}"))
+    for run_index in range(args.runs):
+        for name, delta, steps in chosen:
+            command = [
+                "--scenario", name, "--dt", delta, "--steps", str(steps),
+                "--benchmark", "--samples", str(samples), "--warmup", "1",
+                "--min-sample-ms", str(minimum_ms),
+            ]
+            scenario_records = parse_jsonl(
+                run([str(scenario_runner), *command], cwd=root, capture=True), f"libivp:{name}"
+            )
+            for record in scenario_records:
+                record["run"] = run_index
+            records.extend(scenario_records)
+            if args.compare_reference:
+                reference_records = parse_jsonl(
+                    run([str(reference_runner), *command], cwd=root, capture=True), f"reference:{name}"
+                )
+                for record in reference_records:
+                    record["run"] = run_index
+                records.extend(reference_records)
 
     if not records:
         raise BenchmarkError("no native case or scenario matched --case")
@@ -323,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
     result: dict[str, Any] = {
         "schema": SCHEMA,
         "profile": args.profile,
+        "runs": args.runs,
         "metadata": metadata,
         "records": records,
         "summary": summary,
@@ -330,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     if args.baseline:
         result["baseline"] = baseline_comparison(result, args.baseline)
+    if args.check_baseline:
+        result["checked_baseline"] = enforce_baseline(result, args.check_baseline)
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print_report(result)
     print(f"\nRaw result: {output_path}")
