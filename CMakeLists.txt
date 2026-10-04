@@ -18,6 +18,7 @@ option(IVP_ENABLE_SCENARIO_TESTS "Enable scenario regression tests (test_scenari
 option(IVP_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(IVP_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(IVP_BUILD_TESTS "Build unit tests" ON)
+option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_BUILD_TESTS})
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
 # ── Strict floating-point and warnings will be applied to ivp targets only,
@@ -606,6 +607,15 @@ if (IVP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()
 
+# ── Benchmarks ────────────────────────────────────────────────────────────────
+if (IVP_BUILD_BENCHMARKS)
+    add_executable(ivp_benchmark benchmarks/ivp_benchmark.c)
+    target_link_libraries(ivp_benchmark PRIVATE ivp)
+    if (NOT MSVC)
+        target_link_libraries(ivp_benchmark PRIVATE m)
+    endif ()
+endif ()
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 if (IVP_BUILD_TESTS)
     enable_testing()
@@ -687,8 +697,11 @@ if (IVP_BUILD_TESTS)
     # P2 stability benchmarks
     ivp_add_test(test_stability_benchmarks tests/test_stability_benchmarks.c)
 
-    # Performance regression test
-    ivp_add_test(test_perf tests/test_perf.c)
+    if (IVP_BUILD_BENCHMARKS)
+        add_test(NAME benchmark_quick
+                 COMMAND ivp_benchmark --profile quick --check)
+        set_tests_properties(benchmark_quick PROPERTIES TIMEOUT 180 LABELS "perf")
+    endif ()
 
     # Scenario parity runner (not a unit test — a JSONL producer)
     if (IVP_ENABLE_SCENARIO_TESTS)
@@ -759,7 +772,6 @@ if (IVP_BUILD_TESTS)
     if (NOT MSVC)
         target_compile_options(test_math_ref PRIVATE -ffp-contract=off -fno-fast-math)
     endif ()
-    set_tests_properties(test_perf PROPERTIES LABELS "perf")
     set_tests_properties(test_stability_benchmarks PROPERTIES LABELS "perf;stability")
 
     if (IVP_ENABLE_SCENARIO_TESTS)
