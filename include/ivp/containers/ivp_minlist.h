@@ -1,7 +1,8 @@
 /* ivp_minlist.h -- Sorted minimum list for IVP C17
  *
  * A sorted linked list where elements are ordered by ascending float value.
- * Supports O(1) minimum query, O(n) insertion with skip-list acceleration.
+ * Supports O(1) minimum query and O(log n) finite-key insertion through a
+ * red-black index.  The doubly-linked list remains the enumeration order.
  * Used for mindist event scheduling where minimum-time queries are critical.
  *
  * Ported from ivu_min_list.hxx / ivu_min_list.cxx.
@@ -24,6 +25,7 @@ extern "C" {
 
 #define IVP_MINLIST_UNUSED       UINT32_MAX
 #define IVP_MINLIST_LONG_UNUSED  (UINT32_MAX - UINT32_C(1))
+#define IVP_MINLIST_TREE_UNUSED  UINT32_C(0x7fffffff)
 #define IVP_MINLIST_MAX_ALLOC    (UINT32_C(0x7fffffff) - UINT32_C(2))
 #define IVP_MINLIST_MAX_VALUE   1e10f
 
@@ -32,8 +34,9 @@ typedef uint32_t ivp_minlist_index_t;
 /* ── Element ───────────────────────────────────────────────────────────── */
 
 typedef struct ivp_minlist_elem {
-    uint32_t long_next;   /* skip-list: next long-jump node */
-    uint32_t long_prev;   /* skip-list: previous long-jump node */
+    uint32_t tree_left;
+    uint32_t tree_right;
+    uint32_t tree_parent_color; /* low 31 bits parent, high bit red */
     uint32_t next;        /* doubly-linked: next in sorted order */
     uint32_t prev;        /* doubly-linked: previous in sorted order */
     float    value;       /* sort key */
@@ -47,8 +50,11 @@ typedef struct ivp_minlist {
     uint32_t            malloced_size;
     uint32_t            free_list;
     uint32_t            first_element;  /* head of sorted list */
-    uint32_t            first_long;     /* head of skip-list chain */
+    uint32_t            first_long;     /* small-list skip chain */
+    uint32_t            tree_root;      /* finite values only */
     uint32_t            counter;        /* number of elements */
+    uint32_t            nonfinite_count;
+    bool                tree_active;
     float               min_value;      /* cached minimum value */
     const ivp_allocator_t *alloc;
 } ivp_minlist_t;

@@ -5,7 +5,9 @@
 #include <ivp/utility/ivp_hash.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_assert.h>
+#include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Vhash comparison function for pointer equality */
 static bool ptr_compare(const void *a, const void *b) {
@@ -199,7 +201,7 @@ IVP_TEST(minlist_grow_many) {
 }
 
 IVP_TEST(minlist_supports_32bit_indices) {
-    enum { COUNT = 70000 };
+    enum { COUNT = 100001 };
     ivp_minlist_t ml;
     ivp_minlist_init(&ml, ivp_default_allocator(), 4);
 
@@ -216,6 +218,146 @@ IVP_TEST(minlist_supports_32bit_indices) {
     for (uint32_t i = 0; i < COUNT; i++) ivp_minlist_remove(&ml, i);
     IVP_ASSERT_FALSE(ivp_minlist_has_elements(&ml));
     ivp_minlist_destroy(&ml);
+}
+
+IVP_TEST(minlist_equal_zero_and_index_reuse) {
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    ivp_minlist_index_t ia = ivp_minlist_add(&ml, &dummy_a, -0.0f);
+    ivp_minlist_index_t ib = ivp_minlist_add(&ml, &dummy_b, 0.0f);
+    ivp_minlist_index_t ic = ivp_minlist_add(&ml, &dummy_c, -0.0f);
+    ivp_minlist_enumerator_t en;
+    ivp_minlist_enum_init(&en, &ml);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_c);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_b);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_a);
+    IVP_ASSERT_TRUE(signbit(ivp_minlist_find_min_value(&ml)) != 0);
+
+    ivp_minlist_remove(&ml, ib);
+    ivp_minlist_index_t reused = ivp_minlist_add(&ml, &dummy_d, 1.0f);
+    IVP_ASSERT_EQ(reused, ib);
+    ivp_minlist_remove(&ml, ia);
+    ivp_minlist_remove(&ml, ic);
+    ivp_minlist_remove(&ml, reused);
+    ivp_minlist_destroy(&ml);
+}
+
+IVP_TEST(minlist_nonfinite_values_use_reference_fallback) {
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    ivp_minlist_index_t finite_a = ivp_minlist_add(&ml, &dummy_a, 1.0f);
+    ivp_minlist_index_t nan_value = ivp_minlist_add(&ml, &dummy_b, NAN);
+    ivp_minlist_index_t finite_b = ivp_minlist_add(&ml, &dummy_c, 2.0f);
+    ivp_minlist_index_t pos_inf = ivp_minlist_add(&ml, &dummy_d, INFINITY);
+    ivp_minlist_index_t neg_inf = ivp_minlist_add(&ml, &dummy_e, -INFINITY);
+    ivp_minlist_enumerator_t en;
+    ivp_minlist_enum_init(&en, &ml);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_e);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_a);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_c);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_d);
+    IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_b);
+    IVP_ASSERT_NULL(ivp_minlist_enum_next(&en));
+    ivp_minlist_remove(&ml, nan_value);
+    ivp_minlist_remove(&ml, pos_inf);
+    ivp_minlist_remove(&ml, neg_inf);
+    ivp_minlist_remove(&ml, finite_b);
+    ivp_minlist_remove(&ml, finite_a);
+    ivp_minlist_destroy(&ml);
+}
+
+typedef struct minlist_model_entry {
+    float value;
+    uint32_t sequence;
+    ivp_minlist_index_t handle;
+    bool active;
+} minlist_model_entry_t;
+
+static uint32_t minlist_test_rand(uint32_t *state)
+{
+    *state = *state * UINT32_C(1664525) + UINT32_C(1013904223);
+    return *state;
+}
+
+static void minlist_verify_model(ivp_minlist_t *ml, const minlist_model_entry_t *entries,
+                                 const uint32_t *order, uint32_t order_count, int *_fail_count)
+{
+    IVP_ASSERT_EQ(ivp_minlist_count(ml), order_count);
+    ivp_minlist_enumerator_t en;
+    ivp_minlist_enum_init(&en, ml);
+    for (uint32_t i = 0; i < order_count; i++) {
+        void *actual = ivp_minlist_enum_next(&en);
+        IVP_ASSERT_TRUE(actual == (void *)(uintptr_t)(order[i] + 1u));
+        if (i > 0) {
+            const minlist_model_entry_t *prev = &entries[order[i - 1u]];
+            const minlist_model_entry_t *current = &entries[order[i]];
+            IVP_ASSERT_TRUE(prev->value < current->value ||
+                            (prev->value == current->value &&
+                             prev->sequence > current->sequence));
+        }
+    }
+    IVP_ASSERT_NULL(ivp_minlist_enum_next(&en));
+}
+
+IVP_TEST(minlist_randomized_differential) {
+    enum { operations = 12000, max_entries = 7000 };
+    minlist_model_entry_t *entries =
+        (minlist_model_entry_t *)calloc(max_entries, sizeof(*entries));
+    uint32_t *order = (uint32_t *)malloc(max_entries * sizeof(*order));
+    IVP_ASSERT_NOT_NULL(entries);
+    IVP_ASSERT_NOT_NULL(order);
+    if (!entries || !order) {
+        free(entries);
+        free(order);
+        return;
+    }
+
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    uint32_t random_state = UINT32_C(0x51a7b00b);
+    uint32_t entry_count = 0;
+    uint32_t order_count = 0;
+    for (uint32_t op = 0; op < operations; op++) {
+        bool add = order_count < 1400u ||
+                   (entry_count < max_entries && (minlist_test_rand(&random_state) & 3u) != 0u);
+        if (add) {
+            uint32_t id = entry_count++;
+            float value = (float)((int)(minlist_test_rand(&random_state) % 257u) - 128);
+            entries[id].value = value;
+            entries[id].sequence = id;
+            entries[id].active = true;
+            entries[id].handle = ivp_minlist_add(
+                &ml, (void *)(uintptr_t)(id + 1u), value);
+            IVP_ASSERT_TRUE(entries[id].handle != IVP_MINLIST_UNUSED);
+            uint32_t pos = 0;
+            while (pos < order_count && entries[order[pos]].value < value) pos++;
+            memmove(&order[pos + 1u], &order[pos],
+                    (size_t)(order_count - pos) * sizeof(*order));
+            order[pos] = id;
+            order_count++;
+        } else {
+            uint32_t pos = minlist_test_rand(&random_state) % order_count;
+            uint32_t id = order[pos];
+            ivp_minlist_remove(&ml, entries[id].handle);
+            entries[id].active = false;
+            memmove(&order[pos], &order[pos + 1u],
+                    (size_t)(order_count - pos - 1u) * sizeof(*order));
+            order_count--;
+        }
+        if ((op & 31u) == 0u) {
+            minlist_verify_model(&ml, entries, order, order_count, _fail_count);
+            if (*_fail_count != 0) return;
+        }
+    }
+    minlist_verify_model(&ml, entries, order, order_count, _fail_count);
+    if (*_fail_count != 0) return;
+    while (order_count > 0) {
+        uint32_t id = order[--order_count];
+        ivp_minlist_remove(&ml, entries[id].handle);
+    }
+    ivp_minlist_destroy(&ml);
+    free(order);
+    free(entries);
 }
 
 /* ========== Vhash Tests ========== */
@@ -504,6 +646,9 @@ int main(void) {
     IVP_REGISTER(minlist_enum_next_lt);
     IVP_REGISTER(minlist_grow_many);
     IVP_REGISTER(minlist_supports_32bit_indices);
+    IVP_REGISTER(minlist_equal_zero_and_index_reuse);
+    IVP_REGISTER(minlist_nonfinite_values_use_reference_fallback);
+    IVP_REGISTER(minlist_randomized_differential);
 
     /* Vhash tests */
     IVP_REGISTER(vhash_init_destroy);
