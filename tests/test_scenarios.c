@@ -59,6 +59,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+
+static int64_t benchmark_now_ns(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER frequency, counter;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&counter);
+    return (int64_t)((double)counter.QuadPart * 1000000000.0 /
+                     (double)frequency.QuadPart);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * INT64_C(1000000000) + (int64_t)ts.tv_nsec;
+#endif
+}
+
+static int64_t g_benchmark_simulate_ns;
+static int g_benchmark_enabled;
 
 /* ── Scenario IDs (match reference runner) ──────────────────────────────── */
 enum {
@@ -315,6 +340,7 @@ static void snapshot_frame(FILE *f, int scenario_id, int step, double dt,
                            ivp_object_t **objects, const char **types,
                            int object_count)
 {
+    if (!f) return;
     double t = (double)ivp_environment_get_time(env);
     fprintf(f, "{\"scenario\":%d,\"step\":%d,\"dt\":%.17g,\"time\":%.17g,\"objects\":[",
             scenario_id, step, dt, t);
@@ -398,7 +424,9 @@ static ivp_object_t *scenario_create_box(ivp_environment_t *env, const ivp_objec
  * (differs from simulate_one_psi when set_delta_PSI_time rejected dt). */
 static void scenario_step(ivp_environment_t *env, double dt)
 {
+    int64_t start = g_benchmark_enabled ? benchmark_now_ns() : 0;
     ivp_environment_simulate_until(env, env->current_time + dt);
+    if (g_benchmark_enabled) g_benchmark_simulate_ns += benchmark_now_ns() - start;
 }
 
 /* ── Scenario implementations ───────────────────────────────────────────── */
@@ -6213,8 +6241,9 @@ static void print_usage(const char *exe)
             "raycast_car_drive|check_dist_events|golem_beam|"
             "concave_static|compound_dynamic|convex_hulls|grid_terrain|hull_pile|galton|fast_impacts|"
             "spawn_remove|long_range|universe_evict|merge_objects|object_attach|merge_buoyancy|anchor_follow "
-            "[--steps N] [--dt seconds] [--output file.jsonl] [--check-invariants] [--assert-continue]\n"
-            "Outputs JSONL snapshots (to file or stdout).\n"
+            "[--steps N] [--dt seconds] [--output file.jsonl] [--check-invariants] [--assert-continue] "
+            "[--benchmark [--samples N] [--warmup N] [--min-sample-ms MS]]\n"
+            "Outputs JSONL snapshots, or benchmark records in benchmark mode.\n"
             "With --check-invariants, runs physics correctness checks after simulation.\n", exe);
 }
 
@@ -6237,6 +6266,10 @@ int main(int argc, char **argv)
     double dt       = 1.0 / 60.0;
     const char *output_path = NULL;
     int    check_invariants = 0;
+    int    benchmark = 0;
+    int    samples = 5;
+    int    warmup = 1;
+    double min_sample_ms = 200.0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
@@ -6273,6 +6306,28 @@ int main(int argc, char **argv)
             check_invariants = 1;
             continue;
         }
+        if (!strcmp(argv[i], "--benchmark")) {
+            benchmark = 1;
+            continue;
+        }
+        if (!strcmp(argv[i], "--samples")) {
+            if (i + 1 >= argc || (samples = atoi(argv[++i])) <= 0) {
+                fprintf(stderr, "Invalid --samples\n"); return 2;
+            }
+            continue;
+        }
+        if (!strcmp(argv[i], "--warmup")) {
+            if (i + 1 >= argc || (warmup = atoi(argv[++i])) < 0) {
+                fprintf(stderr, "Invalid --warmup\n"); return 2;
+            }
+            continue;
+        }
+        if (!strcmp(argv[i], "--min-sample-ms")) {
+            if (i + 1 >= argc || (min_sample_ms = atof(argv[++i])) <= 0.0) {
+                fprintf(stderr, "Invalid --min-sample-ms\n"); return 2;
+            }
+            continue;
+        }
         if (!strcmp(argv[i], "--assert-continue")) {
             ivp_set_assert_handler(assert_continue_handler, NULL);
             continue;
@@ -6287,8 +6342,12 @@ int main(int argc, char **argv)
         print_usage(argv[0]);
         return 2;
     }
+    if (benchmark && (steps <= 0 || output_path || check_invariants)) {
+        fprintf(stderr, "Benchmark mode requires steps > 0 and cannot use --output or --check-invariants.\n");
+        return 2;
+    }
 
-    FILE *out = stdout;
+    FILE *out = benchmark ? NULL : stdout;
     if (output_path) {
         out = fopen(output_path, "w");
         if (!out) {
@@ -6305,7 +6364,18 @@ int main(int argc, char **argv)
     }
 
     int rc = 0;
-    switch (scenario) {
+    g_benchmark_enabled = benchmark;
+    const int first_sample = benchmark ? -warmup : 0;
+    const int sample_limit = benchmark ? samples : 1;
+    const int64_t minimum_ns = (int64_t)(min_sample_ms * 1000000.0);
+    for (int sample = first_sample; sample < sample_limit && rc == 0; sample++) {
+        int worlds = 0;
+        int64_t aggregate_simulate_ns = 0;
+        int64_t aggregate_total_ns = 0;
+        do {
+            g_benchmark_simulate_ns = 0;
+            int64_t total_start = benchmark ? benchmark_now_ns() : 0;
+            switch (scenario) {
         case SCENARIO_FREEFALL:       rc = run_freefall(out, steps, dt, inv);       break;
         case SCENARIO_TWO_BALLS:      rc = run_two_balls(out, steps, dt, inv);      break;
         case SCENARIO_SLOPE_FRICTION: rc = run_slope_friction(out, steps, dt, inv); break;
@@ -6354,7 +6424,25 @@ int main(int argc, char **argv)
         case SCENARIO_OBJECT_ATTACH:  rc = run_object_attach(out, steps, dt, inv);  break;
         case SCENARIO_MERGE_BUOYANCY: rc = run_merge_buoyancy(out, steps, dt, inv); break;
         case SCENARIO_ANCHOR_FOLLOW:  rc = run_anchor_follow(out, steps, dt, inv);  break;
-        default:                      rc = 1;                                       break;
+            default:                      rc = 1;                                       break;
+            }
+            if (benchmark) {
+                aggregate_total_ns += benchmark_now_ns() - total_start;
+                aggregate_simulate_ns += g_benchmark_simulate_ns;
+                worlds++;
+            }
+        } while (benchmark && sample >= 0 && rc == 0 &&
+                 aggregate_simulate_ns < minimum_ns);
+
+        if (benchmark && sample >= 0 && rc == 0) {
+            fprintf(stdout,
+                    "{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"scenario\","
+                    "\"implementation\":\"libivp\",\"scenario\":\"%s\","
+                    "\"sample\":%d,\"worlds\":%d,\"steps_per_world\":%d,"
+                    "\"dt\":%.17g,\"simulate_ns\":%lld,\"total_ns\":%lld}\n",
+                    scenario_name_from_id(scenario), sample, worlds, steps, dt,
+                    (long long)aggregate_simulate_ns, (long long)aggregate_total_ns);
+        }
     }
 
     if (output_path && out) fclose(out);
