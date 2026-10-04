@@ -743,6 +743,11 @@ if (IVP_BUILD_TESTS)
     else ()
         message(STATUS "Skipping test_compare_jsonl_self (missing Python3 interpreter or JSONL inputs)")
     endif ()
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME test_benchmark_tool
+                 COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_tool.py)
+        set_tests_properties(test_benchmark_tool PROPERTIES LABELS "unit;perf")
+    endif ()
 
     # ── CTest labels ──────────────────────────────────────────────────────
     # unit:       all unit tests
