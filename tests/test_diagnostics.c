@@ -132,6 +132,32 @@ IVP_TEST(default_env_creates_simple_counter)
     ivp_environment_destroy(env); /* environment_is_going_to_be_deleted frees the counter */
 }
 
+IVP_TEST(environment_can_disable_default_counter)
+{
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    IVP_ASSERT_FALSE(cfg.disable_performance_counter);
+    cfg.disable_performance_counter = true;
+
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    IVP_ASSERT_NOT_NULL(env);
+    IVP_ASSERT_NULL(ivp_environment_get_performance_counter(env));
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_NULL(ivp_environment_get_performance_counter(env));
+    ivp_environment_destroy(env);
+
+    rec_counter_t rec;
+    rec_init(&rec);
+    ivp_environment_config_init(&cfg);
+    cfg.disable_performance_counter = true;
+    cfg.performance_counter = &rec.base;
+    env = ivp_environment_create(&cfg);
+    IVP_ASSERT_NOT_NULL(env);
+    IVP_ASSERT_TRUE(ivp_environment_get_performance_counter(env) == &rec.base);
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(rec.deleted_calls, 1);
+}
+
 IVP_TEST(simple_counter_accumulates_and_resets)
 {
     ivp_performance_counter_simple_t pc;
@@ -866,6 +892,7 @@ IVP_TEST(clustering_visualizer_object_hash)
 int main(void)
 {
     IVP_REGISTER(default_env_creates_simple_counter);
+    IVP_REGISTER(environment_can_disable_default_counter);
     IVP_REGISTER(simple_counter_accumulates_and_resets);
     IVP_REGISTER(user_counter_receives_reference_sequence);
     IVP_REGISTER(counter_does_not_change_simulation);

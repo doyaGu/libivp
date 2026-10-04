@@ -1589,6 +1589,7 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     cfg->collision_filter = ivp_collision_filter_allow_all();
     cfg->ccd_enabled = false;
     cfg->n_cache_objects = 256;
+    cfg->disable_performance_counter = false;
 }
 
 /* IVP_Environment::set_gravity */
@@ -1913,7 +1914,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* performancecounter: the application's, else new IVP_PerformanceCounter_Simple() */
     if (cfg.performance_counter) {
         env->performance_counter = cfg.performance_counter;
-    } else {
+    } else if (!cfg.disable_performance_counter) {
         ivp_performance_counter_simple_t *simple = ivp_performance_counter_simple_create(env->allocator);
         env->performance_counter = simple ? &simple->base : NULL;
     }

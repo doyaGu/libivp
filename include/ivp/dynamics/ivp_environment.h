@@ -61,6 +61,10 @@ typedef struct ivp_environment_config {
      * environment_is_going_to_be_deleted on destruction
      * (ivp/diagnostics/ivp_performance_counter.h). */
     struct ivp_performance_counter *performance_counter;
+    /* Skip creation of the default counter when performance instrumentation
+     * is not required.  A non-NULL performance_counter always takes
+     * precedence.  Default: false. */
+    bool                            disable_performance_counter;
 } ivp_environment_config_t;
 
 /* Fill with sensible defaults */
