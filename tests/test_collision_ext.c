@@ -2,6 +2,7 @@
 #include <string.h>
 #include <ivp/collision/ivp_range_manager.h>
 #include <ivp/collision/ivp_collision_filter.h>
+#include <ivp/collision/ivp_collision_core.h>
 #include <ivp/collision/ivp_compact_ledge_solver.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
@@ -14,6 +15,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #ifdef IVP_REAL_DOUBLE
   #define TOL 1e-6
@@ -344,6 +346,43 @@ IVP_TEST(compact_ledge_solver_box_box) {
     ivp_compact_surface_free(NULL, surf_b);
 }
 
+IVP_TEST(ov_tree_hash_grows_and_releases_allocator_storage) {
+    enum { element_count = 5000 };
+    ivp_allocator_t counting = ivp_counting_allocator_create(ivp_default_allocator());
+    ivp_ov_tree_t tree;
+    IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &counting), IVP_OK);
+
+    ivp_ov_element_t *elements = (ivp_ov_element_t *)calloc(element_count, sizeof(*elements));
+    IVP_ASSERT_NOT_NULL(elements);
+    if (!elements) {
+        ivp_ov_tree_destroy(&tree);
+        ivp_counting_allocator_destroy(&counting);
+        return;
+    }
+    for (int i = 0; i < element_count; i++) {
+        elements[i].center.k[0] = (float)(i * 4);
+        elements[i].center.k[1] = (float)((i % 17) * 4);
+        elements[i].center.k[2] = (float)((i % 31) * 4);
+        (void)ivp_ov_tree_insert_ov_element(&tree, &elements[i], 0.25, 0.25, NULL);
+        IVP_ASSERT_NOT_NULL(elements[i].node);
+    }
+    IVP_ASSERT_TRUE(tree.node_count > 4096u);
+    IVP_ASSERT_TRUE(tree.hash_size > IVP_OV_HASH_INITIAL_SIZE);
+
+    for (int i = element_count - 1; i >= 0; i--) {
+        ivp_ov_tree_remove_ov_element(&tree, &elements[i]);
+        IVP_ASSERT_TRUE(elements[i].node == NULL);
+    }
+    IVP_ASSERT_EQ(tree.node_count, 0u);
+    free(elements);
+    ivp_ov_tree_destroy(&tree);
+
+    ivp_alloc_stats_t stats;
+    ivp_counting_allocator_get_stats(&counting, &stats);
+    IVP_ASSERT_EQ(stats.current_bytes, 0);
+    ivp_counting_allocator_destroy(&counting);
+}
+
 /* ========================================================================
  * Test Registration and Main
  * ======================================================================== */
@@ -365,6 +404,7 @@ int main(void) {
     IVP_REGISTER(compact_ledge_solver_point_to_ledge);
     IVP_REGISTER(compact_ledge_solver_box_box);
     IVP_REGISTER(surman_ledge_references_balanced);
+    IVP_REGISTER(ov_tree_hash_grows_and_releases_allocator_storage);
 
     IVP_RUN_ALL();
 }

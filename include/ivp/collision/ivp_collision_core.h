@@ -20,6 +20,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_legacy.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
@@ -348,17 +349,21 @@ typedef struct ivp_ov_element {
     ivp_coll_fvector_t   collision_fvector;
 } ivp_ov_element_t;
 
-#define IVP_OV_HASH_SIZE 1024
+#define IVP_OV_HASH_INITIAL_SIZE 1024u
 
 typedef struct ivp_ov_tree {
     double          powerlist[81];
     ivp_ov_node_t   search_node;
     ivp_pvec_t     *collision_partners;
-    ivp_ov_node_t  *hash[IVP_OV_HASH_SIZE];
+    ivp_ov_node_t **hash;
+    size_t          hash_size;
+    size_t          node_count;
+    const ivp_allocator_t *allocator;
     ivp_ov_node_t  *root;
 } ivp_ov_tree_t;
 
 void   ivp_ov_tree_init(ivp_ov_tree_t *t);
+ivp_result_t ivp_ov_tree_init_with_allocator(ivp_ov_tree_t *t, const ivp_allocator_t *allocator);
 void   ivp_ov_tree_destroy(ivp_ov_tree_t *t);
 double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
                                      double min_radius, double max_radius,

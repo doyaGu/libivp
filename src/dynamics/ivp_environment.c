@@ -1916,7 +1916,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_sim_units_mgr_init(&pl->sim_units_manager, env);
     ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event);
     ivp_mindist_mgr_init(&pl->mindist_mgr, env);
-    ivp_ov_tree_init(&pl->ov_tree);
+    if (ivp_ov_tree_init_with_allocator(&pl->ov_tree, env->allocator) != IVP_OK) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
     /* statistic_manager.l_environment = this */
     ivp_statistic_manager_init(&pl->statistic_manager);
     pl->statistic_manager.l_environment = env;

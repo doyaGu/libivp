@@ -193,11 +193,15 @@ static void ov_node_destroy(ivp_ov_node_t *n)
 
 /* ── node lookup (IVP_ov_tree_hash; lookup only, order-free) ─────────── */
 
-static unsigned ov_hash_index(const ivp_ov_node_data_t *d)
+static unsigned ov_hash_value(const ivp_ov_node_data_t *d)
 {
-    unsigned h = (unsigned)d->x * 73856093u ^ (unsigned)d->y * 19349663u ^
-                 (unsigned)d->z * 83492791u ^ (unsigned)d->rasterlevel * 2654435761u;
-    return h & (IVP_OV_HASH_SIZE - 1);
+    return (unsigned)d->x * 73856093u ^ (unsigned)d->y * 19349663u ^
+           (unsigned)d->z * 83492791u ^ (unsigned)d->rasterlevel * 2654435761u;
+}
+
+static size_t ov_hash_index(const ivp_ov_tree_t *t, const ivp_ov_node_data_t *d)
+{
+    return (size_t)ov_hash_value(d) & (t->hash_size - 1u);
 }
 
 static bool ov_node_equal(const ivp_ov_node_t *a, const ivp_ov_node_t *b)
@@ -206,26 +210,57 @@ static bool ov_node_equal(const ivp_ov_node_t *a, const ivp_ov_node_t *b)
            a->data.y == b->data.y && a->data.z == b->data.z;
 }
 
+static void ov_hash_grow(ivp_ov_tree_t *t)
+{
+    if (t->hash_size > SIZE_MAX / 2u / sizeof(*t->hash)) return;
+    const size_t new_size = t->hash_size * 2u;
+    ivp_ov_node_t **new_hash = (ivp_ov_node_t **)ivp_alloc(t->allocator,
+                                                           new_size * sizeof(*new_hash));
+    if (!new_hash) return;
+    memset(new_hash, 0, new_size * sizeof(*new_hash));
+    for (size_t i = 0; i < t->hash_size; i++) {
+        ivp_ov_node_t *node = t->hash[i];
+        while (node) {
+            ivp_ov_node_t *next = node->hash_next;
+            const size_t new_index = (size_t)ov_hash_value(&node->data) & (new_size - 1u);
+            node->hash_next = new_hash[new_index];
+            new_hash[new_index] = node;
+            node = next;
+        }
+    }
+    ivp_free(t->allocator, t->hash, t->hash_size * sizeof(*t->hash));
+    t->hash = new_hash;
+    t->hash_size = new_size;
+}
+
 static void ov_hash_add(ivp_ov_tree_t *t, ivp_ov_node_t *n)
 {
-    unsigned i = ov_hash_index(&n->data);
+    if ((t->node_count + 1u) * 4u > t->hash_size * 3u) ov_hash_grow(t);
+    size_t i = ov_hash_index(t, &n->data);
     n->hash_next = t->hash[i];
     t->hash[i] = n;
+    t->node_count++;
 }
 
 static void ov_hash_remove(ivp_ov_tree_t *t, ivp_ov_node_t *n)
 {
-    unsigned i = ov_hash_index(&n->data);
+    size_t i = ov_hash_index(t, &n->data);
     ivp_ov_node_t **pp = &t->hash[i];
     while (*pp) {
-        if (*pp == n) { *pp = n->hash_next; n->hash_next = NULL; return; }
+        if (*pp == n) {
+            *pp = n->hash_next;
+            n->hash_next = NULL;
+            IVP_ASSERT(t->node_count > 0);
+            t->node_count--;
+            return;
+        }
         pp = &(*pp)->hash_next;
     }
 }
 
 static ivp_ov_node_t *ov_hash_find(ivp_ov_tree_t *t, const ivp_ov_node_t *key)
 {
-    for (ivp_ov_node_t *n = t->hash[ov_hash_index(&key->data)]; n; n = n->hash_next) {
+    for (ivp_ov_node_t *n = t->hash[ov_hash_index(t, &key->data)]; n; n = n->hash_next) {
         if (ov_node_equal(n, key)) return n;
     }
     return NULL;
@@ -233,9 +268,18 @@ static ivp_ov_node_t *ov_hash_find(ivp_ov_tree_t *t, const ivp_ov_node_t *key)
 
 /* ── IVP_OV_Tree_Manager ────────────────────────────────────────────────── */
 
-void ivp_ov_tree_init(ivp_ov_tree_t *t)
+ivp_result_t ivp_ov_tree_init_with_allocator(ivp_ov_tree_t *t, const ivp_allocator_t *allocator)
 {
+    if (!t) return IVP_ERR_INVALID_ARG;
     memset(t, 0, sizeof(*t));
+    t->allocator = allocator ? allocator : ivp_default_allocator();
+    t->hash_size = IVP_OV_HASH_INITIAL_SIZE;
+    t->hash = (ivp_ov_node_t **)ivp_alloc(t->allocator, t->hash_size * sizeof(*t->hash));
+    if (!t->hash) {
+        t->hash_size = 0;
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    memset(t->hash, 0, t->hash_size * sizeof(*t->hash));
     double y = 1.0, iy = 1.0;
     for (int x = 0; x <= 40; x++) {
         t->powerlist[40 + x] = y;
@@ -243,6 +287,14 @@ void ivp_ov_tree_init(ivp_ov_tree_t *t)
         y *= 2.0;
         iy *= 0.5;
     }
+    return IVP_OK;
+}
+
+void ivp_ov_tree_init(ivp_ov_tree_t *t)
+{
+    ivp_result_t result = ivp_ov_tree_init_with_allocator(t, ivp_default_allocator());
+    IVP_ASSERT(result == IVP_OK);
+    (void)result;
 }
 
 void ivp_ov_tree_destroy(ivp_ov_tree_t *t)
@@ -253,7 +305,12 @@ void ivp_ov_tree_destroy(ivp_ov_tree_t *t)
         ov_node_destroy(t->root);
         t->root = NULL;
     }
-    memset(t->hash, 0, sizeof(t->hash));
+    if (t->hash) {
+        ivp_free(t->allocator, t->hash, t->hash_size * sizeof(*t->hash));
+        t->hash = NULL;
+    }
+    t->hash_size = 0;
+    t->node_count = 0;
 }
 
 static inline double ov_power2(const ivp_ov_tree_t *t, int x) { return t->powerlist[x + 40]; }
