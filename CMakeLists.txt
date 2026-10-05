@@ -22,6 +22,20 @@ option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_B
 option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
+function(ivp_apply_strict_fp TARGET_NAME)
+    if (MSVC)
+        target_compile_options(${TARGET_NAME} PRIVATE /fp:strict /Oi-)
+        if (CMAKE_C_COMPILER_ID MATCHES "Clang")
+            # clang-cl needs the same explicit contraction rules as Clang.
+            target_compile_options(${TARGET_NAME} PRIVATE
+                    -ffp-contract=off -fno-fast-math)
+        endif ()
+    else ()
+        target_compile_options(${TARGET_NAME} PRIVATE
+                -ffp-contract=off -fno-fast-math -frounding-math)
+    endif ()
+endfunction()
+
 # ── Strict floating-point and warnings will be applied to ivp targets only,
 # ── not to third-party dependencies like SDL ──────────────────────────────
 
@@ -252,17 +266,7 @@ target_include_directories(ivp_qhull
         ${CMAKE_CURRENT_SOURCE_DIR}/deps/qhull
 )
 
-# Apply strict floating-point rules
-if (MSVC)
-    target_compile_options(ivp_qhull PRIVATE /fp:strict /Oi-)
-    if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-        target_compile_options(ivp_qhull PRIVATE -ffp-contract=off -fno-fast-math)
-    endif ()
-else ()
-    target_compile_options(ivp_qhull PRIVATE
-            -ffp-contract=off -fno-fast-math -frounding-math
-    )
-endif ()
+ivp_apply_strict_fp(ivp_qhull)
 
 # Project warning set (not fatal: third-party code), with the warning
 # classes the vendored 1999 code triggers silenced for these files only
@@ -321,19 +325,7 @@ if (IVP_BUILD_TESTS)
     target_compile_definitions(ivp PRIVATE IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API)
 endif ()
 
-# Apply strict floating-point rules
-if (MSVC)
-    target_compile_options(ivp PRIVATE /fp:strict /Oi-)
-    if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-        # clang-cl
-        target_compile_options(ivp PRIVATE -ffp-contract=off -fno-fast-math)
-    endif ()
-else ()
-    # GCC / Clang
-    target_compile_options(ivp PRIVATE
-            -ffp-contract=off -fno-fast-math -frounding-math
-    )
-endif ()
+ivp_apply_strict_fp(ivp)
 
 # The reference pipeline port mixes IVP_FLOAT and IVP_DOUBLE on purpose
 # (float storage, double arithmetic) exactly like the C++ reference.
@@ -584,17 +576,7 @@ if (IVP_BUILD_RENDER)
         IVP_RENDER_SHADER_DIR_FALLBACK="${IVP_SHADER_BIN_DIR}"
     )
 
-    # Apply floating-point strictness
-    if (MSVC)
-        target_compile_options(ivp_render PRIVATE /fp:strict /Oi-)
-        if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-            target_compile_options(ivp_render PRIVATE -ffp-contract=off -fno-fast-math)
-        endif ()
-    else ()
-        target_compile_options(ivp_render PRIVATE
-                -ffp-contract=off -fno-fast-math -frounding-math
-        )
-    endif ()
+    ivp_apply_strict_fp(ivp_render)
 
     # Relax warnings for render module (uses float casts and literals freely)
     if (NOT MSVC)
@@ -620,10 +602,8 @@ if (IVP_BUILD_BENCHMARKS)
     endif ()
     if (NOT MSVC)
         target_link_libraries(ivp_benchmark PRIVATE m)
-        target_compile_options(ivp_benchmark PRIVATE -ffp-contract=off -fno-fast-math -frounding-math)
-    else ()
-        target_compile_options(ivp_benchmark PRIVATE /fp:strict /Oi-)
     endif ()
+    ivp_apply_strict_fp(ivp_benchmark)
 endif ()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -689,12 +669,7 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_great_matrix_port tests/test_great_matrix_port.c)
     # Its scalar differential models must have the same rounding and
     # contraction semantics as the engine, including dynamic fenv tests.
-    if (MSVC)
-        target_compile_options(test_great_matrix_port PRIVATE /fp:strict /Oi-)
-    else ()
-        target_compile_options(test_great_matrix_port PRIVATE
-                -ffp-contract=off -fno-fast-math -frounding-math)
-    endif ()
+    ivp_apply_strict_fp(test_great_matrix_port)
     ivp_add_test(test_matrix_cache tests/test_matrix_cache.c)
     target_include_directories(test_matrix_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_deferred_deletion tests/test_deferred_deletion.c)
