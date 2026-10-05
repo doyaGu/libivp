@@ -744,11 +744,11 @@ bool ivp_ctrl_mgr_core_has_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
     return false;
 }
 
-void ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core)
+bool ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core)
 {
-    if (!core || !c) return;
-    if (ivp_ctrl_mgr_core_has_controller(core, c)) return;
-    ivp_core_add_core_controller(core, c);
+    if (!core || !c) return false;
+    if (ivp_ctrl_mgr_core_has_controller(core, c)) return true;
+    return ivp_core_add_core_controller(core, c);
 }
 
 void ivp_ctrl_mgr_remove_controller_from_core(ivp_sim_ctrl_t *c, ivp_core_t *core)

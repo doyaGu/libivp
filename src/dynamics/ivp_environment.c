@@ -1161,20 +1161,25 @@ void ivp_env_attach_default_controllers(ivp_environment_t *env, ivp_core_t *core
 {
     ivp_pvec_t *l = &env->pl->all_core_ctrls;
     for (int i = 0; i < ivp_pvec_len(l); i++) {
-        ivp_ctrl_mgr_add_controller_to_core((ivp_sim_ctrl_t *)ivp_pvec_at(l, i), core);
+        (void)ivp_ctrl_mgr_add_controller_to_core((ivp_sim_ctrl_t *)ivp_pvec_at(l, i), core);
     }
 }
 
-static void slot_ctrl_set_all_cores(ivp_environment_t *env, slot_ctrl_t *sc)
+static bool slot_ctrl_set_all_cores(ivp_environment_t *env, slot_ctrl_t *sc)
 {
-    if (sc->all_cores) return;
+    if (sc->all_cores) return true;
+    if (ivp_pvec_add(&env->pl->all_core_ctrls, &sc->base) < 0) return false;
     sc->all_cores = true;
-    ivp_pvec_add(&env->pl->all_core_ctrls, &sc->base);
     ivp_object_system_t *os = env_object_system(env);
     for (int i = 0; i < ivp_object_system_count(os); i++) {
         ivp_object_t *obj = ivp_object_system_get_at(os, i);
-        if (obj) ivp_ctrl_mgr_add_controller_to_core(&sc->base, obj->physical_core);
+        if (obj && !ivp_ctrl_mgr_add_controller_to_core(&sc->base, obj->physical_core)) {
+            slot_ctrl_detach_all(env, sc, true);
+            sc->all_cores = false;
+            return false;
+        }
     }
+    return true;
 }
 
 /* ── controller API ────────────────────────────────────────────────────── */
@@ -1343,11 +1348,19 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     sc->cache_assoc_objects = env_find_builtin_controller(event_fn) != NULL;
     ivp_pvec_init(&sc->assoc_cores);
     slot->sim_ctrl = sc;
-    ivp_pvec_add(&env->pl->slot_ctrls, sc);
+    if (ivp_pvec_add(&env->pl->slot_ctrls, sc) < 0) {
+        slot->sim_ctrl = NULL;
+        slot_ctrl_free(env, sc);
+        (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+        return invalid;
+    }
     if (sc->dependent) {
         slot_ctrl_refresh_dependent(env, sc, slot);
-    } else {
-        slot_ctrl_set_all_cores(env, sc);
+    } else if (!slot_ctrl_set_all_cores(env, sc)) {
+        slot->sim_ctrl = NULL;
+        slot_ctrl_free(env, sc);
+        (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+        return invalid;
     }
     ivp_controller_system_sort(env_controller_system(env));
     ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_ADDED, IVP_REAL(0.0), -1, (int)out.slot);

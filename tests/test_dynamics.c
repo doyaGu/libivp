@@ -11,6 +11,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "controllers/ivp_controller_system.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1149,6 +1150,52 @@ static void controller_count_only(const ivp_event_sim_t *event_sim,
     count_ctx->calls++;
 }
 
+IVP_TEST(controller_registration_failure_is_atomic) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(obj);
+    ivp_controller_system_t *controllers = (ivp_controller_system_t *)env->controller_system;
+    controller_count_ctx_t count_ctx = {0};
+
+    ivp_pvec_t saved = env->pl->slot_ctrls;
+    env->pl->slot_ctrls = (ivp_pvec_t){ NULL, 0, -1 };
+    ivp_controller_handle_t h = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(h));
+    IVP_ASSERT_EQ(ivp_controller_system_count(controllers), 0);
+    env->pl->slot_ctrls = saved;
+
+    saved = env->pl->all_core_ctrls;
+    env->pl->all_core_ctrls = (ivp_pvec_t){ NULL, 0, -1 };
+    h = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(h));
+    IVP_ASSERT_EQ(ivp_controller_system_count(controllers), 0);
+    IVP_ASSERT_EQ(ivp_pvec_len(&env->pl->slot_ctrls), 0);
+    env->pl->all_core_ctrls = saved;
+
+    saved = obj->physical_core->controllers_of_core;
+    obj->physical_core->controllers_of_core = (ivp_pvec_t){ NULL, 0, -1 };
+    h = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(h));
+    IVP_ASSERT_EQ(ivp_controller_system_count(controllers), 0);
+    IVP_ASSERT_EQ(ivp_pvec_len(&env->pl->slot_ctrls), 0);
+    IVP_ASSERT_EQ(ivp_pvec_len(&env->pl->all_core_ctrls), 0);
+    obj->physical_core->controllers_of_core = saved;
+
+    h = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, h));
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(controller_self_remove_does_not_break_iteration) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     ivp_environment_clear_controllers(env);
@@ -1705,6 +1752,7 @@ int main(void) {
     IVP_REGISTER(sim_unit_event_pipeline);
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
     IVP_REGISTER(controller_self_remove_does_not_break_iteration);
+    IVP_REGISTER(controller_registration_failure_is_atomic);
     IVP_REGISTER(controller_priority_sync_async);
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);

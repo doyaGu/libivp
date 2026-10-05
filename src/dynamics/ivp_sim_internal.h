@@ -134,7 +134,7 @@ void ivp_sim_unit_sim_unit_debug_out(ivp_sim_unit_t *su);
 void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c);
 void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently);
 void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, ivp_sim_ctrl_t *c);
-void ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core);
+bool ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core);
 void ivp_ctrl_mgr_remove_controller_from_core(ivp_sim_ctrl_t *c, ivp_core_t *core);
 bool ivp_ctrl_mgr_core_has_controller(ivp_core_t *core, ivp_sim_ctrl_t *c);
 
