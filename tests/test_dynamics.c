@@ -427,6 +427,38 @@ IVP_TEST(env_create_object) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(env_create_object_reserves_psi_scratch_atomically) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+
+    ivp_pvec_t saved = env->pl->touched_cores;
+    env->pl->touched_cores = (ivp_pvec_t){ .elems = NULL, .n = 0, .cap = -1 };
+    ivp_object_handle_t handle = { 7u, 7u };
+    IVP_ASSERT_NULL(ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle));
+    IVP_ASSERT_FALSE(ivp_object_handle_is_valid(handle));
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 0);
+    env->pl->touched_cores = saved;
+
+    saved = env->pl->active_hulls;
+    env->pl->active_hulls = (ivp_pvec_t){ .elems = NULL, .n = 0, .cap = -1 };
+    handle = (ivp_object_handle_t){ 7u, 7u };
+    IVP_ASSERT_NULL(ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle));
+    IVP_ASSERT_FALSE(ivp_object_handle_is_valid(handle));
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 0);
+    env->pl->active_hulls = saved;
+
+    ivp_object_t *obj = ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle);
+    IVP_ASSERT_NOT_NULL(obj);
+    IVP_ASSERT_TRUE(ivp_object_handle_is_valid(handle));
+    IVP_ASSERT_TRUE(env->pl->touched_cores.cap >= 1);
+    IVP_ASSERT_TRUE(env->pl->active_hulls.cap >= 1);
+
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(env_destroy_object) {
     ivp_environment_t *env = ivp_environment_create(NULL);
 
@@ -1927,6 +1959,7 @@ int main(void) {
     IVP_REGISTER(env_create_with_config);
     IVP_REGISTER(env_create_allocation_failures_are_recoverable);
     IVP_REGISTER(env_create_object);
+    IVP_REGISTER(env_create_object_reserves_psi_scratch_atomically);
     IVP_REGISTER(env_destroy_object);
     IVP_REGISTER(env_object_handle_basic);
     IVP_REGISTER(env_object_handle_stale_after_delete);

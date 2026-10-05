@@ -2344,14 +2344,27 @@ void ivp_environment_destroy(ivp_environment_t *env)
 ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, const ivp_object_template_t *tmpl,
                                                         const ivp_surman_t *surman, ivp_object_handle_t *out_handle)
 {
+    if (out_handle) *out_handle = ivp_object_handle_invalid();
     if (!env || !tmpl) return NULL;
     ivp_object_t *obj = ivp_object_system_create(env_object_system(env), env, tmpl, surman, out_handle);
     if (!obj) return NULL;
+    const int object_count = ivp_object_system_count(env_object_system(env));
+    /* A PSI can touch at most one core and one hull manager per object.  Grow
+     * the reusable scratch here so the simulation hot path never allocates. */
+    if (!ivp_pvec_reserve(&env->pl->touched_cores, object_count) ||
+        !ivp_pvec_reserve(&env->pl->active_hulls, object_count)) {
+        (void)ivp_object_system_destroy_by_handle(env_object_system(env),
+                                                  ivp_environment_get_object_handle(obj),
+                                                  env->allocator);
+        if (out_handle) *out_handle = ivp_object_handle_invalid();
+        return NULL;
+    }
     ivp_cluster_add_child(&env->pl->root_cluster, obj); /* IVP_Object(father = root cluster) */
     if (!ivp_object_pipeline_create(env, obj, tmpl)) {
         ivp_cluster_remove_child(&env->pl->root_cluster, obj);
         (void)ivp_object_system_destroy_by_handle(env_object_system(env), ivp_environment_get_object_handle(obj),
                                                   env->allocator);
+        if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
     }
     fire_object_event_global(env, obj, OBJ_EV_CREATED); /* end of IVP_Polygon / IVP_Ball ctor */
