@@ -649,6 +649,33 @@ IVP_TEST(car_listener_failure_is_atomic)
     scene_destroy(&sc);
 }
 
+IVP_TEST(fix_wheel_registration_failure_is_atomic)
+{
+    car_scene_t sc;
+    IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+    IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+
+    ivp_vec3f_t speed_before = sc.wheels[0]->physical_core->rot_speed;
+    ivp_allocator_t saved_allocator = *sc.env->allocator;
+    sc.env->allocator->alloc = car_fail_alloc;
+    ivp_car_system_fix_wheel(&sc.car, 0, true);
+    *sc.env->allocator = saved_allocator;
+
+    IVP_ASSERT_NULL(sc.car.fix_wheel_constraint[0]);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(sc.car.h_fix_wheel[0]));
+    IVP_ASSERT_NULL(ivp_constraint_solver_car_get_wheel(
+                        sc.car.car_constraint_solver, 0)->fix_wheel_constraint);
+    for (int i = 0; i < 3; i++) {
+        IVP_ASSERT_TRUE(sc.wheels[0]->physical_core->rot_speed.k[i] == speed_before.k[i]);
+    }
+
+    ivp_car_system_fix_wheel(&sc.car, 0, true);
+    IVP_ASSERT_NOT_NULL(sc.car.fix_wheel_constraint[0]);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(sc.car.h_fix_wheel[0]));
+    ivp_car_system_destroy(&sc.car);
+    scene_destroy(&sc);
+}
+
 IVP_TEST(compat_controller_entry_is_noop)
 {
     car_scene_t sc;
@@ -679,6 +706,7 @@ int main(void)
     IVP_REGISTER(constraint_solver_core_list_failure_is_atomic);
     IVP_REGISTER(constraint_solver_listener_failure_is_atomic);
     IVP_REGISTER(car_listener_failure_is_atomic);
+    IVP_REGISTER(fix_wheel_registration_failure_is_atomic);
     IVP_REGISTER(compat_controller_entry_is_noop);
     IVP_RUN_ALL();
 }

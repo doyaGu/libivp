@@ -757,17 +757,24 @@ void ivp_car_system_fix_wheel(ivp_car_system_t *car, int wheel_nr, bool stop_whe
     constraint.axis_type[cs_car->y_idx] = IVP_CONSTRAINT_AXIS_FREE;
     constraint.axis_type[cs_car->z_idx] = IVP_CONSTRAINT_AXIS_FREE;
 
+    ivp_constraint_state_t *c = (ivp_constraint_state_t *)calloc(1, sizeof(*c));
+    if (!c) return;
+    ivp_constraint_init_from_template(c, &constraint);
+    ivp_controller_handle_t handle =
+        ivp_environment_add_controller(car->environment, IVP_CP_CONSTRAINTS,
+                                       ivp_controller_constraint, c);
+    if (!ivp_controller_handle_is_valid(handle)) {
+        free(c);
+        return;
+    }
+
     /* magic trick: slow down the wheel to avoid effects that would normally
      * result from such an immediate blocking (inertias!) */
     ivp_core_t *wheel_core = wheel->physical_core;
     lvf_add_multiple(&wheel_core->rot_speed, &car->body->physical_core->rot_speed, 0.25f);
 
-    ivp_constraint_state_t *c = (ivp_constraint_state_t *)calloc(1, sizeof(*c));
-    if (!c) return;
-    ivp_constraint_init_from_template(c, &constraint);
     car->fix_wheel_constraint[wheel_nr] = c;
-    car->h_fix_wheel[wheel_nr] = ivp_environment_add_controller(car->environment, IVP_CP_CONSTRAINTS,
-                                                                ivp_controller_constraint, c);
+    car->h_fix_wheel[wheel_nr] = handle;
     if (wheel_obj) wheel_obj->fix_wheel_constraint = c;
 }
 
