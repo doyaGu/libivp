@@ -2,6 +2,7 @@
  * (ivp_physics/ivp_object_attach.cxx)
  */
 #include <math.h>
+#include <limits.h>
 #include <string.h>
 
 #include <ivp/base/ivp_assert.h>
@@ -19,6 +20,12 @@ void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_objec
     if (!parent || !attached_object || !parent->physical_core || !attached_object->physical_core) return;
     /* NULL and self attachment are ignored (reference f105953) */
     if (parent == attached_object) return;
+    ivp_core_t *old_core = attached_object->physical_core;   /* get_core() */
+    ivp_core_t *ncore = parent->physical_core;
+    if (old_core != ncore) {
+        int n_objects = ivp_core_n_objects(ncore);
+        if (n_objects == INT_MAX || !ivp_pvec_reserve(&ncore->objects, n_objects + 1)) return;
+    }
     struct ivp_environment *env = parent->owner;
     D max_dist = (D)max_distance_attached_object_to_parent;
     if (max_dist < (D)0.0f) {
@@ -41,12 +48,10 @@ void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_objec
         }
     }
 
-    ivp_core_t *old_core = attached_object->physical_core;   /* get_core() */
     ivp_quatr_t q_world_f_object;
     ivp_vec3r_t shift_world_f_object;
     ivp_object_get_quat_world_f_object_AT(attached_object, &q_world_f_object, &shift_world_f_object);
 
-    ivp_core_t *ncore = parent->physical_core;
     /* update radius (IVP_DOUBLE sums, IVP_FLOAT core fields) */
     D radius = max_dist + (D)(float)old_core->upper_limit_radius;
     if (radius > (D)(float)ncore->upper_limit_radius) ncore->upper_limit_radius = (ivp_real_t)(float)radius;
@@ -60,7 +65,9 @@ void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_objec
     attached_object->physical_core = ncore;
     attached_object->friction_core = ncore;
     attached_object->original_core = ncore;
-    ivp_core_core_add_link_to_obj(ncore, attached_object);
+    bool linked = ivp_core_core_add_link_to_obj(ncore, attached_object);
+    IVP_ASSERT(linked);
+    if (!linked) return;   /* capacity was reserved above (or released by unlinking this core) */
     attached_object->object_movement_state = parent->object_movement_state;
 
     /* position object */
@@ -73,9 +80,6 @@ void ivp_object_attach_object(ivp_object_t *parent, ivp_object_t *attached_objec
 void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_template_t *t)
 {
     if (!attached_object || !t || !attached_object->physical_core) return;
-    /* get rid of all contact points as they reference the core */
-    ivp_object_unlink_contact_points(attached_object, true);
-
     struct ivp_environment *env = attached_object->owner;
     ivp_core_t *old_core = attached_object->physical_core;
 
@@ -96,6 +100,15 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
     lvf_set_p(&shift, &attached_object->shift_core_f_object);
     D moved_distance_val = lvf_real_length(&shift);
 
+    /* Allocate the replacement before changing the old core.  The new core
+     * is not observable through the object until the old links are gone. */
+    ivp_core_t *core = ivp_core_create(attached_object, &q_world_f_object, &position_ws,
+                                       false /* physical_unmoveable */, t->enable_piling_optimization);
+    if (!core) return;
+
+    /* get rid of all contact points as they reference the old core */
+    ivp_object_unlink_contact_points(attached_object, true);
+
     /* reset object values */
     if (t->nocoll_group_ident && t->nocoll_group_ident[0]) {
         /* IVP_Template_Real_Object::set_nocoll_group_ident: CORE for an id
@@ -112,10 +125,6 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
     }
     {   /* build new core */
         attached_object->object_movement_state = IVP_MT_NOT_SIM;
-        ivp_core_t *core = ivp_core_create(attached_object, &q_world_f_object, &position_ws, false /* physical_unmoveable */,
-                                           t->enable_piling_optimization);
-        IVP_ASSERT(core);
-        if (!core) return;
         attached_object->physical_core = core;
         attached_object->friction_core = core;
         attached_object->original_core = core;

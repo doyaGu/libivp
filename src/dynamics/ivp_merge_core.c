@@ -10,6 +10,7 @@
  * fields), matrices and positions IVP_DOUBLE.
  */
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 
@@ -379,6 +380,7 @@ void ivp_core_split_collision_merged_core_next_psi(ivp_core_merged_t *ccore)
 bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *objs_to_merge, int n_objs)
 {
     if (!env || !objs_to_merge || n_objs <= 0) return false;
+    if ((size_t)n_objs > SIZE_MAX / sizeof(ivp_core_t *)) return false;
     /* input contract (reference 8ad306e, see ivp_merge_core.h) */
     for (int i = 0; i < n_objs; i++) {
         ivp_object_t *obj = objs_to_merge[i];
@@ -399,6 +401,10 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
     ivp_object_t *my_obj = objs_to_merge[0];
     ivp_core_merged_t *merged_core_for_all = core_merged_create_from_object(my_obj);
     if (!merged_core_for_all) return false;
+    if (!ivp_pvec_reserve(&merged_core_for_all->core.objects, n_objs)) {
+        ivp_core_delete(&merged_core_for_all->core);
+        return false;
+    }
     merge_all_objs.mcore = merged_core_for_all;
     merge_all_objs.cores = (ivp_core_t **)malloc((size_t)n_objs * sizeof(ivp_core_t *));
     if (!merge_all_objs.cores) {
@@ -413,7 +419,9 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
         my_obj->physical_core = &merged_core_for_all->core;
         my_obj->friction_core = &merged_core_for_all->core;
         my_obj->original_core = &merged_core_for_all->core;
-        ivp_core_core_add_link_to_obj(&merged_core_for_all->core, my_obj);
+        bool linked = ivp_core_core_add_link_to_obj(&merged_core_for_all->core, my_obj);
+        IVP_ASSERT(linked);
+        if (!linked) IVP_CORE();   /* reserve above makes this unreachable for valid vector state */
     }
 
     mc_calc_calc(&merge_all_objs);   /* now the merged core is valid */
