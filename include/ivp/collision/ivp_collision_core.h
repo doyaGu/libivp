@@ -368,6 +368,10 @@ typedef struct ivp_ov_tree {
 void   ivp_ov_tree_init(ivp_ov_tree_t *t);
 ivp_result_t ivp_ov_tree_init_with_allocator(ivp_ov_tree_t *t, const ivp_allocator_t *allocator);
 void   ivp_ov_tree_destroy(ivp_ov_tree_t *t);
+ivp_result_t ivp_ov_tree_insert_ov_element_ex(
+    ivp_ov_tree_t *t, ivp_ov_element_t *element,
+    double min_radius, double max_radius,
+    ivp_pvec_t *colliding_balls, double *used_radius_out);
 double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
                                      double min_radius, double max_radius,
                                      ivp_pvec_t *colliding_balls /* ivp_ov_element_t*, may be NULL */);

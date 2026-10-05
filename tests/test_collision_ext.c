@@ -14,6 +14,7 @@
 #include <ivp/math/ivp_quat.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/geometry/ivp_surman.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -383,6 +384,128 @@ IVP_TEST(ov_tree_hash_grows_and_releases_allocator_storage) {
     ivp_counting_allocator_destroy(&counting);
 }
 
+typedef struct ov_fail_allocator {
+    ivp_allocator_t allocator;
+    const ivp_allocator_t *inner;
+    int attempts;
+    int fail_at;
+    size_t live_bytes;
+} ov_fail_allocator_t;
+
+static void *ov_fail_alloc(size_t size, void *ctx)
+{
+    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
+    state->attempts++;
+    if (state->attempts == state->fail_at) return NULL;
+    void *ptr = ivp_alloc(state->inner, size);
+    if (ptr) state->live_bytes += size;
+    return ptr;
+}
+
+static void *ov_fail_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx)
+{
+    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
+    state->attempts++;
+    if (state->attempts == state->fail_at) return NULL;
+    void *new_ptr = ivp_realloc(state->inner, ptr, old_size, new_size);
+    if (new_ptr) state->live_bytes = state->live_bytes - old_size + new_size;
+    return new_ptr;
+}
+
+static void ov_fail_free(void *ptr, size_t size, void *ctx)
+{
+    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
+    if (!ptr) return;
+    ivp_free(state->inner, ptr, size);
+    state->live_bytes -= size;
+}
+
+static void ov_fail_allocator_init(ov_fail_allocator_t *state)
+{
+    memset(state, 0, sizeof(*state));
+    state->inner = ivp_default_allocator();
+    state->fail_at = INT_MAX;
+    state->allocator = (ivp_allocator_t){
+        .alloc = ov_fail_alloc,
+        .realloc = ov_fail_realloc,
+        .free = ov_fail_free,
+        .ctx = state
+    };
+}
+
+static void ov_tree_far_insert_attempts(int fail_at, int *attempts_out,
+                                        int *_fail_count)
+{
+    ov_fail_allocator_t state;
+    ov_fail_allocator_init(&state);
+    ivp_ov_tree_t tree;
+    IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &state.allocator), IVP_OK);
+
+    ivp_ov_element_t base;
+    ivp_ov_element_t target;
+    memset(&base, 0, sizeof(base));
+    memset(&target, 0, sizeof(target));
+    target.center.k[0] = 4096.0f;
+    IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                      &tree, &base, 0.25, 0.25, NULL, NULL), IVP_OK);
+
+    state.attempts = 0;
+    state.fail_at = fail_at;
+    ivp_result_t result = ivp_ov_tree_insert_ov_element_ex(
+        &tree, &target, 0.25, 0.25, NULL, NULL);
+    *attempts_out = state.attempts;
+    if (fail_at == INT_MAX) {
+        IVP_ASSERT_EQ(result, IVP_OK);
+    } else {
+        IVP_ASSERT_EQ(result, IVP_ERR_OUT_OF_MEMORY);
+        IVP_ASSERT_NULL(target.node);
+        IVP_ASSERT_NOT_NULL(base.node);
+        state.fail_at = INT_MAX;
+        IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                          &tree, &target, 0.25, 0.25, NULL, NULL), IVP_OK);
+    }
+
+    ivp_ov_tree_remove_ov_element(&tree, &target);
+    ivp_ov_tree_remove_ov_element(&tree, &base);
+    ivp_ov_tree_destroy(&tree);
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
+IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
+    int allocation_points = 0;
+    ov_tree_far_insert_attempts(INT_MAX, &allocation_points, _fail_count);
+    IVP_ASSERT_TRUE(allocation_points > 2);
+    for (int fail_at = 1; fail_at <= allocation_points; fail_at++) {
+        int attempts = 0;
+        ov_tree_far_insert_attempts(fail_at, &attempts, _fail_count);
+    }
+
+    ov_fail_allocator_t state;
+    ov_fail_allocator_init(&state);
+    ivp_ov_tree_t tree;
+    IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &state.allocator), IVP_OK);
+    ivp_ov_element_t base;
+    ivp_ov_element_t target;
+    memset(&base, 0, sizeof(base));
+    memset(&target, 0, sizeof(target));
+    IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                      &tree, &base, 1.0, 1.0, NULL, NULL), IVP_OK);
+    ivp_pvec_t partners;
+    ivp_pvec_init_with_allocator(&partners, &state.allocator);
+    state.attempts = 0;
+    state.fail_at = 1;
+    IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                      &tree, &target, 1.0, 1.0, &partners, NULL),
+                  IVP_ERR_OUT_OF_MEMORY);
+    IVP_ASSERT_NULL(target.node);
+    IVP_ASSERT_EQ(ivp_pvec_len(&partners), 0);
+    state.fail_at = INT_MAX;
+    ivp_pvec_clear(&partners);
+    ivp_ov_tree_remove_ov_element(&tree, &base);
+    ivp_ov_tree_destroy(&tree);
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
 /* ========================================================================
  * Test Registration and Main
  * ======================================================================== */
@@ -405,6 +528,7 @@ int main(void) {
     IVP_REGISTER(compact_ledge_solver_box_box);
     IVP_REGISTER(surman_ledge_references_balanced);
     IVP_REGISTER(ov_tree_hash_grows_and_releases_allocator_storage);
+    IVP_REGISTER(ov_tree_insertion_failures_are_recoverable);
 
     IVP_RUN_ALL();
 }
