@@ -129,6 +129,7 @@ static void *counting_realloc(void *ptr, size_t old_size, size_t new_size, void 
 }
 
 static void counting_free(void *ptr, size_t size, void *ctx) {
+    if (!ptr) return;
     ivp_counting_ctx_t *c = (ivp_counting_ctx_t *)ctx;
     c->inner->free(ptr, size, c->inner->ctx);
     c->stats.free_count++;

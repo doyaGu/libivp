@@ -17,6 +17,11 @@ extern "C" {
 /* ── Allocator vtable ───────────────────────────────────────────────────── */
 
 typedef struct ivp_allocator {
+    /* alloc/realloc return NULL without changing existing storage on
+     * failure.  free must accept NULL.  old_size/size are the exact sizes
+     * supplied by the owning module.  The vtable context must outlive every
+     * allocation made through it, including state that may outlive an
+     * environment. */
     void *(*alloc)(size_t size, void *ctx);
     void *(*realloc)(void *ptr, size_t old_size, size_t new_size, void *ctx);
     void  (*free)(void *ptr, size_t size, void *ctx);
@@ -62,7 +67,8 @@ typedef struct ivp_alloc_stats {
     int64_t current_bytes;
 } ivp_alloc_stats_t;
 
-/* Create a counting allocator wrapping another allocator (or default). */
+/* Create a counting allocator wrapping another allocator (or default).
+ * Destroy it only after every allocation made through it has been freed. */
 ivp_allocator_t ivp_counting_allocator_create(const ivp_allocator_t *inner);
 /* Destroy a counting allocator and restore passthrough behavior. */
 void            ivp_counting_allocator_destroy(ivp_allocator_t *a);

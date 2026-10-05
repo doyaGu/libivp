@@ -38,9 +38,10 @@ typedef struct ivp_environment_config {
     ivp_vec3r_t         gravity;           /* default: (0, 9.83, 0) Y-down     */
     ivp_real_t          delta_psi_time;    /* default: 1/66 s                   */
     ivp_freeze_params_t freeze_params;     /* calm/freeze detection thresholds  */
-    /* If non-NULL, the allocator object and its context must outlive the
-     * environment.  If NULL, the environment owns a copy of the default
-     * allocator. */
+    /* If non-NULL, the environment borrows this vtable.  Its context must
+     * outlive the environment and any user-owned controller/diagnostic state
+     * initialized from it.  Such state copies the vtable, not the context.
+     * If NULL, the environment owns a copy of the default allocator. */
     ivp_allocator_t    *allocator;
     int                 initial_object_capacity;
     int                 initial_controller_capacity;
