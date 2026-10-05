@@ -23,6 +23,7 @@
 #include "collision/ivp_mindist_debug.h"
 #include "collision/ivp_mindist_event_internal.h"
 #include "collision/ivp_recheck_diagnostics.h"
+#include "collision/ivp_collision_diff.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
 
@@ -40,6 +41,10 @@ void ivp_recheck_diagnostics_reset(void)
 ivp_recheck_diagnostics_t ivp_recheck_diagnostics_get(void)
 {
     return recheck_diagnostics;
+}
+ivp_recheck_diagnostics_t *ivp_recheck_diagnostics_mutable(void)
+{
+    return &recheck_diagnostics;
 }
 #endif
 
@@ -568,6 +573,7 @@ void ivp_mindist_mgr_init(ivp_mindist_mgr_t *mm, struct ivp_environment *env)
     ivp_pvec_init(&mm->recheck_colliding_elements);
     ivp_pvec_init(&mm->recheck_new_objects);
     mm->recheck_depth = 0;
+    mm->recheck_diff_storage = NULL;
 }
 
 void ivp_mindist_mgr_destroy(ivp_mindist_mgr_t *mm)
@@ -584,6 +590,9 @@ void ivp_mindist_mgr_destroy(ivp_mindist_mgr_t *mm)
     ivp_pvec_clear(&mm->wheel_look_ahead_mindists);
     ivp_pvec_clear(&mm->recheck_colliding_elements);
     ivp_pvec_clear(&mm->recheck_new_objects);
+    if (mm->recheck_diff_storage)
+        ivp_collision_diff_storage_free(mm->recheck_diff_storage, ivp_env_get_allocator(mm->environment));
+    mm->recheck_diff_storage = NULL;
 }
 
 /* IVP_Diff_Hash replacement: same resulting order (found -> swapped to n_found) */
@@ -604,38 +613,6 @@ static bool diff_hash_check_ledges(diff_hash_t *dh, const ivp_compact_ledge_t *l
             return true;
         }
     }
-    return false;
-}
-
-static bool diff_hash_check_object(diff_hash_t *dh, ivp_object_t *obj)
-{
-#ifdef IVP_BENCHMARK_DIAGNOSTICS
-    recheck_diagnostics.searches++;
-    uint64_t scanned = 0;
-#endif
-    for (int i = dh->n_found_objects; i < dh->v->n; i++) {
-#ifdef IVP_BENCHMARK_DIAGNOSTICS
-        recheck_diagnostics.entries_compared++;
-        scanned++;
-#endif
-        ivp_collision_t *c = dh->v->elems[i];
-        ivp_object_t *objs[2];
-        c->cvt->get_objects(c, objs);
-        if (objs[0] == obj || objs[1] == obj) {
-#ifdef IVP_BENCHMARK_DIAGNOSTICS
-            recheck_diagnostics.found++;
-            if (scanned > recheck_diagnostics.max_scan) recheck_diagnostics.max_scan = scanned;
-            if (i > dh->n_found_objects) recheck_diagnostics.swaps++;
-#endif
-            if (i > dh->n_found_objects) ivp_coll_fvector_swap(dh->v, dh->n_found_objects, i);
-            dh->n_found_objects++;
-            return true;
-        }
-    }
-#ifdef IVP_BENCHMARK_DIAGNOSTICS
-    recheck_diagnostics.misses++;
-    if (scanned > recheck_diagnostics.max_scan) recheck_diagnostics.max_scan = scanned;
-#endif
     return false;
 }
 
@@ -1639,6 +1616,21 @@ ivp_collision_delegator_root_t *ivp_collision_delegator_root_mindist_create(stru
 
 /* ── recheck_ov_element / enable_collision_detection ────────────────────── */
 
+/* Only the two built-in, pure getters are stable during the partition. User
+ * collision implementations keep their original callback sequence. */
+static ivp_object_t *recheck_collision_key(const ivp_collision_t *c, const ivp_object_t *owner)
+{
+    ivp_object_t *a, *b;
+    if (c->cvt == &mindist_collision_vt) {
+        const ivp_mindist_t *md = (const ivp_mindist_t *)c;
+        a = md->synapse[0].l_obj; b = md->synapse[1].l_obj;
+    } else if (c->cvt == &oo_collision_vt) {
+        const ivp_oo_watcher_t *w = (const ivp_oo_watcher_t *)c;
+        a = w->synapses[0].object; b = w->synapses[1].object;
+    } else return NULL;
+    return a == owner ? b : b == owner ? a : NULL;
+}
+
 void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object *object)
 {
     ivp_ov_element_t *elem = object->ov_element;
@@ -1652,6 +1644,7 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
 #endif
     ivp_pvec_t local_colliding_elements = IVP_PVEC_INIT;
     ivp_pvec_t local_new_objects = IVP_PVEC_INIT;
+    ivp_collision_diff_storage_t *local_diff_storage = NULL;
     ivp_pvec_t *colliding_elements = top_level ? &mm->recheck_colliding_elements
                                                 : &local_colliding_elements;
     ivp_pvec_t *new_objects = top_level ? &mm->recheck_new_objects : &local_new_objects;
@@ -1709,7 +1702,15 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
         IVP_ASSERT(objects[0] == object || objects[1] == object);
     }
 #endif
-    diff_hash_t dh = { &elem->collision_fvector, 0 };
+    ivp_collision_diff_t dh;
+    /* User filters can mutate or recursively recheck this very vector. Only
+     * allow-all filtering has a callback-free partition interval. */
+    ivp_collision_diff_begin(&dh, &elem->collision_fvector, object,
+                             ivp_pvec_len(colliding_elements),
+                             top_level ? &mm->recheck_diff_storage : &local_diff_storage,
+                             ivp_env_get_allocator(env),
+                             env->collision_filter.type == IVP_CFILTER_ALLOW_ALL
+                                 ? recheck_collision_key : NULL);
     for (int i = ivp_pvec_len(colliding_elements) - 1; i >= 0; i--) {
         ivp_ov_element_t *el = (ivp_ov_element_t *)ivp_pvec_at(colliding_elements, i);
         ivp_object_t *obj0 = object;
@@ -1722,11 +1723,11 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
             (c0->physical_unmoveable && c1->pinned))
             continue;
         if (!ivp_env_check_objects_for_collision_detection(env, obj0, obj1)) continue;
-        if (diff_hash_check_object(&dh, obj1)) continue;
+        if (ivp_collision_diff_check(&dh, obj1)) continue;
         ivp_pvec_add(new_objects, obj1);
     }
     /* delete unused collisions */
-    for (int x = elem->collision_fvector.n - 1; x >= dh.n_found_objects; x--) {
+    for (int x = elem->collision_fvector.n - 1; x >= dh.found; x--) {
         if (x >= elem->collision_fvector.n) continue;
         ivp_collision_t *c = elem->collision_fvector.elems[x];
         /* reference HACKHACK (E3 2003): never delete the mindist that is calling us up the stack */
@@ -1750,6 +1751,7 @@ cleanup:
         ivp_pvec_remove_all(&mm->recheck_new_objects);
         ivp_pvec_remove_all(&mm->recheck_colliding_elements);
     } else {
+        ivp_collision_diff_storage_free(local_diff_storage, ivp_env_get_allocator(env));
         ivp_pvec_clear(&local_new_objects);
         ivp_pvec_clear(&local_colliding_elements);
     }

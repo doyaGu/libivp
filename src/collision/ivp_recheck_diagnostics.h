@@ -18,8 +18,18 @@ typedef struct ivp_recheck_diagnostics {
     uint64_t entries_compared;
     uint64_t max_scan;
     uint64_t swaps;
+    uint64_t indexed_rechecks;
+    uint64_t indexed_searches;
+    uint64_t indexed_found;
+    uint64_t index_entries;
+    uint64_t index_probes;
+    uint64_t max_index_probes;
+    uint64_t duplicate_fallbacks;
+    uint64_t unsafe_fallbacks;
+    uint64_t oom_fallbacks;
 } ivp_recheck_diagnostics_t;
 void ivp_recheck_diagnostics_reset(void);
 ivp_recheck_diagnostics_t ivp_recheck_diagnostics_get(void);
+ivp_recheck_diagnostics_t *ivp_recheck_diagnostics_mutable(void);
 #endif
 #endif

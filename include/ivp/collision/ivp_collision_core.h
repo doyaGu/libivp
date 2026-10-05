@@ -398,6 +398,7 @@ typedef struct ivp_mindist_mgr {
     ivp_pvec_t             recheck_colliding_elements;
     ivp_pvec_t             recheck_new_objects;
     unsigned               recheck_depth;
+    struct ivp_collision_diff_storage *recheck_diff_storage;
 } ivp_mindist_mgr_t;
 
 void ivp_mindist_mgr_init(ivp_mindist_mgr_t *mm, struct ivp_environment *env);

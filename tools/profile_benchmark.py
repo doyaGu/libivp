@@ -173,10 +173,21 @@ def validate_broadphase_counts(counts: dict | None, case: str) -> None:
     if not isinstance(counts, dict) or any(type(counts.get(f)) is not int or counts[f] < 0
                                           for f in fields):
         raise benchmark.BenchmarkError(f"{case}: missing/invalid broadphase operation counts")
+    index_fields = ("indexed_rechecks", "indexed_searches", "indexed_found", "index_entries",
+                    "index_probes", "max_index_probes", "duplicate_fallbacks", "unsafe_fallbacks", "oom_fallbacks")
+    if any(f in counts for f in index_fields):
+        if (any(type(counts.get(f)) is not int or counts[f] < 0 for f in index_fields)
+                or counts["indexed_rechecks"] > counts["rechecks"]
+                or counts["indexed_searches"] > counts["searches"]
+                or counts["indexed_found"] > min(counts["found"], counts["indexed_searches"])
+                or counts["index_probes"] < counts["indexed_searches"]
+                or counts["max_index_probes"] > counts["index_probes"]
+                or counts["index_entries"] > counts["old_collisions"]):
+            raise benchmark.BenchmarkError(f"{case}: missing/inconsistent broadphase index counts")
     if (counts["searches"] != counts["found"] + counts["misses"]
             or counts["searches"] > counts["candidates"]
             or counts["swaps"] > counts["found"]
-            or counts["entries_compared"] < counts["found"]
+            or counts["entries_compared"] < counts["found"] - counts.get("indexed_found", 0)
             or counts["entries_compared"] > counts["potential_search_pairs"]
             or counts["max_scan"] > counts["max_old_collisions"]
             or counts["max_candidates"] > counts["candidates"]
@@ -285,6 +296,14 @@ def print_report(result: dict, top: int) -> None:
                   f"max scan={c['max_scan']}, swaps={c['swaps']}")
             print(f"    max candidates={c['max_candidates']}, max old collisions={c['max_old_collisions']}, "
                   f"recursive rechecks={c['recursive_rechecks']}, max depth={c['max_depth']}")
+            if "indexed_searches" in c:
+                searches = c["indexed_searches"]
+                print(f"    indexed rechecks={c['indexed_rechecks']}, queries={searches}, "
+                      f"entries built={c['index_entries']}, "
+                      f"probes/query={c['index_probes'] / searches if searches else 0:.1f}, "
+                      f"max probes={c['max_index_probes']}")
+                print(f"    fallback rechecks: duplicate={c['duplicate_fallbacks']}, "
+                      f"unsafe={c['unsafe_fallbacks']}, OOM={c['oom_fallbacks']}")
 
 
 def main(argv=None) -> int:

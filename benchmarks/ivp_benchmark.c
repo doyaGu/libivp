@@ -727,14 +727,22 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
             "\"max_depth\":%llu,\"candidates\":%llu,\"old_collisions\":%llu,"
             "\"max_candidates\":%llu,\"max_old_collisions\":%llu,\"potential_search_pairs\":%llu,"
             "\"searches\":%llu,\"found\":%llu,\"misses\":%llu,\"entries_compared\":%llu,"
-            "\"max_scan\":%llu,\"swaps\":%llu}",
+            "\"max_scan\":%llu,\"swaps\":%llu,\"indexed_rechecks\":%llu,"
+            "\"indexed_searches\":%llu,\"indexed_found\":%llu,\"index_entries\":%llu,"
+            "\"index_probes\":%llu,\"max_index_probes\":%llu,\"duplicate_fallbacks\":%llu,"
+            "\"unsafe_fallbacks\":%llu,\"oom_fallbacks\":%llu}",
             (unsigned long long)b->rechecks, (unsigned long long)b->recursive_rechecks,
             (unsigned long long)b->max_depth, (unsigned long long)b->candidates,
             (unsigned long long)b->old_collisions, (unsigned long long)b->max_candidates,
             (unsigned long long)b->max_old_collisions, (unsigned long long)b->potential_search_pairs,
             (unsigned long long)b->searches, (unsigned long long)b->found,
             (unsigned long long)b->misses, (unsigned long long)b->entries_compared,
-            (unsigned long long)b->max_scan, (unsigned long long)b->swaps);
+            (unsigned long long)b->max_scan, (unsigned long long)b->swaps,
+            (unsigned long long)b->indexed_rechecks, (unsigned long long)b->indexed_searches,
+            (unsigned long long)b->indexed_found, (unsigned long long)b->index_entries,
+            (unsigned long long)b->index_probes, (unsigned long long)b->max_index_probes,
+            (unsigned long long)b->duplicate_fallbacks, (unsigned long long)b->unsafe_fallbacks,
+            (unsigned long long)b->oom_fallbacks);
 #endif
 }
 

@@ -28,6 +28,23 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(benchmark.BenchmarkError):
             profiler.validate_broadphase_counts({}, "invalid")
 
+    def test_indexed_matching_has_separate_probe_counts(self):
+        counts = dict(rechecks=2, recursive_rechecks=0, max_depth=1, candidates=8, old_collisions=6,
+                      max_candidates=5, max_old_collisions=4, potential_search_pairs=20,
+                      searches=7, found=5, misses=2, entries_compared=2, max_scan=2, swaps=4,
+                      indexed_rechecks=1, indexed_searches=6, indexed_found=4, index_entries=4,
+                      index_probes=8, max_index_probes=3, duplicate_fallbacks=0,
+                      unsafe_fallbacks=0, oom_fallbacks=0)
+        profiler.validate_broadphase_counts(counts, "index")
+        for broken in ({"indexed_searches": 8}, {"indexed_found": 6}, {"index_probes": 5},
+                       {"max_index_probes": 9}, {"indexed_rechecks": 3}, {"index_entries": 7},
+                       {"oom_fallbacks": -1}, {"entries_compared": 0}):
+            with self.assertRaises(benchmark.BenchmarkError):
+                profiler.validate_broadphase_counts(dict(counts, **broken), "index")
+        del counts["index_entries"]
+        with self.assertRaises(benchmark.BenchmarkError):
+            profiler.validate_broadphase_counts(counts, "partial-index-record")
+
     def test_finger_counts_are_a_subset_not_an_extra_add_category(self):
         counts = {"adds": 10, "tree_adds": 1, "skip_adds": 8, "fallback_adds": 1,
                   "population_buckets": [10], "finger_attempts": 7, "finger_hits": 6}

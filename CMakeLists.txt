@@ -132,6 +132,7 @@ set(IVP_COLLISION_SOURCES
         src/collision/ivp_hull_mgr.c
         src/collision/ivp_ov_tree.c
         src/collision/ivp_mindist_core.c
+        src/collision/ivp_collision_diff.c
         src/collision/ivp_mindist_minimize.c
         src/collision/ivp_mindist_event.c
         src/collision/ivp_ray_solver.c
@@ -671,6 +672,8 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_active_value_ref tests/test_active_value_ref.c)
     ivp_add_test(test_utility_ref tests/test_utility_ref.c)
     ivp_add_test(test_collision_ext tests/test_collision_ext.c)
+    ivp_add_test(test_collision_diff tests/test_collision_diff.c)
+    target_include_directories(test_collision_diff PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_events tests/test_events.c)
     ivp_add_test(test_diagnostics tests/test_diagnostics.c)
     ivp_add_test(test_env_services tests/test_env_services.c)
@@ -777,7 +780,7 @@ if (IVP_BUILD_TESTS)
             test_base test_math test_containers test_geometry test_collision
             test_dynamics test_solver test_utility
             test_controllers test_builders test_convex_layout test_anomaly test_object_lifecycle
-            test_containers_ext test_math_ext test_collision_ext test_events test_diagnostics test_env_services
+            test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
             test_fake_jetski
             test_p1_controllers test_controller_parity test_car_system
