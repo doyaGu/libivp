@@ -17,7 +17,6 @@
 #include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
-#include "ivp_build_checked.h"
 #include <math.h>
 #include <string.h>
 
@@ -74,27 +73,9 @@ static int halfspaces_to_points_d(const ivp_allocator_t *alloc,
                                   double merge_threshold,
                                   double **out, size_t *out_sz)
 {
-    if (n < 3) return -1;
-    size_t factors[3] = { (size_t)n, (size_t)(n - 1), (size_t)(n - 2) };
-    for (int divisor = 2; divisor <= 3; divisor++) {
-        bool divided = false;
-        for (int i = 0; i < 3; i++) {
-            if (factors[i] % (size_t)divisor == 0u) {
-                factors[i] /= (size_t)divisor;
-                divided = true;
-                break;
-            }
-        }
-        if (!divided) return -1;
-    }
-    size_t max_points;
-    if (!ivp_build_size_mul(factors[0], factors[1], &max_points) ||
-        !ivp_build_size_mul(max_points, factors[2], &max_points) ||
-        max_points == 0u || max_points > (size_t)INT_MAX) return -1;
-    size_t n_coords;
-    size_t sz;
-    if (!ivp_build_size_mul(max_points, 3u, &n_coords) ||
-        !ivp_build_size_mul(n_coords, sizeof(double), &sz)) return -1;
+    long max_points = (long)n * (n - 1) * (n - 2) / 6;
+    if (max_points <= 0) return -1;
+    size_t sz = (size_t)max_points * 3u * sizeof(double);
     double *pts = (double *)ivp_alloc(alloc, sz);
     if (!pts) return -1;
     int np = 0;
@@ -167,19 +148,12 @@ ivp_result_t ivp_halfspacesoup_to_points(
         return IVP_ERR_INVALID_ARG;
     }
     /* caller frees with ivp_free(alloc, ptr, np * 3 * sizeof(float)) */
-    int n_coords;
-    size_t float_sz;
-    if (!ivp_build_int_mul(np, 3, &n_coords) ||
-        !ivp_build_count_bytes(n_coords, sizeof(float), &float_sz)) {
-        ivp_free(alloc, pts, sz);
-        return IVP_ERR_CAPACITY_EXCEEDED;
-    }
-    float *f = (float *)ivp_alloc(alloc, float_sz);
+    float *f = (float *)ivp_alloc(alloc, (size_t)np * 3u * sizeof(float));
     if (!f) {
         ivp_free(alloc, pts, sz);
         return IVP_ERR_OUT_OF_MEMORY;
     }
-    for (int i = 0; i < n_coords; i++) f[i] = (float)pts[i];
+    for (int i = 0; i < 3 * np; i++) f[i] = (float)pts[i];
     ivp_free(alloc, pts, sz);
     *out_points = f;
     *out_n_points = np;

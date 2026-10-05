@@ -8,7 +8,6 @@
 
 #include <ivp/builder/ivp_build_grid.h>
 #include <ivp/builder/ivp_build_concave.h>
-#include "ivp_build_checked.h"
 #include <string.h>
 
 void ivp_grid_config_init(ivp_grid_config_t *cfg)
@@ -38,10 +37,8 @@ ivp_compact_surface_t *ivp_build_grid_surface(const ivp_allocator_t *alloc,
 
     int rows = cfg->n_rows;
     int cols = cfg->n_columns;
-    int n_verts;
-    int n_quads;
-    if (!ivp_build_int_mul(rows, cols, &n_verts) ||
-        !ivp_build_int_mul(rows - 1, cols - 1, &n_quads)) return NULL;
+    int n_verts = rows * cols;
+    int n_quads = (rows - 1) * (cols - 1);
 
     /* Determine axis mapping:
      * height_axis = Y(1): row→X, col→Z, height→Y
@@ -61,28 +58,14 @@ ivp_compact_surface_t *ivp_build_grid_surface(const ivp_allocator_t *alloc,
     float thickness = cfg->field_size * 0.01f;
     if (thickness < 0.001f) thickness = 0.001f;
 
-    int n_verts_total;
-    int n_tris_top;
-    int n_tris_sides_rows;
-    int n_tris_sides_cols;
-    int n_tris_sides;
-    int n_tris_faces;
-    int n_tris_total;
-    int n_vert_scalars;
-    int n_index_scalars;
-    size_t vert_sz;
-    size_t idx_sz;
-    if (!ivp_build_int_mul(n_verts, 2, &n_verts_total) ||
-        !ivp_build_int_mul(n_quads, 2, &n_tris_top) ||
-        !ivp_build_int_mul(rows - 1, 4, &n_tris_sides_rows) ||
-        !ivp_build_int_mul(cols - 1, 4, &n_tris_sides_cols) ||
-        !ivp_build_int_add(n_tris_sides_rows, n_tris_sides_cols, &n_tris_sides) ||
-        !ivp_build_int_add(n_tris_top, n_tris_top, &n_tris_faces) ||
-        !ivp_build_int_add(n_tris_faces, n_tris_sides, &n_tris_total) ||
-        !ivp_build_int_mul(n_verts_total, 3, &n_vert_scalars) ||
-        !ivp_build_int_mul(n_tris_total, 3, &n_index_scalars) ||
-        !ivp_build_count_bytes(n_vert_scalars, sizeof(float), &vert_sz) ||
-        !ivp_build_count_bytes(n_index_scalars, sizeof(int), &idx_sz)) return NULL;
+    int n_verts_total = n_verts * 2;  /* top + bottom layer */
+    int n_tris_top    = n_quads * 2;
+    int n_tris_bottom = n_quads * 2;
+    int n_tris_sides  = (rows - 1) * 2 * 2 + (cols - 1) * 2 * 2; /* perimeter side quads */
+    int n_tris_total  = n_tris_top + n_tris_bottom + n_tris_sides;
+
+    size_t vert_sz = (size_t)n_verts_total * 3 * sizeof(float);
+    size_t idx_sz  = (size_t)n_tris_total * 3 * sizeof(int);
 
     float *verts = (float *)ivp_alloc(alloc, vert_sz);
     int   *inds  = (int *)ivp_alloc(alloc, idx_sz);

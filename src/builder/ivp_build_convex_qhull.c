@@ -37,7 +37,6 @@
 #include <ivp/diagnostics/ivp_debug_manager.h>
 
 #include "ivp_build_polygon_convex_internal.h"
-#include "ivp_build_checked.h"
 #include "geometry/ivp_check_ledge_debug.h"
 #include "qhull_api.h"
 
@@ -80,18 +79,10 @@ typedef struct ps_facets {
 
 static bool ps_grow(const ivp_allocator_t *alloc, void **buf, int *cap, int need, size_t elem)
 {
-    if (!buf || !cap || need < 0 || *cap < 0 || elem == 0u) return false;
     if (need <= *cap) return true;
     int ncap = *cap ? *cap : 16;
-    while (ncap < need) {
-        if (ncap > INT_MAX / 2) return false;
-        ncap *= 2;
-    }
-    size_t old_size;
-    size_t new_size;
-    if (!ivp_build_count_bytes(*cap, elem, &old_size) ||
-        !ivp_build_count_bytes(ncap, elem, &new_size)) return false;
-    void *nb = ivp_realloc(alloc, *buf, old_size, new_size);
+    while (ncap < need) ncap *= 2;
+    void *nb = ivp_realloc(alloc, *buf, (size_t)*cap * elem, (size_t)ncap * elem);
     if (!nb) return false;
     *buf = nb;
     *cap = ncap;
@@ -302,15 +293,10 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     }
 
     /* copy vector and remove duplicated points */
-    int n_coords;
-    size_t pts_sz;
-    size_t list_sz;
-    if (!ivp_build_int_mul(n_in, 3, &n_coords) ||
-        !ivp_build_count_bytes(n_coords, sizeof(double), &pts_sz) ||
-        !ivp_build_count_bytes(n_in, sizeof(unsigned), &list_sz)) return NULL;
+    size_t pts_sz = (size_t)n_in * 3u * sizeof(double);
     double *pts = (double *)ivp_alloc(alloc, pts_sz); /* points == points2 */
-    unsigned *skip_list = (unsigned *)ivp_alloc(alloc, list_sz);
-    unsigned *use_list = (unsigned *)ivp_alloc(alloc, list_sz);
+    unsigned *skip_list = (unsigned *)ivp_alloc(alloc, (size_t)n_in * sizeof(unsigned));
+    unsigned *use_list = (unsigned *)ivp_alloc(alloc, (size_t)n_in * sizeof(unsigned));
     ivp_compact_ledge_t *res = NULL;
     bool qhull_used = false;
 
@@ -319,10 +305,8 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     int numpoints = 0;
     {
         ivp_hashmap_t map;
-        int minimum_capacity;
-        int cap;
-        if (!ivp_build_int_mul(n_in, 2, &minimum_capacity) ||
-            !ivp_build_int_grow_pow2(minimum_capacity, &cap)) goto cleanup;
+        int cap = 16;
+        while (cap < 2 * n_in) cap <<= 1;
         if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, ps_hash_point, ivp_eq_memcmp,
                                      3 * sizeof(double)))) {
             goto cleanup;
@@ -397,8 +381,8 @@ cleanup:
         qh_api_free_short_memory();
     }
     if (pts) ivp_free(alloc, pts, pts_sz);
-    if (skip_list) ivp_free(alloc, skip_list, list_sz);
-    if (use_list) ivp_free(alloc, use_list, list_sz);
+    if (skip_list) ivp_free(alloc, skip_list, (size_t)n_in * sizeof(unsigned));
+    if (use_list) ivp_free(alloc, use_list, (size_t)n_in * sizeof(unsigned));
     if (!res) {
         IVP_IFDEBUG(IVP_DM_SURBUILD_POINTSOUP) {
             ivp_better_debug_manager_dprint(&ivp_debugmanager, IVP_DM_SURBUILD_POINTSOUP, "*** IVP_SurfaceBuilder_Pointsoup::convert_pointsoup_to_template_polygon - couldn't build convex hull! Skipping object...\n");
@@ -433,10 +417,7 @@ ivp_compact_ledge_t *ivp_build_convex_ledge(const ivp_allocator_t *alloc,
     if (!points || n_points < 3) return NULL;
     if (n_points > INT_MAX / 3) return NULL;
     if (!alloc) alloc = ivp_default_allocator();
-    int n_coords;
-    size_t sz;
-    if (!ivp_build_int_mul(n_points, 3, &n_coords) ||
-        !ivp_build_count_bytes(n_coords, sizeof(double), &sz)) return NULL;
+    size_t sz = (size_t)n_points * 3u * sizeof(double);
     double *c = (double *)ivp_alloc(alloc, sz);
     if (!c) return NULL;
     for (int i = 0; i < n_points; i++) {

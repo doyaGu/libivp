@@ -43,8 +43,7 @@ static void reader_init(reader_ctx_t *r, const void *data, int size)
 
 static bool reader_can_read(const reader_ctx_t *r, int bytes)
 {
-    return !r->error && bytes >= 0 && r->pos >= 0 && r->pos <= r->size &&
-           bytes <= r->size - r->pos;
+    return r->pos + bytes <= r->size && !r->error;
 }
 
 static uint16_t reader_u16(reader_ctx_t *r)
@@ -87,7 +86,7 @@ static void reader_read_name(reader_ctx_t *r, char *buf, int max_len)
 
 static void reader_skip(reader_ctx_t *r, int bytes)
 {
-    if (!reader_can_read(r, bytes)) { r->error = true; return; }
+    if (r->pos + bytes > r->size) { r->error = true; return; }
     r->pos += bytes;
 }
 
@@ -297,8 +296,7 @@ static void weld_vertices(ivp_3ds_mesh_t *mesh, float epsilon,
     if (mesh->n_vertices <= 1) return;
 
     float eps2 = epsilon * epsilon;
-    const size_t remap_size = (size_t)mesh->n_vertices * sizeof(int);
-    int *remap = (int *)ivp_alloc(alloc, remap_size);
+    int *remap = (int *)ivp_alloc(alloc, (size_t)mesh->n_vertices * sizeof(int));
     if (!remap) return;
 
     int new_count = 0;
@@ -330,7 +328,7 @@ static void weld_vertices(ivp_3ds_mesh_t *mesh, float epsilon,
     }
 
     mesh->n_vertices = new_count;
-    ivp_free(alloc, remap, remap_size);
+    ivp_free(alloc, remap, (size_t)mesh->n_vertices * sizeof(int));
 }
 
 /* ── Apply scale ───────────────────────────────────────────────────────── */

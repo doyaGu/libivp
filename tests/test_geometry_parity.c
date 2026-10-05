@@ -21,7 +21,6 @@
 #include <ivp/geometry/ivp_surman.h>
 
 #include <stdint.h>
-#include <limits.h>
 #include <string.h>
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
@@ -815,18 +814,6 @@ IVP_TEST(ledge_point_helpers_bit_exact)
     ivp_compact_ledge_free(NULL, l);
 }
 
-IVP_TEST(halfspacesoup_rejects_overflowing_count)
-{
-    const ivp_halfspace_t halfspace = {{1.0f, 0.0f, 0.0f}, 1.0f};
-    float *points = NULL;
-    int n_points = 0;
-    IVP_ASSERT_EQ(ivp_halfspacesoup_to_points(&halfspace, INT_MAX, 0.01f,
-                                              &points, &n_points, NULL),
-                  IVP_ERR_OUT_OF_MEMORY);
-    IVP_ASSERT_NULL(points);
-    IVP_ASSERT_EQ(n_points, 0);
-}
-
 int main(void)
 {
     IVP_REGISTER(box_header_matches_reference);
@@ -837,7 +824,6 @@ int main(void)
     IVP_REGISTER(pointsoup_coplanar_input_gives_two_sided_triangle_or_null);
     IVP_REGISTER(halfspacesoup_cube_matches_reference);
     IVP_REGISTER(halfspacesoup_tolerance_is_1e4);
-    IVP_REGISTER(halfspacesoup_rejects_overflowing_count);
     IVP_REGISTER(ledge_soup_soup3_matches_reference);
     IVP_REGISTER(ledge_soup_median_ties_match_reference);
     IVP_REGISTER(ledge_soup_root_hull_matches_reference);

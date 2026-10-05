@@ -9,7 +9,6 @@
 #include <ivp/geometry/ivp_compact_ledge.h>
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/base/ivp_assert.h>
-#include "ivp_build_checked.h"
 #include <string.h>
 
 static uint32_t cr_hash(const void *key, size_t len)
@@ -32,29 +31,16 @@ static int cr_collect_points(const ivp_allocator_t *alloc,
 {
     int total = 0;
     for (int k = 0; k < n_ledges; k++) {
-        if (ledges[k]) {
-            int ledge_points;
-            if (!ivp_build_int_mul(ivp_ledge_get_n_triangles(ledges[k]), 3,
-                                   &ledge_points) ||
-                !ivp_build_int_add(total, ledge_points, &total)) return -1;
-        }
+        if (ledges[k]) total += 3 * ivp_ledge_get_n_triangles(ledges[k]);
     }
     if (total <= 0) return -1;
-    int n_coords;
-    size_t sz;
-    if (!ivp_build_int_mul(total, 3, &n_coords) ||
-        !ivp_build_count_bytes(n_coords, sizeof(double), &sz)) return -1;
+    size_t sz = (size_t)total * 3u * sizeof(double);
     double *pts = (double *)ivp_alloc(alloc, sz);
     if (!pts) return -1;
 
     ivp_hashmap_t map;
-    int minimum_capacity;
-    int cap;
-    if (!ivp_build_int_mul(total, 2, &minimum_capacity) ||
-        !ivp_build_int_grow_pow2(minimum_capacity, &cap)) {
-        ivp_free(alloc, pts, sz);
-        return -1;
-    }
+    int cap = 16;
+    while (cap < 2 * total) cap <<= 1;
     if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, cr_hash, ivp_eq_memcmp, 3 * sizeof(float)))) {
         ivp_free(alloc, pts, sz);
         return -1;
@@ -107,25 +93,14 @@ void ivp_compact_recursive_set_virtual_flags(ivp_compact_ledge_t *hull,
 
     int total_tri = 0;
     for (int i = 0; i < n_ledges; i++) {
-        if (ledges[i] &&
-            !ivp_build_int_add(total_tri, ivp_ledge_get_n_triangles(ledges[i]),
-                               &total_tri)) return;
+        if (ledges[i]) total_tri += ivp_ledge_get_n_triangles(ledges[i]);
     }
-    if (total_tri <= 0) return;
-    int edge_count;
-    int hash_entries;
-    int minimum_capacity;
-    int cap;
-    if (!ivp_build_int_mul(total_tri, 3, &edge_count) ||
-        !ivp_build_int_mul(total_tri, 6, &hash_entries) ||
-        !ivp_build_int_add(hash_entries, 16, &minimum_capacity) ||
-        !ivp_build_int_grow_pow2(minimum_capacity, &cap)) return;
+    int cap = 16;
+    while (cap < 6 * total_tri + 16) cap <<= 1;
 
     /* point identity -> index; triangle / edge key storage */
-    size_t tkeys_sz;
-    size_t ekeys_sz;
-    if (!ivp_build_count_bytes(total_tri, sizeof(cr_tri_key_t), &tkeys_sz) ||
-        !ivp_build_count_bytes(edge_count, sizeof(cr_edge_key_t), &ekeys_sz)) return;
+    size_t tkeys_sz = (size_t)total_tri * sizeof(cr_tri_key_t);
+    size_t ekeys_sz = (size_t)(3 * total_tri) * sizeof(cr_edge_key_t);
     cr_tri_key_t *tkeys = (cr_tri_key_t *)ivp_alloc(alloc, tkeys_sz);
     cr_edge_key_t *ekeys = (cr_edge_key_t *)ivp_alloc(alloc, ekeys_sz);
     ivp_hashmap_t pmap, tmap, emap;
@@ -276,19 +251,12 @@ int ivp_extract_ledge_vertices(const ivp_compact_ledge_t **ledges,
     size_t sz = 0;
     int n = cr_collect_points(alloc, (const ivp_compact_ledge_t *const *)ledges, n_ledges, &pts, &sz);
     if (n <= 0) return -1;
-    int n_coords;
-    size_t coords_sz;
-    if (!ivp_build_int_mul(n, 3, &n_coords) ||
-        !ivp_build_count_bytes(n_coords, sizeof(float), &coords_sz)) {
-        ivp_free(alloc, pts, sz);
-        return -1;
-    }
-    float *coords = (float *)ivp_alloc(alloc, coords_sz);
+    float *coords = (float *)ivp_alloc(alloc, (size_t)n * 3u * sizeof(float));
     if (!coords) {
         ivp_free(alloc, pts, sz);
         return -1;
     }
-    for (int i = 0; i < n_coords; i++) coords[i] = (float)pts[i];
+    for (int i = 0; i < 3 * n; i++) coords[i] = (float)pts[i];
     ivp_free(alloc, pts, sz);
     *out_coords = coords;
     *out_count = n;

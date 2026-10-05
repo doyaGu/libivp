@@ -8,7 +8,6 @@
 #include <ivp/builder/ivp_build_ledge_soup.h>
 #include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/geometry/ivp_compact_ledge.h>
-#include "ivp_build_checked.h"
 #include <string.h>
 
 /* ── Build from parts ──────────────────────────────────────────────────── */
@@ -131,19 +130,13 @@ ivp_compact_surface_t *ivp_build_concave_surface(
         return NULL;
     if (!alloc) alloc = ivp_default_allocator();
 
-    int n_coords;
-    int n_indices;
-    size_t pts_sz;
-    size_t sizes_sz;
-    if (!ivp_build_int_mul(n_vertices, 3, &n_coords) ||
-        !ivp_build_int_mul(n_triangles, 3, &n_indices) ||
-        !ivp_build_count_bytes(n_coords, sizeof(double), &pts_sz) ||
-        !ivp_build_count_bytes(n_triangles, sizeof(int), &sizes_sz)) return NULL;
+    size_t pts_sz = (size_t)n_vertices * 3u * sizeof(double);
+    size_t sizes_sz = (size_t)n_triangles * sizeof(int);
     double *pts = (double *)ivp_alloc(alloc, pts_sz);
     int *sizes = (int *)ivp_alloc(alloc, sizes_sz);
     ivp_compact_surface_t *result = NULL;
     if (pts && sizes) {
-        for (int i = 0; i < n_coords; i++) pts[i] = (double)vertices[i];
+        for (int i = 0; i < 3 * n_vertices; i++) pts[i] = (double)vertices[i];
         for (int i = 0; i < n_triangles; i++) sizes[i] = 3;
         result = ivp_build_concave_polyhedron_surface(alloc, pts, n_vertices, indices, sizes,
                                                       n_triangles, options);

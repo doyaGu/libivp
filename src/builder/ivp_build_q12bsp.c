@@ -17,7 +17,6 @@
 #include <ivp/builder/ivp_build_concave.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
-#include "ivp_build_checked.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -142,24 +141,10 @@ static void convert_solid_leaf(bsp_traverse_ctx_t *ctx)
     if (part) {
         /* Store part for later assembly */
         if (ctx->n_parts >= ctx->parts_cap) {
-            int new_cap;
-            size_t old_sz;
-            size_t new_sz;
-            if (ctx->parts_cap < 16) {
-                new_cap = 16;
-            } else if (!ivp_build_int_mul(ctx->parts_cap, 2, &new_cap)) {
-                ivp_compact_surface_free(ctx->alloc, part);
-                return;
-            }
-            if (!ivp_build_count_bytes(ctx->parts_cap,
-                                       sizeof(ivp_compact_surface_t *),
-                                       &old_sz) ||
-                !ivp_build_count_bytes(new_cap,
-                                       sizeof(ivp_compact_surface_t *),
-                                       &new_sz)) {
-                ivp_compact_surface_free(ctx->alloc, part);
-                return;
-            }
+            int new_cap = ctx->parts_cap * 2;
+            if (new_cap < 16) new_cap = 16;
+            size_t old_sz = (size_t)ctx->parts_cap * sizeof(ivp_compact_surface_t *);
+            size_t new_sz = (size_t)new_cap * sizeof(ivp_compact_surface_t *);
             ivp_compact_surface_t **new_arr = (ivp_compact_surface_t **)
                 ivp_realloc(ctx->alloc, ctx->parts, old_sz, new_sz);
             if (!new_arr) {

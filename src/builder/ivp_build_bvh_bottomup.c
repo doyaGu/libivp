@@ -24,7 +24,6 @@
 #include <ivp/geometry/ivp_compact_ledge.h>
 #include <ivp/geometry/ivp_ledgetree.h>
 #include <ivp/base/ivp_assert.h>
-#include "ivp_build_checked.h"
 
 #include <math.h>
 #include <string.h>
@@ -257,11 +256,7 @@ static void execute_merges(merge_pair_t *pairs, int n_pairs,
     }
 
     /* Create parent spheres and add them to active set */
-    int alloc_size;
-    if (!ivp_build_int_add(orig_n, n_pairs, &alloc_size)) {
-        ivp_free(alloc, merged, (size_t)orig_n * sizeof(int));
-        return;
-    }
+    int alloc_size = orig_n + n_pairs;
     bu_sphere_t **new_spheres = (bu_sphere_t **)ivp_alloc(alloc,
         (size_t)alloc_size * sizeof(bu_sphere_t *));
     if (!new_spheres) {
@@ -353,14 +348,8 @@ static bu_sphere_t *build_bvh_bottomup(ivp_ledge_soup_t *soup,
     int n_ledges = soup->n_ledges;
 
     /* Allocate arena: at most 2*n_ledges - 1 nodes */
-    int max_nodes;
-    size_t arena_sz;
-    size_t active_sz;
-    size_t pair_sz;
-    if (!ivp_build_int_mul(n_ledges, 2, &max_nodes) ||
-        !ivp_build_count_bytes(max_nodes, sizeof(bu_sphere_t), &arena_sz) ||
-        !ivp_build_count_bytes(max_nodes, sizeof(bu_sphere_t *), &active_sz) ||
-        !ivp_build_count_bytes(max_nodes, sizeof(merge_pair_t), &pair_sz)) return NULL;
+    int max_nodes = 2 * n_ledges;
+    size_t arena_sz = (size_t)max_nodes * sizeof(bu_sphere_t);
 
     bu_arena_t arena;
     arena.nodes = (bu_sphere_t *)ivp_alloc(alloc, arena_sz);
@@ -370,7 +359,8 @@ static bu_sphere_t *build_bvh_bottomup(ivp_ledge_soup_t *soup,
     arena.capacity = max_nodes;
 
     /* Create terminal spheres */
-    bu_sphere_t **active = (bu_sphere_t **)ivp_alloc(alloc, active_sz);
+    bu_sphere_t **active = (bu_sphere_t **)ivp_alloc(alloc,
+        (size_t)max_nodes * sizeof(bu_sphere_t *));
     if (!active) {
         ivp_free(alloc, arena.nodes, arena_sz);
         return NULL;
@@ -410,9 +400,10 @@ static bu_sphere_t *build_bvh_bottomup(ivp_ledge_soup_t *soup,
     }
 
     /* Allocate merge pair buffer */
-    merge_pair_t *pairs = (merge_pair_t *)ivp_alloc(alloc, pair_sz);
+    merge_pair_t *pairs = (merge_pair_t *)ivp_alloc(alloc,
+        (size_t)max_nodes * sizeof(merge_pair_t));
     if (!pairs) {
-        ivp_free(alloc, active, active_sz);
+        ivp_free(alloc, active, (size_t)max_nodes * sizeof(bu_sphere_t *));
         ivp_free(alloc, arena.nodes, arena_sz);
         return NULL;
     }
@@ -447,16 +438,16 @@ static bu_sphere_t *build_bvh_bottomup(ivp_ledge_soup_t *soup,
     }
 
     if (n_active != 1) {
-        ivp_free(alloc, pairs, pair_sz);
-        ivp_free(alloc, active, active_sz);
+        ivp_free(alloc, pairs, (size_t)max_nodes * sizeof(merge_pair_t));
+        ivp_free(alloc, active, (size_t)max_nodes * sizeof(bu_sphere_t *));
         ivp_free(alloc, arena.nodes, arena_sz);
         return NULL;
     }
 
     /* Cleanup and return root */
     bu_sphere_t *root = active[0];
-    ivp_free(alloc, pairs, pair_sz);
-    ivp_free(alloc, active, active_sz);
+    ivp_free(alloc, pairs, (size_t)max_nodes * sizeof(merge_pair_t));
+    ivp_free(alloc, active, (size_t)max_nodes * sizeof(bu_sphere_t *));
 
     /* Keep arena.nodes alive — it contains the tree */
     *arena_nodes_out = arena.nodes;
@@ -604,17 +595,9 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
     if (n_ledges == 1) {
         const ivp_compact_ledge_t *src = soup->ledges[0];
         int ledge_size = ivp_ledge_get_size(src);
-        if (ledge_size < 0) return NULL;
-        const int header_size = (int)sizeof(ivp_compact_surface_t);
-        size_t total_size;
-        if (!ivp_build_size_add(sizeof(ivp_compact_surface_t), (size_t)ledge_size,
-                                &total_size) ||
-            !ivp_build_size_add(total_size, sizeof(ivp_compact_ledgetree_node_t),
-                                &total_size) ||
-            !ivp_build_size_add(total_size, 15u, &total_size)) return NULL;
-        total_size &= ~(size_t)15u;
-        if (total_size > (size_t)INT_MAX) return NULL;
-        const int total = (int)total_size;
+        int header_size = (int)sizeof(ivp_compact_surface_t);
+        int node_size = (int)sizeof(ivp_compact_ledgetree_node_t);
+        int total = (header_size + ledge_size + node_size + 15) & ~15;
 
         void *mem = ivp_alloc_aligned(alloc, (size_t)total, 16);
         if (!mem) return NULL;
@@ -698,29 +681,13 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
     int total_bvh_nodes = count_bvh_nodes(root);
 
     /* Phase 2: Compute memory layout */
-    const int header_size = (int)sizeof(ivp_compact_surface_t);
+    int header_size = (int)sizeof(ivp_compact_surface_t);
     int total_ledge_data = 0;
     for (int i = 0; i < n_ledges; i++) {
-        const int ledge_size = ivp_ledge_get_size(soup->ledges[i]);
-        if (ledge_size < 0 ||
-            !ivp_build_int_add(total_ledge_data, ledge_size,
-                               &total_ledge_data)) {
-            ivp_free(alloc, arena_nodes, arena_sz);
-            return NULL;
-        }
+        total_ledge_data += ivp_ledge_get_size(soup->ledges[i]);
     }
-    int tree_size;
-    int subtotal;
-    int padded_total;
-    if (!ivp_build_int_mul(total_bvh_nodes,
-                           (int)sizeof(ivp_compact_ledgetree_node_t), &tree_size) ||
-        !ivp_build_int_add(header_size, total_ledge_data, &subtotal) ||
-        !ivp_build_int_add(subtotal, tree_size, &subtotal) ||
-        !ivp_build_int_add(subtotal, 15, &padded_total)) {
-        ivp_free(alloc, arena_nodes, arena_sz);
-        return NULL;
-    }
-    const int total = padded_total & ~15;
+    int tree_size = total_bvh_nodes * (int)sizeof(ivp_compact_ledgetree_node_t);
+    int total = (header_size + total_ledge_data + tree_size + 15) & ~15;
 
     void *mem = ivp_alloc_aligned(alloc, (size_t)total, 16);
     if (!mem) {
@@ -732,12 +699,7 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
     ivp_compact_surface_t *surface = (ivp_compact_surface_t *)mem;
 
     /* Phase 3: Copy ledges */
-    size_t remap_sz;
-    if (!ivp_build_count_bytes(n_ledges, sizeof(ledge_remap_t), &remap_sz)) {
-        ivp_free_aligned(alloc, mem);
-        ivp_free(alloc, arena_nodes, arena_sz);
-        return NULL;
-    }
+    size_t remap_sz = (size_t)n_ledges * sizeof(ledge_remap_t);
     ledge_remap_t *remap = (ledge_remap_t *)ivp_alloc(alloc, remap_sz);
     if (!remap) {
         ivp_free_aligned(alloc, mem);

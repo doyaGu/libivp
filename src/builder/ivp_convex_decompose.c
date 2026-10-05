@@ -16,7 +16,6 @@
 
 #include <limits.h>
 #include <string.h>
-#include "ivp_build_checked.h"
 
 int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
                                 const double *points, int n_points,
@@ -33,33 +32,21 @@ int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
     *out_part_points = NULL;
     *out_part_offsets = NULL;
 
-    int fvl_length = 0;
+    long fvl_length = 0;
     for (int i = 0; i < n_faces; i++) {
         if (face_sizes[i] < 3) return -1;
-        if (!ivp_build_int_add(fvl_length, face_sizes[i], &fvl_length) ||
-            fvl_length > INT_MAX / 8) return -1;
+        fvl_length += face_sizes[i];
+        if (fvl_length > INT_MAX / 8) return -1;
     }
 
     /* vertex coordinate list (capacity nvc + 2 like size_vcl) */
     ivp_geompack_parameters_t gp;
     memset(&gp, 0, sizeof(gp));
-    int point_capacity;
-    int point_scalars;
-    int face_capacity;
-    int face_scalars;
-    size_t input_points_sz;
-    size_t fvl_sz;
-    if (!ivp_build_int_add(n_points, 2, &point_capacity) ||
-        !ivp_build_int_mul(point_capacity, 3, &point_scalars) ||
-        !ivp_build_int_add(n_faces, 2, &face_capacity) ||
-        !ivp_build_int_mul(face_capacity, 3, &face_scalars) ||
-        !ivp_build_count_bytes(point_scalars, sizeof(double), &gp.vcl_cap_bytes) ||
-        !ivp_build_count_bytes(face_scalars, sizeof(int), &gp.facep_cap_bytes) ||
-        !ivp_build_int_mul(n_points, 3, &point_scalars) ||
-        !ivp_build_count_bytes(point_scalars, sizeof(double), &input_points_sz) ||
-        !ivp_build_count_bytes(fvl_length, sizeof(int), &fvl_sz)) return -1;
+    gp.vcl_cap_bytes = (size_t)(n_points + 2) * 3u * sizeof(double);
     gp.vcl = (double *)ivp_alloc(alloc, gp.vcl_cap_bytes);
+    gp.facep_cap_bytes = (size_t)(n_faces + 2) * 3u * sizeof(int);
     gp.facep = (int *)ivp_alloc(alloc, gp.facep_cap_bytes);
+    size_t fvl_sz = (size_t)fvl_length * sizeof(int);
     int *fvl = (int *)ivp_alloc(alloc, fvl_sz);
     if (!gp.vcl || !gp.facep || !fvl) {
         if (!gp.vcl) {
@@ -77,7 +64,7 @@ int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
     }
     memset(gp.vcl, 0, gp.vcl_cap_bytes);
     memset(gp.facep, 0, gp.facep_cap_bytes);
-    memcpy(gp.vcl, points, input_points_sz);
+    memcpy(gp.vcl, points, (size_t)n_points * 3u * sizeof(double));
 
     int entry_ctr = 0;
     int off = 0;
@@ -123,16 +110,9 @@ int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
         goto done;
     }
 
-    int offsets_count;
-    int seen_width;
-    int fvl_output_scalars;
-    if (nvert < 0 || gp.nvc_out < 0 ||
-        !ivp_build_int_add(npolh, 1, &offsets_count) ||
-        !ivp_build_int_add(gp.nvc_out, 1, &seen_width) ||
-        !ivp_build_int_mul(nvert, 6, &fvl_output_scalars) ||
-        !ivp_build_count_bytes(offsets_count, sizeof(int), &offsets_sz) ||
-        !ivp_build_count_bytes(nvert > 0 ? nvert : 1, sizeof(int), &members_sz) ||
-        !ivp_build_size_mul((size_t)npolh, (size_t)seen_width, &seen_sz)) goto done;
+    offsets_sz = (size_t)(npolh + 1) * sizeof(int);
+    members_sz = (size_t)(nvert > 0 ? nvert : 1) * sizeof(int);
+    seen_sz = (size_t)npolh * (size_t)(gp.nvc_out + 1);
     offsets = (int *)ivp_alloc(alloc, offsets_sz);
     members = (int *)ivp_alloc(alloc, members_sz);
     seen = (unsigned char *)ivp_alloc(alloc, seen_sz);
@@ -177,10 +157,7 @@ int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
         ivp_free(alloc, fill, offsets_sz);
     }
 
-    int point_count = total > 0 ? total : 1;
-    int coordinate_count;
-    if (!ivp_build_int_mul(point_count, 3, &coordinate_count) ||
-        !ivp_build_count_bytes(coordinate_count, sizeof(double), &pts_sz)) goto done;
+    pts_sz = (size_t)(total > 0 ? total : 1) * 3u * sizeof(double);
     pts = (double *)ivp_alloc(alloc, pts_sz);
     if (!pts) goto done;
     for (int k = 0; k < total; k++) {
@@ -312,16 +289,8 @@ ivp_result_t ivp_convex_decompose(const ivp_allocator_t *alloc,
     if (!alloc) alloc = ivp_default_allocator();
     result->allocator = alloc;
 
-    int n_coords;
-    int n_indices;
-    size_t pts_sz;
-    size_t sizes_sz;
-    if (!ivp_build_int_mul(n_vertices, 3, &n_coords) ||
-        !ivp_build_int_mul(n_triangles, 3, &n_indices) ||
-        !ivp_build_count_bytes(n_coords, sizeof(double), &pts_sz) ||
-        !ivp_build_count_bytes(n_triangles, sizeof(int), &sizes_sz)) {
-        return IVP_ERR_CAPACITY_EXCEEDED;
-    }
+    size_t pts_sz = (size_t)n_vertices * 3u * sizeof(double);
+    size_t sizes_sz = (size_t)n_triangles * sizeof(int);
     double *pts = (double *)ivp_alloc(alloc, pts_sz);
     int *sizes = (int *)ivp_alloc(alloc, sizes_sz);
     if (!pts || !sizes) {
@@ -329,7 +298,7 @@ ivp_result_t ivp_convex_decompose(const ivp_allocator_t *alloc,
         if (sizes) ivp_free(alloc, sizes, sizes_sz);
         return IVP_ERR_OUT_OF_MEMORY;
     }
-    for (int i = 0; i < n_coords; i++) pts[i] = (double)vertices[i];
+    for (int i = 0; i < 3 * n_vertices; i++) pts[i] = (double)vertices[i];
     for (int i = 0; i < n_triangles; i++) sizes[i] = 3;
 
     ivp_compact_ledge_t **ledges = NULL;
