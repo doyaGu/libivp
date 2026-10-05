@@ -1387,7 +1387,8 @@ static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs, const ivp_sim_es_t *es
 #ifdef IVP_DEBUG_BUILD
     s->gauss_succed = 0;
 #endif
-    ivp_pvec_init(&s->contact_info_vector);
+    ivp_pvec_init_with_allocator(&s->contact_info_vector,
+                                 ivp_env_get_allocator(s->l_environment));
     ivp_gmmz_t *m = &s->dist_change_mat;
     m->matrix_eps = IVP_GMMZ_DEFAULT_EPS;
     m->columns = fs->friction_dist_number - fs->complex_not_necessary_number;

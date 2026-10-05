@@ -837,7 +837,8 @@ static void isys_recalc_all_affected_cores(impact_system_t *is)
         double delta_time_till_next_psi =
             ivp_time_diff(ivp_env_get_next_psi_time(is->l_environment), ivp_env_get_current_time(is->l_environment));
         ivp_pvec_t active_hull_managers;
-        ivp_pvec_init(&active_hull_managers);
+        ivp_pvec_init_with_allocator(&active_hull_managers,
+                                     ivp_env_get_allocator(is->l_environment));
         for (int k = ivp_pvec_len(&is->i_s_pushed_cores) - 1; k >= 0; k--) {
             ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(&is->i_s_pushed_cores, k);
             IVP_ASSERT(!my_core->physical_unmoveable); /* core merge? */
@@ -889,14 +890,15 @@ static void isys_init_and_solve(ivp_fr_system_t *fs_system, ivp_fr_core_pair_t *
     }
     impact_system_t is;
     memset(&is, 0, sizeof(is));
-    ivp_pvec_init(&is.i_s_pushed_cores);
-    ivp_pvec_init(&is.i_s_known_cores);
-    ivp_pvec_init(&is.i_s_pairs);
+    is.l_environment = ivp_core_env(start_pair->objs[0]);
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(is.l_environment);
+    ivp_pvec_init_with_allocator(&is.i_s_pushed_cores, allocator);
+    ivp_pvec_init_with_allocator(&is.i_s_known_cores, allocator);
+    ivp_pvec_init_with_allocator(&is.i_s_pairs, allocator);
     ivp_core_t *start_core0 = start_fr_dist->synapse[0].l_obj->physical_core;
     ivp_core_t *start_core1 = start_fr_dist->synapse[1].l_obj->physical_core;
     is.sum_of_pushes = 0;
     is.associated_fs_system = fs_system;
-    is.l_environment = ivp_core_env(start_pair->objs[0]);
     if (!start_core0->physical_unmoveable && !start_core0->pinned) {
         isys_add_pushed_core_with_pairs_except(&is, start_core0, start_pair);
     }

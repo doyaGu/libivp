@@ -153,7 +153,8 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
         ivp_core_t *my_core = attached_object->physical_core;
         if (!my_core->physical_unmoveable) {
             ivp_pvec_t active_hull_managers;
-            ivp_pvec_init(&active_hull_managers);
+            ivp_pvec_init_with_allocator(&active_hull_managers,
+                                         ivp_env_get_allocator(env));
             if (attached_object->hull_manager) {
                 ivp_hull_mgr_jump_add_hull(attached_object->hull_manager, (float)moved_distance_val, 0.0f);
             }
