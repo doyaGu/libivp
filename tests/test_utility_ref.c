@@ -11,6 +11,7 @@
 #include <ivp/containers/ivp_diff_hash.h>
 #include <ivp/utility/ivp_string.h>
 #include <ivp/base/ivp_assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -228,11 +229,44 @@ IVP_TEST(diff_hash_resorts_found_to_front) {
     ivp_diff_hash_destroy(&dh);
 }
 
+IVP_TEST(diff_hash_rejects_invalid_capacity_and_configuration) {
+    void *base[1] = { fake(0) };
+    short buffer[4];
+    ivp_diff_hash_t dh;
+
+    IVP_ASSERT_EQ(ivp_diff_hash_init(NULL, NULL, base, 1, buffer, 4, NULL,
+                                     dh_base_index, dh_search_index, dh_equal),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_diff_hash_init(&dh, NULL, base, -1, buffer, 4, NULL,
+                                     dh_base_index, dh_search_index, dh_equal),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_diff_hash_init(&dh, NULL, base, SHRT_MAX + 2,
+                                     NULL, 0, NULL, dh_base_index,
+                                     dh_search_index, dh_equal),
+                  IVP_ERR_CAPACITY_EXCEEDED);
+    IVP_ASSERT_EQ(ivp_diff_hash_init(&dh, NULL, base, 1, buffer, 3, NULL,
+                                     dh_base_index, dh_search_index, dh_equal),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_diff_hash_init(&dh, NULL, base, 1, buffer, 4, NULL,
+                                     NULL, dh_search_index, dh_equal),
+                  IVP_ERR_INVALID_ARG);
+
+    IVP_ASSERT_EQ(ivp_diff_hash_init(&dh, NULL, base, 1, buffer, 4, NULL,
+                                     dh_base_index, dh_search_index, dh_equal),
+                  IVP_OK);
+    IVP_ASSERT_TRUE(ivp_diff_hash_check(&dh, fake(0), NULL) == fake(0));
+    IVP_ASSERT_NULL(ivp_diff_hash_check(&dh, fake(0), NULL));
+    ivp_diff_hash_destroy(&dh);
+    ivp_diff_hash_destroy(&dh);
+    ivp_diff_hash_destroy(NULL);
+}
+
 int main(void) {
     IVP_REGISTER(ref_min_hash_tie_order);
     IVP_REGISTER(ref_string_find_and_cmp);
     IVP_REGISTER(ref_string_hash);
     IVP_REGISTER(set_and_active_set);
     IVP_REGISTER(diff_hash_resorts_found_to_front);
+    IVP_REGISTER(diff_hash_rejects_invalid_capacity_and_configuration);
     IVP_RUN_ALL();
 }

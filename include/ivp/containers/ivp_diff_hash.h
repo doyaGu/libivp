@@ -39,9 +39,11 @@ typedef struct ivp_diff_hash {
     const ivp_allocator_t         *alloc;
 } ivp_diff_hash_t;
 
-/* buffer/buffer_size: caller scratch buffer (buffer_size a power of 2); a
- * private buffer is allocated when buffer_size <= base_len (the reference
- * condition), growing until it exceeds 2 * base_len. */
+/* buffer/buffer_size: caller scratch buffer (buffer_size zero or a power of
+ * two); a private buffer is allocated when buffer_size <= base_len (the
+ * reference condition), growing until it exceeds 2 * base_len.  The compact
+ * hash slots store signed-short vector indices, so base_len may not exceed
+ * SHRT_MAX + 1. */
 ivp_result_t ivp_diff_hash_init(ivp_diff_hash_t *dh, const ivp_allocator_t *alloc,
                                 void **base, int base_len,
                                 short *buffer, int buffer_size,
