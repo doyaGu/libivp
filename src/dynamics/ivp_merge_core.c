@@ -266,7 +266,10 @@ static ivp_core_merged_t *core_merged_create_from_object(ivp_object_t *real_obj)
 {
     ivp_core_merged_t *mc = (ivp_core_merged_t *)malloc(sizeof(ivp_core_merged_t));
     if (!mc) return NULL;
-    ivp_core_init_from_object(&mc->core, real_obj);
+    if (!ivp_core_init_from_object(&mc->core, real_obj)) {
+        free(mc);
+        return NULL;
+    }
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
     ivp_pvec_remove(&mc->core.objects, real_obj);
     return mc;
@@ -295,7 +298,10 @@ ivp_core_merged_t *ivp_core_merged_create_from_cores(ivp_core_t *core0, ivp_core
     ivp_object_t *io = ivp_core_object_at(core0, 0);
     ivp_core_merged_t *mc = (ivp_core_merged_t *)malloc(sizeof(ivp_core_merged_t));
     if (!mc) return NULL;
-    ivp_core_init_from_object(&mc->core, io);
+    if (!ivp_core_init_from_object(&mc->core, io)) {
+        free(mc);
+        return NULL;
+    }
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
     /* clear the objects added by the base constructor (set_by_merge does not re-add them) */
     ivp_pvec_remove_all(&mc->core.objects);

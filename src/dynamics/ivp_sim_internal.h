@@ -109,10 +109,10 @@ void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *m, ivp_pvec_t *touched_cores);
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset);
 
-void ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);
+bool ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);
 void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);
 void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *core); /* may delete su */
-void ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c);
+bool ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c);
 void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c);
 void ivp_sim_unit_clean_sim_unit(ivp_sim_unit_t *su);
 void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su);
@@ -150,11 +150,11 @@ static inline struct ivp_object *ivp_core_object_at(const ivp_core_t *core, int 
 
 /* IVP_Core ctors / dtor and object links (cores are heap allocated; an
  * object's cores are physical_core / friction_core / original_core) */
-void ivp_core_init_from_object(ivp_core_t *core, struct ivp_object *io);   /* IVP_Core(io) */
+bool ivp_core_init_from_object(ivp_core_t *core, struct ivp_object *io);   /* IVP_Core(io) */
 ivp_core_t *ivp_core_create(struct ivp_object *io, const ivp_quatr_t *q_world_f_object_init, const ivp_vec3r_t *position,
                             bool physical_unmoveable, bool enable_piling_optimization);
 void ivp_core_delete(ivp_core_t *core);                                     /* ~IVP_Core + free */
-void ivp_core_core_add_link_to_obj(ivp_core_t *core, struct ivp_object *add_obj);
+bool ivp_core_core_add_link_to_obj(ivp_core_t *core, struct ivp_object *add_obj);
 void ivp_core_unlink_obj_from_core_and_maybe_destroy(ivp_core_t *core, struct ivp_object *remove_obj);
 void ivp_core_fire_event_object_frozen(ivp_core_t *core);
 /* IVP_Core_Merged / IVP_Core_Collision helpers (ivp_merge_core.c) */
@@ -164,7 +164,7 @@ void ivp_core_create_collision_merged_core_with(ivp_core_t *core, ivp_core_t *ot
 void ivp_core_split_collision_merged_core_next_psi(ivp_core_merged_t *ccore);
 void ivp_core_ensure_all_core_objs_in_simulation_now(ivp_core_t *core);
 
-void ivp_core_add_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c);
+bool ivp_core_add_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c);
 void ivp_core_rem_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c);
 
 struct ivp_fr_info_for_core *ivp_core_get_friction_info(ivp_core_t *core, struct ivp_fr_system *fs);

@@ -60,32 +60,26 @@ void ivp_sim_unit_delete(ivp_sim_unit_t *su)
 
 /* ── controller lists ──────────────────────────────────────────────────── */
 
-static bool su_controller_is_known(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
+static ivp_su_ctrl_list_t *su_find_controller(const ivp_pvec_t *controllers, ivp_sim_ctrl_t *c)
 {
-    for (int i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
-        if (su_cl_at(su, i)->l_controller == c) return true;
+    for (int i = ivp_pvec_len(controllers) - 1; i >= 0; i--) {
+        ivp_su_ctrl_list_t *cl = (ivp_su_ctrl_list_t *)ivp_pvec_at(controllers, i);
+        if (cl->l_controller == c) return cl;
     }
-    return false;
+    return NULL;
 }
 
-static void su_add_controlled_core_for_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c, ivp_core_t *core)
-{
-    int i;
-    for (i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
-        if (su_cl_at(su, i)->l_controller == c) break;
-    }
-    IVP_ASSERT(i >= 0);
-    if (i < 0) return;
-    ivp_pvec_install(&su_cl_at(su, i)->cores_controlled_by, core);
-}
-
-static void su_add_controller_unit_sim(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
+static ivp_su_ctrl_list_t *su_add_controller_unit_sim(ivp_pvec_t *controllers, ivp_sim_ctrl_t *c)
 {
     ivp_su_ctrl_list_t *cl = (ivp_su_ctrl_list_t *)calloc(1, sizeof(*cl));
-    if (!cl) return;
+    if (!cl) return NULL;
     cl->l_controller = c;
     ivp_pvec_init(&cl->cores_controlled_by);
-    ivp_pvec_add(&su->controller_cores, cl);
+    if (ivp_pvec_add(controllers, cl) < 0) {
+        free(cl);
+        return NULL;
+    }
+    return cl;
 }
 
 static int su_get_pos_of_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
@@ -141,8 +135,9 @@ void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
         ivp_core_t *my_core = su_core_at(su, i);
         for (int k = ivp_pvec_len(&my_core->controllers_of_core) - 1; k >= 0; k--) {
             ivp_sim_ctrl_t *c = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, k);
-            if (!su_controller_is_known(su, c)) su_add_controller_unit_sim(su, c);
-            su_add_controlled_core_for_controller(su, c, my_core);
+            ivp_su_ctrl_list_t *cl = su_find_controller(&su->controller_cores, c);
+            if (!cl) cl = su_add_controller_unit_sim(&su->controller_cores, c);
+            if (!cl || ivp_pvec_install(&cl->cores_controlled_by, my_core) < 0) return;
         }
     }
     su_sort_controllers(su);
@@ -157,11 +152,24 @@ static void su_rem_sim_unit_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
     ivp_pvec_remove_at(&su->controller_cores, pos);
 }
 
-void ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c)
+bool ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c)
 {
-    if (!su_controller_is_known(su, c)) su_add_controller_unit_sim(su, c);
-    su_add_controlled_core_for_controller(su, c, core);
+    ivp_su_ctrl_list_t *cl = su_find_controller(&su->controller_cores, c);
+    bool created = false;
+    if (!cl) {
+        cl = su_add_controller_unit_sim(&su->controller_cores, c);
+        if (!cl) return false;
+        created = true;
+    }
+    if (ivp_pvec_install(&cl->cores_controlled_by, core) < 0) {
+        if (created) {
+            ivp_pvec_remove_at(&su->controller_cores, ivp_pvec_len(&su->controller_cores) - 1);
+            su_cl_delete(cl);
+        }
+        return false;
+    }
     su_sort_controllers(su);
+    return true;
 }
 
 void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c)
@@ -179,7 +187,10 @@ void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core
 
 /* ── cores ─────────────────────────────────────────────────────────────── */
 
-void ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core) { ivp_pvec_add(&su->sim_unit_cores, core); }
+bool ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core)
+{
+    return su && core && ivp_pvec_add(&su->sim_unit_cores, core) >= 0;
+}
 void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core) { ivp_pvec_remove(&su->sim_unit_cores, core); }
 
 void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *del_core)
@@ -277,7 +288,7 @@ void ivp_sim_unit_sim_unit_debug_consistency(ivp_sim_unit_t *su)
         for (int i2 = ivp_pvec_len(&my_core->controllers_of_core) - 1; i2 >= 0; i2--) {
             ivp_sim_ctrl_t *my_controller = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, i2);
 
-            IVP_ASSERT(su_controller_is_known(su, my_controller) == true);
+            IVP_ASSERT(su_find_controller(&su->controller_cores, my_controller) != NULL);
 
             /* for every core its via controllers associated cores must exist */
             ivp_pvec_t *core_list = my_controller->vt->get_associated_controlled_cores(my_controller);

@@ -67,26 +67,35 @@ void ivp_core_release(ivp_core_t *core)
 
 /* IVP_Core::init: every value zero (quaternions and matrix included), then
  * link the object, a new simulation unit and the standard gravity controller */
-static void core_init_ref(ivp_core_t *core, ivp_object_t *io)
+static bool core_init_ref(ivp_core_t *core, ivp_object_t *io)
 {
     memset(core, 0, sizeof(*core));
     ivp_pvec_init(&core->controllers_of_core);
     ivp_pvec_init(&core->objects);
-    ivp_pvec_add(&core->objects, io);
     core->environment = io->owner;
+    if (ivp_pvec_add(&core->objects, io) < 0) return false;
     core->sim_unit = ivp_sim_unit_new();
-    IVP_ASSERT(core->sim_unit);
-    ivp_sim_unit_add_sim_unit_core(core->sim_unit, core);
+    if (!core->sim_unit) goto fail;
+    if (!ivp_sim_unit_add_sim_unit_core(core->sim_unit, core)) goto fail;
     core->sim_unit->sim_unit_movement_type = IVP_MT_NOT_SIM;
-    ivp_core_add_core_controller(core, ivp_env_get_standard_gravity_controller(core->environment));
+    if (!ivp_core_add_core_controller(core, ivp_env_get_standard_gravity_controller(core->environment))) goto fail;
     core->movement_state = IVP_MT_NOT_SIM;
+    return true;
+
+fail:
+    ivp_sim_unit_delete(core->sim_unit);
+    core->sim_unit = NULL;
+    ivp_pvec_clear(&core->controllers_of_core);
+    ivp_pvec_clear(&core->objects);
+    return false;
 }
 
 /* IVP_Core::IVP_Core(IVP_Real_Object *io): init + register the sim unit */
-void ivp_core_init_from_object(ivp_core_t *core, ivp_object_t *io)
+bool ivp_core_init_from_object(ivp_core_t *core, ivp_object_t *io)
 {
-    core_init_ref(core, io);
+    if (!core_init_ref(core, io)) return false;
     ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(core->environment), core->sim_unit);
+    return true;
 }
 
 /* IVP_Core::IVP_Core(object, q_world_f_object_init, position, physical_unmoveable, enable_piling_optimization) */
@@ -95,7 +104,10 @@ ivp_core_t *ivp_core_create(ivp_object_t *io, const ivp_quatr_t *q_world_f_objec
 {
     ivp_core_t *core = (ivp_core_t *)malloc(sizeof(ivp_core_t));
     if (!core) return NULL;
-    core_init_ref(core, io);
+    if (!core_init_ref(core, io)) {
+        free(core);
+        return NULL;
+    }
     core->physical_unmoveable = physical_unmoveable;
     ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(core->environment), core->sim_unit);
     core->q_world_f_core_last_psi = *q_world_f_object_init;
@@ -132,7 +144,7 @@ void ivp_core_delete(ivp_core_t *core)
 }
 
 /* IVP_Core::core_add_link_to_obj */
-void ivp_core_core_add_link_to_obj(ivp_core_t *core, ivp_object_t *add_obj)
+bool ivp_core_core_add_link_to_obj(ivp_core_t *core, ivp_object_t *add_obj)
 {
     IVP_IF(1)
     {
@@ -140,7 +152,7 @@ void ivp_core_core_add_link_to_obj(ivp_core_t *core, ivp_object_t *add_obj)
             IVP_ASSERT(ivp_core_object_at(core, j) != add_obj);
         }
     }
-    ivp_pvec_add(&core->objects, add_obj);
+    return ivp_pvec_add(&core->objects, add_obj) >= 0;
 }
 
 /* IVP_Core::unlink_obj_from_core_and_maybe_destroy */
@@ -1029,14 +1041,19 @@ void ivp_core_reset_time(ivp_core_t *core, double offset)
 
 /* ── controllers of core (ivp_sim_unit.cxx) ────────────────────────────── */
 
-void ivp_core_add_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
+bool ivp_core_add_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
 {
-    if (!core->sim_unit) {
+    if (!core || !core->sim_unit || !c) {
         IVP_ASSERT(0);
-        return;
+        return false;
     }
-    ivp_pvec_add(&core->controllers_of_core, c);
-    ivp_sim_unit_add_controller_of_core(core->sim_unit, core, c);
+    int index = ivp_pvec_add(&core->controllers_of_core, c);
+    if (index < 0) return false;
+    if (!ivp_sim_unit_add_controller_of_core(core->sim_unit, core, c)) {
+        ivp_pvec_remove_at(&core->controllers_of_core, index);
+        return false;
+    }
+    return true;
 }
 
 void ivp_core_rem_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
