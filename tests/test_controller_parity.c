@@ -809,6 +809,47 @@ IVP_TEST(raycast_car_rests_on_real_ground) {
 
 /* ── Airboat (ivp_controller_airboat.cpp:272-306) ─────────────────────── */
 
+static void *controller_parity_fail_alloc(size_t size, void *ctx)
+{
+    (void)size;
+    (void)ctx;
+    return NULL;
+}
+
+IVP_TEST(airboat_registration_failure_is_atomic) {
+    ivp_environment_t *env = make_env(true);
+    ivp_object_t *b = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(b);
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(3.0));
+    b->physical_core->rot_speed = ivp_vec3f(4.0f, 5.0f, 6.0f);
+    const ivp_vec3r_t speed_before = b->physical_core->speed;
+    const ivp_vec3f_t rot_speed_before = b->physical_core->rot_speed;
+
+    ivp_car_system_template_t t;
+    ivp_car_system_template_init(&t, 4, 2);
+    t.car_body = b;
+    ivp_allocator_t saved_allocator = *env->allocator;
+    env->allocator->alloc = controller_parity_fail_alloc;
+    ivp_airboat_state_t a;
+    IVP_ASSERT_FALSE(ivp_airboat_init(&a, &t));
+    *env->allocator = saved_allocator;
+
+    IVP_ASSERT_FALSE(a.active);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(a.handle));
+    IVP_ASSERT_NULL(a.gravity_controller);
+    for (int i = 0; i < 3; i++) {
+        IVP_ASSERT_TRUE(b->physical_core->speed.k[i] == speed_before.k[i]);
+        IVP_ASSERT_TRUE(b->physical_core->rot_speed.k[i] == rot_speed_before.k[i]);
+    }
+
+    IVP_ASSERT_TRUE(ivp_airboat_init(&a, &t));
+    ivp_airboat_destroy(&a);
+    ivp_vec3r_set(&b->physical_core->speed, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    step(env, 1);
+    IVP_ASSERT_NEAR(b->physical_core->speed.k[1], IVP_REAL(9.81) * DT60, IVP_REAL(1e-6));
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(airboat_drag_uses_half_rho) {
     ivp_environment_t *env = make_env(false);
     ivp_object_t *b = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
@@ -1011,6 +1052,7 @@ int main(void) {
     IVP_REGISTER(phantom_enter_exit_hysteresis);
     IVP_REGISTER(phantom_object_distance_is_exact_convex);
     IVP_REGISTER(raycast_car_rests_on_real_ground);
+    IVP_REGISTER(airboat_registration_failure_is_atomic);
     IVP_REGISTER(airboat_drag_uses_half_rho);
     IVP_REGISTER(airboat_own_gravity);
     IVP_REGISTER(anchor_object_space_includes_mass_center_shift);

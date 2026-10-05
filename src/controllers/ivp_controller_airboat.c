@@ -114,6 +114,9 @@ bool ivp_airboat_init(ivp_airboat_state_t *state, const ivp_car_system_template_
 
     airboat_gravity_t *gravity = (airboat_gravity_t *)calloc(1, sizeof(*gravity));
     if (!gravity) return false;
+    const ivp_vec3f_t rot_speed_before = core->rot_speed;
+    const ivp_vec3r_t speed_before = core->speed;
+    ivp_sim_ctrl_t *std_gravity = NULL;
 
     /* InitRaycastCarBody */
     {
@@ -148,17 +151,33 @@ bool ivp_airboat_init(ivp_airboat_state_t *state, const ivp_car_system_template_
     state->is_left_handed = tcs->is_left_handed;
     {
         /* remove the old gravity controller and add a different one */
-        ivp_sim_ctrl_t *std_gravity = ivp_env_get_standard_gravity_controller(env);
+        std_gravity = ivp_env_get_standard_gravity_controller(env);
         if (std_gravity) ivp_core_rem_core_controller(core, std_gravity);
         gravity->base.vt = &ag_vt;
         lvf_set3(&gravity->grav_vec, 0.0f, IVP_AIRBOAT_GRAVITY, 0.0f);
-        ivp_core_add_core_controller(core, &gravity->base);
+        if (!ivp_core_add_core_controller(core, &gravity->base)) {
+            if (std_gravity) (void)ivp_core_add_core_controller(core, std_gravity);
+            core->rot_speed = rot_speed_before;
+            core->speed = speed_before;
+            free(gravity);
+            return false;
+        }
         state->gravity_controller = gravity;
     }
     state->active = true;
     state->handle = ivp_environment_announce_dependent_controller(env, IVP_CP_CONSTRAINTS_MAX,
                                                                   ivp_controller_airboat, state,
                                                                   ivp_airboat_discovery);
+    if (!ivp_controller_handle_is_valid(state->handle)) {
+        ivp_core_rem_core_controller(core, &gravity->base);
+        if (std_gravity) (void)ivp_core_add_core_controller(core, std_gravity);
+        state->gravity_controller = NULL;
+        core->rot_speed = rot_speed_before;
+        core->speed = speed_before;
+        state->active = false;
+        free(gravity);
+        return false;
+    }
     state->extra_gravity = (float)tcs->extra_gravity_force;
     {
         ivp_vec3r_t g;
