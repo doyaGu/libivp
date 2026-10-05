@@ -8,9 +8,81 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import benchmark  # noqa: E402
+import benchmark_trace  # noqa: E402
+import native_benchmark  # noqa: E402
+import build_native_probes  # noqa: E402
 
 
 class BenchmarkToolTests(unittest.TestCase):
+    def test_probe_rejects_missing_or_duplicate_source_anchor(self):
+        pattern = r"void run\(void\)"
+        self.assertIn("count();", build_native_probes.inject("void run(void) {}", pattern, "count();"))
+        for source in ("", "void run(void) {} void run(void) {}"):
+            with self.assertRaises(benchmark.BenchmarkError):
+                build_native_probes.inject(source, pattern, "count();")
+
+    def test_native_comparison_rejects_instrumented_measurement_build(self):
+        config = dict(cmake_build_type="Release", ivp_real_double="ON")
+        native_benchmark.measurement_build(config)
+        for changed in (dict(config, cmake_build_type="Debug"), dict(config, ivp_real_double="OFF"),
+                        dict(config, ivp_benchmark_diagnostics="ON"), dict(config, ivp_enable_asan="ON")):
+            with self.assertRaises(benchmark.BenchmarkError): native_benchmark.measurement_build(changed)
+
+    def test_native_comparison_requires_complete_compatible_samples(self):
+        row = dict(kind="native", implementation="reference", case="fast_impacts", scale=4,
+                   sample=0, timing_contract="native-noop-v1", iterations=2, operations=360,
+                   operation_ns=100, total_ns=120)
+        native_benchmark.validate_samples([row], "reference", "fast_impacts", 4, 1)
+        for invalid in ([row, row], [], [dict(row, operations=359)],
+                        [dict(row, timing_contract="native-v1")], [dict(row, total_ns=10)]):
+            with self.assertRaises(benchmark.BenchmarkError):
+                native_benchmark.validate_samples(invalid, "reference", "fast_impacts", 4, 1)
+
+    def test_incremental_gate_does_not_reset_overall_target(self):
+        metadata = {"machine": {"cpu": "same"}, "compiler": {"id": "c"},
+                    "build_type": "Release", "ivp_real_double": True, "libivp": {"dirty": False}}
+        row = dict(kind="native", implementation="libivp", name="fast_impacts", scale=512,
+                   median_ns=100, state_hash="a" * 16, peak_bytes=10, residual_bytes=0,
+                   verification_contract=benchmark_trace.CONTRACT, verification_steps=181,
+                   trajectory_hash="b" * 16, contact_height=0)
+        current = dict(schema=benchmark.SCHEMA, profile="large", runs=3, metadata=metadata, summary=[row])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(current), encoding="utf-8")
+            self.assertTrue(benchmark.enforce_baseline(current, path, require_targets=False)["passed"])
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "large target"):
+                benchmark.enforce_baseline(current, path)
+            for field, value, message in (("trajectory_hash", "c" * 16, "verification differs"),
+                                          ("contact_height", 4, "verification differs"),
+                                          ("median_ns", 106, "performance regression"),
+                                          ("residual_bytes", 1, "residual allocation"),
+                                          ("peak_bytes", 14, "peak allocation")):
+                changed = dict(current, summary=[dict(row, **{field: value})])
+                with self.assertRaisesRegex(benchmark.BenchmarkError, message):
+                    benchmark.enforce_baseline(changed, path, require_targets=False)
+
+    def test_trace_catches_intermediate_state_and_event_order_changes(self):
+        import copy
+        step = dict(schema=benchmark.SCHEMA, kind="native-step", implementation="libivp",
+                    case="fast_impacts", scale=1, objects=2, event_count=0,
+                    verification_contract=benchmark_trace.CONTRACT)
+        step.update({field: "0" * 16 for field in benchmark_trace.HASH_FIELDS})
+        records = [dict(step, step=i) for i in range(3)]
+        records.append(dict(kind="native-verification", implementation="libivp",
+                            case="fast_impacts", scale=1, steps_per_world=2, dt=0.01,
+                            verification_contract=benchmark_trace.CONTRACT,
+                            trajectory_hash="0" * 16))
+        self.assertTrue(benchmark_trace.compare(records, records)["passed"])
+        for field in ("object_hash", "constraint_hash", "event_hash", "statistics_hash"):
+            changed = copy.deepcopy(records)
+            changed[1][field] = "1" * 16
+            difference = benchmark_trace.compare(records, changed)
+            self.assertEqual(difference["step"], 1)
+            self.assertEqual(difference["field"], field)
+            self.assertFalse(difference["passed"])
+        for broken in (records[:-1], records[:1] + records[2:], [records[1], records[0], *records[2:]]):
+            with self.assertRaises(benchmark.BenchmarkError): benchmark_trace.validate(broken)
+
     def test_failed_absolute_gate_preserves_parseable_result(self):
         record = {"schema": benchmark.SCHEMA, "kind": "native-summary", "gate_ok": False}
         command = [sys.executable, "-c", f"print({json.dumps(record)!r}); raise SystemExit(1)"]

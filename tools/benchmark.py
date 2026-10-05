@@ -222,6 +222,12 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "peak_bytes": max(int(record["peak_bytes"]) for record in diagnostics),
                 "residual_bytes": max(int(record["residual_bytes"]) for record in diagnostics),
             })
+            if any("verification_contract" in r for r in diagnostics):
+                for field in ("verification_contract", "verification_steps", "trajectory_hash", "contact_height"):
+                    observed = {r.get(field) for r in diagnostics}
+                    if None in observed or len(observed) != 1:
+                        raise BenchmarkError(f"native verification differs across runs: {name}/{scale}/{field}")
+                    item[field] = next(iter(observed))
             scoped = [r for r in diagnostics if r.get("phase_scope") == "simulation"]
             for record in scoped:
                 wall = int(record["diagnostic_operation_ns"])
@@ -314,7 +320,7 @@ def baseline_comparison(current: dict[str, Any], baseline_path: Path) -> dict[st
     }
 
 
-def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, Any]:
+def enforce_baseline(current: dict[str, Any], baseline_path: Path, *, require_targets: bool = True) -> dict[str, Any]:
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     if baseline.get("schema") != SCHEMA:
         raise BenchmarkError(f"baseline has unsupported schema: {baseline.get('schema')!r}")
@@ -343,7 +349,7 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
 
     now = native_index(current)
     before = native_index(baseline)
-    if set(now) != set(before):
+    if not now or set(now) != set(before):
         raise BenchmarkError("checked baseline native case/scale set differs")
 
     speedups: dict[str, float] = {}
@@ -353,7 +359,15 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
             raise BenchmarkError(f"baseline timing contract differs: {key[0]}/{key[1]}")
         if item.get("state_hash") != previous.get("state_hash"):
             raise BenchmarkError(f"state hash differs for {key[0]}/{key[1]}")
-        if int(item.get("residual_bytes", -1)) != 0:
+        if item.get("verification_contract") != "native-trajectory-v1":
+            raise BenchmarkError(f"missing trajectory verification for {key[0]}/{key[1]}; regenerate baseline")
+        if not isinstance(item.get("trajectory_hash"), str) or not re.fullmatch(r"[0-9a-f]{16}", item["trajectory_hash"]) or \
+                type(item.get("verification_steps")) is not int or item["verification_steps"] < 0:
+            raise BenchmarkError(f"invalid trajectory verification for {key[0]}/{key[1]}")
+        for field in ("verification_contract", "verification_steps", "trajectory_hash", "contact_height"):
+            if item.get(field) != previous.get(field):
+                raise BenchmarkError(f"verification differs for {key[0]}/{key[1]}/{field}; use a verified baseline")
+        if int(item.get("residual_bytes", -1)) != 0 or int(previous.get("residual_bytes", -1)) != 0:
             raise BenchmarkError(f"residual allocation bytes for {key[0]}/{key[1]}")
         previous_peak = int(previous.get("peak_bytes", 0))
         if previous_peak and int(item.get("peak_bytes", 0)) > previous_peak * 1.30:
@@ -363,7 +377,7 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
         if speedup < (1.0 / 1.05):
             raise BenchmarkError(f"performance regression exceeds 5% for {key[0]}/{key[1]}")
 
-    if current["profile"] == "large":
+    if require_targets and current["profile"] == "large":
         key_cases = ("active_bodies", "contact_pile", "constraint_chain", "fast_impacts")
         for name in key_cases:
             if speedups.get(name, 0.0) < 1.25:
@@ -377,6 +391,7 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path) -> dict[str, 
     return {
         "path": str(baseline_path),
         "passed": True,
+        "requires_overall_targets": require_targets,
         "speedups": speedups,
         "large_geometric_mean": geometric_mean,
     }
@@ -438,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compare-reference", action="store_true")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--check-baseline", type=Path)
+    parser.add_argument("--check-regression", type=Path,
+                        help="check a recent checkpoint without reapplying the overall 2x target")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--case", action="append", dest="cases")
@@ -581,6 +598,11 @@ def main(argv: list[str] | None = None) -> int:
             result["checked_baseline"] = enforce_baseline(result, args.check_baseline)
         except BenchmarkError as exc:
             result["checked_baseline"] = {"passed": False, "error": str(exc)}
+    if args.check_regression:
+        try:
+            result["checked_regression"] = enforce_baseline(result, args.check_regression, require_targets=False)
+        except BenchmarkError as exc:
+            result["checked_regression"] = {"passed": False, "error": str(exc)}
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print_report(result)
     print(f"\nRaw result: {output_path}")
@@ -588,7 +610,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Absolute gates FAILED: {result['absolute_gate_failures']}", file=sys.stderr)
     if result.get("checked_baseline", {}).get("passed") is False:
         print(f"Checked baseline FAILED: {result['checked_baseline']['error']}", file=sys.stderr)
-    return 1 if result["absolute_gate_failures"] or result.get("checked_baseline", {}).get("passed") is False else 0
+    if "checked_regression" in result:
+        checked = result["checked_regression"]
+        print("Incremental regression: " + ("PASS" if checked["passed"] else "FAILED: " + checked["error"]))
+    return int(bool(result["absolute_gate_failures"]) or
+               any(result.get(key, {}).get("passed") is False for key in ("checked_baseline", "checked_regression")))
 
 
 if __name__ == "__main__":
