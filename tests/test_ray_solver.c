@@ -314,6 +314,53 @@ IVP_TEST(ray_object_space_helpers)
     ivp_compact_surface_free(NULL, s);
 }
 
+IVP_TEST(ray_object_space_helpers_reject_invalid_arguments)
+{
+    ivp_compact_surface_t *s =
+        ivp_build_box_surface(NULL, 1.0f, 1.0f, 1.0f);
+    IVP_ASSERT_NOT_NULL(s);
+    const ivp_compact_ledge_t *ledge = ivp_surface_get_single_convex(s);
+    const ivp_compact_triangle_t *tri = ivp_ledge_get_first_triangle(ledge);
+    ivp_ray_input_t ray;
+    ray.origin = ivp_vec3r(IVP_REAL(-10.0), IVP_REAL(0.3), IVP_REAL(-0.2));
+    ray.direction = ivp_vec3r(1, 0, 0);
+    ray.max_distance = IVP_REAL(20.0);
+    ivp_ray_hit_t hit;
+    ivp_real_t distance = IVP_REAL(-1.0);
+
+    IVP_ASSERT_EQ(ivp_ray_cast_surface(NULL, &ray, &hit),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_cast_surface(s, NULL, &hit),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_cast_surface(s, &ray, NULL),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_cast_ledge(NULL, &ray, &hit),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_cast_ledge(ledge, NULL, &hit),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_cast_ledge(ledge, &ray, NULL),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_test_triangle(NULL, tri, &ray, &distance),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_test_triangle(ledge, NULL, &ray, &distance),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_test_triangle(ledge, tri, NULL, &distance),
+                  IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_EQ(ivp_ray_test_triangle(ledge, tri, &ray, NULL),
+                  IVP_ERR_INVALID_ARG);
+
+    ivp_vec3r_t zero = ivp_vec3r(0, 0, 0);
+    IVP_ASSERT_FALSE(ivp_ray_test_sphere(NULL, &zero, &zero,
+                                         IVP_REAL(1.0), &distance));
+    IVP_ASSERT_FALSE(ivp_ray_test_sphere(&zero, NULL, &zero,
+                                         IVP_REAL(1.0), &distance));
+    IVP_ASSERT_FALSE(ivp_ray_test_sphere(&zero, &zero, NULL,
+                                         IVP_REAL(1.0), &distance));
+    IVP_ASSERT_FALSE(ivp_ray_test_sphere(&zero, &zero, &zero,
+                                         IVP_REAL(-1.0), &distance));
+    ivp_compact_surface_free(NULL, s);
+}
+
 IVP_TEST(sphere_solver_environment_matches_reference)
 {
     scene_t sc;
@@ -739,6 +786,7 @@ int main(void)
     IVP_REGISTER(ray_reference_world_queries);
     IVP_REGISTER(ray_min_and_group);
     IVP_REGISTER(ray_object_space_helpers);
+    IVP_REGISTER(ray_object_space_helpers_reject_invalid_arguments);
     IVP_REGISTER(sphere_solver_environment_matches_reference);
     IVP_REGISTER(ray_env_queries_walk_ov_tree);
     IVP_REGISTER(ray_env_skips_collision_disabled_and_phantoms);

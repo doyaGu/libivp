@@ -876,6 +876,7 @@ ivp_result_t ivp_ray_cast_surface(const ivp_compact_surface_t *surface,
                                   const ivp_ray_input_t *ray,
                                   ivp_ray_hit_t *hit_out)
 {
+    if (!surface || !ray || !hit_out) return IVP_ERR_INVALID_ARG;
     IVP_ASSERT(surface != NULL && ray != NULL && hit_out != NULL);
     ivp_ray_solver_os_t os;
     local_min_t lm;
@@ -890,6 +891,7 @@ ivp_result_t ivp_ray_cast_ledge(const ivp_compact_ledge_t *ledge,
                                 const ivp_ray_input_t *ray,
                                 ivp_ray_hit_t *hit_out)
 {
+    if (!ledge || !ray || !hit_out) return IVP_ERR_INVALID_ARG;
     IVP_ASSERT(ledge != NULL && ray != NULL && hit_out != NULL);
     ivp_ray_solver_os_t os;
     local_min_t lm;
@@ -911,6 +913,9 @@ bool ivp_ray_test_sphere(const ivp_vec3r_t *origin,
                          ivp_real_t radius,
                          ivp_real_t *t_out)
 {
+    if (!origin || !direction || !center || radius < IVP_REAL(0.0)) {
+        return false;
+    }
     ivp_vec3r_t delta;
     ivp_vec3r_sub(&delta, center, origin);
     ivp_real_t t_closest = ivp_vec3r_dot(&delta, direction);
@@ -931,6 +936,7 @@ ivp_result_t ivp_ray_test_triangle(const ivp_compact_ledge_t *ledge,
                                    const ivp_ray_input_t *ray,
                                    ivp_real_t *hit_dist)
 {
+    if (!ledge || !tri || !ray || !hit_dist) return IVP_ERR_INVALID_ARG;
     IVP_ASSERT(ledge != NULL && tri != NULL && ray != NULL && hit_dist != NULL);
     ivp_vec3r_t p0 = point_to_vec3r(ivp_edge_get_start_point(&tri->edges[0], ledge));
     ivp_vec3r_t p1 = point_to_vec3r(ivp_edge_get_start_point(&tri->edges[1], ledge));

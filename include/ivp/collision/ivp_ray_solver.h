@@ -271,25 +271,29 @@ typedef struct ivp_ray_input {
 } ivp_ray_input_t;
 
 /* Closest reference hit of the ray against a compact surface (object
- * space).  Returns IVP_OK on hit, IVP_NOT_FOUND otherwise. */
+ * space).  Returns IVP_OK on hit, IVP_NOT_FOUND on a miss, or
+ * IVP_ERR_INVALID_ARG for a NULL argument. */
 ivp_result_t ivp_ray_cast_surface(const ivp_compact_surface_t *surface,
                                    const ivp_ray_input_t      *ray,
                                    ivp_ray_hit_t              *hit_out);
 
-/* Reference hit of the ray against one convex ledge (object space). */
+/* Reference hit of the ray against one convex ledge (object space).
+ * Returns IVP_ERR_INVALID_ARG for a NULL argument. */
 ivp_result_t ivp_ray_cast_ledge(const ivp_compact_ledge_t *ledge,
                                  const ivp_ray_input_t     *ray,
                                  ivp_ray_hit_t             *hit_out);
 
 /* Two sided plane + barycentric test against a single triangle
- * (libivp utility, not part of the reference). */
+ * (libivp utility, not part of the reference).  Returns
+ * IVP_ERR_INVALID_ARG for a NULL argument. */
 ivp_result_t ivp_ray_test_triangle(const ivp_compact_ledge_t    *ledge,
                                     const ivp_compact_triangle_t *tri,
                                     const ivp_ray_input_t        *ray,
                                     ivp_real_t                   *hit_dist);
 
 /* Infinite ray vs sphere (libivp utility).  If hit, *t_out receives the
- * entry distance (exit distance when the origin is inside). */
+ * entry distance (exit distance when the origin is inside).  NULL inputs
+ * and a negative radius return false. */
 bool ivp_ray_test_sphere(const ivp_vec3r_t *origin,
                          const ivp_vec3r_t *direction,
                          const ivp_vec3r_t *center,
