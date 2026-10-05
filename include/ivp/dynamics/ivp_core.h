@@ -89,6 +89,7 @@ typedef struct ivp_core {
     ivp_real_t       upper_limit_radius;
     ivp_real_t       max_surface_deviation;
     struct ivp_environment *environment;     /* backlink (NULL for a standalone ivp_core_init core) */
+    size_t           heap_allocation_size;   /* zero for caller-owned standalone cores */
     void            *car_wheel;              /* IVP_Constraint_Car_Object (opaque) */
 
     ivp_vec3r_t      rot_inertia;            /* rot_inertia (hesse_val = mass) */

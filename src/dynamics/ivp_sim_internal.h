@@ -90,6 +90,7 @@ typedef struct ivp_sim_unit {
     bool     sim_unit_just_slowed_down;
     struct ivp_sim_unit *prev_sim_unit;
     struct ivp_sim_unit *next_sim_unit;
+    const ivp_allocator_t *allocator;
     ivp_pvec_t sim_unit_cores;              /* ivp_core_t*           */
     ivp_pvec_t controller_cores;            /* ivp_su_ctrl_list_t*   */
 } ivp_sim_unit_t;
@@ -100,7 +101,7 @@ typedef struct ivp_sim_units_manager {
     ivp_sim_unit_t *still_slot;
 } ivp_sim_units_manager_t;
 
-ivp_sim_unit_t *ivp_sim_unit_new(void);
+ivp_sim_unit_t *ivp_sim_unit_new(const ivp_allocator_t *allocator);
 void ivp_sim_unit_delete(ivp_sim_unit_t *su);           /* ~IVP_Simulation_Unit (+free) */
 
 void ivp_sim_units_mgr_init(ivp_sim_units_manager_t *m, struct ivp_environment *env);
@@ -131,7 +132,7 @@ void ivp_sim_unit_sim_unit_debug_out(ivp_sim_unit_t *su);
 #endif
 
 /* IVP_Controller_Manager */
-void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c);
+bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c);
 void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently);
 void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, ivp_sim_ctrl_t *c);
 bool ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core);

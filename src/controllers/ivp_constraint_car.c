@@ -712,11 +712,14 @@ ivp_result_t ivp_constraint_solver_car_init_constraint_system(ivp_constraint_sol
     }
 
     if (res == IVP_OK) {
-        s->announced = true;
-        ivp_ctrl_mgr_announce_controller_to_environment(env, &s->base);
-        s->env_listener = ivp_environment_add_event_listener(env, solver_env_event, s);
-        if (!ivp_event_listener_handle_is_valid(s->env_listener)) {
+        if (!ivp_ctrl_mgr_announce_controller_to_environment(env, &s->base)) {
             res = IVP_ERR_OUT_OF_MEMORY;
+        } else {
+            s->announced = true;
+            s->env_listener = ivp_environment_add_event_listener(env, solver_env_event, s);
+            if (!ivp_event_listener_handle_is_valid(s->env_listener)) {
+                res = IVP_ERR_OUT_OF_MEMORY;
+            }
         }
     }
     if (res != IVP_OK) {

@@ -1168,7 +1168,10 @@ static bool slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
         sc->assoc_objects = new_objects;
         sc->assoc_count = n;
         if (!same_cores && ivp_pvec_len(&sc->assoc_cores) > 0) {
-            ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+            if (!ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base)) {
+                ivp_pvec_clear(&cores);
+                return false;
+            }
         }
     }
     ivp_pvec_clear(&cores);
@@ -1531,7 +1534,9 @@ bool ivp_environment_set_controller_discovery(ivp_environment_t *env, ivp_contro
         sc->all_cores = false;
         sc->dependent = true;
         if (ivp_pvec_len(&sc->assoc_cores) > 0) {
-            ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+            if (!ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base)) {
+                return false;
+            }
         }
     } else if (!slot_ctrl_refresh_dependent(env, sc, slot)) {
         slot->discovery_fn = old_discovery_fn;
@@ -1595,7 +1600,9 @@ bool ivp_environment_add_controller_to_core(ivp_environment_t *env, ivp_controll
             sc->dependent = true;
             sc->assoc_cores.n = old_assoc_core_count;
             if (old_assoc_core_count > 0) {
-                ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+                bool restored = ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+                IVP_ASSERT(restored);
+                (void)restored;
             }
         } else if (was_all_cores) {
             bool restored = slot_ctrl_set_all_cores(env, sc);

@@ -412,7 +412,7 @@ void ivp_object_change_unmovable_flag(ivp_object_t *obj, bool flag)
     ivp_sim_unit_t *replacement_unit = NULL;
     ivp_sim_ctrl_t *gravity = NULL;
     if (flag && my_core->sim_unit) {
-        replacement_unit = ivp_sim_unit_new();
+        replacement_unit = ivp_sim_unit_new(ivp_env_get_allocator(ivp_core_env(my_core)));
         gravity = ivp_env_get_standard_gravity_controller(ivp_core_env(my_core));
         if (!replacement_unit || !ivp_sim_unit_add_sim_unit_core(replacement_unit, my_core) ||
             !ivp_sim_unit_add_controller_of_core(replacement_unit, my_core, gravity) ||
@@ -532,8 +532,10 @@ void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r
         new_m_object_f_core->rot.rows[2].k[2] != IVP_REAL(1.0);
     ivp_quatr_t *q_core_f_object = obj->q_core_f_object;
     if (needs_quaternion && !q_core_f_object) {
-        q_core_f_object = (ivp_quatr_t *)calloc(1, sizeof(*q_core_f_object));
+        q_core_f_object = (ivp_quatr_t *)ivp_alloc(obj->owner->allocator,
+                                                   sizeof(*q_core_f_object));
         if (!q_core_f_object) return;
+        memset(q_core_f_object, 0, sizeof(*q_core_f_object));
     }
 
     /* new_m_core_f_object = transpose(new_m_object_f_core) */
@@ -561,7 +563,8 @@ void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r
     }
     if (!needs_quaternion) {
         if (obj->q_core_f_object) {
-            free(obj->q_core_f_object);
+            ivp_free(obj->owner->allocator, obj->q_core_f_object,
+                     sizeof(*obj->q_core_f_object));
             obj->q_core_f_object = NULL;
         }
     } else {
@@ -794,7 +797,7 @@ void ivp_object_pipeline_destroy(ivp_environment_t *env, ivp_object_t *obj)
         obj->hull_manager = NULL;
     }
     if (obj->q_core_f_object) {
-        free(obj->q_core_f_object);
+        ivp_free(env->allocator, obj->q_core_f_object, sizeof(*obj->q_core_f_object));
         obj->q_core_f_object = NULL;
     }
 }

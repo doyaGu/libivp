@@ -70,11 +70,13 @@ void ivp_core_release(ivp_core_t *core)
 static bool core_init_ref(ivp_core_t *core, ivp_object_t *io)
 {
     memset(core, 0, sizeof(*core));
-    ivp_pvec_init(&core->controllers_of_core);
-    ivp_pvec_init(&core->objects);
     core->environment = io->owner;
+    core->heap_allocation_size = sizeof(*core);
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(core->environment);
+    ivp_pvec_init_with_allocator(&core->controllers_of_core, allocator);
+    ivp_pvec_init_with_allocator(&core->objects, allocator);
     if (ivp_pvec_add(&core->objects, io) < 0) return false;
-    core->sim_unit = ivp_sim_unit_new();
+    core->sim_unit = ivp_sim_unit_new(allocator);
     if (!core->sim_unit) goto fail;
     if (!ivp_sim_unit_add_sim_unit_core(core->sim_unit, core)) goto fail;
     core->sim_unit->sim_unit_movement_type = IVP_MT_NOT_SIM;
@@ -102,10 +104,11 @@ bool ivp_core_init_from_object(ivp_core_t *core, ivp_object_t *io)
 ivp_core_t *ivp_core_create(ivp_object_t *io, const ivp_quatr_t *q_world_f_object_init, const ivp_vec3r_t *position,
                             bool physical_unmoveable, bool enable_piling_optimization)
 {
-    ivp_core_t *core = (ivp_core_t *)malloc(sizeof(ivp_core_t));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(io->owner);
+    ivp_core_t *core = (ivp_core_t *)ivp_alloc(allocator, sizeof(ivp_core_t));
     if (!core) return NULL;
     if (!core_init_ref(core, io)) {
-        free(core);
+        ivp_free(allocator, core, sizeof(*core));
         return NULL;
     }
     core->physical_unmoveable = physical_unmoveable;
@@ -127,6 +130,7 @@ ivp_core_t *ivp_core_create(ivp_object_t *io, const ivp_quatr_t *q_world_f_objec
 void ivp_core_delete(ivp_core_t *core)
 {
     struct ivp_environment *env = ivp_core_env(core);
+    const size_t allocation_size = core->heap_allocation_size;
     ivp_env_remove_revive_core(env, core);
     if (!core->physical_unmoveable) {
         for (int i = ivp_pvec_len(&core->controllers_of_core) - 1; i >= 0; i--) {
@@ -140,7 +144,8 @@ void ivp_core_delete(ivp_core_t *core)
         core->sim_unit = NULL;
     }
     ivp_core_release(core);   /* friction info hash of unmoveable cores, vectors */
-    free(core);
+    IVP_ASSERT(allocation_size >= sizeof(*core));
+    ivp_free(ivp_env_get_allocator(env), core, allocation_size);
 }
 
 /* IVP_Core::core_add_link_to_obj */

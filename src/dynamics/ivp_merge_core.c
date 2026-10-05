@@ -265,12 +265,14 @@ static void mc_calc_calc(merge_core_t *m)
  * object in its object list */
 static ivp_core_merged_t *core_merged_create_from_object(ivp_object_t *real_obj)
 {
-    ivp_core_merged_t *mc = (ivp_core_merged_t *)malloc(sizeof(ivp_core_merged_t));
+    const ivp_allocator_t *allocator = real_obj->owner->allocator;
+    ivp_core_merged_t *mc = (ivp_core_merged_t *)ivp_alloc(allocator, sizeof(*mc));
     if (!mc) return NULL;
     if (!ivp_core_init_from_object(&mc->core, real_obj)) {
-        free(mc);
+        ivp_free(allocator, mc, sizeof(*mc));
         return NULL;
     }
+    mc->core.heap_allocation_size = sizeof(*mc);
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
     ivp_pvec_remove(&mc->core.objects, real_obj);
     return mc;
@@ -297,12 +299,14 @@ void ivp_core_merged_set_by_merge(ivp_core_merged_t *mcore, ivp_core_t *c0, ivp_
 ivp_core_merged_t *ivp_core_merged_create_from_cores(ivp_core_t *core0, ivp_core_t *core1)
 {
     ivp_object_t *io = ivp_core_object_at(core0, 0);
-    ivp_core_merged_t *mc = (ivp_core_merged_t *)malloc(sizeof(ivp_core_merged_t));
+    const ivp_allocator_t *allocator = core0->environment->allocator;
+    ivp_core_merged_t *mc = (ivp_core_merged_t *)ivp_alloc(allocator, sizeof(*mc));
     if (!mc) return NULL;
     if (!ivp_core_init_from_object(&mc->core, io)) {
-        free(mc);
+        ivp_free(allocator, mc, sizeof(*mc));
         return NULL;
     }
+    mc->core.heap_allocation_size = sizeof(*mc);
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
     /* clear the objects added by the base constructor (set_by_merge does not re-add them) */
     ivp_pvec_remove_all(&mc->core.objects);
@@ -406,13 +410,15 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
         return false;
     }
     merge_all_objs.mcore = merged_core_for_all;
-    merge_all_objs.cores = (ivp_core_t **)malloc((size_t)n_objs * sizeof(ivp_core_t *));
+    merge_all_objs.cores = (ivp_core_t **)ivp_alloc(
+        env->allocator, (size_t)n_objs * sizeof(ivp_core_t *));
     if (!merge_all_objs.cores) {
         ivp_core_delete(&merged_core_for_all->core);
         return false;
     }
     if (!ivp_env_attach_default_controllers(env, &merged_core_for_all->core)) {
-        free(merge_all_objs.cores);
+        ivp_free(env->allocator, merge_all_objs.cores,
+                 (size_t)n_objs * sizeof(ivp_core_t *));
         ivp_core_delete(&merged_core_for_all->core);
         return false;
     }
@@ -439,7 +445,8 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
     ivp_core_calc_next_psi_matrix_zero_speed(&merged_core_for_all->core, &es);
 
     for (int i = 0; i < n_objs; i++) ivp_core_delete(merge_all_objs.cores[i]);   /* delete cores[i] */
-    free(merge_all_objs.cores);
+    ivp_free(env->allocator, merge_all_objs.cores,
+             (size_t)n_objs * sizeof(ivp_core_t *));
 
     return true;
 }

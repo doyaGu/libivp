@@ -16,7 +16,7 @@
 #include "dynamics/ivp_env_pipeline.h"
 
 #include <stdint.h>
-#include <stdlib.h>
+#include <string.h>
 
 void ivp_phantom_mindist_entered_volume(void *controller_phantom, ivp_mindist_t *md);
 void ivp_phantom_mindist_left_volume(void *controller_phantom, ivp_mindist_t *md);
@@ -223,70 +223,78 @@ static void phantom_event_object_revived(ivp_listener_object_t *self, ivp_event_
 
 static void controller_phantom_free_storage(ivp_controller_phantom_t *c)
 {
+    const ivp_allocator_t *allocator = c->object->owner->allocator;
     if (c->mindist_core_counter) {
         ivp_vhash_store_destroy(c->mindist_core_counter);
-        free(c->mindist_core_counter);
+        ivp_free(allocator, c->mindist_core_counter, sizeof(*c->mindist_core_counter));
     }
     if (c->mindist_object_counter) {
         ivp_vhash_store_destroy(c->mindist_object_counter);
-        free(c->mindist_object_counter);
+        ivp_free(allocator, c->mindist_object_counter, sizeof(*c->mindist_object_counter));
     }
     if (c->set_of_objects) {
         ivp_set_active_destroy(c->set_of_objects);
-        free(c->set_of_objects);
+        ivp_free(allocator, c->set_of_objects, sizeof(*c->set_of_objects));
     }
     if (c->set_of_sleeping_cores) {
         ivp_set_destroy(c->set_of_sleeping_cores);
-        free(c->set_of_sleeping_cores);
+        ivp_free(allocator, c->set_of_sleeping_cores, sizeof(*c->set_of_sleeping_cores));
     }
     if (c->set_of_cores) {
         ivp_set_active_destroy(c->set_of_cores);
-        free(c->set_of_cores);
+        ivp_free(allocator, c->set_of_cores, sizeof(*c->set_of_cores));
     }
     ivp_set_active_destroy(&c->set_of_mindists);
     ivp_pvec_clear(&c->listeners);
-    free(c->object_listener);
-    free(c);
+    ivp_free(allocator, c->object_listener, sizeof(phantom_obj_listener_t));
+    ivp_free(allocator, c, sizeof(*c));
 }
 
 /* IVP_Controller_Phantom::IVP_Controller_Phantom */
 static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object, const ivp_template_phantom_t *templat)
 {
-    ivp_controller_phantom_t *c = (ivp_controller_phantom_t *)calloc(1, sizeof(*c));
-    phantom_obj_listener_t *ol = (phantom_obj_listener_t *)calloc(1, sizeof(*ol));
+    const ivp_allocator_t *alloc = object->owner->allocator;
+    ivp_controller_phantom_t *c = (ivp_controller_phantom_t *)ivp_alloc(alloc, sizeof(*c));
+    phantom_obj_listener_t *ol = (phantom_obj_listener_t *)ivp_alloc(alloc, sizeof(*ol));
     if (!c || !ol) {
-        free(c);
-        free(ol);
+        if (c) ivp_free(alloc, c, sizeof(*c));
+        if (ol) ivp_free(alloc, ol, sizeof(*ol));
         return NULL;
     }
+    memset(c, 0, sizeof(*c));
+    memset(ol, 0, sizeof(*ol));
     ol->c = c;
     ol->base.event_object_deleted = phantom_event_object_revived;
     ol->base.event_object_revived = phantom_event_object_revived;
     c->object_listener = ol;
 
-    const ivp_allocator_t *alloc = ivp_default_allocator();
     c->object = object;
-    ivp_pvec_init(&c->listeners);
+    ivp_pvec_init_with_allocator(&c->listeners, alloc);
     ivp_set_active_init(&c->set_of_mindists, alloc, 16);
     if (!c->set_of_mindists.set.hash.elems) goto fail;
     if (templat->manage_intruding_objects) {
-        c->set_of_objects = (ivp_set_active_t *)calloc(1, sizeof(ivp_set_active_t));
-        c->mindist_object_counter = (ivp_vhash_store_t *)calloc(1, sizeof(ivp_vhash_store_t));
+        c->set_of_objects = (ivp_set_active_t *)ivp_alloc(alloc, sizeof(ivp_set_active_t));
+        c->mindist_object_counter = (ivp_vhash_store_t *)ivp_alloc(alloc, sizeof(ivp_vhash_store_t));
         if (!c->set_of_objects || !c->mindist_object_counter) goto fail;
+        memset(c->set_of_objects, 0, sizeof(*c->set_of_objects));
+        memset(c->mindist_object_counter, 0, sizeof(*c->mindist_object_counter));
         ivp_set_active_init(c->set_of_objects, alloc, 16);
         ivp_vhash_store_init(c->mindist_object_counter, alloc, 16);
         if (!c->set_of_objects->set.hash.elems || !c->mindist_object_counter->elems) goto fail;
     }
     if (templat->manage_intruding_cores) {
-        c->set_of_cores = (ivp_set_active_t *)calloc(1, sizeof(ivp_set_active_t));
-        c->mindist_core_counter = (ivp_vhash_store_t *)calloc(1, sizeof(ivp_vhash_store_t));
+        c->set_of_cores = (ivp_set_active_t *)ivp_alloc(alloc, sizeof(ivp_set_active_t));
+        c->mindist_core_counter = (ivp_vhash_store_t *)ivp_alloc(alloc, sizeof(ivp_vhash_store_t));
         if (!c->set_of_cores || !c->mindist_core_counter) goto fail;
+        memset(c->set_of_cores, 0, sizeof(*c->set_of_cores));
+        memset(c->mindist_core_counter, 0, sizeof(*c->mindist_core_counter));
         ivp_set_active_init(c->set_of_cores, alloc, 16);
         ivp_vhash_store_init(c->mindist_core_counter, alloc, 16);
         if (!c->set_of_cores->set.hash.elems || !c->mindist_core_counter->elems) goto fail;
         if (templat->manage_sleeping_cores) {
-            c->set_of_sleeping_cores = (ivp_set_t *)calloc(1, sizeof(ivp_set_t));
+            c->set_of_sleeping_cores = (ivp_set_t *)ivp_alloc(alloc, sizeof(ivp_set_t));
             if (!c->set_of_sleeping_cores) goto fail;
+            memset(c->set_of_sleeping_cores, 0, sizeof(*c->set_of_sleeping_cores));
             ivp_set_init(c->set_of_sleeping_cores, alloc, 16);
             if (!c->set_of_sleeping_cores->hash.elems) goto fail;
         }

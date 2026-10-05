@@ -21,25 +21,29 @@ static inline ivp_su_ctrl_list_t *su_cl_at(const ivp_sim_unit_t *su, int i) {
 
 /* ── lifecycle ─────────────────────────────────────────────────────────── */
 
-ivp_sim_unit_t *ivp_sim_unit_new(void)
+ivp_sim_unit_t *ivp_sim_unit_new(const ivp_allocator_t *allocator)
 {
-    ivp_sim_unit_t *su = (ivp_sim_unit_t *)calloc(1, sizeof(*su));
+    if (!allocator) allocator = ivp_default_allocator();
+    ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_alloc(allocator, sizeof(*su));
     if (!su) return NULL;
+    memset(su, 0, sizeof(*su));
+    su->allocator = allocator;
     su->union_find_needed_for_sim_unit = false;
     su->sim_unit_movement_type = IVP_MT_NOT_SIM;
     su->sim_unit_just_slowed_down = false;
     su->sim_unit_has_fast_objects = false;
     su->prev_sim_unit = NULL;
     su->next_sim_unit = NULL;
-    ivp_pvec_init(&su->sim_unit_cores);
-    ivp_pvec_init(&su->controller_cores);
+    ivp_pvec_init_with_allocator(&su->sim_unit_cores, allocator);
+    ivp_pvec_init_with_allocator(&su->controller_cores, allocator);
     return su;
 }
 
 static void su_cl_delete(ivp_su_ctrl_list_t *cl)
 {
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(&cl->cores_controlled_by);
     ivp_pvec_clear(&cl->cores_controlled_by);
-    free(cl);
+    ivp_free(allocator, cl, sizeof(*cl));
 }
 
 void ivp_sim_unit_clean_sim_unit(ivp_sim_unit_t *su)
@@ -56,7 +60,7 @@ void ivp_sim_unit_delete(ivp_sim_unit_t *su)
     ivp_sim_unit_clean_sim_unit(su);
     ivp_pvec_clear(&su->controller_cores);
     ivp_pvec_clear(&su->sim_unit_cores);
-    free(su);
+    ivp_free(su->allocator, su, sizeof(*su));
 }
 
 /* ── controller lists ──────────────────────────────────────────────────── */
@@ -72,12 +76,14 @@ static ivp_su_ctrl_list_t *su_find_controller(const ivp_pvec_t *controllers, ivp
 
 static ivp_su_ctrl_list_t *su_add_controller_unit_sim(ivp_pvec_t *controllers, ivp_sim_ctrl_t *c)
 {
-    ivp_su_ctrl_list_t *cl = (ivp_su_ctrl_list_t *)calloc(1, sizeof(*cl));
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(controllers);
+    ivp_su_ctrl_list_t *cl = (ivp_su_ctrl_list_t *)ivp_alloc(allocator, sizeof(*cl));
     if (!cl) return NULL;
+    memset(cl, 0, sizeof(*cl));
     cl->l_controller = c;
-    ivp_pvec_init(&cl->cores_controlled_by);
+    ivp_pvec_init_with_allocator(&cl->cores_controlled_by, allocator);
     if (ivp_pvec_add(controllers, cl) < 0) {
-        free(cl);
+        ivp_free(allocator, cl, sizeof(*cl));
         return NULL;
     }
     return cl;
@@ -436,7 +442,7 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
     IVP_ASSERT(split_father);
     ivp_core_t *next_split_father = NULL;
     bool next_split_necessary = false;
-    ivp_sim_unit_t *split_new_unit = ivp_sim_unit_new();
+    ivp_sim_unit_t *split_new_unit = ivp_sim_unit_new(su->allocator);
     if (!split_new_unit) return;
     int split_count = 0;
     for (int i = 0; i < ivp_pvec_len(&su->sim_unit_cores); i++) {
@@ -779,11 +785,10 @@ static bool su_was_touched(ivp_pvec_t *units, ivp_sim_unit_t *unit)
 
 void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently)
 {
-    (void)env;
     ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
     if (!controlled_cores) return;
     ivp_pvec_t touched_units;
-    ivp_pvec_init(&touched_units);
+    ivp_pvec_init_with_allocator(&touched_units, ivp_env_get_allocator(env));
     for (int i = ivp_pvec_len(controlled_cores) - 1; i >= 0; i--) {
         ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
         if (!my_core) continue;
@@ -823,12 +828,13 @@ void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, i
     if (fallback_core) ivp_core_ensure_core_in_simulation_delayed(fallback_core);
 }
 
-void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c)
+bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c)
 {
     ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
-    if (!controlled_cores) return;
+    if (!controlled_cores) return true;
     ivp_sim_unit_t *reference_unit = NULL;
     bool did_fusion = false;
+    bool success = true;
     int mtype = IVP_MT_NOT_SIM;
     for (int i = ivp_pvec_len(controlled_cores) - 1; i >= 0; i--) {
         ivp_core_t *test_core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
@@ -842,23 +848,34 @@ void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
         }
         if (reference_unit != NULL) {
             if (test_sim_unit != reference_unit) {
-                if (ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit)) {
-                    ivp_sim_unit_delete(test_sim_unit);
-                    did_fusion = true;
+                if (!ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit)) {
+                    success = false;
+                    break;
                 }
+                ivp_sim_unit_delete(test_sim_unit);
+                did_fusion = true;
             }
         } else {
             reference_unit = test_sim_unit;
         }
-        if (!ivp_ctrl_mgr_core_has_controller(test_core, c)) ivp_core_add_core_controller(test_core, c);
+        if (!ivp_ctrl_mgr_core_has_controller(test_core, c) &&
+            !ivp_core_add_core_controller(test_core, c)) {
+            success = false;
+            break;
+        }
+    }
+    if (!success) {
+        ivp_ctrl_mgr_remove_controller_from_environment(env, c, true);
     }
     if (did_fusion && reference_unit) {
         ivp_sim_unit_clean_sim_unit(reference_unit);
         if (!ivp_sim_unit_sim_unit_calc_redundants(reference_unit)) {
             reference_unit->union_find_needed_for_sim_unit = true;
+            success = false;
         }
     }
     if (mtype < IVP_MT_NOT_SIM && reference_unit) {
         ivp_sim_unit_revive_for_simulation(reference_unit, env);
     }
+    return success;
 }
