@@ -7,6 +7,7 @@
 
 #include <ivp/solver/ivp_great_matrix.h>
 #include <ivp/solver/ivp_linear_constraint_solver.h>
+#include <fenv.h>
 #include <string.h>
 
 static void gmmz_fill(ivp_gmmz_t *m, const double *A, const double *b)
@@ -274,6 +275,142 @@ IVP_TEST(vecfpu_unaligned_window)
 
 /* ── incremental LU ─────────────────────────────────────────────────────── */
 
+/* Literal scalar reductions: compare bytes and exception flags, not a
+ * tolerance. In particular, four independent partial sums are not equivalent.
+ * Keep the FMA-reference flavour's unfused prefix and contracted tail. */
+static double scalar_dot(const double *a, const double *b, int count)
+{
+    double sum = 0.0;
+    for (int k = 0; k < count; k++) {
+#if IVP_GM_USE_FMA
+        if (k >= (count >= 8 ? count & ~7 : 0)) {
+            sum = fma(a[k], b[k], sum);
+            continue;
+        }
+#endif
+        double product = a[k] * b[k];
+        sum = sum + product;
+    }
+    return sum;
+}
+
+static double scalar_madd(double a, double b, double c)
+{
+#if IVP_GM_USE_FMA
+    return fma(a, b, c);
+#else
+    return a * b + c;
+#endif
+}
+
+static double reduction_value(unsigned int index)
+{
+    static const uint64_t bits[] = {
+        UINT64_C(0), UINT64_C(0x8000000000000000),
+        UINT64_C(0x3ff0000000000001), UINT64_C(0xbfefffffffffffff),
+        UINT64_C(0x0010000000000000), UINT64_C(1),
+        UINT64_C(0x7fefffffffffffff), UINT64_C(0xffefffffffffffff),
+        UINT64_C(0x3cb0000000000000), UINT64_C(0xbcb0000000000000),
+        UINT64_C(0x7ff0000000000000), UINT64_C(0xfff0000000000000),
+        UINT64_C(0x7ff8000000000042), UINT64_C(0x7ff0000000000001)
+    };
+    double value;
+    uint64_t word = bits[index % (sizeof(bits) / sizeof(bits[0]))];
+    memcpy(&value, &word, sizeof(value));
+    return value;
+}
+
+IVP_TEST(vecfpu_reduction_bitwise_scalar)
+{
+    fenv_t saved;
+    IVP_ASSERT_EQ(fegetenv(&saved), 0);
+    const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    bool equal = true;
+    for (unsigned int mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
+        equal &= fesetround(modes[mode]) == 0;
+        for (int variant = 0; variant < 14; variant++) {
+            double a[80], b[80];
+            for (int k = 0; k < 80; k++) {
+                a[k] = reduction_value((unsigned int)(k + variant));
+                b[k] = reduction_value((unsigned int)(3 * k + variant + 1));
+            }
+            for (int count = 0; count <= 65; count++) {
+                for (int aligned = 0; aligned < 2; aligned++) {
+                    int off_a = 1, off_b = 3, size = count;
+#if IVP_GM_VECFPU_SIZE == 4
+                    if (!aligned) { off_a = 0; off_b = 2; size += 2; }
+#endif
+                    feclearexcept(FE_ALL_EXCEPT);
+                    double expected = scalar_dot(a + off_a, b + off_b, size);
+                    int flags = fetestexcept(FE_ALL_EXCEPT);
+                    feclearexcept(FE_ALL_EXCEPT);
+                    double actual = ivp_vecfpu_large_dot_product(a, 1, b, 3, count, aligned != 0);
+                    equal &= flags == fetestexcept(FE_ALL_EXCEPT);
+                    equal &= memcmp(&expected, &actual, sizeof(actual)) == 0;
+                }
+            }
+        }
+    }
+    int restored = fesetenv(&saved);
+    IVP_ASSERT_EQ(restored, 0);
+    IVP_ASSERT_TRUE(equal);
+}
+
+IVP_TEST(incr_lu_solve_bitwise_scalar)
+{
+    enum { stride = 40, max_n = 33 };
+    double lower[stride * stride], upper[stride * stride], input[stride];
+    double expected_mult[stride], expected_temp[stride], expected_out[stride];
+    double actual_mult[stride], actual_temp[stride], actual_out[stride];
+    fenv_t saved;
+    IVP_ASSERT_EQ(fegetenv(&saved), 0);
+    const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    bool equal = true;
+    for (unsigned int mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
+        equal &= fesetround(modes[mode]) == 0;
+        for (int variant = 0; variant < 2; variant++) {
+            for (int k = 0; k < stride * stride; k++) {
+                lower[k] = variant ? reduction_value((unsigned int)k) : (double)(k % 17 - 8) / 19.0;
+                upper[k] = variant ? reduction_value((unsigned int)(k + 3)) : (double)(k % 13 - 6) / 23.0;
+            }
+            for (int k = 0; k < stride; k++) input[k] = (double)(k % 7 - 3) / 11.0;
+            for (int n = 0; n <= max_n; n++) {
+                for (int k = 0; k < stride; k++) {
+                    expected_mult[k] = actual_mult[k] = -13.0;
+                    expected_temp[k] = actual_temp[k] = -17.0;
+                    expected_out[k] = actual_out[k] = -19.0;
+                }
+                feclearexcept(FE_ALL_EXCEPT);
+                for (int i = n - 1; i >= 0; i--) expected_mult[i] = input[i];
+                for (int i = n - 1; i >= 0; i--)
+                    expected_temp[i] = scalar_dot(lower + i * stride, expected_mult, n);
+                for (int i = n - 1; i >= 0; i--) {
+                    double sum = 0.0;
+                    for (int j = n - 1; j > i; j--)
+                        sum = scalar_madd(upper[i * stride + j], expected_temp[j], sum);
+                    double result = expected_temp[i] - sum;
+                    expected_temp[i] = result;
+                    expected_out[i] = result;
+                }
+                int flags = fetestexcept(FE_ALL_EXCEPT);
+                ivp_incr_lu_t lu = {0};
+                lu.L_matrix = lower; lu.U_matrix = upper; lu.input_vec = input;
+                lu.mult_vec = actual_mult; lu.temp_vec = actual_temp; lu.out_vec = actual_out;
+                lu.n_sub = n; lu.aligned_row_len = stride;
+                feclearexcept(FE_ALL_EXCEPT);
+                ivp_incr_lu_solve_lin_equ(&lu);
+                equal &= flags == fetestexcept(FE_ALL_EXCEPT);
+                equal &= memcmp(actual_mult, expected_mult, sizeof(actual_mult)) == 0;
+                equal &= memcmp(actual_temp, expected_temp, sizeof(actual_temp)) == 0;
+                equal &= memcmp(actual_out, expected_out, sizeof(actual_out)) == 0;
+            }
+        }
+    }
+    int restored = fesetenv(&saved);
+    IVP_ASSERT_EQ(restored, 0);
+    IVP_ASSERT_TRUE(equal);
+}
+
 /* Matrix whose elimination pivots are all exactly 1 and needs no row
  * exchange, so the reference's row overruns (which scale neighbouring
  * rows by 1/pivot) are harmless and the result is exact. */
@@ -445,6 +582,8 @@ int main(void)
     IVP_REGISTER(gmmz_invert_singular_faults);
     IVP_REGISTER(gmmz_lu_crout_solve_5x5);
     IVP_REGISTER(vecfpu_unaligned_window);
+    IVP_REGISTER(vecfpu_reduction_bitwise_scalar);
+    IVP_REGISTER(incr_lu_solve_bitwise_scalar);
     IVP_REGISTER(incr_lu_decompose_increment_decrement);
     IVP_REGISTER(incr_lu_singular_faults);
     IVP_REGISTER(lcs_scalar_cases);
