@@ -34,6 +34,8 @@
 #define PHASE_COUNT IVP_PE_MAX
 #define MAX_STEPS 600
 #define WINDOW_COUNT 12
+#include "bench_verify.h"
+#include "bench_scene.h"
 #ifdef _MSC_VER
 #define BENCH_NOINLINE __declspec(noinline)
 #else
@@ -56,6 +58,7 @@ typedef struct bench_config {
     int scale;
     int steps;
     double dt;
+    int contact_height;
 } bench_config_t;
 
 typedef struct bench_measurement {
@@ -73,6 +76,7 @@ typedef struct bench_measurement {
     int range_world_exceeded;
     int impacts;
     int valid;
+    bench_verification_t verification;
     int64_t step_ns[MAX_STEPS];
     int step_count;
     int64_t window_ns[WINDOW_COUNT];
@@ -95,7 +99,17 @@ typedef struct options {
     int list;
     int scale;
     double hotspot_ms;
+    int verify;
+    int contact_height;
+    int noop_counter;
 } options_t;
+
+static int noop_counter_requested;
+#ifdef BENCH_WORK_DIAGNOSTICS
+#include "bench_work.h"
+#include <ivp/collision/ivp_hull_mgr.h>
+#include <ivp/dynamics/ivp_time_manager.h>
+#endif
 
 static int64_t now_ns(void)
 {
@@ -169,6 +183,13 @@ static const ivp_performance_counter_vtable_t counter_vtable = {
     counter_start, counter_phase, counter_stop, counter_destroy, counter_reset
 };
 
+static void counter_noop(ivp_performance_counter_t *base) { (void)base; }
+static void counter_noop_phase(ivp_performance_counter_t *base, ivp_performance_element_t phase)
+{ (void)base; (void)phase; }
+static const ivp_performance_counter_vtable_t noop_counter_vtable = {
+    counter_noop, counter_noop_phase, counter_noop, counter_destroy, counter_reset
+};
+
 static void begin_operation(ivp_environment_t *env)
 {
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
@@ -184,6 +205,31 @@ static BENCH_NOINLINE void bench_simulate(ivp_environment_t *env, int steps,
                                          const bench_config_t *cfg,
                                          bench_measurement_t *m, int instrumented)
 {
+    if (instrumented == 3) {
+        verify_begin(&m->verification, env);
+#ifdef BENCH_WORK_DIAGNOSTICS
+        bench_work_reset();
+        bench_work_register(&ivp_environment_get_time_manager(env)->min_hash, 2);
+        for (int i = 0; i < ivp_environment_get_object_count(env); ++i) {
+            ivp_object_t *o = ivp_environment_get_object(env, i);
+            if (o->hull_manager) bench_work_register(&o->hull_manager->sorted_synapses, 1);
+        }
+        bench_work_start();
+        bench_work_step();
+#endif
+        for (int i = 0; i < steps; ++i) {
+            ivp_environment_simulate_one_psi(env);
+            verify_step(&m->verification);
+#ifdef BENCH_WORK_DIAGNOSTICS
+            bench_work_step();
+#endif
+        }
+#ifdef BENCH_WORK_DIAGNOSTICS
+        bench_work_finish();
+#endif
+        m->verification.running = 0;
+        return;
+    }
     if (!instrumented) {
         for (int i = 0; i < steps; ++i) ivp_environment_simulate_one_psi(env);
         return;
@@ -273,7 +319,8 @@ static void usage(const char *exe)
     fprintf(stderr,
             "Usage: %s [--profile quick|standard|large] [--case NAME] [--samples N]\n"
             "          [--min-sample-ms MS] [--format text|jsonl] [--output PATH]\n"
-            "          [--scale N] [--hotspot-ms MS] [--check] [--list]\n", exe);
+            "          [--scale N] [--hotspot-ms MS] [--verify] [--check] [--list]\n"
+            "          [--contact-height N] [--noop-counter]\n", exe);
 }
 
 static void benchmark_message(const char *text, void *userdata)
@@ -341,11 +388,11 @@ static ivp_environment_t *make_env(const ivp_allocator_t *allocator, double dt,
     if (!gravity) ivp_vec3r_set_zero(&cfg.gravity);
     if (group_filter) cfg.collision_filter = ivp_collision_filter_group();
     cfg.disable_performance_counter = instrumented != 1;
-    if (instrumented == 1) {
+    if (instrumented == 1 || noop_counter_requested) {
         bench_counter_t *pc = (bench_counter_t *)ivp_alloc(allocator, sizeof(*pc));
         if (!pc) return NULL;
         memset(pc, 0, sizeof(*pc));
-        pc->base.vt = &counter_vtable;
+        pc->base.vt = instrumented == 1 ? &counter_vtable : &noop_counter_vtable;
         pc->allocator = allocator;
         cfg.performance_counter = &pc->base;
         ivp_environment_t *env = ivp_environment_create(&cfg);
@@ -393,7 +440,8 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
     int64_t total_start = now_ns();
     ivp_environment_t *env = make_env(allocator, cfg->dt, 1, 0, instrumented);
     if (!env) return 0;
-    ivp_compact_surface_t *surface = ivp_build_box_surface(allocator, 20.0f, 0.5f, 20.0f);
+    float extent = bench_contact_ground_extent(cfg->scale, cfg->contact_height);
+    ivp_compact_surface_t *surface = ivp_build_box_surface(allocator, extent, 0.5f, extent);
     if (!surface) { ivp_environment_destroy(env); return 0; }
     ivp_surman_polygon_t surman;
     ivp_surman_polygon_init(&surman, surface);
@@ -410,11 +458,10 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
     }
     ivp_object_t *probe = NULL;
     for (int i = 0; i < cfg->scale; ++i) {
-        int x = i % 8, z = (i / 8) % 8, layer = i / 64;
+        double p[3];
+        bench_contact_position(i, cfg->scale, cfg->contact_height, p);
         probe = make_ball(env, IVP_REAL(0.45),
-                          (ivp_real_t)((x - 4) * 1.05),
-                          (ivp_real_t)(1.8 - layer * 1.0),
-                          (ivp_real_t)((z - 4) * 1.05));
+                          (ivp_real_t)p[0], (ivp_real_t)p[1], (ivp_real_t)p[2]);
         if (!probe) { ivp_environment_destroy(env); ivp_compact_surface_free(allocator, surface); return 0; }
     }
     begin_operation(env);
@@ -456,6 +503,8 @@ static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allo
         ivp_environment_announce_dependent_controller(env, 0, ivp_controller_constraint,
                                                       &constraints[i], ivp_constraint_discovery);
     }
+    m->verification.constraints = constraints;
+    m->verification.constraint_count = cfg->scale;
     begin_operation(env);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
@@ -689,10 +738,11 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
     qsort(sorted, (size_t)count, sizeof(*sorted), compare_ns);
     if (count) {
         fprintf(out, ",\"psi_latency_ns\":{\"count\":%d,\"median\":%lld,"
-                "\"p95\":%lld,\"max\":%lld,\"scope\":\"single-world-counter-disabled\"}",
+                "\"p95\":%lld,\"max\":%lld,\"scope\":\"%s\"}",
                 count, (long long)sorted[(count - 1) / 2],
                 (long long)sorted[(int)ceil(count * 0.95) - 1],
-                (long long)sorted[count - 1]);
+                (long long)sorted[count - 1],
+                noop_counter_requested ? "single-world-noop-counter" : "single-world-counter-disabled");
     }
     fprintf(out, ",\"windows\":[");
     int comma = 0;
@@ -806,7 +856,8 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                     (long long)aggregate.operations, (long long)aggregate.psis,
                     aggregate.simulated_seconds, (long long)aggregate.operation_ns,
                     (long long)aggregate.total_ns, (long long)aggregate.validation_ns,
-                    cfg->kind == BENCH_CHURN ? "churn-excluding-validation-v2" : "native-v1");
+                    cfg->kind == BENCH_CHURN ? "churn-excluding-validation-v2" :
+                        noop_counter_requested ? "native-noop-v1" : "native-v1");
         }
     }
 
@@ -829,6 +880,22 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
     bench_measurement_t latency;
     if (!run_once(cfg, ivp_default_allocator(), &latency, 2) ||
         latency.state_hash != expected_hash) return 0;
+    bench_measurement_t verification;
+    if (!run_once(cfg, ivp_default_allocator(), &verification, 3) ||
+        verification.state_hash != expected_hash) return 0;
+    counting = ivp_counting_allocator_create(NULL);
+    if (!run_once(cfg, &counting, &memory_run, 3) ||
+        memory_run.state_hash != expected_hash ||
+        memory_run.verification.count != verification.verification.count ||
+        memory_run.verification.trajectory != verification.verification.trajectory) {
+        ivp_counting_allocator_destroy(&counting);
+        fprintf(stderr, "%s: verification differs with counting allocator\n", cfg->name);
+        return 0;
+    }
+    ivp_alloc_stats_t verification_stats;
+    ivp_counting_allocator_get_stats(&counting, &verification_stats);
+    ivp_counting_allocator_destroy(&counting);
+    if (verification_stats.current_bytes != 0) return 0;
     int64_t latency_sorted[MAX_STEPS];
     memcpy(latency_sorted, latency.step_ns, (size_t)latency.step_count * sizeof(*latency_sorted));
     qsort(latency_sorted, (size_t)latency.step_count, sizeof(*latency_sorted), compare_ns);
@@ -875,6 +942,10 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
         }
         fprintf(out, "}");
         print_diagnostic(out, cfg, &diagnostic, &latency);
+        fprintf(out, ",\"verification_contract\":\"%s\",\"verification_steps\":%d,"
+                "\"trajectory_hash\":\"%016llx\",\"contact_height\":%d", BENCH_TRACE_CONTRACT,
+                verification.verification.count,
+                (unsigned long long)verification.verification.trajectory, cfg->contact_height);
         fprintf(out, "}\n");
     } else {
         double throughput = median > 0.0 ? 1.0e9 / median : 0.0;
@@ -931,7 +1002,7 @@ static const bench_config_t large_configs[] = {
 
 int main(int argc, char **argv)
 {
-    options_t opt = {"quick", NULL, "text", NULL, 0, 0.0, 0, 0, 0, 0.0};
+    options_t opt = {"quick", NULL, "text", NULL, 0, 0.0, 0, 0, 0, 0.0, 0, 0, 0};
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(argv[0]); return 0; }
         if (!strcmp(argv[i], "--profile") && i + 1 < argc) { opt.profile = argv[++i]; continue; }
@@ -943,6 +1014,9 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--format") && i + 1 < argc) { opt.format = argv[++i]; continue; }
         if (!strcmp(argv[i], "--output") && i + 1 < argc) { opt.output_path = argv[++i]; continue; }
         if (!strcmp(argv[i], "--check")) { opt.check = 1; continue; }
+        if (!strcmp(argv[i], "--verify")) { opt.verify = 1; continue; }
+        if (!strcmp(argv[i], "--noop-counter")) { opt.noop_counter = 1; continue; }
+        if (!strcmp(argv[i], "--contact-height") && i + 1 < argc && parse_positive_int(argv[++i], &opt.contact_height)) continue;
         if (!strcmp(argv[i], "--list")) { opt.list = 1; continue; }
         usage(argv[0]); return 2;
     }
@@ -950,10 +1024,19 @@ int main(int argc, char **argv)
         strcmp(opt.profile, "large")) { usage(argv[0]); return 2; }
     if (strcmp(opt.format, "text") && strcmp(opt.format, "jsonl")) { usage(argv[0]); return 2; }
     /* Native benchmark JSONL must also be parseable in Debug builds. */
-    if (!strcmp(opt.format, "jsonl") || opt.hotspot_ms)
+    if (!strcmp(opt.format, "jsonl") || opt.hotspot_ms || opt.verify)
         ivp_set_message_output(benchmark_message, NULL);
+    noop_counter_requested = opt.noop_counter;
+    if (opt.contact_height && (!opt.case_filter || strcmp(opt.case_filter, "contact_pile"))) {
+        fprintf(stderr, "--contact-height requires --case contact_pile\n"); return 2;
+    }
     if ((opt.hotspot_ms || opt.scale) && !opt.case_filter) {
         fprintf(stderr, "--hotspot-ms and --scale require --case\n"); return 2;
+    }
+    if (opt.verify && (!opt.case_filter || opt.hotspot_ms || opt.check || opt.list ||
+                      !strcmp(opt.case_filter, "convex_build"))) {
+        fprintf(stderr, "--verify requires one simulation case and cannot be combined with timing/check/list modes\n");
+        return 2;
     }
     if (opt.hotspot_ms && opt.check) {
         fprintf(stderr, "--hotspot-ms cannot be used with --check\n"); return 2;
@@ -992,11 +1075,32 @@ int main(int argc, char **argv)
         if (opt.case_filter && strcmp(opt.case_filter, configs[i].name)) continue;
         matched = 1;
         bench_config_t cfg = configs[i];
+        cfg.contact_height = opt.contact_height;
         if (opt.scale) cfg.scale = opt.scale;
-        if (opt.hotspot_ms) {
+        if (cfg.contact_height > cfg.scale) {
+            fprintf(stderr, "--contact-height must not exceed object count\n");
+            if (out != stdout) fclose(out);
+            return 2;
+        }
+        if (opt.verify) {
+            bench_measurement_t verification;
+            if (!run_once(&cfg, ivp_default_allocator(), &verification, 3)) ok = 0;
+            else {
+                for (int j = 0; j < verification.verification.count; ++j)
+                    bench_print_step(out, "libivp", cfg.name, cfg.scale, j,
+                                     &verification.verification.steps[j]);
+                fprintf(out, "{\"schema\":\"%s\",\"kind\":\"native-verification\","
+                        "\"verification_contract\":\"%s\",\"implementation\":\"libivp\","
+                        "\"case\":\"%s\",\"scale\":%d,\"steps_per_world\":%d,\"dt\":%.17g,"
+                        "\"state_hash\":\"%016llx\",\"trajectory_hash\":\"%016llx\",\"contact_height\":%d}\n",
+                        BENCH_SCHEMA, BENCH_TRACE_CONTRACT, cfg.name, cfg.scale, cfg.steps,
+                        cfg.dt, (unsigned long long)verification.state_hash,
+                        (unsigned long long)verification.verification.trajectory, cfg.contact_height);
+            }
+        } else if (opt.hotspot_ms) {
             if (!profile_config(&cfg, &opt, out)) ok = 0;
         } else if (!benchmark_config(&cfg, &opt, out)) ok = 0;
-        if (opt.scale) break;
+        if (opt.scale || opt.verify) break;
     }
     if (opt.output_path) fclose(out);
     if (!matched) { fprintf(stderr, "Unknown case: %s\n", opt.case_filter ? opt.case_filter : ""); return 2; }

@@ -47,6 +47,43 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(sample["timing_contract"], "churn-excluding-validation-v2")
         self.assertEqual(summary["psi_latency_ns"]["scope"], "single-world-counter-disabled")
 
+    def test_verification_covers_each_psi_and_is_repeatable(self):
+        for case in ("fast_impacts", "constraint_chain", "object_churn"):
+            with self.subTest(case=case):
+                command = [RUNNER, "--case", case, "--scale", "4", "--verify",
+                           "--format", "jsonl"]
+                first = subprocess.check_output(command, text=True)
+                self.assertEqual(first, subprocess.check_output(command, text=True))
+                records = [json.loads(line) for line in first.splitlines()][:-1]
+                self.assertEqual([r["step"] for r in records], list(range(len(records))))
+                self.assertGreater(len({r["trajectory_hash"] for r in records}), 1)
+                if case == "fast_impacts":
+                    self.assertGreater(records[-1]["event_count"], 0)
+                    self.assertNotEqual(records[0]["event_hash"], records[-1]["event_hash"])
+                if case == "constraint_chain":
+                    self.assertNotEqual(records[0]["constraint_hash"], records[-1]["constraint_hash"])
+                sample = subprocess.check_output(
+                    [RUNNER, "--case", case, "--scale", "4", "--samples", "1",
+                     "--min-sample-ms", "1", "--format", "jsonl"], text=True)
+                summary = json.loads(sample.splitlines()[-1])
+                self.assertEqual(summary["trajectory_hash"], records[-1]["trajectory_hash"])
+                self.assertEqual(summary["verification_steps"], len(records))
+
+    def test_verification_rejects_ambiguous_modes(self):
+        for args in ([], ["--case", "convex_build"],
+                     ["--case", "fast_impacts", "--check"],
+                     ["--case", "fast_impacts", "--hotspot-ms", "1"]):
+            self.assertEqual(subprocess.run([RUNNER, "--verify", *args],
+                                           capture_output=True).returncode, 2)
+
+    def test_contact_geometry_control_is_explicit_and_verified(self):
+        command = [RUNNER, "--case", "contact_pile", "--scale", "16", "--verify"]
+        original = json.loads(subprocess.check_output(command, text=True).splitlines()[-1])
+        shorter = json.loads(subprocess.check_output(command + ["--contact-height", "4"], text=True).splitlines()[-1])
+        self.assertEqual(shorter["contact_height"], 4)
+        self.assertNotEqual(original["trajectory_hash"], shorter["trajectory_hash"])
+        self.assertEqual(subprocess.run(command + ["--contact-height", "17"], capture_output=True).returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
