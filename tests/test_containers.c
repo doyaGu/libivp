@@ -242,6 +242,25 @@ IVP_TEST(pvec_growth_and_capacity_failure_are_atomic) {
     vec.cap = 0;
 }
 
+IVP_TEST(pvec_uses_supplied_allocator) {
+    ivp_allocator_t counting = ivp_counting_allocator_create(NULL);
+    ivp_pvec_t vec;
+    ivp_pvec_init_with_allocator(&vec, &counting);
+
+    IVP_ASSERT_EQ(ivp_pvec_add(&vec, &dummy_vals[0]), 0);
+    IVP_ASSERT_EQ(ivp_pvec_add(&vec, &dummy_vals[1]), 1);
+
+    ivp_alloc_stats_t live;
+    ivp_counting_allocator_get_stats(&counting, &live);
+    IVP_ASSERT_TRUE(live.current_bytes > 0);
+
+    ivp_pvec_clear(&vec);
+    ivp_alloc_stats_t cleared;
+    ivp_counting_allocator_get_stats(&counting, &cleared);
+    IVP_ASSERT_EQ(cleared.current_bytes, 0);
+    ivp_counting_allocator_destroy(&counting);
+}
+
 IVP_TEST(elem_typeinfo_registry) {
     static const registry_case_t k_cases[] = {
         {
@@ -1046,6 +1065,7 @@ int main(void) {
     IVP_REGISTER(array_clear);
     IVP_REGISTER(array_grow);
     IVP_REGISTER(pvec_growth_and_capacity_failure_are_atomic);
+    IVP_REGISTER(pvec_uses_supplied_allocator);
     IVP_REGISTER(elem_typeinfo_registry);
     IVP_REGISTER(elem_typeinfo_registry_runtime_register);
     IVP_REGISTER(array_reserve);

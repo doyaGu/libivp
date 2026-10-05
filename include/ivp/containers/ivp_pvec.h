@@ -9,9 +9,9 @@
 #define IVP_PVEC_H
 
 #include <ivp/base/ivp_assert.h>
+#include <ivp/base/ivp_allocator.h>
 #include <limits.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #ifdef __cplusplus
@@ -22,14 +22,35 @@ typedef struct ivp_pvec {
     void **elems;
     int    n;
     int    cap;
+    const ivp_allocator_t *allocator;
 } ivp_pvec_t;
 
-#define IVP_PVEC_INIT { NULL, 0, 0 }
+#define IVP_PVEC_INIT { NULL, 0, 0, NULL }
 
-static inline void ivp_pvec_init(ivp_pvec_t *v) { v->elems = NULL; v->n = 0; v->cap = 0; }
+/* A NULL stored allocator is the default allocator.  This keeps zero and
+ * IVP_PVEC_INIT initialisation valid while allowing environment-owned vectors
+ * to remain in the environment's allocation domain. */
+static inline const ivp_allocator_t *ivp_pvec_allocator(const ivp_pvec_t *v) {
+    return v->allocator ? v->allocator : ivp_default_allocator();
+}
+
+static inline void ivp_pvec_init_with_allocator(ivp_pvec_t *v,
+                                                const ivp_allocator_t *allocator) {
+    v->elems = NULL;
+    v->n = 0;
+    v->cap = 0;
+    v->allocator = allocator;
+}
+
+static inline void ivp_pvec_init(ivp_pvec_t *v) {
+    ivp_pvec_init_with_allocator(v, NULL);
+}
 
 static inline void ivp_pvec_clear(ivp_pvec_t *v) {
-    free(v->elems);
+    if (v->elems) {
+        ivp_free(ivp_pvec_allocator(v), v->elems,
+                 (size_t)v->cap * sizeof(void *));
+    }
     v->elems = NULL; v->n = 0; v->cap = 0;
 }
 
@@ -56,7 +77,9 @@ static inline bool ivp_pvec_reserve(ivp_pvec_t *v, int minimum) {
         if (nc < 4) nc = 4;
     }
     if ((size_t)nc > SIZE_MAX / sizeof(void *)) return false;
-    void **ne = (void **)realloc(v->elems, (size_t)nc * sizeof(void *));
+    void **ne = (void **)ivp_realloc(ivp_pvec_allocator(v), v->elems,
+                                     (size_t)v->cap * sizeof(void *),
+                                     (size_t)nc * sizeof(void *));
     if (!ne) return false;
     v->elems = ne;
     v->cap = nc;
