@@ -1608,7 +1608,6 @@ ivp_collision_delegator_root_t *ivp_collision_delegator_root_mindist_create(stru
     const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
     ivp_collision_delegator_root_t *r =
         (ivp_collision_delegator_root_t *)ivp_alloc(allocator, sizeof(*r));
-    IVP_ASSERT(r);
     if (!r) return NULL;
     memset(r, 0, sizeof(*r));
     r->base.dvt = &root_delegator_vt;
