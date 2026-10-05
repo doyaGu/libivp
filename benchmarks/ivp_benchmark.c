@@ -706,11 +706,14 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
     const ivp_minlist_diagnostics_t *d = &m->minlist;
     fprintf(out, ",\"minlist_operations\":{\"adds\":%llu,\"removes\":%llu,"
             "\"tree_adds\":%llu,\"skip_adds\":%llu,\"fallback_adds\":%llu,"
+            "\"finger_attempts\":%llu,\"finger_hits\":%llu,"
             "\"search_comparisons\":%llu,\"max_search_comparisons\":%llu,\"max_population\":%u,"
             "\"population_bucket_upper_bounds\":[15,63,255,1023,4095,null],\"population_buckets\":[",
             (unsigned long long)d->adds, (unsigned long long)d->removes,
             (unsigned long long)d->tree_adds, (unsigned long long)d->skip_adds,
-            (unsigned long long)d->fallback_adds, (unsigned long long)d->comparisons,
+            (unsigned long long)d->fallback_adds,
+            (unsigned long long)d->finger_attempts, (unsigned long long)d->finger_hits,
+            (unsigned long long)d->comparisons,
             (unsigned long long)d->max_comparisons, d->max_population);
     for (int i = 0; i < 6; ++i)
         fprintf(out, "%s%llu", i ? "," : "", (unsigned long long)d->population_buckets[i]);

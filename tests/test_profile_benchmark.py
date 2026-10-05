@@ -10,6 +10,17 @@ import profile_benchmark as profiler
 
 
 class ProfileTests(unittest.TestCase):
+    def test_finger_counts_are_a_subset_not_an_extra_add_category(self):
+        counts = {"adds": 10, "tree_adds": 1, "skip_adds": 8, "fallback_adds": 1,
+                  "population_buckets": [10], "finger_attempts": 7, "finger_hits": 6}
+        profiler.validate_operation_counts(counts, "test")
+        for attempts, hits in ((9, 6), (7, 8), (7, -1)):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "finger"):
+                profiler.validate_operation_counts(dict(counts, finger_attempts=attempts, finger_hits=hits), "test")
+        del counts["finger_attempts"]
+        del counts["finger_hits"]
+        profiler.validate_operation_counts(counts, "older-report")
+
     def test_sample_recursion_scope_and_exclusive_accounting(self):
         text = """Call graph:
     100 Thread_1 DispatchQueue_1: com.apple.main-thread (serial)

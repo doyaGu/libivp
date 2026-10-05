@@ -157,6 +157,15 @@ def aggregate_stacks(stacks: list[tuple[int, tuple[str, ...]]]) -> dict:
     return {"samples": total, "scopes": output}
 
 
+def validate_operation_counts(counts: dict | None, case: str) -> None:
+    if not counts or counts["adds"] != counts["tree_adds"] + counts["skip_adds"] + counts["fallback_adds"] or counts["adds"] != sum(counts["population_buckets"]):
+        raise benchmark.BenchmarkError(f"{case}: missing/inconsistent operation counts")
+    # Local searches are a subset of skip-path insertions, not an additional
+    # mutually exclusive insertion category. Older reports omit these fields.
+    if not 0 <= counts.get("finger_hits", 0) <= counts.get("finger_attempts", 0) <= counts["skip_adds"]:
+        raise benchmark.BenchmarkError(f"{case}: inconsistent finger operation counts")
+
+
 def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
     raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
     command = [str(runner), "--profile", args.profile, "--case", case,
@@ -211,8 +220,7 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
         if counted.get("state_hash") != record[0]["state_hash"] or counted.get("residual_bytes") != 0:
             raise benchmark.BenchmarkError(f"{case}: operation-count run changed state or leaked memory")
         counts = counted.get("minlist_operations")
-        if not counts or counts["adds"] != counts["tree_adds"] + counts["skip_adds"] + counts["fallback_adds"] or counts["adds"] != sum(counts["population_buckets"]):
-            raise benchmark.BenchmarkError(f"{case}: missing/inconsistent operation counts")
+        validate_operation_counts(counts, case)
         report["minlist_operations"] = counts
     return report
 
@@ -238,6 +246,10 @@ def print_report(result: dict, top: int) -> None:
                   f"skip={c['skip_adds']}, fallback={c['fallback_adds']}, max population={c['max_population']}")
             print(f"    comparisons/add={c['search_comparisons'] / adds if adds else 0:.1f}, "
                   f"max comparisons={c['max_search_comparisons']}, population buckets={c['population_buckets']}")
+            if "finger_attempts" in c:
+                attempts = c["finger_attempts"]
+                print(f"    cached skip-prefix hits={c['finger_hits']}/{attempts} "
+                      f"({100 * c['finger_hits'] / attempts if attempts else 0:.1f}% of attempts)")
 
 
 def main(argv=None) -> int:
