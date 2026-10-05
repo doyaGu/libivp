@@ -26,13 +26,28 @@ static inline ivp_env_pipeline_t *PL(const ivp_object_t *obj) { return obj->owne
 
 /* ── IVP_Cache_Object_Manager ──────────────────────────────────────────── */
 
-void ivp_cache_obj_mgr_init(ivp_cache_obj_mgr_t *m, int n)
+ivp_result_t ivp_cache_obj_mgr_init(ivp_cache_obj_mgr_t *m,
+                                    const ivp_allocator_t *allocator,
+                                    int n)
 {
+    if (!m) return IVP_ERR_INVALID_ARG;
     IVP_ASSERT(n > 0);   /* number_of_cache_elements > 0 */
     if (n <= 0) n = 1;
+    allocator = allocator ? allocator : ivp_default_allocator();
+    if ((size_t)n > SIZE_MAX / sizeof(ivp_cache_obj_t)) {
+        return IVP_ERR_CAPACITY_EXCEEDED;
+    }
     m->n_cache_objects = n;
-    m->cache_objects = (ivp_cache_obj_t *)calloc((size_t)n, sizeof(ivp_cache_obj_t));
+    m->allocator = allocator;
+    const size_t bytes = (size_t)n * sizeof(ivp_cache_obj_t);
+    m->cache_objects = (ivp_cache_obj_t *)ivp_alloc(allocator, bytes);
+    if (!m->cache_objects) {
+        m->n_cache_objects = 0;
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    memset(m->cache_objects, 0, bytes);
     m->reuse_loop_index = 0;
+    return IVP_OK;
 }
 
 void ivp_cache_obj_mgr_destroy(ivp_cache_obj_mgr_t *m)
@@ -42,8 +57,11 @@ void ivp_cache_obj_mgr_destroy(ivp_cache_obj_mgr_t *m)
         ivp_cache_obj_t *co = &m->cache_objects[i];
         if (co->object) ivp_object_invalid_cache_object(co->object);
     }
-    free(m->cache_objects);
+    ivp_free(m->allocator, m->cache_objects,
+             (size_t)m->n_cache_objects * sizeof(ivp_cache_obj_t));
     m->cache_objects = NULL;
+    m->n_cache_objects = 0;
+    m->allocator = NULL;
 }
 
 void ivp_object_invalid_cache_object(ivp_object_t *object)
@@ -658,9 +676,25 @@ bool ivp_object_pipeline_create(ivp_environment_t *env, ivp_object_t *obj, const
     ivp_object_set_movement_state(obj, tmpl->physical_unmoveable ? IVP_MT_STATIC : IVP_MT_NOT_SIM);
 
     /* hull manager */
-    obj->hull_manager = (struct ivp_hull_mgr *)calloc(1, sizeof(ivp_hull_mgr_t));
-    if (!obj->hull_manager) return false;
-    ivp_hull_mgr_init(obj->hull_manager, env->allocator);
+    obj->hull_manager =
+        (struct ivp_hull_mgr *)ivp_alloc(env->allocator, sizeof(ivp_hull_mgr_t));
+    if (!obj->hull_manager) {
+        ivp_core_unlink_obj_from_core_and_maybe_destroy(core, obj);
+        obj->physical_core = NULL;
+        obj->friction_core = NULL;
+        obj->original_core = NULL;
+        return false;
+    }
+    memset(obj->hull_manager, 0, sizeof(ivp_hull_mgr_t));
+    if (ivp_hull_mgr_init(obj->hull_manager, env->allocator) != IVP_OK) {
+        ivp_free(env->allocator, obj->hull_manager, sizeof(ivp_hull_mgr_t));
+        obj->hull_manager = NULL;
+        ivp_core_unlink_obj_from_core_and_maybe_destroy(core, obj);
+        obj->physical_core = NULL;
+        obj->friction_core = NULL;
+        obj->original_core = NULL;
+        return false;
+    }
 
     /* IVP_Polygon / IVP_Ball */
     if (is_ball) {
@@ -726,7 +760,7 @@ void ivp_object_pipeline_destroy(ivp_environment_t *env, ivp_object_t *obj)
     obj_unlink_cores(obj);
     if (obj->hull_manager) {
         ivp_hull_mgr_destroy(obj->hull_manager);
-        free(obj->hull_manager);
+        ivp_free(env->allocator, obj->hull_manager, sizeof(ivp_hull_mgr_t));
         obj->hull_manager = NULL;
     }
     if (obj->q_core_f_object) {

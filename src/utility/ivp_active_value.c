@@ -99,6 +99,10 @@ static ivp_active_float_t *alloc_float(const ivp_allocator_t *alloc, const char 
     af->alloc = alloc;
     af->type = type;
     af->name = dup_name(alloc, name);
+    if (name && !af->name) {
+        ivp_free(alloc, af, sizeof(*af));
+        return NULL;
+    }
     af->ref_count = 1;
     af->last_update = 0; /* "should be updated" */
     return af;
@@ -113,6 +117,10 @@ static ivp_active_int_t *alloc_int(const ivp_allocator_t *alloc, const char *nam
     ai->alloc = alloc;
     ai->type = type;
     ai->name = dup_name(alloc, name);
+    if (name && !ai->name) {
+        ivp_free(alloc, ai, sizeof(*ai));
+        return NULL;
+    }
     ai->ref_count = 1;
     ai->last_update = 0;
     return ai;
@@ -687,18 +695,31 @@ ivp_active_value_manager_t *ivp_active_value_manager_create(const ivp_allocator_
     m->alloc = alloc;
     ivp_vhash_init(&m->floats_name_hash, alloc, IVP_U_MOD_NAME_HASH_SIZE, float_name_compare);
     ivp_vhash_init(&m->ints_name_hash, alloc, IVP_U_MOD_NAME_HASH_SIZE, int_name_compare);
+    if (!m->floats_name_hash.elems || !m->ints_name_hash.elems) {
+        ivp_active_value_manager_destroy(m);
+        return NULL;
+    }
 
     /* init_active_values_generic: "double_null" and "current_time" */
     ivp_active_float_t *mod_double_null = ivp_active_float_terminal_create(alloc, "double_null", 0.0);
-    if (mod_double_null) {
-        ivp_active_value_manager_insert_float(m, mod_double_null);
-        ivp_active_float_remove_ref(mod_double_null); /* manager owns it */
+    if (!mod_double_null ||
+        !ivp_active_value_manager_insert_float(m, mod_double_null)) {
+        if (mod_double_null) ivp_active_float_remove_ref(mod_double_null);
+        ivp_active_value_manager_destroy(m);
+        return NULL;
     }
-    m->mod_current_time = ivp_active_float_terminal_create(alloc, IVP_ACTIVE_FLOAT_CURRENT_TIME_NAME, 0.0);
-    if (m->mod_current_time) {
-        ivp_active_value_manager_insert_float(m, m->mod_current_time);
-        ivp_active_float_remove_ref(m->mod_current_time);
+    ivp_active_float_remove_ref(mod_double_null); /* manager owns it */
+
+    ivp_active_float_t *mod_current_time =
+        ivp_active_float_terminal_create(alloc, IVP_ACTIVE_FLOAT_CURRENT_TIME_NAME, 0.0);
+    if (!mod_current_time ||
+        !ivp_active_value_manager_insert_float(m, mod_current_time)) {
+        if (mod_current_time) ivp_active_float_remove_ref(mod_current_time);
+        ivp_active_value_manager_destroy(m);
+        return NULL;
     }
+    m->mod_current_time = mod_current_time;
+    ivp_active_float_remove_ref(mod_current_time); /* manager owns it */
     return m;
 }
 

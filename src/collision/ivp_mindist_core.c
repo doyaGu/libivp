@@ -1556,8 +1556,7 @@ static void root_object_is_removed(ivp_collision_delegator_root_t *r, struct ivp
 
 static void root_env_deleted(ivp_collision_delegator_root_t *r, struct ivp_environment *env)
 {
-    (void)env;
-    free(r);
+    ivp_free(ivp_env_get_allocator(env), r, sizeof(*r));
 }
 
 static void root_collision_is_going_to_be_deleted_event(ivp_collision_delegator_t *d, ivp_collision_t *t)
@@ -1605,10 +1604,13 @@ static const ivp_collision_delegator_root_vt_t root_vt = {
 
 ivp_collision_delegator_root_t *ivp_collision_delegator_root_mindist_create(struct ivp_environment *env)
 {
-    (void)env;
-    ivp_collision_delegator_root_t *r = (ivp_collision_delegator_root_t *)calloc(1, sizeof(*r));
+    if (!env) return NULL;
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ivp_collision_delegator_root_t *r =
+        (ivp_collision_delegator_root_t *)ivp_alloc(allocator, sizeof(*r));
     IVP_ASSERT(r);
     if (!r) return NULL;
+    memset(r, 0, sizeof(*r));
     r->base.dvt = &root_delegator_vt;
     r->rvt = &root_vt;
     return r;

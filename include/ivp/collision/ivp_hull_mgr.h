@@ -14,6 +14,7 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_legacy.h>
+#include <ivp/base/ivp_result.h>
 #include <ivp/containers/ivp_minlist.h>
 
 #ifdef __cplusplus
@@ -70,7 +71,7 @@ typedef struct ivp_hull_mgr {
     ivp_minlist_t sorted_synapses;
 } ivp_hull_mgr_t;
 
-void ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc);
+ivp_result_t ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc);
 /* Fires hull_manager_is_going_to_be_deleted_event for all listeners. */
 void ivp_hull_mgr_delete_listeners(ivp_hull_mgr_t *hm);
 void ivp_hull_mgr_destroy(ivp_hull_mgr_t *hm);

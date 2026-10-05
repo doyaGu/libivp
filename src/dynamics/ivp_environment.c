@@ -1817,7 +1817,7 @@ void ivp_environment_reset_time(ivp_environment_t *env)
 
 /* ── environment lifecycle ─────────────────────────────────────────────── */
 
-static void env_create_static_object(ivp_environment_t *env);
+static bool env_create_static_object(ivp_environment_t *env);
 
 ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config)
 {
@@ -1851,7 +1851,11 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     env->object_system = (struct ivp_object_system *)ivp_alloc(env->allocator, sizeof(ivp_object_system_t));
     env->controller_system = (struct ivp_controller_system *)ivp_alloc(env->allocator, sizeof(ivp_controller_system_t));
     env->event_system = (struct ivp_event_system *)ivp_alloc(env->allocator, sizeof(ivp_event_system_t));
-    env->pl = (struct ivp_env_pipeline *)calloc(1, sizeof(ivp_env_pipeline_t));
+    env->pl = (struct ivp_env_pipeline *)ivp_alloc(env->allocator, sizeof(ivp_env_pipeline_t));
+    if (env->object_system) memset(env->object_system, 0, sizeof(ivp_object_system_t));
+    if (env->controller_system) memset(env->controller_system, 0, sizeof(ivp_controller_system_t));
+    if (env->event_system) memset(env->event_system, 0, sizeof(ivp_event_system_t));
+    if (env->pl) memset(env->pl, 0, sizeof(ivp_env_pipeline_t));
     if (!env->object_system || !env->controller_system || !env->event_system || !env->pl) {
         ivp_environment_destroy(env);
         return NULL;
@@ -1888,6 +1892,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     } else {
         pl->active_value_manager = ivp_active_value_manager_create(env->allocator);
         pl->owns_active_value_manager = true;
+        if (!pl->active_value_manager) {
+            ivp_environment_destroy(env);
+            return NULL;
+        }
     }
     /* the manager's "current_time" terminal (borrowed) */
     env->mod_current_time = pl->active_value_manager ? ivp_active_value_manager_current_time(pl->active_value_manager) : NULL;
@@ -1920,7 +1928,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     double dt = (double)cfg.delta_psi_time;
     if (!env_set_delta_psi_time_d(env, dt)) (void)env_set_delta_psi_time_d(env, (double)(1.0f / 66.0f));
     ivp_sim_units_mgr_init(&pl->sim_units_manager, env);
-    ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event);
+    if (ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event) != IVP_OK) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
     ivp_mindist_mgr_init(&pl->mindist_mgr, env);
     if (ivp_ov_tree_init_with_allocator(&pl->ov_tree, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
@@ -1932,37 +1943,60 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* better_statisticsmanager = new IVP_BetterStatisticsmanager() */
     env->better_statistics_manager =
         (ivp_better_statistics_manager_t *)ivp_alloc(env->allocator, sizeof(ivp_better_statistics_manager_t));
-    if (env->better_statistics_manager) ivp_better_statistics_manager_init(env->better_statistics_manager);
+    if (!env->better_statistics_manager) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
+    ivp_better_statistics_manager_init(env->better_statistics_manager);
     /* performancecounter: the application's, else new IVP_PerformanceCounter_Simple() */
     if (cfg.performance_counter) {
         env->performance_counter = cfg.performance_counter;
     } else if (!cfg.disable_performance_counter) {
         ivp_performance_counter_simple_t *simple = ivp_performance_counter_simple_create(env->allocator);
-        env->performance_counter = simple ? &simple->base : NULL;
+        if (!simple) {
+            ivp_environment_destroy(env);
+            return NULL;
+        }
+        env->performance_counter = &simple->base;
     }
-    ivp_cache_obj_mgr_init(&pl->cache_mgr, cfg.n_cache_objects > 0 ? cfg.n_cache_objects : 256);
+    if (ivp_cache_obj_mgr_init(&pl->cache_mgr, env->allocator,
+                               cfg.n_cache_objects > 0 ? cfg.n_cache_objects : 256) != IVP_OK) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
     pl->current_time_code = 1;
     env->current_time = 0.0;
     pl->time_of_next_psi = (double)ivp_env_get_delta_psi_time(env);
     pl->next_movement_check = IVP_MOVEMENT_CHECK_COUNT;
     /* debug_information = new IVP_Debug_Manager() (reference: debug builds only) */
     env->debug_manager = (ivp_debug_manager_t *)ivp_alloc(env->allocator, sizeof(ivp_debug_manager_t));
-    if (env->debug_manager) ivp_debug_manager_init(env->debug_manager);
+    if (!env->debug_manager) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
+    ivp_debug_manager_init(env->debug_manager);
     /* default collision delegator root */
     pl->root_mindist = ivp_collision_delegator_root_mindist_create(env);
-    if (pl->root_mindist) env->collision_delegator_roots[env->collision_delegator_root_count++] = pl->root_mindist;
+    if (!pl->root_mindist) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
+    env->collision_delegator_roots[env->collision_delegator_root_count++] = pl->root_mindist;
     ivp_cluster_init(&pl->root_cluster, env, NULL); /* IVP_Cluster_Manager::root_cluster */
-    env_create_static_object(env);
+    if (!env_create_static_object(env)) {
+        ivp_environment_destroy(env);
+        return NULL;
+    }
     return env;
 }
 
 static void env_remove_controllers_of_object(ivp_environment_t *env, ivp_object_t *obj);
 
 /* IVP_Environment ctor: create a static ball (not in the object list) */
-static void env_create_static_object(ivp_environment_t *env)
+static bool env_create_static_object(ivp_environment_t *env)
 {
     ivp_object_t *obj = (ivp_object_t *)ivp_alloc(env->allocator, sizeof(ivp_object_t));
-    if (!obj) return;
+    if (!obj) return false;
     memset(obj, 0, sizeof(*obj));
     ivp_object_template_t t;
     ivp_object_template_init(&t);
@@ -1985,10 +2019,11 @@ static void env_create_static_object(ivp_environment_t *env)
     obj->shift_core_f_object_is_zero = true;
     if (!ivp_object_pipeline_create(env, obj, &t)) {
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
-        return;
+        return false;
     }
     env->pl->static_object = obj;
     ivp_cluster_add_child(&env->pl->root_cluster, obj); /* create_ball(root cluster) */
+    return true;
 }
 
 
@@ -2137,7 +2172,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
         ivp_u_memory_destroy(&pl->short_term_mem);
         /* (the root cluster tree is empty: its objects and sub-clusters were deleted) */
         while (pl->root_cluster.first_child) ivp_cluster_remove_child(&pl->root_cluster, pl->root_cluster.first_child);
-        free(pl);
+        ivp_free(alloc, pl, sizeof(ivp_env_pipeline_t));
         env->pl = NULL;
     }
     env->mod_current_time = NULL; /* borrowed from the active value manager */

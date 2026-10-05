@@ -14,6 +14,7 @@
 #include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_legacy.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_result.h>
 #include <ivp/containers/ivp_minlist.h>
 
 #ifdef __cplusplus
@@ -42,8 +43,8 @@ typedef struct ivp_time_manager {
     ivp_time_t        base_time;  /* values are relative to this */
 } ivp_time_manager_t;
 
-void ivp_time_manager_init(ivp_time_manager_t *tm, const ivp_allocator_t *alloc,
-                           ivp_time_event_fn_t psi_fn);
+ivp_result_t ivp_time_manager_init(ivp_time_manager_t *tm, const ivp_allocator_t *alloc,
+                                   ivp_time_event_fn_t psi_fn);
 void ivp_time_manager_destroy(ivp_time_manager_t *tm);
 
 void ivp_time_manager_insert_event(ivp_time_manager_t *tm, ivp_time_event_t *ev, ivp_time_t time);

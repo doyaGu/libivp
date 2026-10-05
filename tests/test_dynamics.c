@@ -11,6 +11,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ══════════════════════════════════════════════════════════════════════════�?
@@ -276,6 +277,130 @@ IVP_TEST(env_create_with_config) {
     IVP_ASSERT_NEAR(env->delta_psi_time, 0.01, 1e-6);
 
     ivp_environment_destroy(env);
+}
+
+typedef union env_fail_alloc_header {
+    max_align_t alignment;
+    struct {
+        size_t size;
+    } meta;
+} env_fail_alloc_header_t;
+
+typedef struct env_fail_alloc_state {
+    int attempts;
+    int fail_at;
+    int live_blocks;
+} env_fail_alloc_state_t;
+
+static bool env_fail_alloc_should_fail(env_fail_alloc_state_t *state)
+{
+    state->attempts++;
+    return state->fail_at > 0 && state->attempts == state->fail_at;
+}
+
+static void *env_fail_alloc(size_t size, void *ctx)
+{
+    env_fail_alloc_state_t *state = (env_fail_alloc_state_t *)ctx;
+    if (env_fail_alloc_should_fail(state) || size > SIZE_MAX - sizeof(env_fail_alloc_header_t)) {
+        return NULL;
+    }
+    env_fail_alloc_header_t *header =
+        (env_fail_alloc_header_t *)malloc(sizeof(*header) + size);
+    if (!header) return NULL;
+    header->meta.size = size;
+    void *ptr = header + 1;
+    memset(ptr, 0xa5, size);
+    state->live_blocks++;
+    return ptr;
+}
+
+static void *env_fail_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx)
+{
+    env_fail_alloc_state_t *state = (env_fail_alloc_state_t *)ctx;
+    IVP_UNUSED(old_size);
+    if (env_fail_alloc_should_fail(state) ||
+        new_size > SIZE_MAX - sizeof(env_fail_alloc_header_t)) {
+        return NULL;
+    }
+    if (!ptr) {
+        env_fail_alloc_header_t *header =
+            (env_fail_alloc_header_t *)malloc(sizeof(*header) + new_size);
+        if (!header) return NULL;
+        header->meta.size = new_size;
+        void *new_ptr = header + 1;
+        memset(new_ptr, 0xa5, new_size);
+        state->live_blocks++;
+        return new_ptr;
+    }
+
+    env_fail_alloc_header_t *old_header = (env_fail_alloc_header_t *)ptr - 1;
+    const size_t copy_size = old_header->meta.size < new_size
+                                 ? old_header->meta.size : new_size;
+    env_fail_alloc_header_t *new_header =
+        (env_fail_alloc_header_t *)malloc(sizeof(*new_header) + new_size);
+    if (!new_header) return NULL;
+    new_header->meta.size = new_size;
+    void *new_ptr = new_header + 1;
+    memcpy(new_ptr, ptr, copy_size);
+    if (new_size > copy_size) {
+        memset((unsigned char *)new_ptr + copy_size, 0xa5, new_size - copy_size);
+    }
+    free(old_header);
+    return new_ptr;
+}
+
+static void env_fail_free(void *ptr, size_t size, void *ctx)
+{
+    env_fail_alloc_state_t *state = (env_fail_alloc_state_t *)ctx;
+    IVP_UNUSED(size);
+    if (!ptr) return;
+    env_fail_alloc_header_t *header = (env_fail_alloc_header_t *)ptr - 1;
+    free(header);
+    state->live_blocks--;
+}
+
+static ivp_environment_t *env_create_with_fail_allocator(env_fail_alloc_state_t *state,
+                                                          ivp_allocator_t *allocator)
+{
+    *allocator = (ivp_allocator_t){
+        .alloc = env_fail_alloc,
+        .realloc = env_fail_realloc,
+        .free = env_fail_free,
+        .ctx = state
+    };
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    cfg.allocator = allocator;
+    return ivp_environment_create(&cfg);
+}
+
+IVP_TEST(env_create_allocation_failures_are_recoverable) {
+    env_fail_alloc_state_t baseline = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&baseline, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    const int allocation_points = baseline.attempts;
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(baseline.live_blocks, 0);
+
+    for (int fail_at = 1; fail_at <= allocation_points; fail_at++) {
+        env_fail_alloc_state_t state = {
+            .attempts = 0,
+            .fail_at = fail_at,
+            .live_blocks = 0
+        };
+        env = env_create_with_fail_allocator(&state, &allocator);
+        if (env) {
+            fprintf(stderr, "environment unexpectedly survived failure point %d\n", fail_at);
+        }
+        IVP_ASSERT_NULL(env);
+        if (env) ivp_environment_destroy(env);
+        if (state.live_blocks != 0) {
+            fprintf(stderr, "environment allocator leak at failure point %d: %d blocks\n",
+                    fail_at, state.live_blocks);
+        }
+        IVP_ASSERT_EQ(state.live_blocks, 0);
+    }
 }
 
 IVP_TEST(env_create_object) {
@@ -1517,6 +1642,7 @@ int main(void) {
     /* Environment */
     IVP_REGISTER(env_create_destroy);
     IVP_REGISTER(env_create_with_config);
+    IVP_REGISTER(env_create_allocation_failures_are_recoverable);
     IVP_REGISTER(env_create_object);
     IVP_REGISTER(env_destroy_object);
     IVP_REGISTER(env_object_handle_basic);

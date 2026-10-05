@@ -3,8 +3,9 @@
 #include <ivp/base/ivp_assert.h>
 #include "dynamics/ivp_env_internal.h"
 
-void ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc)
+ivp_result_t ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc)
 {
+    if (!hm) return IVP_ERR_INVALID_ARG;
     hm->last_vpsi_time = 0.0;
     hm->gradient = 0.0f;
     hm->center_gradient = 0.0f;
@@ -13,6 +14,7 @@ void ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc)
     hm->hull_value_next_psi = 0.0f;
     hm->time_of_next_reset = 0;
     ivp_minlist_init(&hm->sorted_synapses, alloc, 8);
+    return hm->sorted_synapses.elems ? IVP_OK : IVP_ERR_OUT_OF_MEMORY;
 }
 
 void ivp_hull_mgr_delete_listeners(ivp_hull_mgr_t *hm)

@@ -7,14 +7,21 @@
 void ivp_environment_set_current_time_internal(struct ivp_environment *env, ivp_time_t time);
 void ivp_environment_set_delta_psi_time_internal(struct ivp_environment *env, double psi_time);
 
-void ivp_time_manager_init(ivp_time_manager_t *tm, const ivp_allocator_t *alloc,
-                           ivp_time_event_fn_t psi_fn)
+ivp_result_t ivp_time_manager_init(ivp_time_manager_t *tm, const ivp_allocator_t *alloc,
+                                   ivp_time_event_fn_t psi_fn)
 {
+    if (!tm || !psi_fn) return IVP_ERR_INVALID_ARG;
     ivp_minlist_init(&tm->min_hash, alloc, 16);
+    if (!tm->min_hash.elems) return IVP_ERR_OUT_OF_MEMORY;
     ivp_time_event_init(&tm->psi_event, psi_fn);
     tm->base_time = 0.0;
     tm->last_time = 0.0;
     ivp_time_manager_insert_event(tm, &tm->psi_event, 0.0);
+    if (tm->psi_event.index == IVP_MINLIST_UNUSED) {
+        ivp_minlist_destroy(&tm->min_hash);
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    return IVP_OK;
 }
 
 void ivp_time_manager_destroy(ivp_time_manager_t *tm)

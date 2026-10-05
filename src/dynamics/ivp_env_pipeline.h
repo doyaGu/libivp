@@ -23,6 +23,7 @@ typedef struct ivp_cache_obj_mgr {
     ivp_cache_obj_t *cache_objects;
     int              n_cache_objects;
     int              reuse_loop_index;
+    const ivp_allocator_t *allocator;
 } ivp_cache_obj_mgr_t;
 
 typedef struct ivp_env_pipeline {
@@ -111,7 +112,9 @@ typedef struct ivp_env_pipeline {
 } ivp_env_pipeline_t;
 
 /* object pipeline (ivp_object_pipeline.c) */
-void ivp_cache_obj_mgr_init(ivp_cache_obj_mgr_t *m, int n);
+ivp_result_t ivp_cache_obj_mgr_init(ivp_cache_obj_mgr_t *m,
+                                    const ivp_allocator_t *allocator,
+                                    int n);
 void ivp_cache_obj_mgr_destroy(ivp_cache_obj_mgr_t *m);
 #ifdef IVP_DEBUG_BUILD
 void ivp_cache_obj_mgr_check(ivp_cache_obj_mgr_t *m); /* reference: #ifdef DEBUG */
