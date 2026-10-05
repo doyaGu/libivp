@@ -26,6 +26,7 @@
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
+#include "ivp_build_checked.h"
 
 #include <float.h>
 #include <math.h>
@@ -161,9 +162,17 @@ int ivp_ledge_soup_add(ivp_ledge_soup_t *soup, const ivp_compact_ledge_t *ledge)
     if (ivp_ledge_get_n_triangles(ledge) <= 0) return -1;
 
     if (soup->n_ledges >= soup->capacity) {
-        int new_cap = soup->capacity * 2;
+        int new_cap;
+        if (!ivp_build_int_mul(soup->capacity, 2, &new_cap) ||
+            new_cap > IVP_LEDGE_SOUP_MAX_LEDGES) {
+            new_cap = IVP_LEDGE_SOUP_MAX_LEDGES;
+        }
+        if (new_cap <= soup->capacity) return -1;
+        size_t new_bytes;
+        if (!ivp_build_count_bytes(new_cap, sizeof(ivp_compact_ledge_t *),
+                                   &new_bytes)) return -1;
         const ivp_compact_ledge_t **arr = (const ivp_compact_ledge_t **)ivp_alloc(
-            soup->alloc, (size_t)new_cap * sizeof(ivp_compact_ledge_t *));
+            soup->alloc, new_bytes);
         if (!arr) return -1;
         memcpy(arr, soup->ledges, (size_t)soup->n_ledges * sizeof(ivp_compact_ledge_t *));
         ivp_free(soup->alloc, soup->ledges,
@@ -583,10 +592,15 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
     ls_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.alloc = alloc;
-    ctx.cap_spheres = 2 * n_ledges;
-    size_t spheres_sz = (size_t)ctx.cap_spheres * sizeof(ls_sphere_t);
+    size_t spheres_sz;
+    size_t term_sz;
+    if (!ivp_build_int_mul(2, n_ledges, &ctx.cap_spheres) ||
+        !ivp_build_count_bytes(ctx.cap_spheres, sizeof(ls_sphere_t),
+                               &spheres_sz) ||
+        !ivp_build_count_bytes(n_ledges, sizeof(ls_sphere_t *), &term_sz)) {
+        return NULL;
+    }
     ctx.spheres = (ls_sphere_t *)ivp_alloc(alloc, spheres_sz);
-    size_t term_sz = (size_t)n_ledges * sizeof(ls_sphere_t *);
     ls_sphere_t **terminals = (ls_sphere_t **)ivp_alloc(alloc, term_sz);
     ivp_compact_ledge_t *hull = NULL;
     ivp_compact_surface_t *surface = NULL;
@@ -638,27 +652,49 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
 
     /* 4. allocate_compact_surface */
     const int cs_header_size = (int)sizeof(ivp_compact_surface_t);
-    long est_ledge_list = 0;
+    size_t est_ledge_list = 0;
     int n_tri_compiled = 0;
     int n_ledges_compiled = 0;
     for (int i = 0; i < n_ledges; i++) {
-        est_ledge_list += ls_ledge_copy_size(terminals[i]->compact_ledge);
-        n_tri_compiled += ivp_ledge_get_n_triangles(terminals[i]->compact_ledge);
-        n_ledges_compiled++;
+        int copy_size = ls_ledge_copy_size(terminals[i]->compact_ledge);
+        int n_triangles = ivp_ledge_get_n_triangles(terminals[i]->compact_ledge);
+        if (copy_size < 0 ||
+            !ivp_build_size_add(est_ledge_list, (size_t)copy_size,
+                                &est_ledge_list) ||
+            !ivp_build_int_add(n_tri_compiled, n_triangles,
+                               &n_tri_compiled) ||
+            !ivp_build_int_add(n_ledges_compiled, 1, &n_ledges_compiled)) {
+            goto cleanup;
+        }
     }
     if (rec_sphere) {
-        est_ledge_list += ls_ledge_copy_size(hull);
-        n_tri_compiled += ivp_ledge_get_n_triangles(hull);
-        n_ledges_compiled++;
+        int copy_size = ls_ledge_copy_size(hull);
+        int n_triangles = ivp_ledge_get_n_triangles(hull);
+        if (copy_size < 0 ||
+            !ivp_build_size_add(est_ledge_list, (size_t)copy_size,
+                                &est_ledge_list) ||
+            !ivp_build_int_add(n_tri_compiled, n_triangles,
+                               &n_tri_compiled) ||
+            !ivp_build_int_add(n_ledges_compiled, 1, &n_ledges_compiled)) {
+            goto cleanup;
+        }
     }
-    const int cs_ledgetree_size = ctx.number_of_nodes * (int)sizeof(ivp_compact_ledgetree_node_t);
-    long cs_size = (long)cs_header_size + est_ledge_list + cs_ledgetree_size;
-    if (cs_size > (long)INT32_MAX - 16) goto cleanup;
-    cs_size = (cs_size + 15) & ~15L;
+    int cs_ledgetree_size;
+    size_t cs_size;
+    if (!ivp_build_int_mul(ctx.number_of_nodes,
+                           (int)sizeof(ivp_compact_ledgetree_node_t),
+                           &cs_ledgetree_size) ||
+        !ivp_build_size_add((size_t)cs_header_size, est_ledge_list,
+                            &cs_size) ||
+        !ivp_build_size_add(cs_size, (size_t)cs_ledgetree_size, &cs_size) ||
+        cs_size > (size_t)INT32_MAX - 16u) {
+        goto cleanup;
+    }
+    cs_size = (cs_size + 15u) & ~(size_t)15u;
 
     IVP_IF(1) { /*printf("Compact surface size : %d\n", cs_size);*/ }
 
-    mem_sz = (size_t)cs_size;
+    mem_sz = cs_size;
     mem = ivp_alloc_aligned(alloc, mem_sz, 16);
     if (!mem) goto cleanup;
     memset(mem, 0, mem_sz);
@@ -667,8 +703,12 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
     ls_point_merge_t pm;
     memset(&pm, 0, sizeof(pm));
     if (n_ledges_compiled > 1 && templ.merge_points != IVP_SLMP_NO_MERGE) {
-        int hash_cap = 16;
-        while (hash_cap < n_tri_compiled * 2) hash_cap <<= 1;
+        int hash_minimum;
+        int hash_cap;
+        if (!ivp_build_int_mul(n_tri_compiled, 2, &hash_minimum) ||
+            !ivp_build_int_grow_pow2(hash_minimum, &hash_cap)) {
+            goto cleanup;
+        }
         if (!ivp_ok(ivp_hashmap_init(&pm.map, alloc, hash_cap, ls_hash_point, ivp_eq_memcmp,
                                      3 * sizeof(float)))) {
             goto cleanup;
@@ -695,17 +735,39 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
         IVP_ASSERT(!pm.active || dest == (char *)pm.first);
     }
 
-    long cs_ledgelist_size;
+    size_t cs_ledgelist_size;
     if (pm.active) {
         ivp_hashmap_destroy(&pm.map);
-        cs_ledgelist_size = (long)n_tri_compiled * (long)sizeof(ivp_compact_triangle_t)
-                          + (long)n_ledges_compiled * (long)sizeof(ivp_compact_ledge_t)
-                          + (long)pm.n_allocated * (long)sizeof(ivp_compact_poly_point_t);
+        size_t triangle_bytes;
+        size_t ledge_bytes;
+        size_t point_bytes;
+        if (!ivp_build_count_bytes(n_tri_compiled,
+                                   sizeof(ivp_compact_triangle_t),
+                                   &triangle_bytes) ||
+            !ivp_build_count_bytes(n_ledges_compiled,
+                                   sizeof(ivp_compact_ledge_t), &ledge_bytes) ||
+            !ivp_build_count_bytes(pm.n_allocated,
+                                   sizeof(ivp_compact_poly_point_t),
+                                   &point_bytes) ||
+            !ivp_build_size_add(triangle_bytes, ledge_bytes,
+                                &cs_ledgelist_size) ||
+            !ivp_build_size_add(cs_ledgelist_size, point_bytes,
+                                &cs_ledgelist_size)) {
+            goto cleanup;
+        }
     } else {
         cs_ledgelist_size = est_ledge_list;
     }
 
-    const int cs_real_size = cs_header_size + (int)cs_ledgelist_size + cs_ledgetree_size;
+    size_t cs_real_size_sz;
+    if (!ivp_build_size_add((size_t)cs_header_size, cs_ledgelist_size,
+                            &cs_real_size_sz) ||
+        !ivp_build_size_add(cs_real_size_sz, (size_t)cs_ledgetree_size,
+                            &cs_real_size_sz) ||
+        cs_real_size_sz > (size_t)INT32_MAX) {
+        goto cleanup;
+    }
+    const int cs_real_size = (int)cs_real_size_sz;
     ivp_surface_set_byte_size(surface, cs_real_size);
     surface->offset_ledgetree_root = cs_header_size + (int32_t)cs_ledgelist_size;
     memset(surface->_pad, 0, sizeof(surface->_pad));

@@ -32,6 +32,7 @@
 #include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/base/ivp_arena.h>
 #include <ivp/base/ivp_assert.h>
+#include "ivp_build_checked.h"
 #include <ivp/base/ivp_message.h>
 #include <ivp/geometry/ivp_compact_edge.h>
 #include <ivp/geometry/ivp_compact_triangle.h>
@@ -135,13 +136,24 @@ bool ivp_pc_planes_to_template(ivp_pc_templ_polygon_t *templ,
     int total = 0;
     for (int x = 0; x < n_planes; x++) {
         if (planes[x].n_points < 0 || planes[x].n_points > (1 << 20)) return false;
-        total += planes[x].n_points;
+        if (!ivp_build_int_add(total, planes[x].n_points, &total)) return false;
     }
     if (total <= 0) return false;
 
+    int n_point_coords;
+    size_t points_sz;
+    size_t lines_sz;
+    size_t surfaces_sz;
+    size_t line_indices_sz;
+    if (!ivp_build_int_mul(n_points, 3, &n_point_coords) ||
+        !ivp_build_count_bytes(n_point_coords, sizeof(double), &points_sz) ||
+        !ivp_build_count_bytes(total, sizeof(ivp_pc_templ_line_t), &lines_sz) ||
+        !ivp_build_count_bytes(n_planes, sizeof(ivp_pc_templ_surface_t), &surfaces_sz) ||
+        !ivp_build_count_bytes(total, sizeof(uint16_t), &line_indices_sz)) return false;
+
     /* Build Pointlist: merge equal points (all input points, also the
      * ones no plane uses). */
-    double *tp = (double *)ivp_alloc(alloc, (size_t)n_points * 3u * sizeof(double));
+    double *tp = (double *)ivp_alloc(alloc, points_sz);
     if (!tp) return false;
     templ->points = tp;
     templ->point_capacity = n_points;
@@ -159,16 +171,16 @@ bool ivp_pc_planes_to_template(ivp_pc_templ_polygon_t *templ,
     if (np > 0xffff) goto fail; /* ushort point offsets */
 
     templ->surface_line_capacity = total;
-    templ->lines = (ivp_pc_templ_line_t *)ivp_alloc(alloc, (size_t)total * sizeof(ivp_pc_templ_line_t));
-    templ->surfaces = (ivp_pc_templ_surface_t *)ivp_alloc(alloc, (size_t)n_planes * sizeof(ivp_pc_templ_surface_t));
-    templ->surface_line_storage = (uint16_t *)ivp_alloc(alloc, (size_t)total * sizeof(uint16_t));
+    templ->lines = (ivp_pc_templ_line_t *)ivp_alloc(alloc, lines_sz);
+    templ->surfaces = (ivp_pc_templ_surface_t *)ivp_alloc(alloc, surfaces_sz);
+    templ->surface_line_storage = (uint16_t *)ivp_alloc(alloc, line_indices_sz);
     templ->surface_revert_storage = (char *)ivp_alloc(alloc, (size_t)total);
     templ->n_surfaces = n_planes;
     if (!templ->lines || !templ->surfaces || !templ->surface_line_storage ||
         !templ->surface_revert_storage) {
         goto fail;
     }
-    memset(templ->surfaces, 0, (size_t)n_planes * sizeof(ivp_pc_templ_surface_t));
+    memset(templ->surfaces, 0, surfaces_sz);
 
     /* Build Lineslist: every polygon edge once, in order of appearance and
      * in the direction of its first appearance (lines_hash / lines_vector). */
@@ -644,8 +656,15 @@ static const char *pc2d_calc_triangle_representation(pc_tetra_t *pop, pc2d_surfa
         for (pc2d_line_t *l = s2d->lines; l; l = l->next) n_cand++;
         if (n_cand > *cand_cap) {
             int ncap = *cand_cap ? *cand_cap : 16;
-            while (ncap < n_cand) ncap *= 2;
-            pc2d_cand_t *nb = (pc2d_cand_t *)ivp_arena_alloc(pop->arena, (size_t)ncap * sizeof(pc2d_cand_t));
+            while (ncap < n_cand) {
+                if (ncap > INT_MAX / 2) return "too many candidates";
+                ncap *= 2;
+            }
+            size_t candidate_bytes;
+            if (!ivp_build_count_bytes(ncap, sizeof(pc2d_cand_t), &candidate_bytes)) {
+                return "too many candidates";
+            }
+            pc2d_cand_t *nb = (pc2d_cand_t *)ivp_arena_alloc(pop->arena, candidate_bytes);
             if (!nb) return "out of memory";
             *cand_buf = nb;
             *cand_cap = ncap;
@@ -829,13 +848,19 @@ static bool pc_make_triangles(pc_tetra_t *pop)
 {
     const ivp_pc_templ_polygon_t *templ = pop->templ;
     int total_lines = 0;
-    for (int s = 0; s < templ->n_surfaces; s++) total_lines += templ->surfaces[s].n_lines;
+    for (int s = 0; s < templ->n_surfaces; s++) {
+        if (!ivp_build_int_add(total_lines, templ->surfaces[s].n_lines,
+                               &total_lines)) return false;
+    }
 
     /* undirected edges: at most 3 per triangle, n_lines - 2 triangles per
      * simple face; the table is kept at most half full */
     pc_edge_hash_t hash;
-    hash.cap = 16;
-    while (hash.cap < 8 * total_lines + 16) hash.cap <<= 1;
+    int hash_entries;
+    int minimum_capacity;
+    if (!ivp_build_int_mul(total_lines, 8, &hash_entries) ||
+        !ivp_build_int_add(hash_entries, 16, &minimum_capacity) ||
+        !ivp_build_int_grow_pow2(minimum_capacity, &hash.cap)) return false;
     hash.count = 0;
     hash.slots = (pc_edge_slot_t *)ivp_arena_alloc(pop->arena, (size_t)hash.cap * sizeof(pc_edge_slot_t));
     pc2d_point_t **point_hash_array =
@@ -1059,9 +1084,16 @@ static ivp_compact_ledge_t *pc_generate_compact_ledge(const ivp_allocator_t *all
         IVP_ASSERT(n_triangles == i); /* triangle_vec.len() */
     }
 
-    int size = (int)sizeof(ivp_compact_ledge_t) + (int)sizeof(ivp_compact_triangle_t) * n_triangles +
-               (int)sizeof(ivp_compact_poly_point_t) * point_cnt;
-    ivp_compact_ledge_t *c_ledge = (ivp_compact_ledge_t *)ivp_alloc_aligned(alloc, (size_t)size, 16);
+    size_t triangle_bytes;
+    size_t point_bytes;
+    size_t ledge_bytes;
+    if (!ivp_build_count_bytes(n_triangles, sizeof(ivp_compact_triangle_t), &triangle_bytes) ||
+        !ivp_build_count_bytes(point_cnt, sizeof(ivp_compact_poly_point_t), &point_bytes) ||
+        !ivp_build_size_add(sizeof(ivp_compact_ledge_t), triangle_bytes, &ledge_bytes) ||
+        !ivp_build_size_add(ledge_bytes, point_bytes, &ledge_bytes) ||
+        ledge_bytes > (size_t)INT_MAX) return NULL;
+    int size = (int)ledge_bytes;
+    ivp_compact_ledge_t *c_ledge = (ivp_compact_ledge_t *)ivp_alloc_aligned(alloc, ledge_bytes, 16);
     if (!c_ledge) return NULL;
     memset(c_ledge, 0, (size_t)size);
 

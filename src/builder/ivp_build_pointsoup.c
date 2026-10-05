@@ -7,6 +7,7 @@
 
 #include <ivp/builder/ivp_build_pointsoup.h>
 #include <ivp/builder/ivp_build_surface.h>
+#include "ivp_build_checked.h"
 #include <string.h>
 
 ivp_compact_surface_t *ivp_build_pointsoup_surface(
@@ -20,10 +21,13 @@ ivp_compact_surface_t *ivp_build_pointsoup_surface(
 
     ivp_pointsoup_options_t opts = options ? *options : ivp_pointsoup_options_default();
 
-    size_t sz = (size_t)n_points * 3u * sizeof(double);
+    int n_coords;
+    size_t sz;
+    if (!ivp_build_int_mul(n_points, 3, &n_coords) ||
+        !ivp_build_count_bytes(n_coords, sizeof(double), &sz)) return NULL;
     double *pts = (double *)ivp_alloc(alloc, sz);
     if (!pts) return NULL;
-    for (int i = 0; i < 3 * n_points; i++) pts[i] = (double)coords[i];
+    for (int i = 0; i < n_coords; i++) pts[i] = (double)coords[i];
 
     int count = n_points;
     if (opts.weld_epsilon > 0.0f) {

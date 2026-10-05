@@ -23,6 +23,7 @@
 
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Synthetic 3DS binary data: a tetrahedron (4 vertices, 4 triangles)
@@ -236,6 +237,45 @@ IVP_TEST(tds_config_defaults) {
     IVP_ASSERT_NEAR(cfg.weld_epsilon, 1e-4f, 1e-8);
     IVP_ASSERT_TRUE(cfg.remove_degenerate);
     IVP_ASSERT_FALSE(cfg.center_meshes);
+}
+
+IVP_TEST(tds_weld_balances_allocator_bytes) {
+    float vertices[] = {
+        0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 0.0f
+    };
+    int indices[] = {
+        4, 2, 1,
+        4, 1, 3,
+        1, 2, 3,
+        2, 4, 3
+    };
+    ivp_3ds_mesh_t mesh;
+    memset(&mesh, 0, sizeof(mesh));
+    mesh.vertices = vertices;
+    mesh.indices = indices;
+    mesh.n_vertices = 5;
+    mesh.n_triangles = 4;
+
+    ivp_3ds_scene_t scene;
+    memset(&scene, 0, sizeof(scene));
+    scene.meshes = &mesh;
+    scene.n_meshes = 1;
+
+    ivp_allocator_t counting = ivp_counting_allocator_create(NULL);
+    ivp_compact_surface_t *surface =
+        ivp_3ds_build_surface(&counting, &scene, 0, NULL);
+    IVP_ASSERT_NOT_NULL(surface);
+    ivp_compact_surface_free(&counting, surface);
+
+    ivp_alloc_stats_t stats;
+    ivp_counting_allocator_get_stats(&counting, &stats);
+    IVP_ASSERT_EQ(stats.current_bytes, 0);
+    IVP_ASSERT_EQ(stats.alloc_count, stats.free_count);
+    ivp_counting_allocator_destroy(&counting);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -719,6 +759,19 @@ IVP_TEST(error_codes) {
     IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_ERR_FILE_VERSION), "FILE_VERSION") == 0);
 }
 
+IVP_TEST(grid_rejects_overflowing_dimensions) {
+    ivp_grid_config_t cfg;
+    ivp_grid_config_init(&cfg);
+    cfg.n_rows = 50000;
+    cfg.n_columns = 50000;
+    const float height = 0.0f;
+    IVP_ASSERT_NULL(ivp_build_grid_surface(NULL, &cfg, &height));
+
+    cfg.n_rows = INT_MAX;
+    cfg.n_columns = 2;
+    IVP_ASSERT_NULL(ivp_build_grid_surface(NULL, &cfg, &height));
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Test registration
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -732,6 +785,7 @@ int main(void) {
     IVP_REGISTER(tds_scale);
     IVP_REGISTER(tds_null_args);
     IVP_REGISTER(tds_config_defaults);
+    IVP_REGISTER(tds_weld_balances_allocator_bytes);
 
     /* Q12 BSP */
     IVP_REGISTER(bsp_synthetic_box);
@@ -744,6 +798,7 @@ int main(void) {
     IVP_REGISTER(grid_config_defaults);
     IVP_REGISTER(grid_null_heightfield);
     IVP_REGISTER(grid_small);
+    IVP_REGISTER(grid_rejects_overflowing_dimensions);
 
     /* Universe manager */
     IVP_REGISTER(universe_manager_init);

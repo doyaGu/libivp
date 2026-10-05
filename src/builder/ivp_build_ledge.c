@@ -12,6 +12,7 @@
 #include <ivp/geometry/ivp_compact_triangle.h>
 #include <ivp/base/ivp_assert.h>
 #include "ivp_build_polygon_convex_internal.h"
+#include "ivp_build_checked.h"
 
 #include <float.h>
 #include <limits.h>
@@ -127,9 +128,14 @@ static ivp_compact_ledge_t *ledge_from_faces(const ivp_allocator_t *alloc,
 {
     if (n_points >= (1 << 16)) return NULL;
     int total = 0;
-    for (int f = 0; f < n_faces; f++) total += face_sizes[f];
-    size_t planes_sz = (size_t)n_faces * sizeof(ivp_pc_plane_t);
-    size_t idx_sz = (size_t)total * sizeof(int);
+    for (int f = 0; f < n_faces; f++) {
+        if (face_sizes[f] < 3 ||
+            !ivp_build_int_add(total, face_sizes[f], &total)) return NULL;
+    }
+    size_t planes_sz;
+    size_t idx_sz;
+    if (!ivp_build_count_bytes(n_faces, sizeof(ivp_pc_plane_t), &planes_sz) ||
+        !ivp_build_count_bytes(total, sizeof(int), &idx_sz)) return NULL;
     ivp_pc_plane_t *planes = (ivp_pc_plane_t *)ivp_alloc(alloc, planes_sz);
     int *rev = (int *)ivp_alloc(alloc, idx_sz);
     if (!planes || !rev) {
@@ -196,7 +202,9 @@ ivp_compact_ledge_t *ivp_build_ledge_from_triangles(const ivp_allocator_t *alloc
     if (!points || !indices || n_points < 3 || n_triangles <= 0) return NULL;
     if (n_triangles > IVP_BUILD_MAX_TRIANGLES_PER_LEDGE) return NULL;
     if (!alloc) alloc = ivp_default_allocator();
-    for (int i = 0; i < 3 * n_triangles; i++) {
+    int n_indices;
+    if (!ivp_build_int_mul(n_triangles, 3, &n_indices)) return NULL;
+    for (int i = 0; i < n_indices; i++) {
         if (indices[i] < 0 || indices[i] >= n_points) return NULL;
     }
     size_t sizes_sz = (size_t)n_triangles * sizeof(int);
@@ -267,17 +275,21 @@ ivp_compact_ledge_t *ivp_compact_ledge_clone(const ivp_allocator_t *alloc,
         }
     }
     int n_pts = max_index + 1;
-    int size = (int)sizeof(ivp_compact_ledge_t)
-             + n_tri * (int)sizeof(ivp_compact_triangle_t)
-             + n_pts * (int)sizeof(ivp_compact_poly_point_t);
-    ivp_compact_ledge_t *dst = (ivp_compact_ledge_t *)ivp_alloc_aligned(alloc, (size_t)size, 16);
+    size_t triangle_bytes;
+    size_t point_bytes;
+    size_t size;
+    if (!ivp_build_count_bytes(n_tri, sizeof(ivp_compact_triangle_t), &triangle_bytes) ||
+        !ivp_build_count_bytes(n_pts, sizeof(ivp_compact_poly_point_t), &point_bytes) ||
+        !ivp_build_size_add(sizeof(ivp_compact_ledge_t), triangle_bytes, &size) ||
+        !ivp_build_size_add(size, point_bytes, &size) || size > (size_t)INT_MAX) return NULL;
+    ivp_compact_ledge_t *dst = (ivp_compact_ledge_t *)ivp_alloc_aligned(alloc, size, 16);
     if (!dst) return NULL;
     size_t head = sizeof(ivp_compact_ledge_t) + (size_t)n_tri * sizeof(ivp_compact_triangle_t);
     memcpy(dst, src, head);
     dst->c_point_offset = (int32_t)head;
     memcpy((char *)dst + head, ivp_ledge_get_point_array(src),
            (size_t)n_pts * sizeof(ivp_compact_poly_point_t));
-    ivp_ledge_set_size(dst, size);
+    ivp_ledge_set_size(dst, (int)size);
     ivp_ledge_set_is_compact(dst, 1);
     return dst;
 }
