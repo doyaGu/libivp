@@ -75,6 +75,44 @@ IVP_TEST(aligned_alloc_64) {
     ivp_free_aligned(a, p);
 }
 
+typedef struct reject_alloc_ctx {
+    int calls;
+} reject_alloc_ctx_t;
+
+static void *reject_alloc(size_t size, void *ctx) {
+    reject_alloc_ctx_t *state = (reject_alloc_ctx_t *)ctx;
+    IVP_UNUSED(size);
+    state->calls++;
+    return (void *)(uintptr_t)1;
+}
+
+static void reject_free(void *ptr, size_t size, void *ctx) {
+    IVP_UNUSED(ptr);
+    IVP_UNUSED(size);
+    IVP_UNUSED(ctx);
+}
+
+IVP_TEST(aligned_alloc_rejects_overflow) {
+    reject_alloc_ctx_t state = {0};
+    ivp_allocator_t a = {
+        .alloc = reject_alloc,
+        .realloc = NULL,
+        .free = reject_free,
+        .ctx = &state
+    };
+
+    IVP_ASSERT_NULL(ivp_alloc_aligned(&a, SIZE_MAX, 8));
+    IVP_ASSERT_NULL(ivp_alloc_aligned(&a, 1, SIZE_MAX));
+    IVP_ASSERT_EQ(state.calls, 0);
+}
+
+IVP_TEST(aligned_alloc_rejects_invalid_allocator) {
+    ivp_allocator_t a = {0};
+    IVP_ASSERT_NULL(ivp_alloc_aligned(NULL, 16, 16));
+    IVP_ASSERT_NULL(ivp_alloc_aligned(&a, 16, 16));
+    ivp_free_aligned(&a, (void *)(uintptr_t)1);
+}
+
 /* ── Counting allocator tests ───────────────────────────────────────────── */
 
 IVP_TEST(counting_alloc_stats) {
@@ -394,6 +432,8 @@ int main(void) {
     IVP_REGISTER(default_alloc_realloc);
     IVP_REGISTER(aligned_alloc_16);
     IVP_REGISTER(aligned_alloc_64);
+    IVP_REGISTER(aligned_alloc_rejects_overflow);
+    IVP_REGISTER(aligned_alloc_rejects_invalid_allocator);
     IVP_REGISTER(counting_alloc_stats);
     IVP_REGISTER(counting_alloc_destroy);
     IVP_REGISTER(arena_basic);

@@ -46,15 +46,20 @@ typedef struct {
 } ivp_aligned_header_t;
 
 void *ivp_alloc_aligned(const ivp_allocator_t *a, size_t size, size_t alignment) {
-    if (!a || size == 0 || alignment == 0) return NULL;
+    if (!a || !a->alloc || size == 0 || alignment == 0) return NULL;
 
     /* Ensure alignment is power of 2 and at least sizeof(void*) */
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     /* Round up alignment to power-of-2 */
     size_t align = 1;
-    while (align < alignment) align <<= 1;
+    while (align < alignment) {
+        if (align > SIZE_MAX / 2u) return NULL;
+        align <<= 1;
+    }
 
     size_t header_size = sizeof(ivp_aligned_header_t);
+    if (size > SIZE_MAX - header_size) return NULL;
+    if (align > SIZE_MAX - size - header_size) return NULL;
     size_t total = size + align + header_size;
     char *raw = (char *)a->alloc(total, a->ctx);
     if (!raw) return NULL;
@@ -74,7 +79,7 @@ void *ivp_alloc_aligned(const ivp_allocator_t *a, size_t size, size_t alignment)
 }
 
 void ivp_free_aligned(const ivp_allocator_t *a, void *ptr) {
-    if (!a || !ptr) return;
+    if (!a || !a->free || !ptr) return;
 
     ivp_aligned_header_t *hdr = ((ivp_aligned_header_t *)ptr) - 1;
     IVP_ASSERT(hdr->magic == IVP_ALIGNED_MAGIC);
