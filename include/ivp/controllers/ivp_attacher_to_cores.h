@@ -67,6 +67,9 @@ typedef struct ivp_attacher_to_cores_class {
 typedef bool (*ivp_attacher_object_filter_fn_t)(void *ctx, ivp_object_t *object);
 
 struct ivp_attacher_to_cores {
+    /* Copy the environment allocator vtable because the hash storage may be
+     * released after the environment itself has been destroyed. */
+    ivp_allocator_t                        allocator;
     ivp_vhash_store_t                    core_to_attachment_hash;
     ivp_set_active_t                    *set_of_cores;      /* NULL after the set was deleted */
     struct ivp_environment              *environment;       /* NULL after it was deleted */
@@ -80,6 +83,7 @@ struct ivp_attacher_to_cores {
     void                                *object_filter_ctx;
     bool                                 initialized;
     bool                                 environment_deleted; /* the environment is gone */
+    bool                                 allocation_failed;
 };
 
 /* Reference constructor IVP_Attacher_To_Cores(set_of_cores): attaches to

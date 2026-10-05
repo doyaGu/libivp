@@ -128,6 +128,11 @@ IVP_TEST(attacher_follows_set) {
 
     ivp_attacher_to_cores_t at;
     IVP_ASSERT_TRUE(ivp_attacher_to_cores_init(&at, env, &set, &cnt_class, NULL));
+    IVP_ASSERT_TRUE(at.core_to_attachment_hash.alloc == &at.allocator);
+    IVP_ASSERT_TRUE(at.allocator.alloc == env->allocator->alloc);
+    IVP_ASSERT_TRUE(at.allocator.realloc == env->allocator->realloc);
+    IVP_ASSERT_TRUE(at.allocator.free == env->allocator->free);
+    IVP_ASSERT_TRUE(at.allocator.ctx == env->allocator->ctx);
     IVP_ASSERT_EQ(g_created, 2);
     IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&at), 2);
     IVP_ASSERT_NOT_NULL(ivp_attacher_to_cores_get_attachment(&at, o1->physical_core));

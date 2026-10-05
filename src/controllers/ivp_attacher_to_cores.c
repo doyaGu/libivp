@@ -27,7 +27,15 @@ static void attacher_element_added(void *ctx, ivp_set_active_t *set, void *elem)
     /* only one attachment per core */
     if (ivp_vhash_store_find(&a->core_to_attachment_hash, core)) return;
     void *con = a->cls->create_attachment ? a->cls->create_attachment(a, core) : NULL;
-    if (con) ivp_vhash_store_add(&a->core_to_attachment_hash, core, con);
+    if (con) {
+        ivp_vhash_store_add(&a->core_to_attachment_hash, core, con);
+        if (ivp_vhash_store_find(&a->core_to_attachment_hash, core) != con) {
+            a->allocation_failed = true;
+            if (a->cls->delete_attachment) {
+                a->cls->delete_attachment(a, core, con);
+            }
+        }
+    }
 }
 
 /* P_DELETE(con) of a core's attachment; the ATTACH_T destructor calls
@@ -147,7 +155,9 @@ bool ivp_attacher_to_cores_init(ivp_attacher_to_cores_t *a, struct ivp_environme
     if (!a) return false;
     memset(a, 0, sizeof(*a));
     if (!env || !set_of_cores || !cls) return false;
-    ivp_vhash_store_init(&a->core_to_attachment_hash, NULL, ATTACHER_HASH_INIT_SIZE);
+    a->allocator = *env->allocator;
+    ivp_vhash_store_init(&a->core_to_attachment_hash, &a->allocator,
+                         ATTACHER_HASH_INIT_SIZE);
     if (!a->core_to_attachment_hash.elems) return false;
     a->set_of_cores = set_of_cores;
     a->environment = env;
@@ -173,7 +183,8 @@ bool ivp_attacher_to_cores_init(ivp_attacher_to_cores_t *a, struct ivp_environme
     while ((core = ivp_set_enumerator_next(&e, &set_of_cores->set)) != NULL) {
         attacher_element_added(a, NULL, core);
     }
-    if (!ivp_set_active_add_listener(set_of_cores, &a->set_listener)) {
+    if (a->allocation_failed ||
+        !ivp_set_active_add_listener(set_of_cores, &a->set_listener)) {
         a->set_of_cores = NULL;
         ivp_attacher_to_cores_destroy(a);
         return false;
