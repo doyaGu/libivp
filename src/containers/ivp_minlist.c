@@ -465,8 +465,7 @@ static void link_with_reference_skip_search(ivp_minlist_t *ml, uint32_t index)
     uint32_t long_index = ml->first_long;
     uint32_t anchor = IVP_MINLIST_UNUSED;
     int prefix_length = 0;
-    uint32_t cached = ml->counter >= IVP_MINLIST_CACHE_THRESHOLD
-        ? ml->tree_root : IVP_MINLIST_TREE_UNUSED;
+    uint32_t cached = ml->tree_root; /* absent below the cache threshold */
     if (cached < ml->malloced_size && isfinite(e->value)) {
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
         minlist_diagnostics.finger_attempts++;
@@ -634,11 +633,10 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value)
         rb_insert(ml, index);
     } else if (!finite) {
         ml->nonfinite_count++;
+        /* Its skip chain need not stay ordered even after later removal. */
+        if (!ml->tree_active) ml->tree_root = IVP_MINLIST_LONG_UNUSED;
     }
     ml->counter++;
-    /* Preserve the unmodified reference search after a nonfinite insertion;
-     * its skip chain need not stay ordered, even if that item is removed. */
-    if (!ml->tree_active && !finite) ml->tree_root = IVP_MINLIST_LONG_UNUSED;
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     minlist_diagnostics.comparisons += search_comparisons;
     if (search_comparisons > minlist_diagnostics.max_comparisons)
@@ -659,7 +657,7 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index)
     ivp_minlist_elem_t *e = &ml->elems[index];
     uint32_t prev = e->prev;
     uint32_t next = e->next;
-    if (!ml->tree_active && ml->tree_root < ml->malloced_size &&
+    if (ml->tree_root < ml->malloced_size && !ml->tree_active &&
         e->tree_left != IVP_MINLIST_LONG_UNUSED) {
         /* Only skip-member removal changes the cached prefix length.
          * Equal keys do not identify their position: discard that cache. */
@@ -702,8 +700,8 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index)
         }
     }
     ml->counter--;
-    if (!ml->tree_active && ml->counter < IVP_MINLIST_CACHE_THRESHOLD &&
-        ml->tree_root != IVP_MINLIST_LONG_UNUSED)
+    if (ml->tree_root < ml->malloced_size && !ml->tree_active &&
+        ml->counter < IVP_MINLIST_CACHE_THRESHOLD)
         ml->tree_root = IVP_MINLIST_TREE_UNUSED;
     ml->min_value = ml->counter == 0 ? IVP_MINLIST_MAX_VALUE
                                       : ml->elems[ml->first_element].value;

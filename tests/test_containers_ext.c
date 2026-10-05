@@ -477,6 +477,11 @@ IVP_TEST(minlist_local_reinsert_differential) {
             ml.min_value += 1.25f;
         }
     }
+    /* Dropping below the threshold must leave no anchor for handle reuse. */
+    for (uint32_t i = 0; i < count; i++) {
+        ivp_minlist_remove(&ml, entries[order[i]].handle);
+        if (ml.counter < 64u) IVP_ASSERT_EQ(ml.tree_root, IVP_MINLIST_TREE_UNUSED);
+    }
     ivp_minlist_destroy(&ml);
 }
 
