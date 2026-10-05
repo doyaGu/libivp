@@ -583,6 +583,19 @@ static inline double gm_reduce_add(double sum, const double *a, const double *b,
 {
     int k = 0;
     int unfused = gm_unfused_terms(count, GM_VEC_MIN);
+    /* Small LU systems repeatedly traverse this reduction. Unroll only the
+     * loop control: keep one accumulator, every product/add rounding point,
+     * the original ascending order and the FMA flavour's scalar tail. */
+    for (; k <= unfused - 4; k += 4) {
+        double p = a[k] * b[k];
+        sum = sum + p;
+        p = a[k + 1] * b[k + 1];
+        sum = sum + p;
+        p = a[k + 2] * b[k + 2];
+        sum = sum + p;
+        p = a[k + 3] * b[k + 3];
+        sum = sum + p;
+    }
     for (; k < unfused; k++) {
         double p = a[k] * b[k];
         sum = sum + p;
@@ -1622,7 +1635,16 @@ void ivp_incr_lu_solve_vec_with_U(ivp_incr_lu_t *lu)
     int arl = lu->aligned_row_len;
     for (int i = lu->n_sub - 1; i >= 0; i--) {
         double leftsum = 0.0;
-        for (int j = lu->n_sub - 1; j > i; j--) {
+        int j = lu->n_sub - 1;
+        /* The reference reduces in descending column order. Do not split
+         * this into partial sums or replace it with a forward dot product. */
+        for (; j > i + 3; j -= 4) {
+            leftsum = GM_FMA(lu->U_matrix[i * arl + j], lu->temp_vec[j], leftsum);
+            leftsum = GM_FMA(lu->U_matrix[i * arl + j - 1], lu->temp_vec[j - 1], leftsum);
+            leftsum = GM_FMA(lu->U_matrix[i * arl + j - 2], lu->temp_vec[j - 2], leftsum);
+            leftsum = GM_FMA(lu->U_matrix[i * arl + j - 3], lu->temp_vec[j - 3], leftsum);
+        }
+        for (; j > i; j--) {
             leftsum = GM_FMA(lu->U_matrix[i * arl + j], lu->temp_vec[j], leftsum);
         }
         double res = lu->temp_vec[i] - leftsum;
