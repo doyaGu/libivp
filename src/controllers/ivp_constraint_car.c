@@ -667,8 +667,19 @@ ivp_result_t ivp_constraint_solver_car_init_constraint_system(ivp_constraint_sol
     s->environment_dying = false;
 
     s->body_object = car_object_create(s, body, NULL, NULL);
-    if (!s->body_object) return IVP_ERR_OUT_OF_MEMORY;
-    ivp_pvec_add(&s->cores_of_constraint_system, body->physical_core);
+    if (!s->body_object) {
+        s->environment = NULL;
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    if (!ivp_pvec_reserve(&s->cores_of_constraint_system, 1)) {
+        car_object_destroy(s->body_object, true);
+        s->body_object = NULL;
+        s->environment = NULL;
+        return IVP_ERR_OUT_OF_MEMORY;
+    }
+    int added = ivp_pvec_add(&s->cores_of_constraint_system, body->physical_core);
+    IVP_ASSERT(added >= 0);
+    (void)added;
 
     ivp_result_t res = IVP_OK;
     for (int i = 0; i < n_wheels; i++) {
@@ -679,7 +690,14 @@ ivp_result_t ivp_constraint_solver_car_init_constraint_system(ivp_constraint_sol
             break;
         }
         s->wheel_objects[s->n_wheel_objects++] = o;
-        ivp_pvec_add(&s->cores_of_constraint_system, wheels[i]->physical_core);
+        if (!ivp_pvec_reserve(&s->cores_of_constraint_system,
+                              ivp_pvec_len(&s->cores_of_constraint_system) + 1)) {
+            res = IVP_ERR_OUT_OF_MEMORY;
+            break;
+        }
+        added = ivp_pvec_add(&s->cores_of_constraint_system, wheels[i]->physical_core);
+        IVP_ASSERT(added >= 0);
+        (void)added;
         s->c_local_ballsocket[i] = NULL;
     }
 
@@ -697,19 +715,14 @@ ivp_result_t ivp_constraint_solver_car_init_constraint_system(ivp_constraint_sol
         s->announced = true;
         ivp_ctrl_mgr_announce_controller_to_environment(env, &s->base);
         s->env_listener = ivp_environment_add_event_listener(env, solver_env_event, s);
-    } else {
-        /* roll back the partially initialised state */
-        for (int i = 0; i < s->n_wheel_objects; i++) {
-            car_object_destroy(s->wheel_objects[i], true);
-            s->wheel_objects[i] = NULL;
+        if (!ivp_event_listener_handle_is_valid(s->env_listener)) {
+            res = IVP_ERR_OUT_OF_MEMORY;
         }
-        s->n_wheel_objects = 0;
-        car_object_destroy(s->body_object, true);
-        s->body_object = NULL;
-        ivp_pvec_remove_all(&s->cores_of_constraint_system);
-        memset(s->c_local_ballsocket, 0, sizeof(s->c_local_ballsocket));
-        s->local_translation_in_use = false;
-        s->psis_left_for_plan_B = 0;
+    }
+    if (res != IVP_OK) {
+        /* This also removes a controller that was announced before its
+         * environment-deletion listener failed to register. */
+        solver_detach(s, true);
         if (s->co_matrix_allocated) {
             ivp_gmmz_destroy(&s->co_matrix, NULL);
             s->co_matrix_allocated = false;

@@ -684,6 +684,7 @@ if (IVP_BUILD_TESTS)
 
     # Real-wheel car system + car constraint solver
     ivp_add_test(test_car_system tests/test_car_system.c)
+    target_include_directories(test_car_system PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_controller_active tests/test_controller_active.c)
     ivp_add_test(test_controller_factory tests/test_controller_factory.c)
     ivp_add_test(test_controller_sets tests/test_controller_sets.c)

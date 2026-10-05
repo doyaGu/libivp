@@ -19,6 +19,7 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_mat3.h>
 #include <ivp/math/ivp_quat.h>
+#include "controllers/ivp_constraint_car_internal.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -528,6 +529,65 @@ IVP_TEST(constraint_solver_standalone)
     scene_destroy(&sc);
 }
 
+IVP_TEST(constraint_solver_core_list_failure_is_atomic)
+{
+    car_scene_t sc;
+    IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+    ivp_constraint_solver_car_t *s = ivp_constraint_solver_car_create(0, 1, 2, false);
+    IVP_ASSERT_NOT_NULL(s);
+
+    ivp_pvec_t saved = s->cores_of_constraint_system;
+    s->cores_of_constraint_system = (ivp_pvec_t){ .elems = NULL, .n = 0, .cap = -1 };
+    IVP_ASSERT_EQ(ivp_constraint_solver_car_init_constraint_system(
+                      s, sc.env, sc.body, sc.wheels, NULL, 4),
+                  IVP_ERR_OUT_OF_MEMORY);
+    IVP_ASSERT_FALSE(ivp_constraint_solver_car_is_active(s));
+    IVP_ASSERT_TRUE(sc.body->physical_core->car_wheel == NULL);
+    for (int i = 0; i < 4; i++) {
+        IVP_ASSERT_TRUE(sc.wheels[i]->physical_core->car_wheel == NULL);
+    }
+    s->cores_of_constraint_system = saved;
+
+    IVP_ASSERT_EQ(ivp_constraint_solver_car_init_constraint_system(
+                      s, sc.env, sc.body, sc.wheels, NULL, 4),
+                  IVP_OK);
+    ivp_constraint_solver_car_destroy(s);
+    scene_destroy(&sc);
+}
+
+static void *car_fail_alloc(size_t size, void *ctx)
+{
+    (void)size;
+    (void)ctx;
+    return NULL;
+}
+
+IVP_TEST(constraint_solver_listener_failure_is_atomic)
+{
+    car_scene_t sc;
+    IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+    ivp_constraint_solver_car_t *s = ivp_constraint_solver_car_create(0, 1, 2, false);
+    IVP_ASSERT_NOT_NULL(s);
+
+    ivp_allocator_t saved_allocator = *sc.env->allocator;
+    sc.env->allocator->alloc = car_fail_alloc;
+    IVP_ASSERT_EQ(ivp_constraint_solver_car_init_constraint_system(
+                      s, sc.env, sc.body, sc.wheels, NULL, 4),
+                  IVP_ERR_OUT_OF_MEMORY);
+    *sc.env->allocator = saved_allocator;
+
+    IVP_ASSERT_FALSE(ivp_constraint_solver_car_is_active(s));
+    IVP_ASSERT_TRUE(sc.body->physical_core->car_wheel == NULL);
+    for (int i = 0; i < 4; i++) {
+        IVP_ASSERT_TRUE(sc.wheels[i]->physical_core->car_wheel == NULL);
+    }
+    IVP_ASSERT_EQ(ivp_constraint_solver_car_init_constraint_system(
+                      s, sc.env, sc.body, sc.wheels, NULL, 4),
+                  IVP_OK);
+    ivp_constraint_solver_car_destroy(s);
+    scene_destroy(&sc);
+}
+
 IVP_TEST(compat_controller_entry_is_noop)
 {
     car_scene_t sc;
@@ -555,6 +615,8 @@ int main(void)
     IVP_REGISTER(destroy_after_environment);
     IVP_REGISTER(deleting_a_wheel_detaches_the_car);
     IVP_REGISTER(constraint_solver_standalone);
+    IVP_REGISTER(constraint_solver_core_list_failure_is_atomic);
+    IVP_REGISTER(constraint_solver_listener_failure_is_atomic);
     IVP_REGISTER(compat_controller_entry_is_noop);
     IVP_RUN_ALL();
 }
