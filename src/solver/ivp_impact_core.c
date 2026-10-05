@@ -1030,6 +1030,47 @@ void ivp_impact_lt_do_impact_of_two_objects(ivp_mindist_t *mindist, ivp_object_t
 
 /* ── IVP_Mindist::try_to_generate_managed_friction ─────────────────────── */
 
+typedef struct friction_attach_rollback_state {
+    ivp_fr_system_t *system;
+    ivp_contact_pt_t *contact;
+    ivp_core_t *cores[2];
+    ivp_fr_info_for_core_t *infos[2];
+    bool info_created[2];
+    bool info_linked[2];
+    bool core_added[2];
+    bool dist_added;
+    bool pair_added;
+} friction_attach_rollback_state_t;
+
+static void friction_attach_rollback(friction_attach_rollback_state_t *state)
+{
+    if (state->pair_added) {
+        (void)ivp_fr_system_dist_removed_update_pair_info(
+            state->system, state->contact);
+    }
+    if (state->dist_added) {
+        ivp_fr_system_remove_dist_from_system(state->system, state->contact);
+    }
+    for (int i = 1; i >= 0; i--) {
+        if (state->core_added[i]) {
+            ivp_fr_system_remove_core_from_system(state->system,
+                                                  state->cores[i]);
+        }
+        if (state->info_linked[i]) {
+            ivp_core_unlink_friction_info(state->cores[i], state->infos[i]);
+        }
+        if (state->info_created[i]) {
+            ivp_fr_info_destroy(state->infos[i]);
+        }
+    }
+    if (state->system &&
+        ivp_pvec_len(&state->system->cores_of_friction_system) == 0 &&
+        ivp_pvec_len(&state->system->fr_pairs_of_objs) == 0) {
+        ivp_fr_system_destroy(state->system);
+    }
+    ivp_contact_pt_destroy(state->contact);
+}
+
 ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my_dist, struct ivp_fr_system **associated_fs,
                                                                bool *having_new, struct ivp_sim_unit *sim_unit_not_destroy,
                                                                bool call_recalc_svals)
@@ -1073,18 +1114,13 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
     }
     ivp_env_fire_friction_created(obj0->owner, friction_dist);
     *having_new = true;
-    ivp_fr_system_t *affected_fs = NULL;
-    bool info0_created = false;
-    bool info1_created = false;
-    bool info0_linked = false;
-    bool info1_linked = false;
-    bool core0_added = false;
-    bool core1_added = false;
-    bool dist_added = false;
-    bool pair_added = false;
+    friction_attach_rollback_state_t rollback = {
+        .contact = friction_dist,
+        .cores = { core0, core1 }
+    };
     if (fr_info0) {
         ivp_fr_system_t *fr_sys0 = fr_info0->l_friction_system;
-        affected_fs = fr_sys0;
+        rollback.system = fr_sys0;
         fr_info1 = ivp_core_get_friction_info(core1, fr_sys0);
         if (!fr_info1) {
             if (!core1->physical_unmoveable) {
@@ -1101,12 +1137,13 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
             if (!fr_info1) {
                 fr_info1 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
                 if (!fr_info1) goto allocation_failed;
-                info1_created = true;
+                rollback.infos[1] = fr_info1;
+                rollback.info_created[1] = true;
                 fr_info1->l_friction_system = fr_sys0;
                 if (!ivp_core_add_friction_info(core1, fr_info1)) goto allocation_failed;
-                info1_linked = true;
+                rollback.info_linked[1] = true;
                 if (!ivp_fr_system_add_core_to_system(fr_sys0, core1)) goto allocation_failed;
-                core1_added = true;
+                rollback.core_added[1] = true;
             }
         }
         if (!ivp_pvec_ensure(&fr_info0->friction_springs) ||
@@ -1114,42 +1151,42 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
             goto allocation_failed;
         }
         ivp_fr_system_add_dist_to_system(fr_sys0, friction_dist);
-        dist_added = true;
+        rollback.dist_added = true;
         if (!ivp_fr_system_dist_added_update_pair_info(fr_sys0, friction_dist)) {
             goto allocation_failed;
         }
-        pair_added = true;
-        affected_fs = fr_sys0;
+        rollback.pair_added = true;
     } else {
         fr_info0 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
         if (!fr_info0) goto allocation_failed;
-        info0_created = true;
+        rollback.infos[0] = fr_info0;
+        rollback.info_created[0] = true;
         if (!core1->physical_unmoveable && (fr_info1 = ivp_core_moveable_core_has_friction_info(core1)) != NULL) {
             ivp_fr_system_t *fr_sys1 = fr_info1->l_friction_system;
-            affected_fs = fr_sys1;
+            rollback.system = fr_sys1;
             fr_info0->l_friction_system = fr_sys1;
             if (!ivp_pvec_ensure(&fr_info0->friction_springs) ||
                 !ivp_pvec_ensure(&fr_info1->friction_springs)) {
                 goto allocation_failed;
             }
             if (!ivp_core_add_friction_info(core0, fr_info0)) goto allocation_failed;
-            info0_linked = true;
+            rollback.info_linked[0] = true;
             if (!ivp_fr_system_add_core_to_system(fr_sys1, core0)) goto allocation_failed;
-            core0_added = true;
+            rollback.core_added[0] = true;
             ivp_fr_system_add_dist_to_system(fr_sys1, friction_dist);
-            dist_added = true;
+            rollback.dist_added = true;
             if (!ivp_fr_system_dist_added_update_pair_info(fr_sys1, friction_dist)) {
                 goto allocation_failed;
             }
-            pair_added = true;
-            affected_fs = fr_sys1;
+            rollback.pair_added = true;
         } else {
             ivp_fr_system_t *new_system = ivp_fr_system_create(my_env);
             if (!new_system) goto allocation_failed;
-            affected_fs = new_system;
+            rollback.system = new_system;
             fr_info1 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
             if (!fr_info1) goto allocation_failed;
-            info1_created = true;
+            rollback.infos[1] = fr_info1;
+            rollback.info_created[1] = true;
             fr_info0->l_friction_system = new_system;
             fr_info1->l_friction_system = new_system;
             if (!ivp_pvec_ensure(&fr_info0->friction_springs) ||
@@ -1157,19 +1194,19 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
                 goto allocation_failed;
             }
             if (!ivp_core_add_friction_info(core1, fr_info1)) goto allocation_failed;
-            info1_linked = true;
+            rollback.info_linked[1] = true;
             if (!ivp_core_add_friction_info(core0, fr_info0)) goto allocation_failed;
-            info0_linked = true;
+            rollback.info_linked[0] = true;
             ivp_fr_system_add_dist_to_system(new_system, friction_dist);
-            dist_added = true;
+            rollback.dist_added = true;
             if (!ivp_fr_system_dist_added_update_pair_info(new_system, friction_dist)) {
                 goto allocation_failed;
             }
-            pair_added = true;
+            rollback.pair_added = true;
             if (!ivp_fr_system_add_core_to_system(new_system, core0)) goto allocation_failed;
-            core0_added = true;
+            rollback.core_added[0] = true;
             if (!ivp_fr_system_add_core_to_system(new_system, core1)) goto allocation_failed;
-            core1_added = true;
+            rollback.core_added[1] = true;
         }
     }
     {
@@ -1179,7 +1216,7 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
         IVP_USE(inserted0);
         IVP_USE(inserted1);
     }
-    *associated_fs = affected_fs;
+    *associated_fs = rollback.system;
 #ifdef IVP_DEBUG_BUILD
     IVP_IF(0) {
         ivp_fr_system_t *fs0 = NULL;
@@ -1202,7 +1239,7 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
     ivp_contact_pt_calc_virtual_mass_of_mindist(friction_dist);
 
     IVP_IF(ivp_env_get_debug_manager(obj0->owner)->check_fs) {
-        ivp_fr_system_test_hole_fr_system_data(affected_fs);
+        ivp_fr_system_test_hole_fr_system_data(rollback.system);
     }
 
     ivp_sim_unit_t *sim0 = core0->sim_unit;
@@ -1225,23 +1262,9 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
     return friction_dist;
 
 allocation_failed:
-    if (pair_added) {
-        (void)ivp_fr_system_dist_removed_update_pair_info(affected_fs, friction_dist);
-    }
-    if (dist_added) ivp_fr_system_remove_dist_from_system(affected_fs, friction_dist);
-    if (core1_added) ivp_fr_system_remove_core_from_system(affected_fs, core1);
-    if (core0_added) ivp_fr_system_remove_core_from_system(affected_fs, core0);
-    if (info1_linked) ivp_core_unlink_friction_info(core1, fr_info1);
-    if (info0_linked) ivp_core_unlink_friction_info(core0, fr_info0);
-    if (info1_created) ivp_fr_info_destroy(fr_info1);
-    if (info0_created) ivp_fr_info_destroy(fr_info0);
-    if (affected_fs && ivp_pvec_len(&affected_fs->cores_of_friction_system) == 0 &&
-        ivp_pvec_len(&affected_fs->fr_pairs_of_objs) == 0) {
-        ivp_fr_system_destroy(affected_fs);
-    }
+    friction_attach_rollback(&rollback);
     *associated_fs = NULL;
     *having_new = false;
-    ivp_contact_pt_destroy(friction_dist);
     return NULL;
 }
 
