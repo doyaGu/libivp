@@ -462,9 +462,10 @@ int ivp_surman_grid_query_aabb(const ivp_surman_grid_t *sm,
 #include <float.h>
 
 /* IVP_SurfaceManager_Grid::traverse_grid (ivp_surman_grid.cxx:16) */
-static void cg_traverse(const ivp_compact_grid_t *g, const double pos_os[3], double radius,
+static void cg_traverse(const ivp_surman_compact_grid_t *sm, const double pos_os[3], double radius,
                         ivp_surman_ledge_fn add_fn, void *ctx)
 {
+    const ivp_compact_grid_t *g = sm->compact_grid;
     double gs[3];
     ivp_compact_grid_to_grid_space(g, pos_os, gs);
     double radius_gs = radius * (double)g->inv_grid_size;
@@ -484,7 +485,7 @@ static void cg_traverse(const ivp_compact_grid_t *g, const double pos_os[3], dou
 
     unsigned char flag_buffer[8192];
     unsigned char *flags = flag_buffer;
-    const ivp_allocator_t *alloc = ivp_default_allocator();
+    const ivp_allocator_t *alloc = &sm->allocator;
     size_t flags_sz = (size_t)g->n_compact_ledges;
     if (g->n_compact_ledges >= 8192) {
         flags = (unsigned char *)ivp_alloc(alloc, flags_sz);
@@ -572,17 +573,18 @@ static void cg_ledges_within_radius(const ivp_surman_t *sm, const double pos[3],
     (void)root_ledge;
     (void)other_reference_ledge;
     if (!add_fn) return;
-    cg_traverse(((const ivp_surman_compact_grid_t *)sm)->compact_grid, pos, radius, add_fn, ctx);
+    cg_traverse((const ivp_surman_compact_grid_t *)sm, pos, radius, add_fn, ctx);
 }
 
 static void cg_terminal_ledges(const ivp_surman_t *sm, ivp_surman_ledge_fn fn, void *ctx)
 {
     if (!fn) return;
     const double zero[3] = { 0.0, 0.0, 0.0 };
-    cg_traverse(((const ivp_surman_compact_grid_t *)sm)->compact_grid, zero, DBL_MAX, fn, ctx);
+    cg_traverse((const ivp_surman_compact_grid_t *)sm, zero, DBL_MAX, fn, ctx);
 }
 
 typedef struct cg_ray_ctx {
+    const ivp_allocator_t *allocator;
     const ivp_compact_ledge_t *l[256];
     int n;
     const ivp_compact_ledge_t **heap;
@@ -601,14 +603,15 @@ static void cg_collect(void *c, const ivp_compact_ledge_t *ledge)
     if (rc->heap_n >= rc->heap_cap) {
         int nc = rc->heap_cap ? rc->heap_cap * 2 : 256;
         const ivp_compact_ledge_t **nh = (const ivp_compact_ledge_t **)ivp_alloc(
-            ivp_default_allocator(), (size_t)nc * sizeof(*nh));
+            rc->allocator, (size_t)nc * sizeof(*nh));
         if (!nh) {
             rc->fail = true;
             return;
         }
         if (rc->heap) {
             memcpy(nh, rc->heap, (size_t)rc->heap_n * sizeof(*nh));
-            ivp_free(ivp_default_allocator(), (void *)rc->heap, (size_t)rc->heap_cap * sizeof(*nh));
+            ivp_free(rc->allocator, (void *)rc->heap,
+                     (size_t)rc->heap_cap * sizeof(*nh));
         }
         rc->heap = nh;
         rc->heap_cap = nc;
@@ -626,7 +629,8 @@ static void cg_insert_ray(const ivp_surman_t *sm, struct ivp_ray_solver *ray_sol
                          (double)os.ray_center_point[2] };
     cg_ray_ctx_t rc;
     memset(&rc, 0, sizeof(rc));
-    cg_traverse(((const ivp_surman_compact_grid_t *)sm)->compact_grid, center,
+    rc.allocator = &((const ivp_surman_compact_grid_t *)sm)->allocator;
+    cg_traverse((const ivp_surman_compact_grid_t *)sm, center,
                 (double)(os.ray_length * 0.5f), cg_collect, &rc);
     int total = rc.n + rc.heap_n;
     for (int i = total - 1; i >= 0; i--) {
@@ -634,7 +638,8 @@ static void cg_insert_ray(const ivp_surman_t *sm, struct ivp_ray_solver *ray_sol
         ivp_ray_solver_os_check_compact_ledge(&os, l);
     }
     if (rc.heap) {
-        ivp_free(ivp_default_allocator(), (void *)rc.heap, (size_t)rc.heap_cap * sizeof(*rc.heap));
+        ivp_free(rc.allocator, (void *)rc.heap,
+                 (size_t)rc.heap_cap * sizeof(*rc.heap));
     }
 }
 
@@ -653,6 +658,14 @@ static const ivp_surman_vtable_t s_compact_grid_vtable = {
 
 void ivp_surman_compact_grid_init(ivp_surman_compact_grid_t *sm, const ivp_compact_grid_t *grid)
 {
+    ivp_surman_compact_grid_init_with_allocator(sm, grid, NULL);
+}
+
+void ivp_surman_compact_grid_init_with_allocator(
+    ivp_surman_compact_grid_t *sm, const ivp_compact_grid_t *grid,
+    const ivp_allocator_t *allocator)
+{
     sm->base.vtable = &s_compact_grid_vtable;
     sm->compact_grid = grid;
+    sm->allocator = *(allocator ? allocator : ivp_default_allocator());
 }

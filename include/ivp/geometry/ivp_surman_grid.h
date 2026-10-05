@@ -123,9 +123,13 @@ static inline const ivp_compact_ledge_t *ivp_surman_grid_get_ledge(
 typedef struct ivp_surman_compact_grid {
     ivp_surman_t base;
     const ivp_compact_grid_t *compact_grid;
+    ivp_allocator_t allocator; /* copied; used by query scratch storage */
 } ivp_surman_compact_grid_t;
 
 void ivp_surman_compact_grid_init(ivp_surman_compact_grid_t *sm, const ivp_compact_grid_t *grid);
+void ivp_surman_compact_grid_init_with_allocator(
+    ivp_surman_compact_grid_t *sm, const ivp_compact_grid_t *grid,
+    const ivp_allocator_t *allocator);
 
 #ifdef __cplusplus
 }
