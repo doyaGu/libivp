@@ -17,6 +17,7 @@
 #include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -73,9 +74,19 @@ static int halfspaces_to_points_d(const ivp_allocator_t *alloc,
                                   double merge_threshold,
                                   double **out, size_t *out_sz)
 {
-    long max_points = (long)n * (n - 1) * (n - 2) / 6;
-    if (max_points <= 0) return -1;
-    size_t sz = (size_t)max_points * 3u * sizeof(double);
+    size_t a = (size_t)n;
+    size_t b = (size_t)(n - 1);
+    size_t c = (size_t)(n - 2);
+    if ((a & 1u) == 0u) a /= 2u; else b /= 2u;
+    if (a % 3u == 0u) a /= 3u;
+    else if (b % 3u == 0u) b /= 3u;
+    else c /= 3u;
+    if (a > (size_t)INT_MAX / b || a * b > (size_t)INT_MAX / c)
+        return -1;
+    size_t max_points = a * b * c;
+    if (max_points == 0u || max_points > SIZE_MAX / (3u * sizeof(double)))
+        return -1;
+    size_t sz = max_points * 3u * sizeof(double);
     double *pts = (double *)ivp_alloc(alloc, sz);
     if (!pts) return -1;
     int np = 0;
@@ -136,6 +147,8 @@ ivp_result_t ivp_halfspacesoup_to_points(
 {
     if (!halfspaces || n_halfspaces < 4 || !out_points || !out_n_points)
         return IVP_ERR_INVALID_ARG;
+    *out_points = NULL;
+    *out_n_points = 0;
     if (!alloc) alloc = ivp_default_allocator();
 
     double *pts = NULL;
@@ -148,6 +161,10 @@ ivp_result_t ivp_halfspacesoup_to_points(
         return IVP_ERR_INVALID_ARG;
     }
     /* caller frees with ivp_free(alloc, ptr, np * 3 * sizeof(float)) */
+    if ((size_t)np > SIZE_MAX / (3u * sizeof(float))) {
+        ivp_free(alloc, pts, sz);
+        return IVP_ERR_CAPACITY_EXCEEDED;
+    }
     float *f = (float *)ivp_alloc(alloc, (size_t)np * 3u * sizeof(float));
     if (!f) {
         ivp_free(alloc, pts, sz);

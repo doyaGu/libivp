@@ -27,16 +27,18 @@ int ivp_convex_decompose_points(const ivp_allocator_t *alloc,
         !out_part_points || !out_part_offsets) {
         return -1;
     }
-    if (!alloc) alloc = ivp_default_allocator();
-    ivp_decompose_options_t opts = options ? *options : ivp_decompose_options_default();
     *out_part_points = NULL;
     *out_part_offsets = NULL;
-
-    long fvl_length = 0;
+    if (n_points > INT_MAX / 3 - 2 || n_faces > INT_MAX / 3 - 2 ||
+        (size_t)n_points > SIZE_MAX / (3u * sizeof(double)) ||
+        (size_t)n_faces > SIZE_MAX / (3u * sizeof(int))) return -1;
+    if (!alloc) alloc = ivp_default_allocator();
+    ivp_decompose_options_t opts = options ? *options : ivp_decompose_options_default();
+    int fvl_length = 0;
     for (int i = 0; i < n_faces; i++) {
         if (face_sizes[i] < 3) return -1;
+        if (face_sizes[i] > INT_MAX / 8 - fvl_length) return -1;
         fvl_length += face_sizes[i];
-        if (fvl_length > INT_MAX / 8) return -1;
     }
 
     /* vertex coordinate list (capacity nvc + 2 like size_vcl) */
@@ -286,6 +288,11 @@ ivp_result_t ivp_convex_decompose(const ivp_allocator_t *alloc,
     if (!result) return IVP_ERR_INVALID_ARG;
     memset(result, 0, sizeof(*result));
     if (!vertices || !indices || n_vertices < 4 || n_triangles < 4) return IVP_ERR_INVALID_ARG;
+    if (n_vertices > INT_MAX / 3 || n_triangles > INT_MAX / 3 ||
+        (size_t)n_vertices > SIZE_MAX / (3u * sizeof(double)) ||
+        (size_t)n_triangles > SIZE_MAX / sizeof(int)) {
+        return IVP_ERR_CAPACITY_EXCEEDED;
+    }
     if (!alloc) alloc = ivp_default_allocator();
     result->allocator = alloc;
 
@@ -298,7 +305,8 @@ ivp_result_t ivp_convex_decompose(const ivp_allocator_t *alloc,
         if (sizes) ivp_free(alloc, sizes, sizes_sz);
         return IVP_ERR_OUT_OF_MEMORY;
     }
-    for (int i = 0; i < 3 * n_vertices; i++) pts[i] = (double)vertices[i];
+    const int n_coords = 3 * n_vertices;
+    for (int i = 0; i < n_coords; i++) pts[i] = (double)vertices[i];
     for (int i = 0; i < n_triangles; i++) sizes[i] = 3;
 
     ivp_compact_ledge_t **ledges = NULL;

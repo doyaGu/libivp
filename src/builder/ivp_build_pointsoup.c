@@ -7,6 +7,7 @@
 
 #include <ivp/builder/ivp_build_pointsoup.h>
 #include <ivp/builder/ivp_build_surface.h>
+#include <limits.h>
 #include <string.h>
 
 ivp_compact_surface_t *ivp_build_pointsoup_surface(
@@ -16,6 +17,8 @@ ivp_compact_surface_t *ivp_build_pointsoup_surface(
     const ivp_pointsoup_options_t *options)
 {
     if (!coords || n_points < 3) return NULL;
+    if (n_points > INT_MAX / 3 ||
+        (size_t)n_points > SIZE_MAX / (3u * sizeof(double))) return NULL;
     if (!alloc) alloc = ivp_default_allocator();
 
     ivp_pointsoup_options_t opts = options ? *options : ivp_pointsoup_options_default();
@@ -23,7 +26,8 @@ ivp_compact_surface_t *ivp_build_pointsoup_surface(
     size_t sz = (size_t)n_points * 3u * sizeof(double);
     double *pts = (double *)ivp_alloc(alloc, sz);
     if (!pts) return NULL;
-    for (int i = 0; i < 3 * n_points; i++) pts[i] = (double)coords[i];
+    const int n_coords = 3 * n_points;
+    for (int i = 0; i < n_coords; i++) pts[i] = (double)coords[i];
 
     int count = n_points;
     if (opts.weld_epsilon > 0.0f) {

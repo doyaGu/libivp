@@ -8,6 +8,7 @@
 
 #include <ivp/builder/ivp_build_grid.h>
 #include <ivp/builder/ivp_build_concave.h>
+#include <limits.h>
 #include <string.h>
 
 void ivp_grid_config_init(ivp_grid_config_t *cfg)
@@ -37,8 +38,14 @@ ivp_compact_surface_t *ivp_build_grid_surface(const ivp_allocator_t *alloc,
 
     int rows = cfg->n_rows;
     int cols = cfg->n_columns;
+    if (rows > INT_MAX / cols) return NULL;
     int n_verts = rows * cols;
-    int n_quads = (rows - 1) * (cols - 1);
+    uint64_t n_quads = (uint64_t)(rows - 1) * (uint64_t)(cols - 1);
+    uint64_t n_tris = 4u * n_quads + 4u * (uint64_t)(rows - 1) +
+                      4u * (uint64_t)(cols - 1);
+    if (n_verts > INT_MAX / 6 || n_tris > (uint64_t)INT_MAX / 3u ||
+        (size_t)(2 * n_verts) > SIZE_MAX / (3u * sizeof(float)) ||
+        n_tris > (uint64_t)SIZE_MAX / (3u * sizeof(int))) return NULL;
 
     /* Determine axis mapping:
      * height_axis = Y(1): row→X, col→Z, height→Y
@@ -59,8 +66,8 @@ ivp_compact_surface_t *ivp_build_grid_surface(const ivp_allocator_t *alloc,
     if (thickness < 0.001f) thickness = 0.001f;
 
     int n_verts_total = n_verts * 2;  /* top + bottom layer */
-    int n_tris_top    = n_quads * 2;
-    int n_tris_bottom = n_quads * 2;
+    int n_tris_top    = (int)n_quads * 2;
+    int n_tris_bottom = (int)n_quads * 2;
     int n_tris_sides  = (rows - 1) * 2 * 2 + (cols - 1) * 2 * 2; /* perimeter side quads */
     int n_tris_total  = n_tris_top + n_tris_bottom + n_tris_sides;
 

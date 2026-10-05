@@ -2,6 +2,7 @@
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/builder/ivp_build_ledge_soup.h>
 #include <ivp/builder/ivp_build_pointsoup.h>
+#include <ivp/builder/ivp_build_concave.h>
 #include <ivp/builder/ivp_build_polygon.h>
 #include <ivp/builder/ivp_convex_decompose.h>
 #include <ivp/builder/ivp_rot_inertia.h>
@@ -11,6 +12,7 @@
 #include <ivp/geometry/ivp_ledgetree.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
+#include <limits.h>
 #include <math.h>
 
 /* Box geometry data */
@@ -458,6 +460,21 @@ IVP_TEST(rot_inertia_degenerate) {
     ivp_compact_surface_free(NULL, surface);
 }
 
+IVP_TEST(builders_reject_overflowing_public_counts) {
+    const float point[3] = { 0.0f, 0.0f, 0.0f };
+    const int index = 0;
+    IVP_ASSERT_NULL(ivp_build_pointsoup_surface(NULL, point, INT_MAX, NULL));
+    IVP_ASSERT_NULL(ivp_build_concave_surface(NULL, point, INT_MAX,
+                                               &index, 1, NULL));
+
+    ivp_decompose_result_t result;
+    IVP_ASSERT_EQ(ivp_convex_decompose(NULL, point, INT_MAX, &index, 4,
+                                       NULL, &result),
+                  IVP_ERR_CAPACITY_EXCEEDED);
+    IVP_ASSERT_NULL(result.parts);
+    IVP_ASSERT_EQ(result.n_parts, 0);
+}
+
 int main(void) {
     /* Ledge soup tests */
     IVP_REGISTER(ledge_soup_init_destroy);
@@ -488,6 +505,7 @@ int main(void) {
     /* Rotation inertia tests */
     IVP_REGISTER(rot_inertia_box);
     IVP_REGISTER(rot_inertia_degenerate);
+    IVP_REGISTER(builders_reject_overflowing_public_counts);
 
     IVP_RUN_ALL();
 }

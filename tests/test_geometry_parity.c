@@ -20,6 +20,7 @@
 #include <ivp/geometry/ivp_compact_ledge_geom.h>
 #include <ivp/geometry/ivp_surman.h>
 
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -280,6 +281,18 @@ IVP_TEST(halfspacesoup_tolerance_is_1e4)
      * the cut-off corner: 11 points) */
     IVP_ASSERT_EQ(n, 10);
     ivp_free(ivp_default_allocator(), pts, (size_t)n * 3u * sizeof(float));
+}
+
+IVP_TEST(halfspacesoup_rejects_overflowing_count)
+{
+    ivp_halfspace_t halfspace = {{1.0f, 0.0f, 0.0f}, 1.0f};
+    float *points = (float *)(uintptr_t)1;
+    int n_points = -1;
+    IVP_ASSERT_EQ(ivp_halfspacesoup_to_points(&halfspace, INT_MAX, 0.01f,
+                                              &points, &n_points, NULL),
+                  IVP_ERR_OUT_OF_MEMORY);
+    IVP_ASSERT_NULL(points);
+    IVP_ASSERT_EQ(n_points, 0);
 }
 
 /* ── Ledge soup ────────────────────────────────────────────────────────── */
@@ -824,6 +837,7 @@ int main(void)
     IVP_REGISTER(pointsoup_coplanar_input_gives_two_sided_triangle_or_null);
     IVP_REGISTER(halfspacesoup_cube_matches_reference);
     IVP_REGISTER(halfspacesoup_tolerance_is_1e4);
+    IVP_REGISTER(halfspacesoup_rejects_overflowing_count);
     IVP_REGISTER(ledge_soup_soup3_matches_reference);
     IVP_REGISTER(ledge_soup_median_ties_match_reference);
     IVP_REGISTER(ledge_soup_root_hull_matches_reference);

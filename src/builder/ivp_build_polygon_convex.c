@@ -36,6 +36,7 @@
 #include <ivp/geometry/ivp_compact_edge.h>
 #include <ivp/geometry/ivp_compact_triangle.h>
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -129,12 +130,18 @@ bool ivp_pc_planes_to_template(ivp_pc_templ_polygon_t *templ,
 {
     memset(templ, 0, sizeof(*templ));
     if (!points || !planes || n_points <= 0 || n_planes <= 0) return false;
+    if (n_points > INT_MAX / 3 ||
+        (size_t)n_points > SIZE_MAX / (3u * sizeof(double)) ||
+        (size_t)n_planes > SIZE_MAX / sizeof(ivp_pc_templ_surface_t)) {
+        return false;
+    }
     if (!alloc) alloc = ivp_default_allocator();
     templ->alloc = alloc;
 
     int total = 0;
     for (int x = 0; x < n_planes; x++) {
         if (planes[x].n_points < 0 || planes[x].n_points > (1 << 20)) return false;
+        if (planes[x].n_points > INT_MAX - total) return false;
         total += planes[x].n_points;
     }
     if (total <= 0) return false;
