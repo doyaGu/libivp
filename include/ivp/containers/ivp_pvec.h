@@ -9,6 +9,8 @@
 #define IVP_PVEC_H
 
 #include <ivp/base/ivp_assert.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -40,22 +42,34 @@ static inline void *ivp_pvec_at(const ivp_pvec_t *v, int i) {
     return v->elems[i];
 }
 
-static inline void ivp_pvec_ensure(ivp_pvec_t *v) {
-    if (v->n >= v->cap) {
-        /* reference increment_mem: grows by doubling (+1) */
-        int nc = v->cap * 2 + 1;
+static inline bool ivp_pvec_reserve(ivp_pvec_t *v, int minimum) {
+    if (!v || minimum < 0 || v->n < 0 || v->cap < 0 || v->n > v->cap)
+        return false;
+    if (minimum <= v->cap) return true;
+    int nc = v->cap;
+    while (nc < minimum) {
+        if (nc > (INT_MAX - 1) / 2) {
+            nc = minimum;
+            break;
+        }
+        nc = nc * 2 + 1; /* reference increment_mem */
         if (nc < 4) nc = 4;
-        void **ne = (void **)realloc(v->elems, (size_t)nc * sizeof(void *));
-        IVP_ASSERT(ne);
-        if (!ne) return;
-        v->elems = ne;
-        v->cap = nc;
     }
+    if ((size_t)nc > SIZE_MAX / sizeof(void *)) return false;
+    void **ne = (void **)realloc(v->elems, (size_t)nc * sizeof(void *));
+    if (!ne) return false;
+    v->elems = ne;
+    v->cap = nc;
+    return true;
+}
+
+static inline bool ivp_pvec_ensure(ivp_pvec_t *v) {
+    if (!v || v->n < 0 || v->n == INT_MAX) return false;
+    return ivp_pvec_reserve(v, v->n + 1);
 }
 
 static inline int ivp_pvec_add(ivp_pvec_t *v, void *e) {
-    ivp_pvec_ensure(v);
-    if (v->n >= v->cap) return -1;   /* could not grow: nothing written */
+    if (!ivp_pvec_ensure(v)) return -1;
     v->elems[v->n] = e;
     return v->n++;
 }
@@ -123,8 +137,7 @@ static inline void ivp_pvec_insert_after(ivp_pvec_t *v, int index, void *e) {
     IVP_ASSERT(index >= 0 && index < v->n);
     if (index < 0 || index >= v->n) return;
     index++;
-    ivp_pvec_ensure(v);
-    if (v->n >= v->cap) return;
+    if (!ivp_pvec_ensure(v)) return;
     for (int j = v->n; j > index; j--) v->elems[j] = v->elems[j - 1];
     v->elems[index] = e;
     v->n++;

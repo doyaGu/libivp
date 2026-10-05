@@ -6,6 +6,8 @@
 #include <ivp/containers/ivp_array.h>
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/containers/ivp_minheap.h>
+#include <ivp/containers/ivp_pvec.h>
+#include <limits.h>
 
 /* Dummy values for pointer tests */
 static int dummy_vals[64];
@@ -217,6 +219,27 @@ IVP_TEST(array_grow) {
     IVP_ASSERT_EQ(ivp_array_len(&arr), 50);
 
     ivp_array_destroy(&arr);
+}
+
+IVP_TEST(pvec_growth_and_capacity_failure_are_atomic) {
+    ivp_pvec_t vec;
+    ivp_pvec_init(&vec);
+    IVP_ASSERT_TRUE(ivp_pvec_reserve(&vec, 9));
+    IVP_ASSERT_TRUE(vec.cap >= 9);
+    IVP_ASSERT_EQ(ivp_pvec_add(&vec, &dummy_vals[0]), 0);
+    IVP_ASSERT_EQ(ivp_pvec_add(&vec, &dummy_vals[1]), 1);
+    IVP_ASSERT_EQ(ivp_pvec_len(&vec), 2);
+    ivp_pvec_clear(&vec);
+
+    vec.elems = NULL;
+    vec.n = INT_MAX;
+    vec.cap = INT_MAX;
+    IVP_ASSERT_EQ(ivp_pvec_add(&vec, &dummy_vals[0]), -1);
+    IVP_ASSERT_EQ(vec.n, INT_MAX);
+    IVP_ASSERT_EQ(vec.cap, INT_MAX);
+    IVP_ASSERT_NULL(vec.elems);
+    vec.n = 0;
+    vec.cap = 0;
 }
 
 IVP_TEST(elem_typeinfo_registry) {
@@ -1022,6 +1045,7 @@ int main(void) {
     IVP_REGISTER(array_find);
     IVP_REGISTER(array_clear);
     IVP_REGISTER(array_grow);
+    IVP_REGISTER(pvec_growth_and_capacity_failure_are_atomic);
     IVP_REGISTER(elem_typeinfo_registry);
     IVP_REGISTER(elem_typeinfo_registry_runtime_register);
     IVP_REGISTER(array_reserve);
