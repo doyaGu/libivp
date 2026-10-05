@@ -19,9 +19,10 @@ extern "C" {
 typedef struct ivp_allocator {
     /* alloc/realloc return NULL without changing existing storage on
      * failure.  free must accept NULL.  old_size/size are the exact sizes
-     * supplied by the owning module.  The vtable context must outlive every
-     * allocation made through it, including state that may outlive an
-     * environment. */
+     * supplied by the owning module.  Returned storage must be aligned to at
+     * least 16 bytes because ordinary IVP objects contain IVP_ALIGN16 math
+     * types.  The vtable context must outlive every allocation made through
+     * it, including state that may outlive an environment. */
     void *(*alloc)(size_t size, void *ctx);
     void *(*realloc)(void *ptr, size_t old_size, size_t new_size, void *ctx);
     void  (*free)(void *ptr, size_t size, void *ctx);

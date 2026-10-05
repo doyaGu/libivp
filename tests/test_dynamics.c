@@ -283,12 +283,16 @@ IVP_TEST(env_create_with_config) {
     ivp_environment_destroy(env);
 }
 
-typedef union env_fail_alloc_header {
+typedef union IVP_ALIGN16 env_fail_alloc_header {
     max_align_t alignment;
+    unsigned char ivp_alignment[16];
     struct {
         size_t size;
     } meta;
 } env_fail_alloc_header_t;
+
+_Static_assert(_Alignof(env_fail_alloc_header_t) >= 16,
+               "failure allocator must preserve IVP allocator alignment");
 
 typedef struct env_fail_alloc_state {
     int attempts;
