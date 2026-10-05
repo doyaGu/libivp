@@ -75,6 +75,14 @@ void ivp_collision_diff_begin(ivp_collision_diff_t *d, ivp_coll_fvector_t *v,
 #endif
         return;
     }
+    /* Allocator callbacks may change the vector while storage is reserved.
+     * Keep the linear path rather than indexing beyond the reserved length. */
+    if (v->n != d->indexed_length) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        counts->unsafe_fallbacks++;
+#endif
+        return;
+    }
     ivp_collision_diff_storage_t *s = *storage;
     memset(s->entries, 0, s->slots * sizeof(*s->entries));
     uint32_t *pos = positions(s);

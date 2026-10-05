@@ -221,6 +221,49 @@ IVP_TEST(empty_manager_does_not_require_allocator_owner) {
     IVP_ASSERT_NULL(manager.recheck_diff_storage);
 }
 
+typedef struct mutating_allocator {
+    ivp_allocator_t base;
+    ivp_coll_fvector_t *vector;
+    test_collision_t *extra;
+    struct ivp_object *owner, *other;
+    bool mutated;
+} mutating_allocator_t;
+
+static void *allocate_and_mutate(size_t bytes, void *context)
+{
+    mutating_allocator_t *a = context;
+    void *p = malloc(bytes);
+    if (p && !a->mutated) {
+        a->mutated = true;
+        *a->extra = (test_collision_t){0};
+        a->extra->base.cvt = &pure_vt;
+        a->extra->base.fvector_index[0] = a->extra->base.fvector_index[1] = -1;
+        a->extra->objects[0] = a->owner; a->extra->objects[1] = a->other;
+        ivp_coll_fvector_add(a->vector, &a->extra->base);
+    }
+    return p;
+}
+static void release_mutating(void *p, size_t bytes, void *context)
+{
+    (void)bytes; (void)context; free(p);
+}
+
+IVP_TEST(allocator_mutation_invalidates_pending_index) {
+    struct ivp_object objects[130] = {0}; test_collision_t c[129];
+    ivp_coll_fvector_t v; fill(&v, c, objects, 128);
+    mutating_allocator_t a = {{allocate_and_mutate, NULL, release_mutating, NULL},
+                              &v, &c[128], &objects[0], &objects[129], false};
+    a.base.ctx = &a;
+    ivp_collision_diff_storage_t *storage = NULL; ivp_collision_diff_t d;
+    ivp_collision_diff_begin(&d, &v, objects, 130, &storage, &a.base, key);
+    IVP_ASSERT_TRUE(a.mutated); IVP_ASSERT_EQ(v.n, 129);
+    IVP_ASSERT_NULL(d.index);
+    IVP_ASSERT_TRUE(ivp_collision_diff_check(&d, &objects[129]));
+    ivp_collision_diff_begin(&d, &v, objects, 130, &storage, &a.base, key);
+    IVP_ASSERT_NOT_NULL(d.index);
+    ivp_collision_diff_storage_free(storage, &a.base); ivp_coll_fvector_clear(&v);
+}
+
 IVP_TEST(dense_world_matches_forced_linear_each_psi) {
     enum { N = 256 };
     ivp_allocator_t counting = ivp_counting_allocator_create(NULL);
@@ -294,5 +337,6 @@ int main(void) {
     IVP_REGISTER(indices_above_65535_and_small_world_no_allocation);
     IVP_REGISTER(dense_world_matches_forced_linear_each_psi);
     IVP_REGISTER(empty_manager_does_not_require_allocator_owner);
+    IVP_REGISTER(allocator_mutation_invalidates_pending_index);
     IVP_RUN_ALL();
 }
