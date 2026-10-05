@@ -22,6 +22,7 @@
 #include "collision/ivp_lvec.h"
 #include "collision/ivp_mindist_debug.h"
 #include "collision/ivp_mindist_event_internal.h"
+#include "collision/ivp_recheck_diagnostics.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
 
@@ -29,6 +30,18 @@
 /* g_pCurrentMindist / g_fDeferDeleteMindist (ivp_mindist.cxx) */
 ivp_mindist_t *ivp_g_current_mindist = NULL;
 bool ivp_g_defer_delete_mindist = false;
+
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+static ivp_recheck_diagnostics_t recheck_diagnostics;
+void ivp_recheck_diagnostics_reset(void)
+{
+    recheck_diagnostics = (ivp_recheck_diagnostics_t){0};
+}
+ivp_recheck_diagnostics_t ivp_recheck_diagnostics_get(void)
+{
+    return recheck_diagnostics;
+}
+#endif
 
 /* phantom glue (ivp_controller_phantom.c) */
 void  ivp_phantom_mindist_entered_volume(void *controller_phantom, ivp_mindist_t *md);
@@ -596,16 +609,33 @@ static bool diff_hash_check_ledges(diff_hash_t *dh, const ivp_compact_ledge_t *l
 
 static bool diff_hash_check_object(diff_hash_t *dh, ivp_object_t *obj)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    recheck_diagnostics.searches++;
+    uint64_t scanned = 0;
+#endif
     for (int i = dh->n_found_objects; i < dh->v->n; i++) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        recheck_diagnostics.entries_compared++;
+        scanned++;
+#endif
         ivp_collision_t *c = dh->v->elems[i];
         ivp_object_t *objs[2];
         c->cvt->get_objects(c, objs);
         if (objs[0] == obj || objs[1] == obj) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+            recheck_diagnostics.found++;
+            if (scanned > recheck_diagnostics.max_scan) recheck_diagnostics.max_scan = scanned;
+            if (i > dh->n_found_objects) recheck_diagnostics.swaps++;
+#endif
             if (i > dh->n_found_objects) ivp_coll_fvector_swap(dh->v, dh->n_found_objects, i);
             dh->n_found_objects++;
             return true;
         }
     }
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    recheck_diagnostics.misses++;
+    if (scanned > recheck_diagnostics.max_scan) recheck_diagnostics.max_scan = scanned;
+#endif
     return false;
 }
 
@@ -1614,6 +1644,12 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
     ivp_ov_element_t *elem = object->ov_element;
     if (!elem) return;
     const bool top_level = mm->recheck_depth++ == 0;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    recheck_diagnostics.rechecks++;
+    if (!top_level) recheck_diagnostics.recursive_rechecks++;
+    if (mm->recheck_depth > recheck_diagnostics.max_depth)
+        recheck_diagnostics.max_depth = mm->recheck_depth;
+#endif
     ivp_pvec_t local_colliding_elements = IVP_PVEC_INIT;
     ivp_pvec_t local_new_objects = IVP_PVEC_INIT;
     ivp_pvec_t *colliding_elements = top_level ? &mm->recheck_colliding_elements
@@ -1652,6 +1688,17 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
         ivp_ov_element_add_to_hull_manager(elem, hm, (double)P_DOUBLE_EPS);
         goto cleanup;
     }
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    uint64_t candidates = (uint64_t)ivp_pvec_len(colliding_elements);
+    uint64_t old_collisions = (uint64_t)elem->collision_fvector.n;
+    recheck_diagnostics.candidates += candidates;
+    recheck_diagnostics.old_collisions += old_collisions;
+    recheck_diagnostics.potential_search_pairs += candidates * old_collisions;
+    if (candidates > recheck_diagnostics.max_candidates)
+        recheck_diagnostics.max_candidates = candidates;
+    if (old_collisions > recheck_diagnostics.max_old_collisions)
+        recheck_diagnostics.max_old_collisions = old_collisions;
+#endif
 #ifdef IVP_DEBUG_BUILD
     /* IVP_Diff_Hash constructor: IVP_OO_CMP::calc_hash_index(c, object) of
      * every old collision (ivp_mindist.cxx:720) */

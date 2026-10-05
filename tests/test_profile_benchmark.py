@@ -10,6 +10,24 @@ import profile_benchmark as profiler
 
 
 class ProfileTests(unittest.TestCase):
+    def test_broadphase_work_counts_are_consistent(self):
+        fields = ("rechecks", "recursive_rechecks", "max_depth", "candidates", "old_collisions",
+                  "max_candidates", "max_old_collisions", "potential_search_pairs", "searches",
+                  "found", "misses", "entries_compared", "max_scan", "swaps")
+        empty = dict.fromkeys(fields, 0)
+        profiler.validate_broadphase_counts(empty, "empty-world")
+        counts = dict(empty, rechecks=2, max_depth=1, candidates=8, old_collisions=6,
+                      max_candidates=5, max_old_collisions=4, potential_search_pairs=20,
+                      searches=7, found=5, misses=2, entries_compared=10, max_scan=3, swaps=4)
+        profiler.validate_broadphase_counts(counts, "test")
+        for broken in ({"found": 6}, {"swaps": 6}, {"entries_compared": 4},
+                       {"max_scan": 5}, {"recursive_rechecks": 3}, {"searches": 9},
+                       {"misses": -1}, {"rechecks": "2"}):
+            with self.assertRaises(benchmark.BenchmarkError):
+                profiler.validate_broadphase_counts(dict(counts, **broken), "test")
+        with self.assertRaises(benchmark.BenchmarkError):
+            profiler.validate_broadphase_counts({}, "invalid")
+
     def test_finger_counts_are_a_subset_not_an_extra_add_category(self):
         counts = {"adds": 10, "tree_adds": 1, "skip_adds": 8, "fallback_adds": 1,
                   "population_buckets": [10], "finger_attempts": 7, "finger_hits": 6}

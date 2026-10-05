@@ -20,6 +20,7 @@
 #include <string.h>
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
 #include "ivp_minlist_diagnostics.h"
+#include "ivp_recheck_diagnostics.h"
 #endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -79,6 +80,7 @@ typedef struct bench_measurement {
     int window_impacts[WINDOW_COUNT];
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     ivp_minlist_diagnostics_t minlist;
+    ivp_recheck_diagnostics_t broadphase;
 #endif
 } bench_measurement_t;
 
@@ -171,6 +173,7 @@ static void begin_operation(ivp_environment_t *env)
 {
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     ivp_minlist_diagnostics_reset();
+    ivp_recheck_diagnostics_reset();
 #endif
     ivp_performance_counter_t *pc = ivp_environment_get_performance_counter(env);
     if (pc) counter_reset(pc, 0.0);
@@ -310,6 +313,7 @@ static void collect_phases(ivp_environment_t *env, bench_measurement_t *m)
 {
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     m->minlist = ivp_minlist_diagnostics_get();
+    m->broadphase = ivp_recheck_diagnostics_get();
 #endif
     ivp_performance_counter_t *base = ivp_environment_get_performance_counter(env);
     if (!base) return;
@@ -718,6 +722,19 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
     for (int i = 0; i < 6; ++i)
         fprintf(out, "%s%llu", i ? "," : "", (unsigned long long)d->population_buckets[i]);
     fprintf(out, "]}");
+    const ivp_recheck_diagnostics_t *b = &m->broadphase;
+    fprintf(out, ",\"broadphase_operations\":{\"rechecks\":%llu,\"recursive_rechecks\":%llu,"
+            "\"max_depth\":%llu,\"candidates\":%llu,\"old_collisions\":%llu,"
+            "\"max_candidates\":%llu,\"max_old_collisions\":%llu,\"potential_search_pairs\":%llu,"
+            "\"searches\":%llu,\"found\":%llu,\"misses\":%llu,\"entries_compared\":%llu,"
+            "\"max_scan\":%llu,\"swaps\":%llu}",
+            (unsigned long long)b->rechecks, (unsigned long long)b->recursive_rechecks,
+            (unsigned long long)b->max_depth, (unsigned long long)b->candidates,
+            (unsigned long long)b->old_collisions, (unsigned long long)b->max_candidates,
+            (unsigned long long)b->max_old_collisions, (unsigned long long)b->potential_search_pairs,
+            (unsigned long long)b->searches, (unsigned long long)b->found,
+            (unsigned long long)b->misses, (unsigned long long)b->entries_compared,
+            (unsigned long long)b->max_scan, (unsigned long long)b->swaps);
 #endif
 }
 

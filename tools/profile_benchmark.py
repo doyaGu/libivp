@@ -166,6 +166,26 @@ def validate_operation_counts(counts: dict | None, case: str) -> None:
         raise benchmark.BenchmarkError(f"{case}: inconsistent finger operation counts")
 
 
+def validate_broadphase_counts(counts: dict | None, case: str) -> None:
+    fields = ("rechecks", "recursive_rechecks", "max_depth", "candidates", "old_collisions",
+              "max_candidates", "max_old_collisions", "potential_search_pairs", "searches",
+              "found", "misses", "entries_compared", "max_scan", "swaps")
+    if not isinstance(counts, dict) or any(type(counts.get(f)) is not int or counts[f] < 0
+                                          for f in fields):
+        raise benchmark.BenchmarkError(f"{case}: missing/invalid broadphase operation counts")
+    if (counts["searches"] != counts["found"] + counts["misses"]
+            or counts["searches"] > counts["candidates"]
+            or counts["swaps"] > counts["found"]
+            or counts["entries_compared"] < counts["found"]
+            or counts["entries_compared"] > counts["potential_search_pairs"]
+            or counts["max_scan"] > counts["max_old_collisions"]
+            or counts["max_candidates"] > counts["candidates"]
+            or counts["max_old_collisions"] > counts["old_collisions"]
+            or counts["recursive_rechecks"] > counts["rechecks"]
+            or counts["max_depth"] > counts["rechecks"]):
+        raise benchmark.BenchmarkError(f"{case}: inconsistent broadphase operation counts")
+
+
 def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
     raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
     command = [str(runner), "--profile", args.profile, "--case", case,
@@ -222,6 +242,11 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
         counts = counted.get("minlist_operations")
         validate_operation_counts(counts, case)
         report["minlist_operations"] = counts
+        # Older operation runners omit broadphase counters.
+        if "broadphase_operations" in counted:
+            broadphase = counted["broadphase_operations"]
+            validate_broadphase_counts(broadphase, case)
+            report["broadphase_operations"] = broadphase
     return report
 
 
@@ -250,6 +275,16 @@ def print_report(result: dict, top: int) -> None:
                 attempts = c["finger_attempts"]
                 print(f"    cached skip-prefix hits={c['finger_hits']}/{attempts} "
                       f"({100 * c['finger_hits'] / attempts if attempts else 0:.1f}% of attempts)")
+        if "broadphase_operations" in case:
+            c = case["broadphase_operations"]
+            searches = c["searches"]
+            print(f"  broadphase (separate intrusive run): rechecks={c['rechecks']}, "
+                  f"candidates={c['candidates']}, old collisions={c['old_collisions']}")
+            print(f"    searches={searches}, found={c['found']}, misses={c['misses']}, "
+                  f"comparisons/search={c['entries_compared'] / searches if searches else 0:.1f}, "
+                  f"max scan={c['max_scan']}, swaps={c['swaps']}")
+            print(f"    max candidates={c['max_candidates']}, max old collisions={c['max_old_collisions']}, "
+                  f"recursive rechecks={c['recursive_rechecks']}, max depth={c['max_depth']}")
 
 
 def main(argv=None) -> int:
