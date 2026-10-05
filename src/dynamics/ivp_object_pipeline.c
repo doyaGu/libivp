@@ -409,6 +409,19 @@ void ivp_object_change_unmovable_flag(ivp_object_t *obj, bool flag)
 {
     ivp_core_t *my_core = obj->physical_core;   /* get_core() */
     if (my_core->physical_unmoveable == flag) return;
+    ivp_sim_unit_t *replacement_unit = NULL;
+    ivp_sim_ctrl_t *gravity = NULL;
+    if (flag && my_core->sim_unit) {
+        replacement_unit = ivp_sim_unit_new();
+        gravity = ivp_env_get_standard_gravity_controller(ivp_core_env(my_core));
+        if (!replacement_unit || !ivp_sim_unit_add_sim_unit_core(replacement_unit, my_core) ||
+            !ivp_sim_unit_add_controller_of_core(replacement_unit, my_core, gravity) ||
+            !ivp_pvec_reserve(&my_core->controllers_of_core, 1)) {
+            ivp_sim_unit_delete(replacement_unit);
+            return;
+        }
+        replacement_unit->sim_unit_movement_type = IVP_MT_NOT_SIM;
+    }
     for (int d = ivp_core_n_objects(my_core) - 1; d >= 0; d--) {
         ivp_object_unlink_contact_points(ivp_core_object_at(my_core, d), false);
     }
@@ -423,14 +436,14 @@ void ivp_object_change_unmovable_flag(ivp_object_t *obj, bool flag)
         if (my_core->sim_unit) {
             struct ivp_environment *env = ivp_core_env(my_core);
             ivp_sim_unit_sim_unit_remove_core(my_core->sim_unit, my_core);
-            my_core->sim_unit = ivp_sim_unit_new();
-            ivp_sim_unit_add_sim_unit_core(my_core->sim_unit, my_core);
-            my_core->sim_unit->sim_unit_movement_type = IVP_MT_NOT_SIM;
+            my_core->sim_unit = replacement_unit;
             for (int ic = ivp_pvec_len(&my_core->controllers_of_core) - 1; ic >= 0; ic--) {
                 ivp_pvec_remove_at(&my_core->controllers_of_core, ic);
             }
             ivp_sim_units_mgr_add_sim_unit(&env->pl->sim_units_manager, my_core->sim_unit);
-            ivp_core_add_core_controller(my_core, &env->pl->gravity_ctrl);
+            int added = ivp_pvec_add(&my_core->controllers_of_core, gravity);
+            IVP_ASSERT(added >= 0);
+            if (added < 0) IVP_CORE();   /* core controller capacity was reserved above */
         }
     }
     ivp_core_values_changed_recalc_redundants(my_core);

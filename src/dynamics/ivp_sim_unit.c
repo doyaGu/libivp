@@ -1,6 +1,7 @@
 /* ivp_sim_unit.c — port of IVP_Simulation_Unit / IVP_Sim_Units_Manager /
  * IVP_Controller_Manager (ivp_intern/ivp_sim_unit.cxx)
  */
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -370,23 +371,31 @@ void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
 
 /* ── merge / split / union find ────────────────────────────────────────── */
 
-void ivp_sim_unit_throw_cores_into_my_sim_unit(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
+bool ivp_sim_unit_throw_cores_into_my_sim_unit(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
 {
+    int first_count = ivp_pvec_len(&su->sim_unit_cores);
+    int second_count = ivp_pvec_len(&second_unit->sim_unit_cores);
+    if (second_count > INT_MAX - first_count ||
+        !ivp_pvec_reserve(&su->sim_unit_cores, first_count + second_count)) return false;
     struct ivp_environment *env = NULL;
-    for (int i = 0; i < ivp_pvec_len(&second_unit->sim_unit_cores); i++) {
+    for (int i = 0; i < second_count; i++) {
         ivp_core_t *my_core = su_core_at(second_unit, i);
-        ivp_sim_unit_add_sim_unit_core(su, my_core);
+        bool added = ivp_sim_unit_add_sim_unit_core(su, my_core);
+        IVP_ASSERT(added);
+        if (!added) return false;   /* destination capacity was reserved above */
         env = ivp_core_env(my_core);
         my_core->sim_unit = su;
     }
     if (env) ivp_sim_units_mgr_rem_sim_unit(ivp_env_get_sim_units_manager(env), second_unit);
+    return true;
 }
 
-void ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
+bool ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
 {
+    if (!ivp_sim_unit_throw_cores_into_my_sim_unit(su, second_unit)) return false;
     ivp_sim_unit_clean_sim_unit(su);
-    ivp_sim_unit_throw_cores_into_my_sim_unit(su, second_unit);
     ivp_sim_unit_sim_unit_calc_redundants(su);
+    return true;
 }
 
 static ivp_core_t *su_union_find_test(ivp_sim_unit_t *su)
@@ -423,6 +432,14 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
     bool next_split_necessary = false;
     ivp_sim_unit_t *split_new_unit = ivp_sim_unit_new();
     if (!split_new_unit) return;
+    int split_count = 0;
+    for (int i = 0; i < ivp_pvec_len(&su->sim_unit_cores); i++) {
+        if (ivp_core_union_find_get_father(su_core_at(su, i)) == split_father) split_count++;
+    }
+    if (!ivp_pvec_reserve(&split_new_unit->sim_unit_cores, split_count)) {
+        ivp_sim_unit_delete(split_new_unit);
+        return;
+    }
     split_new_unit->sim_unit_movement_type = IVP_MT_MOVING;
     ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(ivp_core_env(split_father)), split_new_unit);
     for (int i = 0; i < ivp_pvec_len(&su->sim_unit_cores); i++) {
@@ -437,7 +454,9 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
         } else {
             ivp_pvec_remove_at(&su->sim_unit_cores, i);
             i--;
-            ivp_pvec_add(&split_new_unit->sim_unit_cores, my_core);
+            bool added = ivp_sim_unit_add_sim_unit_core(split_new_unit, my_core);
+            IVP_ASSERT(added);
+            if (!added) IVP_CORE();   /* destination capacity was reserved above */
             my_core->sim_unit = split_new_unit;
         }
     }
@@ -812,9 +831,10 @@ void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
         }
         if (reference_unit != NULL) {
             if (test_sim_unit != reference_unit) {
-                ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit);
-                ivp_sim_unit_delete(test_sim_unit);
-                did_fusion = true;
+                if (ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit)) {
+                    ivp_sim_unit_delete(test_sim_unit);
+                    did_fusion = true;
+                }
             }
         } else {
             reference_unit = test_sim_unit;

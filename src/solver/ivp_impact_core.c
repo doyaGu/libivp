@@ -1127,11 +1127,9 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
     if (!((int)core1->physical_unmoveable | (int)core0->physical_unmoveable)) {
         if (sim0 != sim1) {
             if (sim1 == sim_unit_not_destroy) {
-                ivp_sim_unit_fusion_simulation_unities(sim1, sim0);
-                ivp_sim_unit_delete(sim0);
+                if (ivp_sim_unit_fusion_simulation_unities(sim1, sim0)) ivp_sim_unit_delete(sim0);
             } else {
-                ivp_sim_unit_fusion_simulation_unities(sim0, sim1);
-                ivp_sim_unit_delete(sim1);
+                if (ivp_sim_unit_fusion_simulation_unities(sim0, sim1)) ivp_sim_unit_delete(sim1);
             }
         }
     }
