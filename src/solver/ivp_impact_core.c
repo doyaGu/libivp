@@ -1061,7 +1061,7 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
                     goto add_second_to_first_dist_only;
                 }
             }
-            fr_info1 = ivp_fr_info_create();
+            fr_info1 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
             fr_info1->l_friction_system = fr_sys0;
             ivp_core_add_friction_info(core1, fr_info1);
             ivp_fr_system_add_core_to_system(fr_sys0, core1);
@@ -1071,7 +1071,7 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
             affected_fs = fr_sys0;
         }
     } else {
-        fr_info0 = ivp_fr_info_create();
+        fr_info0 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
         if (!core1->physical_unmoveable && (fr_info1 = ivp_core_moveable_core_has_friction_info(core1)) != NULL) {
             ivp_fr_system_t *fr_sys1 = fr_info1->l_friction_system;
             fr_info0->l_friction_system = fr_sys1;
@@ -1082,7 +1082,7 @@ ivp_contact_pt_t *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *my
             affected_fs = fr_sys1;
         } else {
             ivp_fr_system_t *new_system = ivp_fr_system_create(my_env);
-            fr_info1 = ivp_fr_info_create();
+            fr_info1 = ivp_fr_info_create(ivp_env_get_allocator(my_env));
             fr_info0->l_friction_system = new_system;
             fr_info1->l_friction_system = new_system;
             ivp_core_add_friction_info(core1, fr_info1);

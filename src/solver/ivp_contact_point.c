@@ -114,8 +114,10 @@ static void cp_ledge_reference(const ivp_object_t *obj, const ivp_compact_edge_t
 
 ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
 {
-    ivp_contact_pt_t *cp = (ivp_contact_pt_t *)calloc(1, sizeof(*cp));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(md->env);
+    ivp_contact_pt_t *cp = (ivp_contact_pt_t *)ivp_alloc(allocator, sizeof(*cp));
     if (!cp) return NULL;
+    memset(cp, 0, sizeof(*cp));
     ivp_md_synapse_t *syn0 = ivp_mindist_get_sorted_synapse(md, 0);
     fr_synapse_init(&cp->synapse[0], cp, syn0->l_obj, syn0->edge, syn0->status);
     /* add reference to the used ledge (released in ivp_contact_pt_destroy) */
@@ -182,7 +184,7 @@ void ivp_contact_pt_destroy(ivp_contact_pt_t *cp)
             }
         }
     }
-    free(cp);
+    ivp_free(ivp_env_get_allocator(env), cp, sizeof(*cp));
 }
 
 void ivp_contact_pt_reset_time(ivp_contact_pt_t *cp, double offset)
@@ -631,10 +633,16 @@ ivp_contact_pt_t *ivp_friction_mgr_generate_contact_point(ivp_mindist_t *md, boo
 
 /* ── IVP_Friction_Info_For_Core + IVP_Core friction info (ivp_core.cxx) ── */
 
-ivp_fr_info_for_core_t *ivp_fr_info_create(void)
+ivp_fr_info_for_core_t *ivp_fr_info_create(const ivp_allocator_t *allocator)
 {
-    ivp_fr_info_for_core_t *info = (ivp_fr_info_for_core_t *)calloc(1, sizeof(*info));
-    if (info) ivp_pvec_init(&info->friction_springs);
+    if (!allocator) allocator = ivp_default_allocator();
+    ivp_fr_info_for_core_t *info =
+        (ivp_fr_info_for_core_t *)ivp_alloc(allocator, sizeof(*info));
+    if (info) {
+        memset(info, 0, sizeof(*info));
+        info->allocator = allocator;
+        ivp_pvec_init_with_allocator(&info->friction_springs, allocator);
+    }
     return info;
 }
 
@@ -642,7 +650,7 @@ void ivp_fr_info_destroy(ivp_fr_info_for_core_t *info)
 {
     if (!info) return;
     ivp_pvec_clear(&info->friction_springs);
-    free(info);
+    ivp_free(info->allocator, info, sizeof(*info));
 }
 
 void ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp)
@@ -688,9 +696,11 @@ void ivp_core_add_friction_info(ivp_core_t *core, ivp_fr_info_for_core_t *info)
     if (core->physical_unmoveable) {
         ivp_fr_info_list_t *l = (ivp_fr_info_list_t *)core->core_friction_info.for_unmoveables.l_friction_info_hash;
         if (!l) {
-            l = (ivp_fr_info_list_t *)calloc(1, sizeof(*l));
+            const ivp_allocator_t *allocator = ivp_env_get_allocator(ivp_core_env(core));
+            l = (ivp_fr_info_list_t *)ivp_alloc(allocator, sizeof(*l));
             if (!l) return;
-            ivp_pvec_init(&l->infos);
+            memset(l, 0, sizeof(*l));
+            ivp_pvec_init_with_allocator(&l->infos, allocator);
             core->core_friction_info.for_unmoveables.l_friction_info_hash = l;
         }
         IVP_IF(1) /* ivp_core.cxx:1484 */
@@ -736,8 +746,9 @@ void ivp_core_free_friction_info_hash(ivp_core_t *core)
     ivp_fr_info_list_t *l = (ivp_fr_info_list_t *)core->core_friction_info.for_unmoveables.l_friction_info_hash;
     if (l) {
         IVP_ASSERT(ivp_pvec_len(&l->infos) == 0); /* ~IVP_Friction_Hash, ivp_i_friction_hash.cxx:11 */
+        const ivp_allocator_t *allocator = ivp_pvec_allocator(&l->infos);
         ivp_pvec_clear(&l->infos);
-        free(l);
+        ivp_free(allocator, l, sizeof(*l));
         core->core_friction_info.for_unmoveables.l_friction_info_hash = NULL;
     }
 }

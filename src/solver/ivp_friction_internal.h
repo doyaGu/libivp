@@ -123,6 +123,7 @@ static inline float ivp_cp_get_gap_length(const ivp_contact_pt_t *cp) { return c
 
 /* IVP_Friction_Core_Pair */
 typedef struct ivp_fr_core_pair {
+    const ivp_allocator_t *allocator;
     ivp_pvec_t  fr_dists;            /* ivp_contact_pt_t* */
     int         next_ease_nr_psi;
     ivp_time_t  last_impact_time_pair;
@@ -133,6 +134,7 @@ typedef struct ivp_fr_core_pair {
 
 /* IVP_Friction_Info_For_Core */
 typedef struct ivp_fr_info_for_core {
+    const ivp_allocator_t *allocator;
     ivp_pvec_t            friction_springs;   /* ivp_contact_pt_t* */
     struct ivp_fr_system *l_friction_system;
 } ivp_fr_info_for_core_t;
@@ -194,7 +196,7 @@ void ivp_fr_core_pair_debug_printf_pair(ivp_fr_core_pair_t *pair);
 /* out_friction_info_obj (ivp_friction_gaps.cxx, returns at once) */
 void ivp_fr_out_friction_info_obj(ivp_core_t *obj);
 
-ivp_fr_info_for_core_t *ivp_fr_info_create(void);
+ivp_fr_info_for_core_t *ivp_fr_info_create(const ivp_allocator_t *allocator);
 void ivp_fr_info_destroy(ivp_fr_info_for_core_t *info);
 void ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp);
 void ivp_fr_info_delete_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp);

@@ -414,11 +414,14 @@ static void cp_calc_pretension(ivp_contact_pt_t *cp, float len)
 
 /* ── IVP_Friction_Core_Pair ─────────────────────────────────────────────── */
 
-static ivp_fr_core_pair_t *pair_create(void)
+static ivp_fr_core_pair_t *pair_create(ivp_fr_system_t *fs)
 {
-    ivp_fr_core_pair_t *p = (ivp_fr_core_pair_t *)calloc(1, sizeof(*p));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(fs->l_environment);
+    ivp_fr_core_pair_t *p = (ivp_fr_core_pair_t *)ivp_alloc(allocator, sizeof(*p));
     if (!p) return NULL;
-    ivp_pvec_init(&p->fr_dists);
+    memset(p, 0, sizeof(*p));
+    p->allocator = allocator;
+    ivp_pvec_init_with_allocator(&p->fr_dists, allocator);
     p->next_ease_nr_psi = 1;
     p->last_impact_time_pair = -1000.0;
     p->integrated_anti_energy = 0.0f;
@@ -431,7 +434,7 @@ static void pair_destroy(ivp_fr_core_pair_t *p)
 {
     if (!p) return;
     ivp_pvec_clear(&p->fr_dists);
-    free(p);
+    ivp_free(p->allocator, p, sizeof(*p));
 }
 
 static float pair_get_sum_slide_way(ivp_fr_core_pair_t *pair, const ivp_sim_es_t *es)
@@ -772,20 +775,21 @@ static void frs_debug_ease_testt(ivp_contact_pt_t **all_my_dists, int total_n)
  * transaction ends) and the force vectors from alloca.  The arena bytes are
  * reserved the same way here; they are left holding zeros instead of the
  * reference's (address dependent) pointer bits. */
-static void frs_ease_friction_pair(ivp_fr_core_pair_t *my_pair, ivp_u_memory_t *my_mem)
+static void frs_ease_friction_pair(ivp_fr_core_pair_t *my_pair, ivp_u_memory_t *my_mem,
+                                   struct ivp_environment *env)
 {
     int total_n = ivp_pvec_len(&my_pair->fr_dists);
     size_t arena_bytes = (size_t)(total_n > 0 ? total_n : 0) * IVP_FR_REF_POINTER_SIZE;
     void *arena_slot = ivp_u_memory_get_mem(my_mem, arena_bytes);
     if (arena_slot) memset(arena_slot, 0, arena_bytes);
     if (total_n <= 0) return;
-    ivp_contact_pt_t **all_my_dists = (ivp_contact_pt_t **)malloc((size_t)total_n * sizeof(ivp_contact_pt_t *));
-    ivp_vec3f_t *ease_diff = (ivp_vec3f_t *)malloc((size_t)total_n * sizeof(ivp_vec3f_t));
-    if (!all_my_dists || !ease_diff) {
-        free(all_my_dists);
-        free(ease_diff);
-        return;
-    }
+    if ((size_t)total_n > SIZE_MAX / sizeof(ivp_contact_pt_t *) ||
+        (size_t)total_n > SIZE_MAX / sizeof(ivp_vec3f_t)) return;
+    ivp_contact_pt_t **all_my_dists = (ivp_contact_pt_t **)ivp_env_sim_mem_alloc(
+        env, (size_t)total_n * sizeof(ivp_contact_pt_t *));
+    ivp_vec3f_t *ease_diff = (ivp_vec3f_t *)ivp_env_sim_mem_alloc(
+        env, (size_t)total_n * sizeof(ivp_vec3f_t));
+    if (!all_my_dists || !ease_diff) return;
     double easing_factor = 1.0f / ((double)total_n + P_DOUBLE_EPS);
     for (int i = ivp_pvec_len(&my_pair->fr_dists) - 1; i >= 0; i--) {
         all_my_dists[i] = cp_at(&my_pair->fr_dists, i);
@@ -823,8 +827,6 @@ static void frs_ease_friction_pair(ivp_fr_core_pair_t *my_pair, ivp_u_memory_t *
     {
         frs_debug_ease_testt(all_my_dists, total_n);
     }
-    free(all_my_dists);
-    free(ease_diff);
 }
 
 /* ── IVP_Friction_System bookkeeping (ivp_physic_private.cxx) ──────────── */
@@ -853,8 +855,10 @@ static const ivp_sim_ctrl_vt_t fs_energy_vt = {
 
 ivp_fr_system_t *ivp_fr_system_create(struct ivp_environment *env)
 {
-    ivp_fr_system_t *fs = (ivp_fr_system_t *)calloc(1, sizeof(*fs));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ivp_fr_system_t *fs = (ivp_fr_system_t *)ivp_alloc(allocator, sizeof(*fs));
     if (!fs) return NULL;
+    memset(fs, 0, sizeof(*fs));
     IVP_IF(fr_dm(env)->check_fs) /* ivp_physic_private.cxx:659 */
     {
         fprintf(fr_dm(env)->out_deb_file, "create_fs %f %p\n", ivp_env_get_current_time(env), (void *)fs);
@@ -868,9 +872,9 @@ ivp_fr_system_t *ivp_fr_system_create(struct ivp_environment *env)
     fs->friction_obj_number = 0;
     fs->friction_dist_number = 0;
     fs->complex_not_necessary_number = 0;
-    ivp_pvec_init(&fs->cores_of_friction_system);
-    ivp_pvec_init(&fs->moveable_cores_of_friction_system);
-    ivp_pvec_init(&fs->fr_pairs_of_objs);
+    ivp_pvec_init_with_allocator(&fs->cores_of_friction_system, allocator);
+    ivp_pvec_init_with_allocator(&fs->moveable_cores_of_friction_system, allocator);
+    ivp_pvec_init_with_allocator(&fs->fr_pairs_of_objs, allocator);
     return fs;
 }
 
@@ -885,7 +889,7 @@ void ivp_fr_system_destroy(ivp_fr_system_t *fs)
     ivp_pvec_clear(&fs->cores_of_friction_system);
     ivp_pvec_clear(&fs->moveable_cores_of_friction_system);
     ivp_pvec_clear(&fs->fr_pairs_of_objs);
-    free(fs);
+    ivp_free(ivp_env_get_allocator(fs->l_environment), fs, sizeof(*fs));
 }
 
 static void fs_recalc_all_contact_points(ivp_fr_system_t *fs)
@@ -983,7 +987,7 @@ void ivp_fr_system_dist_added_update_pair_info(ivp_fr_system_t *fs, ivp_contact_
     if (my_pair_info) {
         ivp_pvec_add(&my_pair_info->fr_dists, new_dist);
     } else {
-        my_pair_info = pair_create();
+        my_pair_info = pair_create(fs);
         if (!my_pair_info) return;
         my_pair_info->objs[0] = core0;
         my_pair_info->objs[1] = core1;
@@ -1195,7 +1199,8 @@ static void fs_split_friction_system(ivp_fr_system_t *fr_sys, ivp_core_t *split_
     for (int j = ivp_pvec_len(&fr_sys->cores_of_friction_system) - 1; j >= 0; j--) {
         ivp_core_t *obj = core_at(&fr_sys->cores_of_friction_system, j);
         if (obj->physical_unmoveable) {
-            ivp_fr_info_for_core_t *fr_i = ivp_fr_info_create();
+            ivp_fr_info_for_core_t *fr_i = ivp_fr_info_create(
+                ivp_env_get_allocator(fr_sys->l_environment));
             fr_i->l_friction_system = new_fr_sys;
             ivp_fr_system_add_core_to_system(new_fr_sys, obj);
             ivp_core_add_friction_info(obj, fr_i);
@@ -1328,7 +1333,8 @@ static void fs_ease_friction_forces(ivp_fr_system_t *fs)
         ivp_fr_core_pair_t *my_pairs = pair_at(&fs->fr_pairs_of_objs, i);
         my_pairs->next_ease_nr_psi--;
         if (my_pairs->next_ease_nr_psi == 0) {
-            frs_ease_friction_pair(my_pairs, ivp_env_get_short_term_mem(fs->l_environment));
+            frs_ease_friction_pair(my_pairs, ivp_env_get_short_term_mem(fs->l_environment),
+                                   fs->l_environment);
             my_pairs->next_ease_nr_psi = IVP_FR_EASE_EVERY_NTH_PSI;
         }
     }
