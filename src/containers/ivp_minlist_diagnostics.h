@@ -9,6 +9,8 @@ typedef struct ivp_minlist_diagnostics {
     uint64_t tree_adds;
     uint64_t skip_adds;
     uint64_t fallback_adds;
+    uint64_t finger_attempts; /* cached skip prefix, excludes minimum fast path */
+    uint64_t finger_hits;
     uint64_t comparisons;
     uint64_t max_comparisons;
     uint32_t max_population;

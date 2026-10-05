@@ -36,7 +36,7 @@ typedef uint32_t ivp_minlist_index_t;
 typedef struct ivp_minlist_elem {
     uint32_t tree_left;
     uint32_t tree_right;
-    uint32_t tree_parent_color; /* low 31 bits parent, high bit red */
+    uint32_t tree_parent_color; /* tree: parent/red; skip: cached prefix rank */
     uint32_t next;        /* doubly-linked: next in sorted order */
     uint32_t prev;        /* doubly-linked: previous in sorted order */
     float    value;       /* sort key */
@@ -51,7 +51,7 @@ typedef struct ivp_minlist {
     uint32_t            free_list;
     uint32_t            first_element;  /* head of sorted list */
     uint32_t            first_long;     /* small-list skip chain */
-    uint32_t            tree_root;      /* finite values only */
+    uint32_t            tree_root;      /* finite tree root, or cached skip anchor */
     uint32_t            counter;        /* number of elements */
     uint32_t            nonfinite_count;
     bool                tree_active;

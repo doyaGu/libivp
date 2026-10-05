@@ -1,5 +1,6 @@
 #include "ivp_test.h"
 #include <ivp/containers/ivp_minlist.h>
+#include "data/minlist_reference_model.h"
 #include <ivp/containers/ivp_vhash.h>
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/utility/ivp_hash.h>
@@ -250,6 +251,7 @@ IVP_TEST(minlist_nonfinite_values_use_reference_fallback) {
     ivp_minlist_index_t finite_b = ivp_minlist_add(&ml, &dummy_c, 2.0f);
     ivp_minlist_index_t pos_inf = ivp_minlist_add(&ml, &dummy_d, INFINITY);
     ivp_minlist_index_t neg_inf = ivp_minlist_add(&ml, &dummy_e, -INFINITY);
+    IVP_ASSERT_EQ(ml.tree_root, IVP_MINLIST_LONG_UNUSED);
     ivp_minlist_enumerator_t en;
     ivp_minlist_enum_init(&en, &ml);
     IVP_ASSERT_TRUE(ivp_minlist_enum_next(&en) == &dummy_e);
@@ -261,6 +263,9 @@ IVP_TEST(minlist_nonfinite_values_use_reference_fallback) {
     ivp_minlist_remove(&ml, nan_value);
     ivp_minlist_remove(&ml, pos_inf);
     ivp_minlist_remove(&ml, neg_inf);
+    ivp_minlist_index_t later = ivp_minlist_add(&ml, &dummy_e, 3.0f);
+    IVP_ASSERT_EQ(ml.tree_root, IVP_MINLIST_LONG_UNUSED);
+    ivp_minlist_remove(&ml, later);
     ivp_minlist_remove(&ml, finite_b);
     ivp_minlist_remove(&ml, finite_a);
     ivp_minlist_destroy(&ml);
@@ -357,6 +362,122 @@ static void minlist_verify_model(ivp_minlist_t *ml, const minlist_model_entry_t 
         }
     }
     IVP_ASSERT_NULL(ivp_minlist_enum_next(&en));
+}
+
+IVP_TEST(minlist_skip_history_matches_reference) {
+    /* Comparing enumeration alone for finite keys misses a changed auxiliary
+     * history. Match both chains, then exercise one nonfinite insertion before
+     * teardown (the legacy model does not support arbitrary NaN removal). */
+    for (uint32_t seed = 1; seed <= 40; seed++) {
+        ivp_minlist_t actual, model;
+        ivp_minlist_init(&actual, ivp_default_allocator(), 1024);
+        ivp_minlist_init(&model, ivp_default_allocator(), 1024);
+        uint32_t state = seed, handles[512], n = 0, id = 0;
+        for (uint32_t op = 0; op < 4000; op++) {
+            if (n && (n == 512 || (op != 3999 && minlist_test_rand(&state) % 4u == 0))) {
+                uint32_t pos = minlist_test_rand(&state) % n;
+                ivp_minlist_remove(&actual, handles[pos]);
+                minlist_model_remove(&model, handles[pos]);
+                handles[pos] = handles[--n];
+                if (op != 3999) goto verify_chains;
+            }
+            if (n < 512) {
+                float value = (float)((int)(minlist_test_rand(&state) % 257u) - 128);
+                if (op % 7u == 0) value = op % 14u ? -0.0f : 0.0f;
+                if (op == 3999) value = seed % 3u == 0 ? NAN : seed % 3u == 1 ? INFINITY : -INFINITY;
+                void *element = (void *)(uintptr_t)(++id);
+                uint32_t a = ivp_minlist_add(&actual, element, value);
+                uint32_t b = minlist_model_add(&model, element, value);
+                IVP_ASSERT_EQ(a, b);
+                handles[n++] = a;
+            }
+verify_chains:
+            IVP_ASSERT_EQ(actual.first_element, model.first_element);
+            IVP_ASSERT_EQ(actual.first_long, model.first_long);
+            IVP_ASSERT_TRUE(memcmp(&actual.min_value, &model.min_value, sizeof(float)) == 0);
+            uint32_t seen = 0;
+            for (uint32_t i = actual.first_element; i != IVP_MINLIST_UNUSED; i = actual.elems[i].next) {
+                IVP_ASSERT_TRUE(++seen <= n);
+                IVP_ASSERT_EQ(actual.elems[i].next, model.elems[i].next);
+                IVP_ASSERT_EQ(actual.elems[i].prev, model.elems[i].prev);
+                IVP_ASSERT_EQ(actual.elems[i].tree_left, model.elems[i].tree_left);
+                if (actual.elems[i].tree_left != IVP_MINLIST_LONG_UNUSED)
+                    IVP_ASSERT_EQ(actual.elems[i].tree_right, model.elems[i].tree_right);
+                IVP_ASSERT_TRUE(actual.elems[i].element == model.elems[i].element);
+                IVP_ASSERT_TRUE(memcmp(&actual.elems[i].value, &model.elems[i].value, sizeof(float)) == 0);
+            }
+            IVP_ASSERT_EQ(seen, n);
+        }
+        ivp_minlist_destroy(&actual);
+        ivp_minlist_destroy(&model);
+    }
+}
+
+IVP_TEST(minlist_local_reinsert_differential) {
+    enum { count = 512, operations = 8000 };
+    minlist_model_entry_t entries[count] = {0};
+    uint32_t order[count];
+    uint32_t order_count = 0, random_state = UINT32_C(0xa441c88d);
+    ivp_minlist_t ml;
+    ivp_minlist_init(&ml, ivp_default_allocator(), 4);
+    for (uint32_t id = 0; id < count; id++) {
+        float value = (float)(minlist_test_rand(&random_state) % 257u);
+        entries[id].value = value;
+        entries[id].sequence = id;
+        entries[id].handle = ivp_minlist_add(&ml, (void *)(uintptr_t)(id + 1u), value);
+        uint32_t pos = 0;
+        while (pos < order_count && entries[order[pos]].value < value) pos++;
+        memmove(order + pos + 1u, order + pos, (size_t)(order_count - pos) * sizeof(*order));
+        order[pos] = id;
+        order_count++;
+    }
+    IVP_ASSERT_FALSE(ml.tree_active);
+    /* This is the real hull pattern: remove and immediately reinsert, reusing
+     * the handle. Include deleting the cached node and both search directions. */
+    for (uint32_t op = 0; op < operations; op++) {
+        uint32_t pos = minlist_test_rand(&random_state) % count;
+        if (op % 3u == 0 && ml.tree_root < ml.malloced_size) {
+            uint32_t recent = (uint32_t)(uintptr_t)ml.elems[ml.tree_root].element - 1u;
+            pos = 0;
+            while (order[pos] != recent) pos++;
+        }
+        uint32_t id = order[pos];
+        ivp_minlist_index_t old_handle = entries[id].handle;
+        ivp_minlist_remove(&ml, old_handle);
+        memmove(order + pos, order + pos + 1u, (size_t)(count - pos - 1u) * sizeof(*order));
+        float value = entries[id].value + (float)((int)(minlist_test_rand(&random_state) % 17u) - 8);
+        if (op % 17u == 0) value = op % 34u ? -0.0f : 0.0f;
+        entries[id].value = value;
+        entries[id].sequence = count + op;
+        entries[id].handle = ivp_minlist_add(&ml, (void *)(uintptr_t)(id + 1u), value);
+        IVP_ASSERT_EQ(entries[id].handle, old_handle);
+        if (ml.tree_root < ml.malloced_size) {
+            uint32_t rank = 0, anchor = ml.first_long;
+            while (anchor != IVP_MINLIST_UNUSED) {
+                rank++;
+                if (anchor == ml.tree_root) break;
+                anchor = ml.elems[anchor].tree_left;
+            }
+            IVP_ASSERT_EQ(anchor, ml.tree_root);
+            IVP_ASSERT_EQ(ml.elems[anchor].tree_parent_color, rank);
+        }
+        pos = 0;
+        while (pos < count - 1u && entries[order[pos]].value < value) pos++;
+        memmove(order + pos + 1u, order + pos, (size_t)(count - pos - 1u) * sizeof(*order));
+        order[pos] = id;
+        minlist_verify_model(&ml, entries, order, count, _fail_count);
+        if (*_fail_count) break;
+        IVP_ASSERT_TRUE(memcmp(&ml.min_value, &entries[order[0]].value, sizeof(float)) == 0);
+        if (op % 257u == 0) {
+            /* Hull/time-manager rebasing changes the keys externally. A
+             * finger must retain a handle, not a stale key or element pointer. */
+            for (uint32_t i = 0; i < count; i++) entries[i].value += 1.25f;
+            for (uint32_t i = ml.first_element; i != IVP_MINLIST_UNUSED; i = ml.elems[i].next)
+                ml.elems[i].value += 1.25f;
+            ml.min_value += 1.25f;
+        }
+    }
+    ivp_minlist_destroy(&ml);
 }
 
 IVP_TEST(minlist_randomized_differential) {
@@ -711,6 +832,8 @@ int main(void) {
     IVP_REGISTER(minlist_index_activates_for_finite_values);
     IVP_REGISTER(minlist_indexed_zero_and_nonfinite_keys);
     IVP_REGISTER(minlist_randomized_differential);
+    IVP_REGISTER(minlist_local_reinsert_differential);
+    IVP_REGISTER(minlist_skip_history_matches_reference);
 
     /* Vhash tests */
     IVP_REGISTER(vhash_init_destroy);

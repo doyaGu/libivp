@@ -31,6 +31,8 @@ ivp_minlist_diagnostics_t ivp_minlist_diagnostics_get(void)
 #define IVP_MINLIST_RED UINT32_C(0x80000000)
 #define IVP_MINLIST_PARENT_MASK UINT32_C(0x7fffffff)
 #define IVP_MINLIST_TREE_THRESHOLD UINT32_C(1024)
+#define IVP_MINLIST_CACHE_THRESHOLD UINT32_C(64)
+#define IVP_MINLIST_CACHE_BACKTRACK 8u
 
 static uint32_t rb_parent(const ivp_minlist_t *ml, uint32_t index)
 {
@@ -456,20 +458,55 @@ static void link_with_reference_skip_search(ivp_minlist_t *ml, uint32_t index)
         return;
     }
 
+    /* Reuse the previous skip-search prefix, but keep the reference's
+     * first_after, comparison limit and auxiliary-node creation unchanged.
+     * Their history matters even for nonfinite comparison semantics. */
     uint32_t last = ml->first_element;
     uint32_t long_index = ml->first_long;
-    int max_compare_length = 3;
+    uint32_t anchor = IVP_MINLIST_UNUSED;
+    int prefix_length = 0;
+    uint32_t cached = ml->counter >= IVP_MINLIST_CACHE_THRESHOLD
+        ? ml->tree_root : IVP_MINLIST_TREE_UNUSED;
+    if (cached < ml->malloced_size && isfinite(e->value)) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        minlist_diagnostics.finger_attempts++;
+#endif
+        prefix_length = (int)ml->elems[cached].tree_parent_color;
+        uint32_t walked = 0;
+        while (cached != IVP_MINLIST_UNUSED) {
+            COUNT_COMPARISON();
+            if (!(ml->elems[cached].value >= e->value)) break;
+            if (walked++ == IVP_MINLIST_CACHE_BACKTRACK) {
+                cached = IVP_MINLIST_UNUSED;
+                prefix_length = 0;
+                break;
+            }
+            cached = ml->elems[cached].tree_right;
+            prefix_length--;
+        }
+        if (cached != IVP_MINLIST_UNUSED) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+            minlist_diagnostics.finger_hits++;
+#endif
+            anchor = cached;
+            last = cached;
+            long_index = ml->elems[cached].tree_left;
+        }
+    }
+    int max_compare_length = 3 + prefix_length;
     while (long_index != IVP_MINLIST_UNUSED) {
         COUNT_COMPARISON();
         ivp_minlist_elem_t *long_elem = &ml->elems[long_index];
         if (long_elem->value >= e->value) break;
         max_compare_length++;
+        anchor = long_index;
         last = long_index;
         long_index = long_elem->tree_left;
     }
 
     uint32_t first_after = last;
     int comparisons = 0;
+    uint32_t cached_rank;
     uint32_t current = ml->elems[last].next;
     while (current != IVP_MINLIST_UNUSED) {
         COUNT_COMPARISON();
@@ -485,12 +522,15 @@ static void link_with_reference_skip_search(ivp_minlist_t *ml, uint32_t index)
     link_after(ml, index, last);
 
 update_skip:
+    cached_rank = (uint32_t)(max_compare_length - 3);
     if (comparisons > max_compare_length) {
         uint32_t new_long = first_after;
         for (int k = 2; k < max_compare_length; k++) new_long = ml->elems[new_long].next;
         uint32_t next_of_first = ml->elems[first_after].tree_left;
         ivp_minlist_elem_t *new_long_elem = &ml->elems[new_long];
         IVP_ASSERT(new_long_elem->tree_left == IVP_MINLIST_LONG_UNUSED);
+        anchor = new_long;
+        cached_rank++;
         if (next_of_first != IVP_MINLIST_LONG_UNUSED) {
             new_long_elem->tree_left = next_of_first;
             new_long_elem->tree_right = first_after;
@@ -506,6 +546,11 @@ update_skip:
             }
             ml->first_long = new_long;
         }
+    }
+    if (ml->counter >= IVP_MINLIST_CACHE_THRESHOLD &&
+        ml->tree_root != IVP_MINLIST_LONG_UNUSED) {
+        ml->tree_root = anchor == IVP_MINLIST_UNUSED ? IVP_MINLIST_TREE_UNUSED : anchor;
+        if (anchor != IVP_MINLIST_UNUSED) ml->elems[anchor].tree_parent_color = cached_rank;
     }
 }
 
@@ -591,6 +636,9 @@ ivp_minlist_index_t ivp_minlist_add(ivp_minlist_t *ml, void *elem, float value)
         ml->nonfinite_count++;
     }
     ml->counter++;
+    /* Preserve the unmodified reference search after a nonfinite insertion;
+     * its skip chain need not stay ordered, even if that item is removed. */
+    if (!ml->tree_active && !finite) ml->tree_root = IVP_MINLIST_LONG_UNUSED;
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     minlist_diagnostics.comparisons += search_comparisons;
     if (search_comparisons > minlist_diagnostics.max_comparisons)
@@ -611,6 +659,22 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index)
     ivp_minlist_elem_t *e = &ml->elems[index];
     uint32_t prev = e->prev;
     uint32_t next = e->next;
+    if (!ml->tree_active && ml->tree_root < ml->malloced_size &&
+        e->tree_left != IVP_MINLIST_LONG_UNUSED) {
+        /* Only skip-member removal changes the cached prefix length.
+         * Equal keys do not identify their position: discard that cache. */
+        uint32_t cached = ml->tree_root;
+        uint32_t rank = ml->elems[cached].tree_parent_color;
+        if (cached == index) {
+            cached = e->tree_right;
+            ml->tree_root = cached == IVP_MINLIST_UNUSED ? IVP_MINLIST_TREE_UNUSED : cached;
+            if (cached != IVP_MINLIST_UNUSED) ml->elems[cached].tree_parent_color = rank - 1u;
+        } else if (e->value < ml->elems[cached].value) {
+            ml->elems[cached].tree_parent_color = rank - 1u;
+        } else if (e->value == ml->elems[cached].value) {
+            ml->tree_root = IVP_MINLIST_TREE_UNUSED;
+        }
+    }
     if (prev != IVP_MINLIST_UNUSED) {
         ml->elems[prev].next = next;
     } else {
@@ -638,6 +702,9 @@ void ivp_minlist_remove(ivp_minlist_t *ml, ivp_minlist_index_t index)
         }
     }
     ml->counter--;
+    if (!ml->tree_active && ml->counter < IVP_MINLIST_CACHE_THRESHOLD &&
+        ml->tree_root != IVP_MINLIST_LONG_UNUSED)
+        ml->tree_root = IVP_MINLIST_TREE_UNUSED;
     ml->min_value = ml->counter == 0 ? IVP_MINLIST_MAX_VALUE
                                       : ml->elems[ml->first_element].value;
     e->element = NULL;
