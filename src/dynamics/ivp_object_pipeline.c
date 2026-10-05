@@ -526,6 +526,16 @@ void ivp_anchor_unlink(ivp_anchor_t *anchor)
 /* IVP_Real_Object::set_new_m_object_f_core */
 void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r_t *new_m_object_f_core)
 {
+    const bool needs_quaternion =
+        new_m_object_f_core->rot.rows[0].k[0] != IVP_REAL(1.0) ||
+        new_m_object_f_core->rot.rows[1].k[1] != IVP_REAL(1.0) ||
+        new_m_object_f_core->rot.rows[2].k[2] != IVP_REAL(1.0);
+    ivp_quatr_t *q_core_f_object = obj->q_core_f_object;
+    if (needs_quaternion && !q_core_f_object) {
+        q_core_f_object = (ivp_quatr_t *)calloc(1, sizeof(*q_core_f_object));
+        if (!q_core_f_object) return;
+    }
+
     /* new_m_core_f_object = transpose(new_m_object_f_core) */
     ivp_transform_r_t m;
     for (int r = 0; r < 3; r++) {
@@ -549,14 +559,13 @@ void ivp_object_set_new_m_object_f_core(ivp_object_t *obj, const ivp_transform_r
         lvp_set_f(&obj->shift_core_f_object, &f);   /* IVP_U_Float_Point shift_core_f_object */
         obj->shift_core_f_object_is_zero = false;
     }
-    const ivp_transform_r_t *mm = new_m_object_f_core;
-    if (mm->rot.rows[0].k[0] == IVP_REAL(1.0) && mm->rot.rows[1].k[1] == IVP_REAL(1.0) && mm->rot.rows[2].k[2] == IVP_REAL(1.0)) {
+    if (!needs_quaternion) {
         if (obj->q_core_f_object) {
             free(obj->q_core_f_object);
             obj->q_core_f_object = NULL;
         }
     } else {
-        if (!obj->q_core_f_object) obj->q_core_f_object = (ivp_quatr_t *)calloc(1, sizeof(ivp_quatr_t));
+        obj->q_core_f_object = q_core_f_object;
         ivp_quat_from_mat3(obj->q_core_f_object, &m.rot);
         (void)ivp_quat_normalize(obj->q_core_f_object);
     }
