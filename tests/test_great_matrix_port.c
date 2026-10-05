@@ -320,19 +320,43 @@ static double reduction_value(unsigned int index)
     return value;
 }
 
+static const int k_rounding_modes[] = {
+    FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO
+};
+
+typedef struct fp_rounding_fixture {
+    fenv_t saved;
+} fp_rounding_fixture_t;
+
+static bool fp_rounding_fixture_begin(fp_rounding_fixture_t *fixture)
+{
+    return fegetenv(&fixture->saved) == 0;
+}
+
+static bool fp_rounding_fixture_select(size_t mode_index)
+{
+    return fesetround(k_rounding_modes[mode_index]) == 0;
+}
+
+static bool fp_rounding_fixture_end(const fp_rounding_fixture_t *fixture)
+{
+    return fesetenv(&fixture->saved) == 0;
+}
+
 IVP_TEST(vecfpu_reduction_bitwise_scalar)
 {
-    fenv_t saved;
-    IVP_ASSERT_EQ(fegetenv(&saved), 0);
-    const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    fp_rounding_fixture_t rounding;
+    IVP_ASSERT_TRUE(fp_rounding_fixture_begin(&rounding));
     bool equal = true;
-    for (unsigned int mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
-        equal &= fesetround(modes[mode]) == 0;
-        for (int variant = 0; variant < 14; variant++) {
+    for (size_t mode_index = 0;
+         mode_index < sizeof(k_rounding_modes) / sizeof(k_rounding_modes[0]);
+         mode_index++) {
+        equal &= fp_rounding_fixture_select(mode_index);
+        for (int sequence_shift = 0; sequence_shift < 14; sequence_shift++) {
             double a[80], b[80];
             for (int k = 0; k < 80; k++) {
-                a[k] = reduction_value((unsigned int)(k + variant));
-                b[k] = reduction_value((unsigned int)(3 * k + variant + 1));
+                a[k] = reduction_value((unsigned int)(k + sequence_shift));
+                b[k] = reduction_value((unsigned int)(3 * k + sequence_shift + 1));
             }
             for (int count = 0; count <= 65; count++) {
                 for (int aligned = 0; aligned < 2; aligned++) {
@@ -351,8 +375,7 @@ IVP_TEST(vecfpu_reduction_bitwise_scalar)
             }
         }
     }
-    int restored = fesetenv(&saved);
-    IVP_ASSERT_EQ(restored, 0);
+    IVP_ASSERT_TRUE(fp_rounding_fixture_end(&rounding));
     IVP_ASSERT_TRUE(equal);
 }
 
@@ -362,16 +385,22 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
     double lower[stride * stride], upper[stride * stride], input[stride];
     double expected_mult[stride], expected_temp[stride], expected_out[stride];
     double actual_mult[stride], actual_temp[stride], actual_out[stride];
-    fenv_t saved;
-    IVP_ASSERT_EQ(fegetenv(&saved), 0);
-    const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    fp_rounding_fixture_t rounding;
+    IVP_ASSERT_TRUE(fp_rounding_fixture_begin(&rounding));
     bool equal = true;
-    for (unsigned int mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
-        equal &= fesetround(modes[mode]) == 0;
-        for (int variant = 0; variant < 2; variant++) {
+    for (size_t mode_index = 0;
+         mode_index < sizeof(k_rounding_modes) / sizeof(k_rounding_modes[0]);
+         mode_index++) {
+        equal &= fp_rounding_fixture_select(mode_index);
+        for (int use_exceptional_values = 0; use_exceptional_values < 2;
+             use_exceptional_values++) {
             for (int k = 0; k < stride * stride; k++) {
-                lower[k] = variant ? reduction_value((unsigned int)k) : (double)(k % 17 - 8) / 19.0;
-                upper[k] = variant ? reduction_value((unsigned int)(k + 3)) : (double)(k % 13 - 6) / 23.0;
+                lower[k] = use_exceptional_values
+                    ? reduction_value((unsigned int)k)
+                    : (double)(k % 17 - 8) / 19.0;
+                upper[k] = use_exceptional_values
+                    ? reduction_value((unsigned int)(k + 3))
+                    : (double)(k % 13 - 6) / 23.0;
             }
             for (int k = 0; k < stride; k++) input[k] = (double)(k % 7 - 3) / 11.0;
             for (int n = 0; n <= max_n; n++) {
@@ -406,8 +435,7 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
             }
         }
     }
-    int restored = fesetenv(&saved);
-    IVP_ASSERT_EQ(restored, 0);
+    IVP_ASSERT_TRUE(fp_rounding_fixture_end(&rounding));
     IVP_ASSERT_TRUE(equal);
 }
 
