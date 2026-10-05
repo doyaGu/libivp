@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "ivp_test_fault_allocator.h"
 #include "dynamics/ivp_env_internal.h"
 #include "solver/ivp_friction_internal.h"
 
@@ -386,60 +387,11 @@ IVP_TEST(ov_tree_hash_grows_and_releases_allocator_storage) {
     ivp_counting_allocator_destroy(&counting);
 }
 
-typedef struct ov_fail_allocator {
-    ivp_allocator_t allocator;
-    const ivp_allocator_t *inner;
-    int attempts;
-    int fail_at;
-    size_t live_bytes;
-} ov_fail_allocator_t;
-
-static void *ov_fail_alloc(size_t size, void *ctx)
-{
-    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
-    state->attempts++;
-    if (state->attempts == state->fail_at) return NULL;
-    void *ptr = ivp_alloc(state->inner, size);
-    if (ptr) state->live_bytes += size;
-    return ptr;
-}
-
-static void *ov_fail_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx)
-{
-    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
-    state->attempts++;
-    if (state->attempts == state->fail_at) return NULL;
-    void *new_ptr = ivp_realloc(state->inner, ptr, old_size, new_size);
-    if (new_ptr) state->live_bytes = state->live_bytes - old_size + new_size;
-    return new_ptr;
-}
-
-static void ov_fail_free(void *ptr, size_t size, void *ctx)
-{
-    ov_fail_allocator_t *state = (ov_fail_allocator_t *)ctx;
-    if (!ptr) return;
-    ivp_free(state->inner, ptr, size);
-    state->live_bytes -= size;
-}
-
-static void ov_fail_allocator_init(ov_fail_allocator_t *state)
-{
-    memset(state, 0, sizeof(*state));
-    state->inner = ivp_default_allocator();
-    state->fail_at = INT_MAX;
-    state->allocator = (ivp_allocator_t){
-        .alloc = ov_fail_alloc,
-        .realloc = ov_fail_realloc,
-        .free = ov_fail_free,
-        .ctx = state
-    };
-}
-
 static void ov_tree_far_insert_attempts(int fail_at, int *attempts_out,
                                         int *_fail_count)
 {
-    ov_fail_allocator_t state;
-    ov_fail_allocator_init(&state);
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
     ivp_ov_tree_t tree;
     IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &state.allocator), IVP_OK);
 
@@ -451,8 +403,7 @@ static void ov_tree_far_insert_attempts(int fail_at, int *attempts_out,
     IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
                       &tree, &base, 0.25, 0.25, NULL, NULL), IVP_OK);
 
-    state.attempts = 0;
-    state.fail_at = fail_at;
+    ivp_test_fault_allocator_reset(&state, fail_at);
     ivp_result_t result = ivp_ov_tree_insert_ov_element_ex(
         &tree, &target, 0.25, 0.25, NULL, NULL);
     *attempts_out = state.attempts;
@@ -462,7 +413,7 @@ static void ov_tree_far_insert_attempts(int fail_at, int *attempts_out,
         IVP_ASSERT_EQ(result, IVP_ERR_OUT_OF_MEMORY);
         IVP_ASSERT_NULL(target.node);
         IVP_ASSERT_NOT_NULL(base.node);
-        state.fail_at = INT_MAX;
+        ivp_test_fault_allocator_reset(&state, INT_MAX);
         IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
                           &tree, &target, 0.25, 0.25, NULL, NULL), IVP_OK);
     }
@@ -496,8 +447,8 @@ static void exact_mindist_allocation_attempt(int fail_at, bool expect_collision,
                                              int *attempts_out,
                                              int *_fail_count)
 {
-    ov_fail_allocator_t state;
-    ov_fail_allocator_init(&state);
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
     ivp_environment_config_t config;
     ivp_environment_config_init(&config);
     config.allocator = &state.allocator;
@@ -524,8 +475,7 @@ static void exact_mindist_allocation_attempt(int fail_at, bool expect_collision,
         .base = { .dvt = &test_collision_delegator_vt },
         .collisions = &collisions
     };
-    state.attempts = 0;
-    state.fail_at = fail_at;
+    ivp_test_fault_allocator_reset(&state, fail_at);
     ivp_mindist_mgr_create_exact_mindists(
         object0, object1, 4.0, &collisions,
         NULL, NULL, NULL, NULL, &delegator.base);
@@ -542,7 +492,7 @@ static void exact_mindist_allocation_attempt(int fail_at, bool expect_collision,
         (*_fail_count)++;
     }
 
-    state.fail_at = INT_MAX;
+    ivp_test_fault_allocator_reset(&state, INT_MAX);
     ivp_environment_destroy(environment);
     IVP_ASSERT_EQ(collisions.n, 0);
     ivp_coll_fvector_clear(&collisions);
@@ -563,8 +513,8 @@ static void friction_creation_allocation_attempt(int fail_at, int *attempts_out,
                                                  bool expect_contact,
                                                  int *_fail_count)
 {
-    ov_fail_allocator_t state;
-    ov_fail_allocator_init(&state);
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
     ivp_environment_config_t config;
     ivp_environment_config_init(&config);
     config.allocator = &state.allocator;
@@ -599,8 +549,7 @@ static void friction_creation_allocation_attempt(int fail_at, int *attempts_out,
 
     struct ivp_fr_system *friction_system = NULL;
     bool having_new = false;
-    state.attempts = 0;
-    state.fail_at = fail_at;
+    ivp_test_fault_allocator_reset(&state, fail_at);
     ivp_env_sim_mem_begin(environment);
     struct ivp_contact_pt *contact =
         ivp_mindist_try_to_generate_managed_friction(
@@ -617,7 +566,7 @@ static void friction_creation_allocation_attempt(int fail_at, int *attempts_out,
         IVP_ASSERT_NULL(object0->physical_core->core_friction_info.for_moveables.moveable_core_friction_info);
     }
 
-    state.fail_at = INT_MAX;
+    ivp_test_fault_allocator_reset(&state, INT_MAX);
     ivp_environment_destroy(environment);
     IVP_ASSERT_EQ(collisions.n, 0);
     ivp_coll_fvector_clear(&collisions);
@@ -659,8 +608,8 @@ static void friction_fusion_allocation_attempt(int fail_at, bool expect_fusion,
                                                int *attempts_out,
                                                int *_fail_count)
 {
-    ov_fail_allocator_t state;
-    ov_fail_allocator_init(&state);
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
     ivp_environment_config_t config;
     ivp_environment_config_init(&config);
     config.allocator = &state.allocator;
@@ -704,8 +653,7 @@ static void friction_fusion_allocation_attempt(int fail_at, bool expect_fusion,
 
     int first_core_count = ivp_pvec_len(&systems[0]->cores_of_friction_system);
     int second_core_count = ivp_pvec_len(&systems[1]->cores_of_friction_system);
-    state.attempts = 0;
-    state.fail_at = fail_at;
+    ivp_test_fault_allocator_reset(&state, fail_at);
     bool fused = ivp_fr_system_fusion_friction_systems(systems[0], systems[1]);
     *attempts_out = state.attempts;
     IVP_ASSERT_EQ(fused, expect_fusion);
@@ -727,7 +675,7 @@ static void friction_fusion_allocation_attempt(int fail_at, bool expect_fusion,
             objects[2]->physical_core, systems[0]));
     }
 
-    state.fail_at = INT_MAX;
+    ivp_test_fault_allocator_reset(&state, INT_MAX);
     ivp_environment_destroy(environment);
     for (int i = 0; i < 2; i++) {
         IVP_ASSERT_EQ(collisions[i].n, 0);
@@ -758,8 +706,8 @@ IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
         ov_tree_far_insert_attempts(fail_at, &attempts, _fail_count);
     }
 
-    ov_fail_allocator_t state;
-    ov_fail_allocator_init(&state);
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
     ivp_ov_tree_t tree;
     IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &state.allocator), IVP_OK);
     ivp_ov_element_t base;
@@ -770,14 +718,13 @@ IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
                       &tree, &base, 1.0, 1.0, NULL, NULL), IVP_OK);
     ivp_pvec_t partners;
     ivp_pvec_init_with_allocator(&partners, &state.allocator);
-    state.attempts = 0;
-    state.fail_at = 1;
+    ivp_test_fault_allocator_reset(&state, 1);
     IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
                       &tree, &target, 1.0, 1.0, &partners, NULL),
                   IVP_ERR_OUT_OF_MEMORY);
     IVP_ASSERT_NULL(target.node);
     IVP_ASSERT_EQ(ivp_pvec_len(&partners), 0);
-    state.fail_at = INT_MAX;
+    ivp_test_fault_allocator_reset(&state, INT_MAX);
     ivp_pvec_clear(&partners);
     ivp_ov_tree_remove_ov_element(&tree, &base);
     ivp_ov_tree_destroy(&tree);

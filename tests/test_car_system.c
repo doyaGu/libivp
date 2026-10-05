@@ -19,6 +19,7 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_mat3.h>
 #include <ivp/math/ivp_quat.h>
+#include "ivp_test_fault_allocator.h"
 #include "controllers/ivp_constraint_car_internal.h"
 
 #include <limits.h>
@@ -563,34 +564,6 @@ static void *car_fail_alloc(size_t size, void *ctx)
     return NULL;
 }
 
-typedef struct car_fail_nth_alloc_state {
-    ivp_allocator_t base;
-    int attempts;
-    int fail_at;
-} car_fail_nth_alloc_state_t;
-
-static void *car_fail_nth_alloc(size_t size, void *ctx)
-{
-    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
-    state->attempts++;
-    if (state->attempts == state->fail_at) return NULL;
-    return state->base.alloc(size, state->base.ctx);
-}
-
-static void *car_fail_nth_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx)
-{
-    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
-    state->attempts++;
-    if (state->attempts == state->fail_at) return NULL;
-    return state->base.realloc(ptr, old_size, new_size, state->base.ctx);
-}
-
-static void car_fail_nth_free(void *ptr, size_t size, void *ctx)
-{
-    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
-    state->base.free(ptr, size, state->base.ctx);
-}
-
 IVP_TEST(constraint_solver_listener_failure_is_atomic)
 {
     car_scene_t sc;
@@ -622,19 +595,12 @@ IVP_TEST(car_early_allocation_failure_is_atomic)
     car_scene_t sc;
     IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
 
-    car_fail_nth_alloc_state_t state = {
-        .base = *sc.env->allocator,
-        .attempts = 0,
-        .fail_at = 3
-    };
-    *sc.env->allocator = (ivp_allocator_t){
-        .alloc = car_fail_nth_alloc,
-        .realloc = car_fail_nth_realloc,
-        .free = car_fail_nth_free,
-        .ctx = &state
-    };
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init(&state, sc.env->allocator);
+    ivp_test_fault_allocator_reset(&state, 3);
+    *sc.env->allocator = state.allocator;
     IVP_ASSERT_FALSE(ivp_car_system_init(&sc.car, &sc.tmpl));
-    *sc.env->allocator = state.base;
+    *sc.env->allocator = state.inner;
 
     IVP_ASSERT_TRUE(state.attempts >= state.fail_at);
     IVP_ASSERT_FALSE(sc.car.active);
@@ -676,19 +642,11 @@ IVP_TEST(car_controller_registration_failures_are_atomic)
     {
         car_scene_t sc;
         IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
-        car_fail_nth_alloc_state_t state = {
-            .base = *sc.env->allocator,
-            .attempts = 0,
-            .fail_at = INT_MAX
-        };
-        *sc.env->allocator = (ivp_allocator_t){
-            .alloc = car_fail_nth_alloc,
-            .realloc = car_fail_nth_realloc,
-            .free = car_fail_nth_free,
-            .ctx = &state
-        };
+        ivp_test_fault_allocator_t state;
+        ivp_test_fault_allocator_init(&state, sc.env->allocator);
+        *sc.env->allocator = state.allocator;
         IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
-        *sc.env->allocator = state.base;
+        *sc.env->allocator = state.inner;
         allocation_attempts = state.attempts;
         scene_destroy(&sc);
     }
@@ -697,19 +655,12 @@ IVP_TEST(car_controller_registration_failures_are_atomic)
     for (int fail_at = 1; fail_at <= allocation_attempts; fail_at++) {
         car_scene_t sc;
         IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
-        car_fail_nth_alloc_state_t state = {
-            .base = *sc.env->allocator,
-            .attempts = 0,
-            .fail_at = fail_at
-        };
-        *sc.env->allocator = (ivp_allocator_t){
-            .alloc = car_fail_nth_alloc,
-            .realloc = car_fail_nth_realloc,
-            .free = car_fail_nth_free,
-            .ctx = &state
-        };
+        ivp_test_fault_allocator_t state;
+        ivp_test_fault_allocator_init(&state, sc.env->allocator);
+        ivp_test_fault_allocator_reset(&state, fail_at);
+        *sc.env->allocator = state.allocator;
         IVP_ASSERT_FALSE(ivp_car_system_init(&sc.car, &sc.tmpl));
-        *sc.env->allocator = state.base;
+        *sc.env->allocator = state.inner;
         IVP_ASSERT_TRUE(car_init_failure_is_clean(&sc));
 
         IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
@@ -724,19 +675,11 @@ IVP_TEST(booster_registration_failures_are_atomic)
         car_scene_t sc;
         IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
         IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
-        car_fail_nth_alloc_state_t state = {
-            .base = *sc.env->allocator,
-            .attempts = 0,
-            .fail_at = INT_MAX
-        };
-        *sc.env->allocator = (ivp_allocator_t){
-            .alloc = car_fail_nth_alloc,
-            .realloc = car_fail_nth_realloc,
-            .free = car_fail_nth_free,
-            .ctx = &state
-        };
+        ivp_test_fault_allocator_t state;
+        ivp_test_fault_allocator_init(&state, sc.env->allocator);
+        *sc.env->allocator = state.allocator;
         ivp_car_system_activate_booster(&sc.car, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(1.0));
-        *sc.env->allocator = state.base;
+        *sc.env->allocator = state.inner;
         IVP_ASSERT_TRUE(sc.car.booster_active);
         allocation_attempts = state.attempts;
         scene_destroy(&sc);
@@ -747,19 +690,12 @@ IVP_TEST(booster_registration_failures_are_atomic)
         car_scene_t sc;
         IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
         IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
-        car_fail_nth_alloc_state_t state = {
-            .base = *sc.env->allocator,
-            .attempts = 0,
-            .fail_at = fail_at
-        };
-        *sc.env->allocator = (ivp_allocator_t){
-            .alloc = car_fail_nth_alloc,
-            .realloc = car_fail_nth_realloc,
-            .free = car_fail_nth_free,
-            .ctx = &state
-        };
+        ivp_test_fault_allocator_t state;
+        ivp_test_fault_allocator_init(&state, sc.env->allocator);
+        ivp_test_fault_allocator_reset(&state, fail_at);
+        *sc.env->allocator = state.allocator;
         ivp_car_system_activate_booster(&sc.car, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(1.0));
-        *sc.env->allocator = state.base;
+        *sc.env->allocator = state.inner;
 
         IVP_ASSERT_FALSE(sc.car.booster_active);
         IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(sc.car.h_booster[0]));
