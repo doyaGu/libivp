@@ -562,6 +562,34 @@ static void *car_fail_alloc(size_t size, void *ctx)
     return NULL;
 }
 
+typedef struct car_fail_nth_alloc_state {
+    ivp_allocator_t base;
+    int attempts;
+    int fail_at;
+} car_fail_nth_alloc_state_t;
+
+static void *car_fail_nth_alloc(size_t size, void *ctx)
+{
+    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
+    state->attempts++;
+    if (state->attempts == state->fail_at) return NULL;
+    return state->base.alloc(size, state->base.ctx);
+}
+
+static void *car_fail_nth_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx)
+{
+    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
+    state->attempts++;
+    if (state->attempts == state->fail_at) return NULL;
+    return state->base.realloc(ptr, old_size, new_size, state->base.ctx);
+}
+
+static void car_fail_nth_free(void *ptr, size_t size, void *ctx)
+{
+    car_fail_nth_alloc_state_t *state = (car_fail_nth_alloc_state_t *)ctx;
+    state->base.free(ptr, size, state->base.ctx);
+}
+
 IVP_TEST(constraint_solver_listener_failure_is_atomic)
 {
     car_scene_t sc;
@@ -585,6 +613,39 @@ IVP_TEST(constraint_solver_listener_failure_is_atomic)
                       s, sc.env, sc.body, sc.wheels, NULL, 4),
                   IVP_OK);
     ivp_constraint_solver_car_destroy(s);
+    scene_destroy(&sc);
+}
+
+IVP_TEST(car_listener_failure_is_atomic)
+{
+    car_scene_t sc;
+    IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+
+    car_fail_nth_alloc_state_t state = {
+        .base = *sc.env->allocator,
+        .attempts = 0,
+        .fail_at = 3
+    };
+    *sc.env->allocator = (ivp_allocator_t){
+        .alloc = car_fail_nth_alloc,
+        .realloc = car_fail_nth_realloc,
+        .free = car_fail_nth_free,
+        .ctx = &state
+    };
+    IVP_ASSERT_FALSE(ivp_car_system_init(&sc.car, &sc.tmpl));
+    *sc.env->allocator = state.base;
+
+    IVP_ASSERT_EQ(state.attempts, 3);
+    IVP_ASSERT_FALSE(sc.car.active);
+    IVP_ASSERT_NULL(sc.car.car_constraint_solver);
+    IVP_ASSERT_EQ(sc.car.n_wheels, 0);
+    IVP_ASSERT_TRUE(sc.body->physical_core->car_wheel == NULL);
+    for (int i = 0; i < 4; i++) {
+        IVP_ASSERT_TRUE(sc.wheels[i]->physical_core->car_wheel == NULL);
+    }
+
+    IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+    ivp_car_system_destroy(&sc.car);
     scene_destroy(&sc);
 }
 
@@ -617,6 +678,7 @@ int main(void)
     IVP_REGISTER(constraint_solver_standalone);
     IVP_REGISTER(constraint_solver_core_list_failure_is_atomic);
     IVP_REGISTER(constraint_solver_listener_failure_is_atomic);
+    IVP_REGISTER(car_listener_failure_is_atomic);
     IVP_REGISTER(compat_controller_entry_is_noop);
     IVP_RUN_ALL();
 }

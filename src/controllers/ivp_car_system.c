@@ -462,8 +462,15 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         return false;
     }
     ivp_constraint_solver_car_t *cs_car = car->car_constraint_solver;
-    car->active = true;
     car->env_listener = ivp_environment_add_event_listener(env, car_env_event, car);
+    if (!ivp_event_listener_handle_is_valid(car->env_listener)) {
+        ivp_constraint_solver_car_destroy(car->car_constraint_solver);
+        car->car_constraint_solver = NULL;
+        car->n_wheels = 0;
+        car->n_axes = 1;
+        return false;
+    }
+    car->active = true;
 
     /*** springs / shock absorbers, rotation motors ***/
     car_anchor_t anchor_body[IVP_CAR_SYSTEM_MAX_WHEELS];
