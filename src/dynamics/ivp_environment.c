@@ -564,12 +564,14 @@ static env_obj_cb_table_t *cb_find_table(const ivp_pvec_t *tables, const ivp_obj
 
 static env_obj_cb_table_t *cb_create_table(ivp_pvec_t *tables, ivp_object_t *obj)
 {
-    env_obj_cb_table_t *t = (env_obj_cb_table_t *)calloc(1, sizeof(*t));
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(tables);
+    env_obj_cb_table_t *t = (env_obj_cb_table_t *)ivp_alloc(allocator, sizeof(*t));
     if (!t) return NULL;
+    memset(t, 0, sizeof(*t));
     t->real_object = obj;
-    ivp_pvec_init(&t->listeners);
+    ivp_pvec_init_with_allocator(&t->listeners, allocator);
     if (ivp_pvec_add(tables, t) < 0) {
-        free(t);
+        ivp_free(allocator, t, sizeof(*t));
         return NULL;
     }
     return t;
@@ -577,9 +579,10 @@ static env_obj_cb_table_t *cb_create_table(ivp_pvec_t *tables, ivp_object_t *obj
 
 static void cb_remove_table(ivp_pvec_t *tables, env_obj_cb_table_t *t)
 {
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(tables);
     (void)ivp_pvec_remove_if_present(tables, t);
     ivp_pvec_clear(&t->listeners);
-    free(t);
+    ivp_free(allocator, t, sizeof(*t));
 }
 
 static void cb_clear_tables(ivp_pvec_t *tables)
@@ -1098,7 +1101,7 @@ static bool slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
     int n = ivp_controller_slot_collect_associated_handles(slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
     ivp_object_system_t *os = env_object_system(env);
     ivp_pvec_t cores;
-    ivp_pvec_init(&cores);
+    ivp_pvec_init_with_allocator(&cores, env->allocator);
     for (int i = 0; i < n; i++) {
         ivp_object_t *obj = ivp_object_system_get_by_handle(os, handles[i]);
         if (obj && ivp_pvec_install(&cores, obj->physical_core) < 0) {   /* a shared core once */
@@ -1151,7 +1154,7 @@ static bool slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
             }
             ivp_pvec_clear(&sc->assoc_cores);
             sc->assoc_cores = cores;
-            ivp_pvec_init(&cores);
+            ivp_pvec_init_with_allocator(&cores, env->allocator);
         }
         if (sc->assoc_handles) {
             ivp_free(env->allocator, sc->assoc_handles,
@@ -1393,7 +1396,7 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     sc->priority = normalized_priority;
     sc->dependent = (mode == IVP_CONTROLLER_DEPENDENT);
     sc->cache_assoc_objects = env_find_builtin_controller(event_fn) != NULL;
-    ivp_pvec_init(&sc->assoc_cores);
+    ivp_pvec_init_with_allocator(&sc->assoc_cores, env->allocator);
     slot->sim_ctrl = sc;
     if (ivp_pvec_add(&env->pl->slot_ctrls, sc) < 0) {
         slot->sim_ctrl = NULL;
@@ -2048,16 +2051,16 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     env->mod_current_time = pl->active_value_manager ? ivp_active_value_manager_current_time(pl->active_value_manager) : NULL;
     pl->state = IVP_ES_PSI;
     pl->rand_seed = 1;
-    ivp_pvec_init(&pl->core_revive_list);
-    ivp_pvec_init(&pl->touched_cores);
-    ivp_pvec_init(&pl->active_hulls);
-    ivp_pvec_init(&pl->deferred_deletions);
-    ivp_pvec_init(&pl->all_core_ctrls);
-    ivp_pvec_init(&pl->slot_ctrls);
-    ivp_pvec_init(&pl->global_object_listeners);
-    ivp_pvec_init(&pl->obj_callback_tables);
-    ivp_pvec_init(&pl->global_collision_listeners);
-    ivp_pvec_init(&pl->coll_callback_tables);
+    ivp_pvec_init_with_allocator(&pl->core_revive_list, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->touched_cores, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->active_hulls, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->deferred_deletions, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->all_core_ctrls, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->slot_ctrls, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->global_object_listeners, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->obj_callback_tables, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->global_collision_listeners, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->coll_callback_tables, env->allocator);
     if (sim_mem_init(&pl->sim_unit_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
         return NULL;

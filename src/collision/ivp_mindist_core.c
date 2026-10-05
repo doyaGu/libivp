@@ -569,9 +569,11 @@ void ivp_mindist_mgr_init(ivp_mindist_mgr_t *mm, struct ivp_environment *env)
     mm->environment = env;
     mm->exact_mindists = NULL;
     mm->invalid_mindists = NULL;
-    ivp_pvec_init(&mm->wheel_look_ahead_mindists);
-    ivp_pvec_init(&mm->recheck_colliding_elements);
-    ivp_pvec_init(&mm->recheck_new_objects);
+    const ivp_allocator_t *allocator = env ? ivp_env_get_allocator(env)
+                                             : ivp_default_allocator();
+    ivp_pvec_init_with_allocator(&mm->wheel_look_ahead_mindists, allocator);
+    ivp_pvec_init_with_allocator(&mm->recheck_colliding_elements, allocator);
+    ivp_pvec_init_with_allocator(&mm->recheck_new_objects, allocator);
     mm->recheck_depth = 0;
     mm->recheck_diff_storage = NULL;
 }
