@@ -115,7 +115,7 @@ void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *core); /*
 bool ivp_sim_unit_add_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c);
 void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core, ivp_sim_ctrl_t *c);
 void ivp_sim_unit_clean_sim_unit(ivp_sim_unit_t *su);
-void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su);
+bool ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su);
 bool ivp_sim_unit_throw_cores_into_my_sim_unit(ivp_sim_unit_t *su, ivp_sim_unit_t *second);
 bool ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *second);
 void ivp_sim_unit_revive_for_simulation(ivp_sim_unit_t *su, struct ivp_environment *env);

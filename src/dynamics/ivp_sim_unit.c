@@ -130,7 +130,7 @@ static void su_sort_controllers(ivp_sim_unit_t *su)
     }
 }
 
-void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
+bool ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
 {
     for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
         ivp_core_t *my_core = su_core_at(su, i);
@@ -138,10 +138,14 @@ void ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
             ivp_sim_ctrl_t *c = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, k);
             ivp_su_ctrl_list_t *cl = su_find_controller(&su->controller_cores, c);
             if (!cl) cl = su_add_controller_unit_sim(&su->controller_cores, c);
-            if (!cl || ivp_pvec_install(&cl->cores_controlled_by, my_core) < 0) return;
+            if (!cl || ivp_pvec_install(&cl->cores_controlled_by, my_core) < 0) {
+                ivp_sim_unit_clean_sim_unit(su);
+                return false;
+            }
         }
     }
     su_sort_controllers(su);
+    return true;
 }
 
 static void su_rem_sim_unit_controller(ivp_sim_unit_t *su, ivp_sim_ctrl_t *c)
@@ -394,7 +398,9 @@ bool ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *
 {
     if (!ivp_sim_unit_throw_cores_into_my_sim_unit(su, second_unit)) return false;
     ivp_sim_unit_clean_sim_unit(su);
-    ivp_sim_unit_sim_unit_calc_redundants(su);
+    if (!ivp_sim_unit_sim_unit_calc_redundants(su)) {
+        su->union_find_needed_for_sim_unit = true;
+    }
     return true;
 }
 
@@ -460,11 +466,12 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
             my_core->sim_unit = split_new_unit;
         }
     }
-    ivp_sim_unit_sim_unit_calc_redundants(split_new_unit);
+    bool rebuilt = ivp_sim_unit_sim_unit_calc_redundants(split_new_unit);
+    if (!rebuilt) split_new_unit->union_find_needed_for_sim_unit = true;
 #ifdef IVP_DEBUG_BUILD
     IVP_IF(1)
     {
-        ivp_sim_unit_sim_unit_debug_consistency(split_new_unit);
+        if (rebuilt) ivp_sim_unit_sim_unit_debug_consistency(split_new_unit);
     }
 #endif
     if (next_split_necessary) su_split_sim_unit(su, next_split_father);
@@ -476,9 +483,10 @@ static void su_perform_test_and_split(ivp_sim_unit_t *su)
     if (father) {
         ivp_sim_unit_clean_sim_unit(su);
         su_split_sim_unit(su, father);
-        ivp_sim_unit_sim_unit_calc_redundants(su);
+        bool rebuilt = ivp_sim_unit_sim_unit_calc_redundants(su);
+        if (!rebuilt) su->union_find_needed_for_sim_unit = true;
 #ifdef IVP_DEBUG_BUILD
-        ivp_sim_unit_sim_unit_debug_consistency(su);
+        if (rebuilt) ivp_sim_unit_sim_unit_debug_consistency(su);
 #endif
     }
 }
@@ -486,9 +494,12 @@ static void su_perform_test_and_split(ivp_sim_unit_t *su)
 void ivp_sim_unit_do_sim_unit_union_find(ivp_sim_unit_t *su)
 {
     ivp_sim_unit_clean_sim_unit(su);
-    ivp_sim_unit_sim_unit_calc_redundants(su);
-    su_perform_test_and_split(su);
+    if (!ivp_sim_unit_sim_unit_calc_redundants(su)) {
+        su->union_find_needed_for_sim_unit = true;
+        return;
+    }
     su->union_find_needed_for_sim_unit = false;
+    su_perform_test_and_split(su);
 }
 
 /* ── revive / freeze ───────────────────────────────────────────────────── */
@@ -843,7 +854,9 @@ void ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
     }
     if (did_fusion && reference_unit) {
         ivp_sim_unit_clean_sim_unit(reference_unit);
-        ivp_sim_unit_sim_unit_calc_redundants(reference_unit);
+        if (!ivp_sim_unit_sim_unit_calc_redundants(reference_unit)) {
+            reference_unit->union_find_needed_for_sim_unit = true;
+        }
     }
     if (mtype < IVP_MT_NOT_SIM && reference_unit) {
         ivp_sim_unit_revive_for_simulation(reference_unit, env);
