@@ -1079,15 +1079,21 @@ static void slot_ctrl_free(ivp_environment_t *env, slot_ctrl_t *sc)
 {
     (void)ivp_pvec_remove_if_present(&env->pl->slot_ctrls, sc);
     ivp_pvec_clear(&sc->assoc_cores);
-    free(sc->assoc_handles);
-    free(sc->assoc_objects);
-    free(sc);
+    if (sc->assoc_handles) {
+        ivp_free(env->allocator, sc->assoc_handles,
+                 (size_t)sc->assoc_count * sizeof(*sc->assoc_handles));
+    }
+    if (sc->assoc_objects) {
+        ivp_free(env->allocator, sc->assoc_objects,
+                 (size_t)sc->assoc_count * sizeof(*sc->assoc_objects));
+    }
+    ivp_free(env->allocator, sc, sizeof(*sc));
 }
 
 /* refresh the associated cores of a dependent controller (announce on change) */
-static void slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc, ivp_controller_slot_t *slot)
+static bool slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc, ivp_controller_slot_t *slot)
 {
-    if (sc->deleted_with_core) return;   /* deleted with one of its cores */
+    if (sc->deleted_with_core) return true;   /* deleted with one of its cores */
     ivp_object_handle_t handles[IVP_CONTROLLER_DISCOVERY_STACK_MAX];
     int n = ivp_controller_slot_collect_associated_handles(slot, env, handles, IVP_CONTROLLER_DISCOVERY_STACK_MAX);
     ivp_object_system_t *os = env_object_system(env);
@@ -1095,44 +1101,75 @@ static void slot_ctrl_refresh_dependent(ivp_environment_t *env, slot_ctrl_t *sc,
     ivp_pvec_init(&cores);
     for (int i = 0; i < n; i++) {
         ivp_object_t *obj = ivp_object_system_get_by_handle(os, handles[i]);
-        if (obj) (void)ivp_pvec_install(&cores, obj->physical_core);   /* a shared core once */
+        if (obj && ivp_pvec_install(&cores, obj->physical_core) < 0) {   /* a shared core once */
+            ivp_pvec_clear(&cores);
+            return false;
+        }
     }
-    bool same = (ivp_pvec_len(&cores) == ivp_pvec_len(&sc->assoc_cores));
-    for (int i = 0; same && i < ivp_pvec_len(&cores); i++) {
-        if (ivp_pvec_at(&cores, i) != ivp_pvec_at(&sc->assoc_cores, i)) same = false;
+    bool same_cores = (ivp_pvec_len(&cores) == ivp_pvec_len(&sc->assoc_cores));
+    for (int i = 0; same_cores && i < ivp_pvec_len(&cores); i++) {
+        if (ivp_pvec_at(&cores, i) != ivp_pvec_at(&sc->assoc_cores, i)) same_cores = false;
     }
-    if (!same) {
-        if (ivp_pvec_len(&sc->assoc_cores) > 0) ivp_ctrl_mgr_remove_controller_from_environment(env, &sc->base, true);
-        ivp_pvec_remove_all(&sc->assoc_cores);
-        for (int i = 0; i < ivp_pvec_len(&cores); i++) ivp_pvec_add(&sc->assoc_cores, ivp_pvec_at(&cores, i));
-        free(sc->assoc_handles);
-        free(sc->assoc_objects);
-        sc->assoc_handles = NULL;
-        sc->assoc_objects = NULL;
-        sc->assoc_count = 0;
+    bool same_handles = n == sc->assoc_count;
+    for (int i = 0; same_handles && i < n; i++) {
+        if (handles[i].slot != sc->assoc_handles[i].slot ||
+            handles[i].generation != sc->assoc_handles[i].generation) {
+            same_handles = false;
+        }
+    }
+    if (!same_cores || !same_handles) {
+        ivp_object_handle_t *new_handles = NULL;
+        ivp_object_t **new_objects = NULL;
         if (n > 0) {
-            sc->assoc_handles = (ivp_object_handle_t *)malloc((size_t)n * sizeof(ivp_object_handle_t));
-            if (sc->cache_assoc_objects) {
-                sc->assoc_objects = (ivp_object_t **)malloc((size_t)n * sizeof(ivp_object_t *));
+            new_handles = (ivp_object_handle_t *)ivp_alloc(
+                env->allocator, (size_t)n * sizeof(*new_handles));
+            if (!new_handles) {
+                ivp_pvec_clear(&cores);
+                return false;
             }
-            if (sc->assoc_handles && (!sc->cache_assoc_objects || sc->assoc_objects)) {
-                memcpy(sc->assoc_handles, handles, (size_t)n * sizeof(ivp_object_handle_t));
-                if (sc->cache_assoc_objects) {
-                    for (int i = 0; i < n; i++) {
-                        sc->assoc_objects[i] = ivp_object_system_get_by_handle(os, handles[i]);
-                    }
+            if (sc->cache_assoc_objects) {
+                new_objects = (ivp_object_t **)ivp_alloc(
+                    env->allocator, (size_t)n * sizeof(*new_objects));
+                if (!new_objects) {
+                    ivp_free(env->allocator, new_handles,
+                             (size_t)n * sizeof(*new_handles));
+                    ivp_pvec_clear(&cores);
+                    return false;
                 }
-                sc->assoc_count = n;
-            } else {
-                free(sc->assoc_handles);
-                free(sc->assoc_objects);
-                sc->assoc_handles = NULL;
-                sc->assoc_objects = NULL;
+            }
+            memcpy(new_handles, handles, (size_t)n * sizeof(*new_handles));
+            if (new_objects) {
+                for (int i = 0; i < n; i++) {
+                    new_objects[i] = ivp_object_system_get_by_handle(os, handles[i]);
+                }
             }
         }
-        if (ivp_pvec_len(&sc->assoc_cores) > 0) ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+
+        if (!same_cores) {
+            if (ivp_pvec_len(&sc->assoc_cores) > 0) {
+                ivp_ctrl_mgr_remove_controller_from_environment(env, &sc->base, true);
+            }
+            ivp_pvec_clear(&sc->assoc_cores);
+            sc->assoc_cores = cores;
+            ivp_pvec_init(&cores);
+        }
+        if (sc->assoc_handles) {
+            ivp_free(env->allocator, sc->assoc_handles,
+                     (size_t)sc->assoc_count * sizeof(*sc->assoc_handles));
+        }
+        if (sc->assoc_objects) {
+            ivp_free(env->allocator, sc->assoc_objects,
+                     (size_t)sc->assoc_count * sizeof(*sc->assoc_objects));
+        }
+        sc->assoc_handles = new_handles;
+        sc->assoc_objects = new_objects;
+        sc->assoc_count = n;
+        if (!same_cores && ivp_pvec_len(&sc->assoc_cores) > 0) {
+            ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+        }
     }
     ivp_pvec_clear(&cores);
+    return true;
 }
 
 typedef struct env_builtin_ctrl env_builtin_ctrl_t;
@@ -1152,7 +1189,7 @@ static void env_refresh_controller_associations(ivp_environment_t *env)
         slot_ctrl_t *sc = slot_ctrl_of(slot);
         if (!sc || !sc->dependent) continue;
         if (env_find_builtin_controller(slot->event_fn)) continue;
-        slot_ctrl_refresh_dependent(env, sc, slot);
+        (void)slot_ctrl_refresh_dependent(env, sc, slot);
     }
 }
 
@@ -1334,11 +1371,12 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     slot->mode = mode;
     slot->run_for_all_cores = (mode == IVP_CONTROLLER_INDEPENDENT);
     slot->discovery_fn = discovery_fn;
-    slot_ctrl_t *sc = (slot_ctrl_t *)calloc(1, sizeof(*sc));
+    slot_ctrl_t *sc = (slot_ctrl_t *)ivp_alloc(env->allocator, sizeof(*sc));
     if (!sc) {
         (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
         return invalid;
     }
+    memset(sc, 0, sizeof(*sc));
     sc->base.vt = &slot_vt;
     sc->env = env;
     sc->handle = out;
@@ -1355,7 +1393,12 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
         return invalid;
     }
     if (sc->dependent) {
-        slot_ctrl_refresh_dependent(env, sc, slot);
+        if (!slot_ctrl_refresh_dependent(env, sc, slot)) {
+            slot->sim_ctrl = NULL;
+            slot_ctrl_free(env, sc);
+            (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+            return invalid;
+        }
     } else if (!slot_ctrl_set_all_cores(env, sc)) {
         slot->sim_ctrl = NULL;
         slot_ctrl_free(env, sc);
@@ -1457,15 +1500,28 @@ bool ivp_environment_set_controller_discovery(ivp_environment_t *env, ivp_contro
     ivp_controller_slot_t *slot = env_get_controller_slot(env, controller_handle);
     slot_ctrl_t *sc = slot_ctrl_of(slot);
     if (!slot || !sc) return false;
+    ivp_controller_discovery_fn_t old_discovery_fn = slot->discovery_fn;
+    slot->discovery_fn = discovery_fn;
     if (!sc->dependent) {
+        /* Build the dependent association while the all-core attachment is
+         * still intact.  With dependent=false the refresh only prepares the
+         * lists; announcement is intentionally a no-op until after detach. */
+        if (!slot_ctrl_refresh_dependent(env, sc, slot)) {
+            slot->discovery_fn = old_discovery_fn;
+            return false;
+        }
         slot_ctrl_detach_all(env, sc, true);
         sc->all_cores = false;
         sc->dependent = true;
+        if (ivp_pvec_len(&sc->assoc_cores) > 0) {
+            ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+        }
+    } else if (!slot_ctrl_refresh_dependent(env, sc, slot)) {
+        slot->discovery_fn = old_discovery_fn;
+        return false;
     }
     slot->mode = IVP_CONTROLLER_DEPENDENT;
     slot->run_for_all_cores = false;
-    slot->discovery_fn = discovery_fn;
-    slot_ctrl_refresh_dependent(env, sc, slot);
     return true;
 }
 

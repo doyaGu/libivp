@@ -5,6 +5,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
+#include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/events/ivp_listener_psi.h>
 #include <ivp/controllers/ivp_actuator_force.h>
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
@@ -1196,6 +1197,98 @@ IVP_TEST(controller_registration_failure_is_atomic) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(dependent_controller_allocation_failure_is_atomic) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_handle_t object_handle = ivp_object_handle_invalid();
+    ivp_object_t *obj = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &object_handle);
+    IVP_ASSERT_NOT_NULL(obj);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.target_a = object_handle;
+    probe.discovery_handles[0] = object_handle;
+    probe.discovery_count = 1;
+    controller_count_ctx_t warm_ctx = {0};
+    ivp_controller_handle_t warm = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &warm_ctx);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(warm));
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, warm));
+    const int live_before = state.live_blocks;
+    state.fail_at = state.attempts + 3; /* slot, adapter, association handles */
+
+    ivp_controller_handle_t ctrl =
+        ivp_test_environment_announce_custom_dependent_controller(
+            env, IVP_CP_CONSTRAINTS, controller_dependent_probe, &probe,
+            dependent_discovery_fn);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(ctrl));
+    IVP_ASSERT_EQ(state.attempts, state.fail_at);
+    IVP_ASSERT_EQ(state.live_blocks, live_before);
+    IVP_ASSERT_EQ(ivp_pvec_len(&env->pl->slot_ctrls), 0);
+    IVP_ASSERT_EQ(ivp_controller_system_count(
+                      (ivp_controller_system_t *)env->controller_system), 0);
+
+    state.fail_at = 0;
+    ctrl = ivp_test_environment_announce_custom_dependent_controller(
+        env, IVP_CP_CONSTRAINTS, controller_dependent_probe, &probe,
+        dependent_discovery_fn);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, ctrl));
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
+IVP_TEST(controller_discovery_failure_preserves_all_core_mode) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_handle_t h_a = ivp_object_handle_invalid();
+    ivp_object_handle_t h_b = ivp_object_handle_invalid();
+    ivp_object_t *obj_a = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_a);
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *obj_b = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_b);
+    IVP_ASSERT_TRUE(obj_a && obj_b);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.target_a = h_a;
+    probe.target_b = h_b;
+    probe.discovery_handles[0] = h_a;
+    probe.discovery_count = 1;
+    ivp_controller_handle_t ctrl = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_dependent_probe, &probe);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.calls, 2);
+    const int live_before = state.live_blocks;
+    state.fail_at = state.attempts + 1; /* replacement association handles */
+    IVP_ASSERT_FALSE(ivp_environment_set_controller_discovery(
+        env, ctrl, dependent_discovery_fn));
+    IVP_ASSERT_EQ(state.live_blocks, live_before);
+
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.calls, 4);
+    state.fail_at = 0;
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, ctrl));
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
 IVP_TEST(controller_self_remove_does_not_break_iteration) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     ivp_environment_clear_controllers(env);
@@ -1426,6 +1519,48 @@ IVP_TEST(controller_dependent_dynamic_discovery_unions_island) {
     IVP_ASSERT_NOT_NULL(obj_a->physical_core->sim_unit);
     IVP_ASSERT_NOT_NULL(obj_b->physical_core->sim_unit);
     IVP_ASSERT_TRUE(obj_a->physical_core->sim_unit == obj_b->physical_core->sim_unit);
+
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(controller_dependent_refreshes_object_on_shared_core) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.start_in_simulation = false;
+    ivp_object_handle_t h_a = ivp_object_handle_invalid();
+    ivp_object_handle_t h_b = ivp_object_handle_invalid();
+    ivp_object_t *obj_a = ivp_environment_create_object_with_handle(env, &tmpl, NULL, &h_a);
+    ivp_object_t *obj_b = ivp_environment_create_object_with_handle(env, &tmpl, NULL, &h_b);
+    IVP_ASSERT_NOT_NULL(obj_a);
+    IVP_ASSERT_NOT_NULL(obj_b);
+    ivp_object_t *objects[] = { obj_a, obj_b };
+    IVP_ASSERT_TRUE(ivp_environment_merge_objects(env, objects, 2));
+    IVP_ASSERT_TRUE(obj_a->physical_core == obj_b->physical_core);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.target_a = h_a;
+    probe.target_b = h_b;
+    probe.discovery_handles[0] = h_a;
+    probe.discovery_count = 1;
+    ivp_controller_handle_t ctrl =
+        ivp_test_environment_announce_custom_dependent_controller(
+            env, IVP_CP_CONSTRAINTS, controller_dependent_probe, &probe,
+            dependent_discovery_fn);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+    IVP_ASSERT_TRUE(ivp_environment_ensure_core_in_simulation(env, obj_a));
+
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.hits_a, 1);
+    IVP_ASSERT_EQ(probe.hits_b, 0);
+
+    probe.discovery_handles[0] = h_b;
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.hits_a, 1);
+    IVP_ASSERT_EQ(probe.hits_b, 1);
 
     ivp_environment_destroy(env);
 }
@@ -1753,12 +1888,15 @@ int main(void) {
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
     IVP_REGISTER(controller_self_remove_does_not_break_iteration);
     IVP_REGISTER(controller_registration_failure_is_atomic);
+    IVP_REGISTER(dependent_controller_allocation_failure_is_atomic);
+    IVP_REGISTER(controller_discovery_failure_preserves_all_core_mode);
     IVP_REGISTER(controller_priority_sync_async);
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);
     IVP_REGISTER(controller_dependent_requires_discovery_callback);
     IVP_REGISTER(controller_dependent_removed_with_target);
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
+    IVP_REGISTER(controller_dependent_refreshes_object_on_shared_core);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);
     IVP_REGISTER(revive_queue_failure_leaves_core_retryable);
