@@ -221,6 +221,34 @@ static void phantom_event_object_revived(ivp_listener_object_t *self, ivp_event_
     }
 }
 
+static void controller_phantom_free_storage(ivp_controller_phantom_t *c)
+{
+    if (c->mindist_core_counter) {
+        ivp_vhash_store_destroy(c->mindist_core_counter);
+        free(c->mindist_core_counter);
+    }
+    if (c->mindist_object_counter) {
+        ivp_vhash_store_destroy(c->mindist_object_counter);
+        free(c->mindist_object_counter);
+    }
+    if (c->set_of_objects) {
+        ivp_set_active_destroy(c->set_of_objects);
+        free(c->set_of_objects);
+    }
+    if (c->set_of_sleeping_cores) {
+        ivp_set_destroy(c->set_of_sleeping_cores);
+        free(c->set_of_sleeping_cores);
+    }
+    if (c->set_of_cores) {
+        ivp_set_active_destroy(c->set_of_cores);
+        free(c->set_of_cores);
+    }
+    ivp_set_active_destroy(&c->set_of_mindists);
+    ivp_pvec_clear(&c->listeners);
+    free(c->object_listener);
+    free(c);
+}
+
 /* IVP_Controller_Phantom::IVP_Controller_Phantom */
 static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object, const ivp_template_phantom_t *templat)
 {
@@ -240,20 +268,27 @@ static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object,
     c->object = object;
     ivp_pvec_init(&c->listeners);
     ivp_set_active_init(&c->set_of_mindists, alloc, 16);
+    if (!c->set_of_mindists.set.hash.elems) goto fail;
     if (templat->manage_intruding_objects) {
         c->set_of_objects = (ivp_set_active_t *)calloc(1, sizeof(ivp_set_active_t));
         c->mindist_object_counter = (ivp_vhash_store_t *)calloc(1, sizeof(ivp_vhash_store_t));
+        if (!c->set_of_objects || !c->mindist_object_counter) goto fail;
         ivp_set_active_init(c->set_of_objects, alloc, 16);
         ivp_vhash_store_init(c->mindist_object_counter, alloc, 16);
+        if (!c->set_of_objects->set.hash.elems || !c->mindist_object_counter->elems) goto fail;
     }
     if (templat->manage_intruding_cores) {
         c->set_of_cores = (ivp_set_active_t *)calloc(1, sizeof(ivp_set_active_t));
         c->mindist_core_counter = (ivp_vhash_store_t *)calloc(1, sizeof(ivp_vhash_store_t));
+        if (!c->set_of_cores || !c->mindist_core_counter) goto fail;
         ivp_set_active_init(c->set_of_cores, alloc, 16);
         ivp_vhash_store_init(c->mindist_core_counter, alloc, 16);
+        if (!c->set_of_cores->set.hash.elems || !c->mindist_core_counter->elems) goto fail;
         if (templat->manage_sleeping_cores) {
             c->set_of_sleeping_cores = (ivp_set_t *)calloc(1, sizeof(ivp_set_t));
+            if (!c->set_of_sleeping_cores) goto fail;
             ivp_set_init(c->set_of_sleeping_cores, alloc, 16);
+            if (!c->set_of_sleeping_cores->hash.elems) goto fail;
         }
     }
 
@@ -303,6 +338,10 @@ static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object,
     }
     c->client_data = NULL;
     return c;
+
+fail:
+    controller_phantom_free_storage(c);
+    return NULL;
 }
 
 /* IVP_Controller_Phantom::~IVP_Controller_Phantom */
@@ -334,30 +373,7 @@ void ivp_controller_phantom_destroy(ivp_controller_phantom_t *c)
         if (l->phantom_is_going_to_be_deleted_event) l->phantom_is_going_to_be_deleted_event(l, c);
     }
     c->object->controller_phantom = NULL;
-    if (c->mindist_core_counter) {
-        ivp_vhash_store_destroy(c->mindist_core_counter);
-        free(c->mindist_core_counter);
-    }
-    if (c->mindist_object_counter) {
-        ivp_vhash_store_destroy(c->mindist_object_counter);
-        free(c->mindist_object_counter);
-    }
-    if (c->set_of_objects) {
-        ivp_set_active_destroy(c->set_of_objects);
-        free(c->set_of_objects);
-    }
-    if (c->set_of_sleeping_cores) {
-        ivp_set_destroy(c->set_of_sleeping_cores);
-        free(c->set_of_sleeping_cores);
-    }
-    if (c->set_of_cores) {
-        ivp_set_active_destroy(c->set_of_cores);
-        free(c->set_of_cores);
-    }
-    ivp_set_active_destroy(&c->set_of_mindists);
-    ivp_pvec_clear(&c->listeners);
-    free(c->object_listener);
-    free(c);
+    controller_phantom_free_storage(c);
 }
 
 /* IVP_Real_Object::convert_to_phantom */

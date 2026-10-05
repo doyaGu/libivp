@@ -149,6 +149,32 @@ IVP_TEST(phantom_reports_ball_passing_through)
     ivp_compact_surface_free(NULL, surf);
 }
 
+IVP_TEST(phantom_builds_all_optional_tracking_storage)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_surman_polygon_t sm;
+    ivp_compact_surface_t *surf = NULL;
+    ivp_object_t *box = make_static_box(env, &sm, &surf);
+    IVP_ASSERT_NOT_NULL(box);
+
+    ivp_template_phantom_t pt;
+    ivp_template_phantom_init(&pt);
+    pt.manage_intruding_objects = true;
+    pt.manage_intruding_cores = true;
+    pt.manage_sleeping_cores = true;
+    ivp_controller_phantom_t *ph = ivp_object_convert_to_phantom(box, &pt);
+    IVP_ASSERT_NOT_NULL(ph);
+    IVP_ASSERT_NOT_NULL(ph->set_of_objects);
+    IVP_ASSERT_NOT_NULL(ph->mindist_object_counter);
+    IVP_ASSERT_NOT_NULL(ph->set_of_cores);
+    IVP_ASSERT_NOT_NULL(ph->mindist_core_counter);
+    IVP_ASSERT_NOT_NULL(ph->set_of_sleeping_cores);
+
+    ivp_environment_destroy(env);
+    ivp_compact_surface_free(NULL, surf);
+}
+
 typedef struct {
     ivp_listener_object_t base;
     int created, deleted, revived, frozen, env_deleted;
@@ -441,6 +467,7 @@ IVP_TEST(user_time_event_fires_between_psis)
 int main(void)
 {
     IVP_REGISTER(phantom_reports_ball_passing_through);
+    IVP_REGISTER(phantom_builds_all_optional_tracking_storage);
     IVP_REGISTER(object_listeners_global_and_private);
     IVP_REGISTER(collision_listeners_unlimited_and_event_fields);
     IVP_REGISTER(listener_registration_capacity_failure_is_atomic);
