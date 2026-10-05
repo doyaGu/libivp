@@ -1385,7 +1385,10 @@ ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env, i
     }
     if (ivp_controller_handle_is_valid(h)) {
         if (b->anchors) b->anchors(ctx, true);
-        if (b->on_add) (void)b->on_add(ctx, env);
+        if (b->on_add && !b->on_add(ctx, env)) {
+            (void)ivp_environment_remove_dependent_controller(env, h, true);
+            return ivp_controller_handle_invalid();
+        }
     }
     return h;
 }

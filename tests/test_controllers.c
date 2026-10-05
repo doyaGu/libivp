@@ -44,7 +44,6 @@
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
-#include <string.h>
 
 #ifdef IVP_REAL_DOUBLE
   #define TOL  1e-6
@@ -1809,6 +1808,33 @@ IVP_TEST(check_dist_init_setup) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(check_dist_controller_attach_failure_rolls_back) {
+    ivp_environment_t *env = make_env(DT60, false);
+    ivp_object_t *a = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *b = make_ball(env, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(a && b);
+
+    ivp_vec3r_t pos_a_ws, pos_b_ws;
+    ivp_object_get_position(a, &pos_a_ws);
+    ivp_object_get_position(b, &pos_b_ws);
+    ivp_check_dist_state_t state;
+    ivp_check_dist_state_setup(&state, a, &pos_a_ws, b, &pos_b_ws, IVP_REAL(5.0));
+
+    struct ivp_hull_mgr *saved_hull_manager = a->hull_manager;
+    a->hull_manager = NULL;
+    ivp_controller_handle_t handle =
+        ivp_environment_add_controller(env, 0, ivp_controller_check_dist, &state);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(handle));
+    IVP_ASSERT_FALSE(state.attached);
+    a->hull_manager = saved_hull_manager;
+
+    handle = ivp_environment_add_controller(env, 0, ivp_controller_check_dist, &state);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(handle));
+    IVP_ASSERT_TRUE(state.attached);
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, handle));
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(check_dist_callback_fires) {
     g_check_dist_callback_count = 0;
     g_check_dist_last_inside = true;
@@ -2258,8 +2284,9 @@ int main(void) {
     IVP_REGISTER(car_steering_engine_brake);
     IVP_REGISTER(car_suspension_grounded);
 
-    /* Check dist tests (3) */
+    /* Check dist tests (4) */
     IVP_REGISTER(check_dist_init_setup);
+    IVP_REGISTER(check_dist_controller_attach_failure_rolls_back);
     IVP_REGISTER(check_dist_callback_fires);
     IVP_REGISTER(check_dist_active_toggle);
 
