@@ -84,7 +84,7 @@ void ivp_env_universe_ensure_objects(struct ivp_environment *env, struct ivp_obj
                                      const float center[3], double radius);
 
 /* revive list (IVP_Environment::add_revive_core / remove_revive_core) */
-void ivp_env_add_revive_core(struct ivp_environment *env, struct ivp_core *core);
+bool ivp_env_add_revive_core(struct ivp_environment *env, struct ivp_core *core);
 void ivp_env_remove_revive_core(struct ivp_environment *env, struct ivp_core *core);
 
 /* IVP_Anomaly_Manager callbacks */

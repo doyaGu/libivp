@@ -12,6 +12,7 @@
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/events/ivp_listener_object.h>
 #include <ivp/math/ivp_quat.h>
+#include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_sim_internal.h"
 
 #include <string.h>
@@ -144,11 +145,38 @@ IVP_TEST(immediate_deletion_callback_deletes_current_object)
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(deferred_deletion_queue_failure_preserves_object)
+{
+    cascade_t c;
+    ivp_environment_t *env = make_env(&c);
+    ivp_object_t *obj = make_ball(env, IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(obj != NULL);
+    const ivp_object_handle_t handle = ivp_environment_get_object_handle(obj);
+    const int object_count = ivp_environment_get_object_count(env);
+
+    ivp_env_begin_deferred_deletion(env);
+    ivp_pvec_t saved = env->pl->deferred_deletions;
+    env->pl->deferred_deletions.elems = NULL;
+    env->pl->deferred_deletions.n = 0;
+    env->pl->deferred_deletions.cap = -1;
+
+    IVP_ASSERT_FALSE(ivp_environment_destroy_object_by_handle(env, handle));
+    IVP_ASSERT_FALSE(obj->object_deletion_deferred);
+    IVP_ASSERT_FALSE(obj->check_vicinity_on_deferred_deletion);
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(env), object_count);
+
+    env->pl->deferred_deletions = saved;
+    ivp_env_end_deferred_deletion(env);
+    IVP_ASSERT_TRUE(ivp_environment_destroy_object_by_handle(env, handle));
+    ivp_environment_destroy(env);
+}
+
 int main(void)
 {
     IVP_REGISTER(deferred_deletion_callback_deletes_queued_object);
     IVP_REGISTER(deferred_deletion_callback_appends_to_queue);
     IVP_REGISTER(deferred_deletion_callback_deletes_current_object);
     IVP_REGISTER(immediate_deletion_callback_deletes_current_object);
+    IVP_REGISTER(deferred_deletion_queue_failure_preserves_object);
     IVP_RUN_ALL();
 }

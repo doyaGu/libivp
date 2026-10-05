@@ -389,15 +389,16 @@ void ivp_env_universe_ensure_objects(struct ivp_environment *env, struct ivp_obj
 }
 
 /* IVP_Environment::add_revive_core / remove_revive_core */
-void ivp_env_add_revive_core(struct ivp_environment *env, struct ivp_core *c)
+bool ivp_env_add_revive_core(struct ivp_environment *env, struct ivp_core *c)
 {
-    if (c->is_in_wakeup_vec) return;
+    if (c->is_in_wakeup_vec) return true;
     IVP_IF(1)
     {
         IVP_ASSERT(ivp_pvec_index_of(&env->pl->core_revive_list, c) < 0);
     }
-    ivp_pvec_add(&env->pl->core_revive_list, c);
+    if (ivp_pvec_add(&env->pl->core_revive_list, c) < 0) return false;
     c->is_in_wakeup_vec = true;
+    return true;
 }
 
 void ivp_env_remove_revive_core(struct ivp_environment *env, struct ivp_core *c)
@@ -567,7 +568,10 @@ static env_obj_cb_table_t *cb_create_table(ivp_pvec_t *tables, ivp_object_t *obj
     if (!t) return NULL;
     t->real_object = obj;
     ivp_pvec_init(&t->listeners);
-    ivp_pvec_add(tables, t);
+    if (ivp_pvec_add(tables, t) < 0) {
+        free(t);
+        return NULL;
+    }
     return t;
 }
 
@@ -644,12 +648,20 @@ int ivp_env_add_listener_collision_private(ivp_environment_t *env, ivp_object_t 
 {
     ivp_pvec_t *tables = &env->pl->coll_callback_tables;
     env_obj_cb_table_t *t = cb_find_table(tables, obj);
+    bool created = false;
     if (!t) {
         t = cb_create_table(tables, obj);
         if (!t) return -1;
-        obj->collision_listener_exists = true;
+        created = true;
     }
-    ivp_pvec_add(&t->listeners, l);
+    if (ivp_pvec_add(&t->listeners, l) < 0) {
+        if (created) {
+            cb_remove_table(tables, t);
+            obj->collision_listener_exists = false;
+        }
+        return -1;
+    }
+    if (created) obj->collision_listener_exists = true;
     return 0;
 }
 
@@ -793,12 +805,17 @@ void ivp_object_add_listener_object(ivp_object_t *obj, ivp_listener_object_t *li
     if (!obj || !listener || !obj->owner) return;
     ivp_env_pipeline_t *pl = obj->owner->pl;
     env_obj_cb_table_t *t = obj_cb_find_table(pl, obj);
+    bool created = false;
     if (!t) {
         t = cb_create_table(&pl->obj_callback_tables, obj);
         if (!t) return;
-        obj->object_listener_exists = true;
+        created = true;
     }
-    ivp_pvec_add(&t->listeners, listener);
+    if (ivp_pvec_add(&t->listeners, listener) < 0 && created) {
+        obj_cb_remove_table(pl, t);
+        return;
+    }
+    if (created) obj->object_listener_exists = true;
 }
 
 void ivp_object_remove_listener_object(ivp_object_t *obj, ivp_listener_object_t *listener)
@@ -1491,6 +1508,9 @@ bool ivp_environment_ensure_core_in_simulation(ivp_environment_t *env, ivp_objec
 {
     if (!env || !object || object->owner != env) return false;
     if (object->physical_core->physical_unmoveable) return false;
+    if (object->object_movement_state == IVP_MT_NOT_SIM) {
+        return ivp_env_add_revive_core(env, object->friction_core);
+    }
     ivp_object_ensure_in_simulation(object);
     return true;
 }
@@ -2344,9 +2364,9 @@ bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object
     if (pl->deferred_deletion_depth > 0 || pl->deferred_deletion_draining) {
         /* ivp_defer_object_deletion */
         if (!obj->object_deletion_deferred) {
+            if (ivp_pvec_add(&pl->deferred_deletions, obj) < 0) return false;
             obj->object_deletion_deferred = true;
             obj->check_vicinity_on_deferred_deletion = true;
-            ivp_pvec_add(&pl->deferred_deletions, obj);
         } else {
             obj->check_vicinity_on_deferred_deletion = true;
         }
@@ -2420,8 +2440,8 @@ bool ivp_environment_remove_collision_delegator(ivp_environment_t *env, struct i
 int ivp_environment_add_collision_listener_global(ivp_environment_t *env, ivp_collision_listener_t *listener)
 {
     if (!env || !listener) return -1;
-    ivp_pvec_add(&env->pl->global_collision_listeners, listener); /* IVP_Environment::add_listener_collision_global */
-    return 0;
+    /* IVP_Environment::add_listener_collision_global */
+    return ivp_pvec_add(&env->pl->global_collision_listeners, listener) >= 0 ? 0 : -1;
 }
 
 int ivp_environment_remove_collision_listener_global(ivp_environment_t *env, ivp_collision_listener_t *listener)

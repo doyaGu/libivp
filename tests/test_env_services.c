@@ -17,6 +17,7 @@
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/collision/ivp_collision_core.h>
+#include "dynamics/ivp_env_pipeline.h"
 #include <math.h>
 #include <string.h>
 
@@ -313,6 +314,38 @@ IVP_TEST(collision_listeners_unlimited_and_event_fields)
     IVP_ASSERT_EQ(global.env_deleted, 1);
 }
 
+IVP_TEST(listener_registration_capacity_failure_is_atomic)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_TRUE(env != NULL);
+    ivp_object_t *obj = make_ball(env, IVP_REAL(0.0), IVP_REAL(0.0));
+    IVP_ASSERT_TRUE(obj != NULL);
+
+    ivp_collision_listener_t collision_listener;
+    ivp_collision_listener_init(&collision_listener, IVP_COLLISION_CB_ALL, NULL);
+
+    ivp_pvec_t saved = env->pl->global_collision_listeners;
+    env->pl->global_collision_listeners = (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_EQ(ivp_environment_add_collision_listener_global(env, &collision_listener), -1);
+    env->pl->global_collision_listeners = saved;
+
+    saved = env->pl->coll_callback_tables;
+    env->pl->coll_callback_tables = (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_EQ(ivp_object_add_collision_listener(obj, &collision_listener), -1);
+    IVP_ASSERT_FALSE(obj->collision_listener_exists);
+    env->pl->coll_callback_tables = saved;
+
+    ivp_listener_object_t object_listener;
+    memset(&object_listener, 0, sizeof(object_listener));
+    saved = env->pl->obj_callback_tables;
+    env->pl->obj_callback_tables = (ivp_pvec_t){ NULL, 0, -1 };
+    ivp_object_add_listener_object(obj, &object_listener);
+    IVP_ASSERT_FALSE(obj->object_listener_exists);
+    env->pl->obj_callback_tables = saved;
+
+    ivp_environment_destroy(env);
+}
+
 typedef struct {
     ivp_environment_t *env;
     int evicted;
@@ -410,6 +443,7 @@ int main(void)
     IVP_REGISTER(phantom_reports_ball_passing_through);
     IVP_REGISTER(object_listeners_global_and_private);
     IVP_REGISTER(collision_listeners_unlimited_and_event_fields);
+    IVP_REGISTER(listener_registration_capacity_failure_is_atomic);
     IVP_REGISTER(universe_manager_evicts_unreferenced_objects);
     IVP_REGISTER(active_value_manager_refreshed_each_psi);
     IVP_REGISTER(user_time_event_fires_between_psis);

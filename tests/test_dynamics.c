@@ -9,6 +9,8 @@
 #include <ivp/controllers/ivp_actuator_force.h>
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
 #include <ivp/math/ivp_fast_math.h>
+#include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_env_pipeline.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1429,6 +1431,33 @@ IVP_TEST(ensure_core_in_simulation_wakes_frozen_object) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(revive_queue_failure_leaves_core_retryable) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.start_in_simulation = false;
+    ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(obj);
+    ivp_core_t *core = obj->physical_core;
+    IVP_ASSERT_FALSE(core->is_in_wakeup_vec);
+
+    ivp_pvec_t saved = env->pl->core_revive_list;
+    env->pl->core_revive_list = (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_FALSE(ivp_env_add_revive_core(env, core));
+    IVP_ASSERT_FALSE(core->is_in_wakeup_vec);
+    env->pl->core_revive_list = saved;
+
+    IVP_ASSERT_TRUE(ivp_env_add_revive_core(env, core));
+    IVP_ASSERT_TRUE(core->is_in_wakeup_vec);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(&env->pl->core_revive_list, core) >= 0);
+    ivp_env_remove_revive_core(env, core);
+    IVP_ASSERT_FALSE(core->is_in_wakeup_vec);
+
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(force_actuator_executes_once_per_psi) {
     ivp_environment_config_t cfg;
     ivp_environment_config_init(&cfg);
@@ -1684,6 +1713,7 @@ int main(void) {
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);
+    IVP_REGISTER(revive_queue_failure_leaves_core_retryable);
     IVP_REGISTER(force_actuator_executes_once_per_psi);
     IVP_REGISTER(rot_mot_executes_once_per_psi);
 
