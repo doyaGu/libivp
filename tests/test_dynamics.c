@@ -1176,6 +1176,36 @@ IVP_TEST(sim_unit_controller_rebuild_failure_clears_partial_index) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(sim_unit_controller_rebuild_failure_preserves_live_index) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(obj);
+    ivp_sim_unit_t *unit = obj->physical_core->sim_unit;
+    IVP_ASSERT_NOT_NULL(unit);
+    IVP_ASSERT_TRUE(ivp_pvec_len(&unit->controller_cores) > 0);
+
+    ivp_pvec_t index_before = unit->controller_cores;
+    ivp_allocator_t allocator_before = *env->allocator;
+    env_fail_alloc_state_t state = { .fail_at = 1 };
+    *env->allocator = (ivp_allocator_t){
+        .alloc = env_fail_alloc,
+        .realloc = env_fail_realloc,
+        .free = env_fail_free,
+        .ctx = &state
+    };
+    IVP_ASSERT_FALSE(ivp_sim_unit_sim_unit_calc_redundants(unit));
+    *env->allocator = allocator_before;
+
+    IVP_ASSERT_TRUE(unit->controller_cores.elems == index_before.elems);
+    IVP_ASSERT_EQ(unit->controller_cores.n, index_before.n);
+    IVP_ASSERT_EQ(unit->controller_cores.cap, index_before.cap);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+    ivp_environment_destroy(env);
+}
+
 typedef struct controller_self_remove_ctx {
     ivp_controller_handle_t self;
     int calls;
@@ -1996,6 +2026,7 @@ int main(void) {
     IVP_REGISTER(sim_unit_event_pipeline);
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
     IVP_REGISTER(sim_unit_controller_rebuild_failure_clears_partial_index);
+    IVP_REGISTER(sim_unit_controller_rebuild_failure_preserves_live_index);
     IVP_REGISTER(controller_self_remove_does_not_break_iteration);
     IVP_REGISTER(controller_registration_failure_is_atomic);
     IVP_REGISTER(dependent_controller_allocation_failure_is_atomic);

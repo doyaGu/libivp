@@ -138,19 +138,50 @@ static void su_sort_controllers(ivp_sim_unit_t *su)
 
 bool ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
 {
+    if (su->controller_cores.n < 0 || su->controller_cores.cap < 0 ||
+        su->controller_cores.n > su->controller_cores.cap) {
+        return false;
+    }
+
+    /* Most callers clear the old index first and can reuse its capacity.  A
+     * live index is rebuilt beside the old one so OOM leaves it untouched. */
+    bool replace_existing = ivp_pvec_len(&su->controller_cores) > 0;
+    ivp_pvec_t rebuilt;
+    ivp_pvec_t *target = &su->controller_cores;
+    if (replace_existing) {
+        ivp_pvec_init_with_allocator(&rebuilt,
+                                     ivp_pvec_allocator(&su->controller_cores));
+        target = &rebuilt;
+    }
     for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
         ivp_core_t *my_core = su_core_at(su, i);
         for (int k = ivp_pvec_len(&my_core->controllers_of_core) - 1; k >= 0; k--) {
             ivp_sim_ctrl_t *c = (ivp_sim_ctrl_t *)ivp_pvec_at(&my_core->controllers_of_core, k);
-            ivp_su_ctrl_list_t *cl = su_find_controller(&su->controller_cores, c);
-            if (!cl) cl = su_add_controller_unit_sim(&su->controller_cores, c);
+            ivp_su_ctrl_list_t *cl = su_find_controller(target, c);
+            if (!cl) cl = su_add_controller_unit_sim(target, c);
             if (!cl || ivp_pvec_install(&cl->cores_controlled_by, my_core) < 0) {
-                ivp_sim_unit_clean_sim_unit(su);
+                for (int j = ivp_pvec_len(target) - 1; j >= 0; j--) {
+                    su_cl_delete((ivp_su_ctrl_list_t *)ivp_pvec_at(target, j));
+                }
+                ivp_pvec_remove_all(target);
+                if (replace_existing) ivp_pvec_clear(target);
                 return false;
             }
         }
     }
-    su_sort_controllers(su);
+
+    if (replace_existing) {
+        ivp_sim_unit_t rebuilt_unit = *su;
+        rebuilt_unit.controller_cores = rebuilt;
+        su_sort_controllers(&rebuilt_unit);
+        rebuilt = rebuilt_unit.controller_cores;
+
+        ivp_sim_unit_clean_sim_unit(su);
+        ivp_pvec_clear(&su->controller_cores);
+        su->controller_cores = rebuilt;
+    } else {
+        su_sort_controllers(su);
+    }
     return true;
 }
 
@@ -832,6 +863,10 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
 {
     ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
     if (!controlled_cores) return true;
+    /* Keep fused source units intact until the rebuilt controller index
+     * commits.  That makes every allocation failure below reversible. */
+    ivp_pvec_t deferred_units;
+    ivp_pvec_init_with_allocator(&deferred_units, ivp_env_get_allocator(env));
     ivp_sim_unit_t *reference_unit = NULL;
     bool did_fusion = false;
     bool success = true;
@@ -848,11 +883,16 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
         }
         if (reference_unit != NULL) {
             if (test_sim_unit != reference_unit) {
-                if (!ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit)) {
+                if (ivp_pvec_add(&deferred_units, test_sim_unit) < 0) {
                     success = false;
                     break;
                 }
-                ivp_sim_unit_delete(test_sim_unit);
+                if (!ivp_sim_unit_throw_cores_into_my_sim_unit(reference_unit, test_sim_unit)) {
+                    ivp_pvec_remove_at(&deferred_units,
+                                       ivp_pvec_len(&deferred_units) - 1);
+                    success = false;
+                    break;
+                }
                 did_fusion = true;
             }
         } else {
@@ -864,17 +904,35 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
             break;
         }
     }
-    if (!success) {
-        ivp_ctrl_mgr_remove_controller_from_environment(env, c, true);
-    }
-    if (did_fusion && reference_unit) {
-        ivp_sim_unit_clean_sim_unit(reference_unit);
+    if (success && did_fusion && reference_unit) {
         if (!ivp_sim_unit_sim_unit_calc_redundants(reference_unit)) {
-            reference_unit->union_find_needed_for_sim_unit = true;
             success = false;
         }
     }
-    if (mtype < IVP_MT_NOT_SIM && reference_unit) {
+
+    if (!success) {
+        ivp_ctrl_mgr_remove_controller_from_environment(env, c, true);
+        for (int i = ivp_pvec_len(&deferred_units) - 1; i >= 0; i--) {
+            ivp_sim_unit_t *restored =
+                (ivp_sim_unit_t *)ivp_pvec_at(&deferred_units, i);
+            for (int j = ivp_pvec_len(&restored->sim_unit_cores) - 1;
+                 j >= 0; j--) {
+                int last = ivp_pvec_len(&reference_unit->sim_unit_cores) - 1;
+                ivp_core_t *core = su_core_at(restored, j);
+                IVP_ASSERT(last >= 0 && su_core_at(reference_unit, last) == core);
+                if (last >= 0) ivp_pvec_remove_at(&reference_unit->sim_unit_cores, last);
+                core->sim_unit = restored;
+            }
+            ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(env), restored);
+        }
+    } else {
+        for (int i = ivp_pvec_len(&deferred_units) - 1; i >= 0; i--) {
+            ivp_sim_unit_delete((ivp_sim_unit_t *)ivp_pvec_at(&deferred_units, i));
+        }
+    }
+    ivp_pvec_clear(&deferred_units);
+
+    if (success && mtype < IVP_MT_NOT_SIM && reference_unit) {
         ivp_sim_unit_revive_for_simulation(reference_unit, env);
     }
     return success;
