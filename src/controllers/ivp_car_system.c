@@ -822,8 +822,10 @@ void ivp_car_system_set_booster_acceleration(ivp_car_system_t *car, ivp_real_t a
             backPoint.k[pCarConstraint->z_idx] = -1.0f;
             car_anchor_cs(pCarBody, &frontPoint, &a0);
             car_anchor_cs(pCarBody, &backPoint, &a1);
-            car_create_force(car, &car->booster_actuator[0], &car->h_booster[0], pCarBody, &a0, pCarBody, &a1,
-                             acceleration * mass);
+            if (!car_create_force(car, &car->booster_actuator[0], &car->h_booster[0],
+                                  pCarBody, &a0, pCarBody, &a1, acceleration * mass)) {
+                return;
+            }
 
             ivp_vec3f_t centerPoint, downPoint;
             lvf_zero(&centerPoint);
@@ -834,8 +836,11 @@ void ivp_car_system_set_booster_acceleration(ivp_car_system_t *car, ivp_real_t a
             ivp_vec3r_t gravity;
             ivp_environment_get_gravity(car->environment, &gravity);
             float up_force = (float)((D)(-1.0f * mass) * (D)gravity.k[pCarConstraint->y_idx]);
-            car_create_force(car, &car->booster_actuator[1], &car->h_booster[1], pCarBody, &a0, pStaticObject, &a1,
-                             up_force);
+            if (!car_create_force(car, &car->booster_actuator[1], &car->h_booster[1],
+                                  pCarBody, &a0, pStaticObject, &a1, up_force)) {
+                car_remove_controller(car, &car->h_booster[0]);
+                return;
+            }
             car->booster_active = true;
         } else {
             ivp_force_actuator_set_force(&car->booster_actuator[0], (ivp_real_t)(acceleration * mass));
@@ -859,6 +864,7 @@ void ivp_car_system_activate_booster(ivp_car_system_t *car, ivp_real_t thrust, i
     ivp_environment_get_gravity(car->environment, &g);
     float gravity = (float)lvp_real_length(&g);
     ivp_car_system_set_booster_acceleration(car, (ivp_real_t)((float)thrust * gravity));
+    if (!car->booster_active) return;
 
     car->booster_seconds_to_go = (float)duration;                  /* seconds */
     car->booster_seconds_until_ready = (float)duration + (float)delay; /* next ignition */

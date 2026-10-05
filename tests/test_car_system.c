@@ -719,6 +719,62 @@ IVP_TEST(car_controller_registration_failures_are_atomic)
     }
 }
 
+IVP_TEST(booster_registration_failures_are_atomic)
+{
+    int allocation_attempts;
+    {
+        car_scene_t sc;
+        IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+        IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+        car_fail_nth_alloc_state_t state = {
+            .base = *sc.env->allocator,
+            .attempts = 0,
+            .fail_at = INT_MAX
+        };
+        *sc.env->allocator = (ivp_allocator_t){
+            .alloc = car_fail_nth_alloc,
+            .realloc = car_fail_nth_realloc,
+            .free = car_fail_nth_free,
+            .ctx = &state
+        };
+        ivp_car_system_activate_booster(&sc.car, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(1.0));
+        *sc.env->allocator = state.base;
+        IVP_ASSERT_TRUE(sc.car.booster_active);
+        allocation_attempts = state.attempts;
+        scene_destroy(&sc);
+    }
+
+    IVP_ASSERT_TRUE(allocation_attempts > 1);
+    for (int fail_at = 1; fail_at <= allocation_attempts; fail_at++) {
+        car_scene_t sc;
+        IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+        IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+        car_fail_nth_alloc_state_t state = {
+            .base = *sc.env->allocator,
+            .attempts = 0,
+            .fail_at = fail_at
+        };
+        *sc.env->allocator = (ivp_allocator_t){
+            .alloc = car_fail_nth_alloc,
+            .realloc = car_fail_nth_realloc,
+            .free = car_fail_nth_free,
+            .ctx = &state
+        };
+        ivp_car_system_activate_booster(&sc.car, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(1.0));
+        *sc.env->allocator = state.base;
+
+        IVP_ASSERT_FALSE(sc.car.booster_active);
+        IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(sc.car.h_booster[0]));
+        IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(sc.car.h_booster[1]));
+        IVP_ASSERT_NEAR(ivp_car_system_get_booster_time_to_go(&sc.car), 0.0, 0.0);
+        IVP_ASSERT_NEAR(ivp_car_system_get_booster_delay(&sc.car), 0.0, 0.0);
+
+        ivp_car_system_activate_booster(&sc.car, IVP_REAL(0.5), IVP_REAL(0.5), IVP_REAL(1.0));
+        IVP_ASSERT_TRUE(sc.car.booster_active);
+        scene_destroy(&sc);
+    }
+}
+
 IVP_TEST(fix_wheel_registration_failure_is_atomic)
 {
     car_scene_t sc;
@@ -777,6 +833,7 @@ int main(void)
     IVP_REGISTER(constraint_solver_listener_failure_is_atomic);
     IVP_REGISTER(car_listener_failure_is_atomic);
     IVP_REGISTER(car_controller_registration_failures_are_atomic);
+    IVP_REGISTER(booster_registration_failures_are_atomic);
     IVP_REGISTER(fix_wheel_registration_failure_is_atomic);
     IVP_REGISTER(compat_controller_entry_is_noop);
     IVP_RUN_ALL();
