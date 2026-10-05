@@ -896,11 +896,13 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
     ivp_counting_allocator_get_stats(&counting, &verification_stats);
     ivp_counting_allocator_destroy(&counting);
     if (verification_stats.current_bytes != 0) return 0;
+    int latency_count = latency.step_count;
+    if (latency_count > MAX_STEPS) latency_count = MAX_STEPS;
     int64_t latency_sorted[MAX_STEPS];
-    memcpy(latency_sorted, latency.step_ns, (size_t)latency.step_count * sizeof(*latency_sorted));
-    qsort(latency_sorted, (size_t)latency.step_count, sizeof(*latency_sorted), compare_ns);
-    double psi_p95 = latency.step_count
-        ? (double)latency_sorted[(int)ceil(latency.step_count * 0.95) - 1] : 0.0;
+    memcpy(latency_sorted, latency.step_ns, (size_t)latency_count * sizeof(*latency_sorted));
+    qsort(latency_sorted, (size_t)latency_count, sizeof(*latency_sorted), compare_ns);
+    double psi_p95 = latency_count
+        ? (double)latency_sorted[(int)ceil(latency_count * 0.95) - 1] : 0.0;
 
     double median = percentile(normalized, opt->samples, 0.5);
     double p95 = percentile(normalized, opt->samples, 0.95);
