@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 #include "collision/ivp_lvec.h"
 #include "collision/ivp_mindist_debug.h"
 #include "collision/ivp_mindist_event_internal.h"
@@ -125,9 +126,26 @@ static const ivp_compact_ledge_t *obj_get_single_convex(const ivp_object_t *o)
 }
 
 /* IVP_SurfaceManager_Polygon_Solver::traverse_cluster */
-static void traverse_cluster(const ivp_compact_ledgetree_node_t *node, const ivp_vec3r_t *visitor_pos_os, D radius,
-                             ivp_pvec_t *out)
+typedef struct ledge_collection {
+    ivp_pvec_t ledges;
+    bool failed;
+} ledge_collection_t;
+
+static bool ledge_collection_add(ledge_collection_t *collection,
+                                 const ivp_compact_ledge_t *ledge)
 {
+    if (collection->failed) return false;
+    if (ivp_pvec_add(&collection->ledges, (void *)ledge) < 0) {
+        collection->failed = true;
+        return false;
+    }
+    return true;
+}
+
+static void traverse_cluster(const ivp_compact_ledgetree_node_t *node, const ivp_vec3r_t *visitor_pos_os, D radius,
+                             ledge_collection_t *out)
+{
+    if (out->failed) return;
     const D work = IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
     ivp_vec3r_t dist_vec;
     ivp_vec3f_t center;
@@ -142,7 +160,7 @@ static void traverse_cluster(const ivp_compact_ledgetree_node_t *node, const ivp
     if ((D)fabs((double)dist_vec.k[2]) >= ((D)((float)node->box_sizes[2] * work2) + radius)) return;
     const ivp_compact_ledge_t *hull = ivp_ledgetree_get_compact_hull(node);
     if (hull) {
-        ivp_pvec_add(out, (void *)hull);
+        (void)ledge_collection_add(out, hull);
         return;
     }
     if (ivp_ledgetree_is_terminal(node)) {
@@ -151,7 +169,7 @@ static void traverse_cluster(const ivp_compact_ledgetree_node_t *node, const ivp
             D qdist = ivp_lcls_calc_qlen_PF_F_space(ledge, ivp_ledge_get_first_triangle(ledge), visitor_pos_os);
             if (qdist > radius * radius) return;
         }
-        ivp_pvec_add(out, (void *)ledge);
+        (void)ledge_collection_add(out, ledge);
         return;
     }
     traverse_cluster(ivp_ledgetree_left_son(node), visitor_pos_os, radius, out);
@@ -166,50 +184,49 @@ static const ivp_compact_ledgetree_node_t *ledge_get_ledgetree_node(const ivp_co
 
 static void obj_ledge_collect_cb(void *ctx, const ivp_compact_ledge_t *ledge)
 {
-    ivp_pvec_add((ivp_pvec_t *)ctx, (void *)ledge);
+    (void)ledge_collection_add((ledge_collection_t *)ctx, ledge);
 }
 
 /* IVP_SurfaceManager::get_all_ledges_within_radius */
-static void obj_get_all_ledges_within_radius(const ivp_object_t *o, const ivp_vec3r_t *visitor_pos_os, D radius,
-                                             const ivp_compact_ledge_t *root_ledge, ivp_pvec_t *out)
+static bool obj_get_all_ledges_within_radius(const ivp_object_t *o, const ivp_vec3r_t *visitor_pos_os, D radius,
+                                             const ivp_compact_ledge_t *root_ledge, ledge_collection_t *out)
 {
     if (obj_is_ball(o)) {
-        if (lvp_quad_length(visitor_pos_os) > radius * radius) return;
-        ivp_pvec_add(out, (void *)ball_ledge());
-        return;
+        if (lvp_quad_length(visitor_pos_os) > radius * radius) return true;
+        return ledge_collection_add(out, ball_ledge());
     }
     if (o->surman && o->surman->vtable->get_all_ledges_within_radius) {
         /* surface manager port of IVP_SurfaceManager::get_all_ledges_within_radius */
         double vp[3] = { (double)visitor_pos_os->k[0], (double)visitor_pos_os->k[1], (double)visitor_pos_os->k[2] };
         o->surman->vtable->get_all_ledges_within_radius(o->surman, vp, (double)radius, root_ledge, NULL,
                                                         obj_ledge_collect_cb, out);
-        return;
+        return !out->failed;
     }
     if (!root_ledge) {
         const ivp_compact_ledgetree_node_t *root_node = obj_ledgetree_root(o);
         if (!root_node) {
             const ivp_compact_ledge_t *l = o->surman ? ivp_surman_get_single_convex(o->surman) : NULL;
-            if (l) ivp_pvec_add(out, (void *)l);
-            return;
+            if (l) (void)ledge_collection_add(out, l);
+            return !out->failed;
         }
         traverse_cluster(root_node, visitor_pos_os, radius, out);
-        return;
+        return !out->failed;
     }
     if (ivp_ledge_is_terminal(root_ledge)) {
         if (ivp_ledge_get_n_triangles(root_ledge) == 2) {
             D qdist = ivp_lcls_calc_qlen_PF_F_space(root_ledge, ivp_ledge_get_first_triangle(root_ledge), visitor_pos_os);
-            if (qdist > radius * radius) return;
+            if (qdist > radius * radius) return true;
         }
-        ivp_pvec_add(out, (void *)root_ledge);
-        return;
+        return ledge_collection_add(out, root_ledge);
     }
     const ivp_compact_ledgetree_node_t *root_node = ledge_get_ledgetree_node(root_ledge);
     if (ivp_ledgetree_is_terminal(root_node)) {
         traverse_cluster(root_node, visitor_pos_os, radius, out);
-        return;
+        return !out->failed;
     }
     traverse_cluster(ivp_ledgetree_left_son(root_node), visitor_pos_os, radius, out);
     traverse_cluster(ivp_ledgetree_right_son(root_node), visitor_pos_os, radius, out);
+    return !out->failed;
 }
 
 static inline bool obj_is_moving(const ivp_object_t *o) { return IVP_MTIS_IS_MOVING(o->object_movement_state) != 0; }
@@ -412,6 +429,20 @@ ivp_mindist_t *ivp_mindist_create(struct ivp_environment *env, ivp_collision_del
     return md;
 }
 
+/* Release a mindist that was allocated for a pending collision set but was
+ * never initialized or published.  Calling the regular collision destructor
+ * here would notify a delegator that has never seen this collision. */
+static void mindist_discard_uninitialized(ivp_mindist_t *md)
+{
+    if (!md) return;
+    IVP_ASSERT(md->mindist_status == IVP_MD_UNINITIALIZED);
+    if (md->is_recursive) ivp_coll_fvector_clear(&md->mindists);
+    ivp_statistic_manager_t *statistics = ivp_env_get_statistic_manager(md->env);
+    statistics->sum_of_mindists--;
+    statistics->mindists_generated--;
+    ivp_free(ivp_env_get_allocator(md->env), md, sizeof(*md));
+}
+
 static void rec_delete_all_children(ivp_mindist_t *md)
 {
     for (int i = md->mindists.n - 1; i >= 0; i--) {
@@ -604,6 +635,32 @@ typedef struct diff_hash {
     int n_found_objects;
 } diff_hash_t;
 
+typedef struct pending_diff_hash {
+    ivp_pvec_t *collisions;
+    int n_found_objects;
+} pending_diff_hash_t;
+
+static bool pending_diff_hash_check_ledges(pending_diff_hash_t *dh,
+                                           const ivp_compact_ledge_t *l0,
+                                           const ivp_compact_ledge_t *l1)
+{
+    for (int i = dh->n_found_objects; i < ivp_pvec_len(dh->collisions); i++) {
+        ivp_collision_t *collision = (ivp_collision_t *)ivp_pvec_at(dh->collisions, i);
+        const ivp_compact_ledge_t *ledges[2];
+        collision->cvt->get_ledges(collision, ledges);
+        if (ledges[0] == l0 && ledges[1] == l1) {
+            if (i > dh->n_found_objects) {
+                void *tmp = dh->collisions->elems[dh->n_found_objects];
+                dh->collisions->elems[dh->n_found_objects] = dh->collisions->elems[i];
+                dh->collisions->elems[i] = tmp;
+            }
+            dh->n_found_objects++;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool diff_hash_check_ledges(diff_hash_t *dh, const ivp_compact_ledge_t *l0, const ivp_compact_ledge_t *l1)
 {
     for (int i = dh->n_found_objects; i < dh->v->n; i++) {
@@ -628,7 +685,15 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
                                            ivp_collision_delegator_t *oo_watcher)
 {
     struct ivp_environment *env = pop0->owner;
-    ivp_pvec_t ledges0 = IVP_PVEC_INIT, ledges1 = IVP_PVEC_INIT;
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ledge_collection_t ledges0 = {0}, ledges1 = {0};
+    ivp_pvec_init_with_allocator(&ledges0.ledges, allocator);
+    ivp_pvec_init_with_allocator(&ledges1.ledges, allocator);
+    ivp_pvec_t pending_collisions;
+    ivp_pvec_t existing_order;
+    ivp_pvec_init_with_allocator(&pending_collisions, allocator);
+    ivp_pvec_init_with_allocator(&existing_order, allocator);
+    bool committed = false;
     ivp_time_t now = ivp_env_get_current_time(env);
     if (!single_ledge0) {
         ivp_vec3r_t pos1, visitor_os0;
@@ -638,9 +703,10 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
         D search_radius_0 = (D)((float)pop1->physical_core->upper_limit_radius + pop0->extra_radius) + (D)scan_radius;
         ivp_cache_obj_t *cache0 = ivp_object_get_cache_object_no_lock(pop0);
         lvm_vimult4(&cache0->m_world_f_object, &pos1, &visitor_os0);
-        obj_get_all_ledges_within_radius(pop0, &visitor_os0, search_radius_0, root_ledge0, &ledges0);
+        if (!obj_get_all_ledges_within_radius(pop0, &visitor_os0, search_radius_0,
+                                              root_ledge0, &ledges0)) goto cleanup;
     } else {
-        ivp_pvec_add(&ledges0, (void *)single_ledge0);
+        if (!ledge_collection_add(&ledges0, single_ledge0)) goto cleanup;
     }
     if (!single_ledge1) {
         ivp_vec3r_t pos0, visitor_os1;
@@ -649,9 +715,10 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
         D search_radius_1 = (D)((float)pop0->physical_core->upper_limit_radius + pop1->extra_radius) + (D)scan_radius;
         ivp_cache_obj_t *cache1 = ivp_object_get_cache_object_no_lock(pop1);
         lvm_vimult4(&cache1->m_world_f_object, &pos0, &visitor_os1);
-        obj_get_all_ledges_within_radius(pop1, &visitor_os1, search_radius_1, root_ledge1, &ledges1);
+        if (!obj_get_all_ledges_within_radius(pop1, &visitor_os1, search_radius_1,
+                                              root_ledge1, &ledges1)) goto cleanup;
     } else {
-        ivp_pvec_add(&ledges1, (void *)single_ledge1);
+        if (!ledge_collection_add(&ledges1, single_ledge1)) goto cleanup;
     }
 #ifdef IVP_HOME_BUILD
     {
@@ -679,16 +746,60 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
                                                                (ivp_real_t)vis_search_radius_0);
     }
 #endif
+
+    /* Work out every allocation before changing the live collision vector.
+     * The working copy reproduces Diff_Hash's swaps without touching collision
+     * backlink indices. */
+    if (!ivp_pvec_reserve(&existing_order, mindists->n)) goto cleanup;
+    for (int i = 0; i < mindists->n; i++) {
+        int added = ivp_pvec_add(&existing_order, mindists->elems[i]);
+        IVP_ASSERT(added >= 0);
+        IVP_USE(added);
+    }
+    pending_diff_hash_t pending_diff = { &existing_order, 0 };
+    for (int i = ivp_pvec_len(&ledges0.ledges) - 1; i >= 0; i--) {
+        const ivp_compact_ledge_t *l0 =
+            (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges0.ledges, i);
+        for (int j = ivp_pvec_len(&ledges1.ledges) - 1; j >= 0; j--) {
+            const ivp_compact_ledge_t *l1 =
+                (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges1.ledges, j);
+            if (pending_diff_hash_check_ledges(&pending_diff, l0, l1)) continue;
+            bool recursive = !ivp_ledge_is_terminal(l0) || !ivp_ledge_is_terminal(l1);
+            ivp_mindist_t *pending = ivp_mindist_create(env, oo_watcher, recursive);
+            if (!pending) goto cleanup;
+            if (ivp_pvec_add(&pending_collisions, pending) < 0) {
+                mindist_discard_uninitialized(pending);
+                goto cleanup;
+            }
+        }
+    }
+    if (pending_collisions.n > INT_MAX - mindists->n ||
+        !ivp_coll_fvector_reserve(mindists, mindists->n + pending_collisions.n)) {
+        goto cleanup;
+    }
+    if ((pop0->physical_core->car_wheel || pop1->physical_core->car_wheel) &&
+        pending_collisions.n > 0) {
+        ivp_mindist_mgr_t *manager = ivp_env_get_mindist_mgr(env);
+        if (pending_collisions.n > INT_MAX - manager->wheel_look_ahead_mindists.n ||
+            !ivp_pvec_reserve(&manager->wheel_look_ahead_mindists,
+                              manager->wheel_look_ahead_mindists.n +
+                                  pending_collisions.n)) {
+            goto cleanup;
+        }
+    }
+
     diff_hash_t dh = { mindists, 0 };
-    ivp_pvec_t new_collisions = IVP_PVEC_INIT;
-    for (int i = ivp_pvec_len(&ledges0) - 1; i >= 0; i--) {
-        const ivp_compact_ledge_t *l0 = (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges0, i);
+    int next_pending = 0;
+    for (int i = ivp_pvec_len(&ledges0.ledges) - 1; i >= 0; i--) {
+        const ivp_compact_ledge_t *l0 =
+            (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges0.ledges, i);
         const ivp_compact_triangle_t *tri0 = ivp_ledge_get_first_triangle(l0);
-        for (int j = ivp_pvec_len(&ledges1) - 1; j >= 0; j--) {
-            const ivp_compact_ledge_t *l1 = (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges1, j);
+        for (int j = ivp_pvec_len(&ledges1.ledges) - 1; j >= 0; j--) {
+            const ivp_compact_ledge_t *l1 =
+                (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges1.ledges, j);
             if (diff_hash_check_ledges(&dh, l0, l1)) {
 #ifdef IVP_DEBUG_BUILD
-                {   /* IVP_MM_CMP::are_equal (ivp_mindist.cxx:367) */
+                {
                     ivp_collision_t *found = dh.v->elems[dh.n_found_objects - 1];
                     ivp_object_t *object[2];
                     found->cvt->get_objects(found, object);
@@ -698,17 +809,18 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
 #endif
                 continue;
             }
-            bool rec = !ivp_ledge_is_terminal(l0) || !ivp_ledge_is_terminal(l1);
-            ivp_mindist_t *nm = ivp_mindist_create(env, oo_watcher, rec);
-            /* ivp_mindist.cxx:486-491: IVP_ASSERT(new_collisions.n_elems <= new_collisions.memsize) */
-            IVP_ASSERT(new_collisions.n <= new_collisions.cap);
+            IVP_ASSERT(next_pending < pending_collisions.n);
+            ivp_mindist_t *nm = (ivp_mindist_t *)ivp_pvec_at(
+                &pending_collisions, next_pending++);
+            IVP_ASSERT(pending_collisions.n <= pending_collisions.cap);
             const ivp_compact_triangle_t *tri1 = ivp_ledge_get_first_triangle(l1);
-            ivp_mindist_init_mindist(nm, pop0, pop1, ivp_tri_get_first_edge(tri0), ivp_tri_get_first_edge(tri1));
-            IVP_ASSERT(new_collisions.n <= new_collisions.cap);
-            ivp_pvec_add(&new_collisions, nm);
-            IVP_ASSERT(new_collisions.n <= new_collisions.cap);
+            ivp_mindist_init_mindist(nm, pop0, pop1,
+                                     ivp_tri_get_first_edge(tri0),
+                                     ivp_tri_get_first_edge(tri1));
+            IVP_ASSERT(pending_collisions.n <= pending_collisions.cap);
         }
     }
+    IVP_ASSERT(next_pending == pending_collisions.n);
     /* delete unused collisions */
     for (int x = mindists->n - 1; x >= dh.n_found_objects; x--) {
         if (x >= mindists->n) continue;
@@ -716,12 +828,25 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
         ivp_collision_delete(c);
     }
     /* add new collisions */
-    for (int x = ivp_pvec_len(&new_collisions) - 1; x >= 0; x--) {
-        ivp_coll_fvector_add(mindists, (ivp_collision_t *)ivp_pvec_at(&new_collisions, x));
+    for (int x = ivp_pvec_len(&pending_collisions) - 1; x >= 0; x--) {
+        int added = ivp_coll_fvector_add(
+            mindists, (ivp_collision_t *)ivp_pvec_at(&pending_collisions, x));
+        IVP_ASSERT(added >= 0);
+        IVP_USE(added);
     }
-    ivp_pvec_clear(&new_collisions);
-    ivp_pvec_clear(&ledges0);
-    ivp_pvec_clear(&ledges1);
+    committed = true;
+
+cleanup:
+    if (!committed) {
+        for (int i = pending_collisions.n - 1; i >= 0; i--) {
+            mindist_discard_uninitialized(
+                (ivp_mindist_t *)ivp_pvec_at(&pending_collisions, i));
+        }
+    }
+    ivp_pvec_clear(&pending_collisions);
+    ivp_pvec_clear(&existing_order);
+    ivp_pvec_clear(&ledges0.ledges);
+    ivp_pvec_clear(&ledges1.ledges);
 }
 
 void ivp_mindist_mgr_insert_exact_mindist(ivp_mindist_mgr_t *mm, ivp_mindist_t *md)
@@ -735,7 +860,11 @@ void ivp_mindist_mgr_insert_exact_mindist(ivp_mindist_mgr_t *mm, ivp_mindist_t *
     syn_insert_exact_in_object(&md->synapse[0]);
     syn_insert_exact_in_object(&md->synapse[1]);
     if (md->synapse[0].l_obj->physical_core->car_wheel || md->synapse[1].l_obj->physical_core->car_wheel) {
-        if (md->mindist_function != IVP_MF_PHANTOM) ivp_pvec_add(&mm->wheel_look_ahead_mindists, md);
+        if (md->mindist_function != IVP_MF_PHANTOM) {
+            int added = ivp_pvec_add(&mm->wheel_look_ahead_mindists, md);
+            IVP_ASSERT(added >= 0);
+            IVP_USE(added);
+        }
     }
 }
 
@@ -800,7 +929,9 @@ void ivp_mindist_mgr_insert_and_recalc_exact_mindist(ivp_mindist_mgr_t *mm, ivp_
     mm->exact_mindists = md;
     ivp_mindist_recalc_mindist(md);
     if (syn0->l_obj->physical_core->car_wheel || syn1->l_obj->physical_core->car_wheel) {
-        ivp_pvec_add(&mm->wheel_look_ahead_mindists, md);
+        int added = ivp_pvec_add(&mm->wheel_look_ahead_mindists, md);
+        IVP_ASSERT(added >= 0);
+        IVP_USE(added);
     }
     if (md->recalc_result == IVP_MDRR_OK) {
         unsigned allow_hull_bit = (unsigned)syn0->l_obj->physical_core->movement_state | (unsigned)syn1->l_obj->physical_core->movement_state;
@@ -1575,6 +1706,17 @@ static void root_collision_is_going_to_be_deleted_event(ivp_collision_delegator_
 static ivp_collision_t *root_delegate_collisions_for_object(ivp_collision_delegator_root_t *r,
                                                             struct ivp_object *obj0, struct ivp_object *obj1)
 {
+    if (!obj0 || !obj1 || !obj0->ov_element || !obj1->ov_element) return NULL;
+    if (obj0->ov_element->collision_fvector.n == INT_MAX ||
+        obj1->ov_element->collision_fvector.n == INT_MAX) {
+        return NULL;
+    }
+    if (!ivp_coll_fvector_reserve(&obj0->ov_element->collision_fvector,
+                                  obj0->ov_element->collision_fvector.n + 1) ||
+        !ivp_coll_fvector_reserve(&obj1->ov_element->collision_fvector,
+                                  obj1->ov_element->collision_fvector.n + 1)) {
+        return NULL;
+    }
     ivp_collision_t *coll;
     const ivp_compact_ledge_t *l0 = obj_get_single_convex(obj0);
     const ivp_compact_ledge_t *l1 = obj_get_single_convex(obj1);
@@ -1582,12 +1724,21 @@ static ivp_collision_t *root_delegate_collisions_for_object(ivp_collision_delega
         const ivp_compact_triangle_t *tri0 = ivp_ledge_get_first_triangle(l0);
         const ivp_compact_triangle_t *tri1 = ivp_ledge_get_first_triangle(l1);
         bool rec = !ivp_ledge_is_terminal(l0) || !ivp_ledge_is_terminal(l1);
+        if (obj0->physical_core->car_wheel || obj1->physical_core->car_wheel) {
+            ivp_mindist_mgr_t *manager = ivp_env_get_mindist_mgr(obj0->owner);
+            if (!ivp_pvec_ensure(&manager->wheel_look_ahead_mindists)) {
+                return NULL;
+            }
+        }
         ivp_mindist_t *md = ivp_mindist_create(obj0->owner, &r->base, rec);
+        if (!md) return NULL;
         /* reference: ov elements get the collision AFTER init_mindist */
         ivp_mindist_init_mindist(md, obj0, obj1, ivp_tri_get_first_edge(tri0), ivp_tri_get_first_edge(tri1));
         coll = &md->coll;
     } else {
-        coll = &ivp_oo_watcher_create(&r->base, obj0, obj1)->coll;
+        ivp_oo_watcher_t *watcher = ivp_oo_watcher_create(&r->base, obj0, obj1);
+        if (!watcher) return NULL;
+        coll = &watcher->coll;
     }
     ivp_ov_element_add_oo_collision(obj0->ov_element, coll);
     ivp_ov_element_add_oo_collision(obj1->ov_element, coll);

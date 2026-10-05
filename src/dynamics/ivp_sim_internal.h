@@ -170,7 +170,7 @@ void ivp_core_rem_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c);
 
 struct ivp_fr_info_for_core *ivp_core_get_friction_info(ivp_core_t *core, struct ivp_fr_system *fs);
 struct ivp_fr_info_for_core *ivp_core_moveable_core_has_friction_info(ivp_core_t *core);
-void ivp_core_add_friction_info(ivp_core_t *core, struct ivp_fr_info_for_core *info);
+bool ivp_core_add_friction_info(ivp_core_t *core, struct ivp_fr_info_for_core *info);
 void ivp_core_unlink_friction_info(ivp_core_t *core, struct ivp_fr_info_for_core *info);
 void ivp_core_delete_friction_info(ivp_core_t *core, struct ivp_fr_info_for_core *info);
 bool ivp_core_grow_friction_system(ivp_core_t *core);

@@ -17,6 +17,8 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "dynamics/ivp_env_internal.h"
+#include "solver/ivp_friction_internal.h"
 
 #ifdef IVP_REAL_DOUBLE
   #define TOL 1e-6
@@ -471,6 +473,282 @@ static void ov_tree_far_insert_attempts(int fail_at, int *attempts_out,
     IVP_ASSERT_EQ(state.live_bytes, 0u);
 }
 
+typedef struct test_collision_delegator {
+    ivp_collision_delegator_t base;
+    ivp_coll_fvector_t *collisions;
+} test_collision_delegator_t;
+
+static void test_collision_deleted(ivp_collision_delegator_t *base,
+                                   ivp_collision_t *collision)
+{
+    test_collision_delegator_t *delegator =
+        (test_collision_delegator_t *)base;
+    if (ivp_coll_fvector_index_of(delegator->collisions, collision) >= 0) {
+        ivp_coll_fvector_remove_allow_resort(delegator->collisions, collision);
+    }
+}
+
+static const ivp_collision_delegator_vt_t test_collision_delegator_vt = {
+    test_collision_deleted, NULL, NULL
+};
+
+static void exact_mindist_allocation_attempt(int fail_at, bool expect_collision,
+                                             int *attempts_out,
+                                             int *_fail_count)
+{
+    ov_fail_allocator_t state;
+    ov_fail_allocator_init(&state);
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    config.allocator = &state.allocator;
+    ivp_environment_t *environment = ivp_environment_create(&config);
+    IVP_ASSERT_NOT_NULL(environment);
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(1.0);
+    object_template.enable_collision_detection = false;
+    object_template.start_in_simulation = false;
+    ivp_object_t *object0 = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    object_template.client_data = (void *)(uintptr_t)1;
+    object_template.position.k[0] = IVP_REAL(1.5);
+    ivp_object_t *object1 = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    IVP_ASSERT_TRUE(object0 && object1);
+
+    ivp_coll_fvector_t collisions;
+    ivp_coll_fvector_init_with_allocator(&collisions, &state.allocator);
+    test_collision_delegator_t delegator = {
+        .base = { .dvt = &test_collision_delegator_vt },
+        .collisions = &collisions
+    };
+    state.attempts = 0;
+    state.fail_at = fail_at;
+    ivp_mindist_mgr_create_exact_mindists(
+        object0, object1, 4.0, &collisions,
+        NULL, NULL, NULL, NULL, &delegator.base);
+    *attempts_out = state.attempts;
+    if (collisions.n != (expect_collision ? 1 : 0)) {
+        fprintf(stderr, "unexpected collision count %d at failure point %d (%d attempts)\n",
+                collisions.n, fail_at, state.attempts);
+        (*_fail_count)++;
+    }
+    if ((object0->exact_synapses != NULL) != expect_collision ||
+        (object1->exact_synapses != NULL) != expect_collision) {
+        fprintf(stderr, "published mindist at failure point %d (%d attempts)\n",
+                fail_at, state.attempts);
+        (*_fail_count)++;
+    }
+
+    state.fail_at = INT_MAX;
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_EQ(collisions.n, 0);
+    ivp_coll_fvector_clear(&collisions);
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
+IVP_TEST(exact_mindist_allocation_failures_leave_collision_set_unchanged) {
+    /* Ledge vectors, mindist object, pending vector and destination vector. */
+    int attempts = 0;
+    for (int fail_at = 1; fail_at <= 5; fail_at++) {
+        exact_mindist_allocation_attempt(fail_at, false, &attempts, _fail_count);
+    }
+    exact_mindist_allocation_attempt(INT_MAX, true, &attempts, _fail_count);
+    IVP_ASSERT_TRUE(attempts >= 5);
+}
+
+static void friction_creation_allocation_attempt(int fail_at, int *attempts_out,
+                                                 bool expect_contact,
+                                                 int *_fail_count)
+{
+    ov_fail_allocator_t state;
+    ov_fail_allocator_init(&state);
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    config.allocator = &state.allocator;
+    ivp_environment_t *environment = ivp_environment_create(&config);
+    IVP_ASSERT_NOT_NULL(environment);
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(1.0);
+    object_template.enable_collision_detection = false;
+    ivp_object_t *object0 = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    object_template.client_data = (void *)(uintptr_t)1;
+    object_template.position.k[0] = IVP_REAL(1.5);
+    object_template.physical_unmoveable = true;
+    object_template.start_in_simulation = false;
+    ivp_object_t *object1 = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    IVP_ASSERT_TRUE(object0 && object1);
+
+    ivp_coll_fvector_t collisions;
+    ivp_coll_fvector_init_with_allocator(&collisions, &state.allocator);
+    test_collision_delegator_t delegator = {
+        .base = { .dvt = &test_collision_delegator_vt },
+        .collisions = &collisions
+    };
+    ivp_mindist_mgr_create_exact_mindists(
+        object0, object1, 4.0, &collisions,
+        NULL, NULL, NULL, NULL, &delegator.base);
+    IVP_ASSERT_EQ(collisions.n, 1);
+
+    struct ivp_fr_system *friction_system = NULL;
+    bool having_new = false;
+    state.attempts = 0;
+    state.fail_at = fail_at;
+    ivp_env_sim_mem_begin(environment);
+    struct ivp_contact_pt *contact =
+        ivp_mindist_try_to_generate_managed_friction(
+            (ivp_mindist_t *)collisions.elems[0], &friction_system,
+            &having_new, NULL, true);
+    ivp_env_sim_mem_end(environment);
+    *attempts_out = state.attempts;
+    IVP_ASSERT_EQ(contact != NULL, expect_contact);
+    IVP_ASSERT_EQ(having_new, expect_contact);
+    IVP_ASSERT_EQ(friction_system != NULL, expect_contact);
+    if (!expect_contact) {
+        IVP_ASSERT_NULL(object0->fr_synapses);
+        IVP_ASSERT_NULL(object1->fr_synapses);
+        IVP_ASSERT_NULL(object0->physical_core->core_friction_info.for_moveables.moveable_core_friction_info);
+    }
+
+    state.fail_at = INT_MAX;
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_EQ(collisions.n, 0);
+    ivp_coll_fvector_clear(&collisions);
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
+IVP_TEST(friction_creation_allocation_failures_are_atomic) {
+    int allocation_points = 0;
+    friction_creation_allocation_attempt(INT_MAX, &allocation_points, true,
+                                         _fail_count);
+    IVP_ASSERT_TRUE(allocation_points > 5);
+    for (int fail_at = 1; fail_at <= allocation_points; fail_at++) {
+        int attempts = 0;
+        friction_creation_allocation_attempt(fail_at, &attempts, false,
+                                             _fail_count);
+        IVP_ASSERT_EQ(attempts, fail_at);
+    }
+}
+
+static ivp_contact_pt_t *create_test_contact(
+    ivp_environment_t *environment, ivp_object_t *object0,
+    ivp_object_t *object1, ivp_coll_fvector_t *collisions,
+    test_collision_delegator_t *delegator, ivp_fr_system_t **system_out)
+{
+    ivp_mindist_mgr_create_exact_mindists(
+        object0, object1, 4.0, collisions,
+        NULL, NULL, NULL, NULL, &delegator->base);
+    if (collisions->n != 1) return NULL;
+    bool having_new = false;
+    ivp_env_sim_mem_begin(environment);
+    ivp_contact_pt_t *contact = ivp_mindist_try_to_generate_managed_friction(
+        (ivp_mindist_t *)collisions->elems[0], system_out, &having_new,
+        NULL, true);
+    ivp_env_sim_mem_end(environment);
+    return having_new ? contact : NULL;
+}
+
+static void friction_fusion_allocation_attempt(int fail_at, bool expect_fusion,
+                                               int *attempts_out,
+                                               int *_fail_count)
+{
+    ov_fail_allocator_t state;
+    ov_fail_allocator_init(&state);
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    config.allocator = &state.allocator;
+    ivp_environment_t *environment = ivp_environment_create(&config);
+    IVP_ASSERT_NOT_NULL(environment);
+
+    ivp_object_t *objects[4] = {0};
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(1.0);
+    object_template.enable_collision_detection = false;
+    for (int i = 0; i < 4; i++) {
+        object_template.client_data = (void *)(uintptr_t)(i + 1);
+        object_template.position.k[0] = (ivp_real_t)((i / 2) * 4 +
+            (i % 2) * 1.5);
+        object_template.physical_unmoveable = (i % 2) != 0;
+        object_template.start_in_simulation = !object_template.physical_unmoveable;
+        objects[i] = ivp_environment_create_object(
+            environment, &object_template, NULL);
+        IVP_ASSERT_NOT_NULL(objects[i]);
+    }
+
+    ivp_coll_fvector_t collisions[2];
+    test_collision_delegator_t delegators[2];
+    for (int i = 0; i < 2; i++) {
+        ivp_coll_fvector_init_with_allocator(&collisions[i], &state.allocator);
+        delegators[i].base.dvt = &test_collision_delegator_vt;
+        delegators[i].collisions = &collisions[i];
+    }
+    ivp_fr_system_t *systems[2] = {0};
+    ivp_contact_pt_t *contacts[2];
+    contacts[0] = create_test_contact(environment, objects[0], objects[1],
+                                      &collisions[0], &delegators[0],
+                                      &systems[0]);
+    contacts[1] = create_test_contact(environment, objects[2], objects[3],
+                                      &collisions[1], &delegators[1],
+                                      &systems[1]);
+    IVP_ASSERT_TRUE(contacts[0] && contacts[1]);
+    IVP_ASSERT_TRUE(systems[0] && systems[1] && systems[0] != systems[1]);
+
+    int first_core_count = ivp_pvec_len(&systems[0]->cores_of_friction_system);
+    int second_core_count = ivp_pvec_len(&systems[1]->cores_of_friction_system);
+    state.attempts = 0;
+    state.fail_at = fail_at;
+    bool fused = ivp_fr_system_fusion_friction_systems(systems[0], systems[1]);
+    *attempts_out = state.attempts;
+    IVP_ASSERT_EQ(fused, expect_fusion);
+    if (expect_fusion) {
+        IVP_ASSERT_TRUE(contacts[0]->l_friction_system == systems[0]);
+        IVP_ASSERT_TRUE(contacts[1]->l_friction_system == systems[0]);
+        IVP_ASSERT_NOT_NULL(ivp_core_get_friction_info(
+            objects[2]->physical_core, systems[0]));
+    } else {
+        IVP_ASSERT_TRUE(contacts[0]->l_friction_system == systems[0]);
+        IVP_ASSERT_TRUE(contacts[1]->l_friction_system == systems[1]);
+        IVP_ASSERT_EQ(ivp_pvec_len(&systems[0]->cores_of_friction_system),
+                      first_core_count);
+        IVP_ASSERT_EQ(ivp_pvec_len(&systems[1]->cores_of_friction_system),
+                      second_core_count);
+        IVP_ASSERT_NOT_NULL(ivp_core_get_friction_info(
+            objects[2]->physical_core, systems[1]));
+        IVP_ASSERT_NULL(ivp_core_get_friction_info(
+            objects[2]->physical_core, systems[0]));
+    }
+
+    state.fail_at = INT_MAX;
+    ivp_environment_destroy(environment);
+    for (int i = 0; i < 2; i++) {
+        IVP_ASSERT_EQ(collisions[i].n, 0);
+        ivp_coll_fvector_clear(&collisions[i]);
+    }
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
+IVP_TEST(friction_fusion_allocation_failures_are_atomic) {
+    int allocation_points = 0;
+    friction_fusion_allocation_attempt(INT_MAX, true, &allocation_points,
+                                       _fail_count);
+    IVP_ASSERT_TRUE(allocation_points > 5);
+    for (int fail_at = 1; fail_at <= allocation_points; fail_at++) {
+        int attempts = 0;
+        friction_fusion_allocation_attempt(fail_at, false, &attempts,
+                                           _fail_count);
+        IVP_ASSERT_EQ(attempts, fail_at);
+    }
+}
+
 IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
     int allocation_points = 0;
     ov_tree_far_insert_attempts(INT_MAX, &allocation_points, _fail_count);
@@ -529,6 +807,9 @@ int main(void) {
     IVP_REGISTER(surman_ledge_references_balanced);
     IVP_REGISTER(ov_tree_hash_grows_and_releases_allocator_storage);
     IVP_REGISTER(ov_tree_insertion_failures_are_recoverable);
+    IVP_REGISTER(exact_mindist_allocation_failures_leave_collision_set_unchanged);
+    IVP_REGISTER(friction_creation_allocation_failures_are_atomic);
+    IVP_REGISTER(friction_fusion_allocation_failures_are_atomic);
 
     IVP_RUN_ALL();
 }

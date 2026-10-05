@@ -1021,7 +1021,10 @@ void ivp_core_values_changed_recalc_redundants(ivp_core_t *core)
             for (; fr_synapse; fr_synapse = fr_synapse->next) {
                 ivp_contact_pt_t *fr_mindist = fr_synapse->contact_point;
                 ivp_fr_system_t *next_fs = fr_mindist->l_friction_system;
-                if (next_fs != fs) ivp_fr_system_fusion_friction_systems(fs, next_fs);
+                if (next_fs != fs &&
+                    !ivp_fr_system_fusion_friction_systems(fs, next_fs)) {
+                    continue;
+                }
                 ivp_impact_solver_lt_t info;
                 memset(&info, 0, sizeof(info));
                 ivp_contact_pt_recalc_friction_s_vals(fr_mindist);

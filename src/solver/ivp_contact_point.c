@@ -653,9 +653,9 @@ void ivp_fr_info_destroy(ivp_fr_info_for_core_t *info)
     ivp_free(info->allocator, info, sizeof(*info));
 }
 
-void ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp)
+bool ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp)
 {
-    ivp_pvec_add(&info->friction_springs, cp);
+    return info && ivp_pvec_add(&info->friction_springs, cp) >= 0;
 }
 
 void ivp_fr_info_delete_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp)
@@ -691,23 +691,31 @@ ivp_fr_info_for_core_t *ivp_core_moveable_core_has_friction_info(ivp_core_t *cor
     return (ivp_fr_info_for_core_t *)core->core_friction_info.for_moveables.moveable_core_friction_info;
 }
 
-void ivp_core_add_friction_info(ivp_core_t *core, ivp_fr_info_for_core_t *info)
+bool ivp_core_add_friction_info(ivp_core_t *core, ivp_fr_info_for_core_t *info)
 {
     if (core->physical_unmoveable) {
         ivp_fr_info_list_t *l = (ivp_fr_info_list_t *)core->core_friction_info.for_unmoveables.l_friction_info_hash;
+        bool created = false;
         if (!l) {
             const ivp_allocator_t *allocator = ivp_env_get_allocator(ivp_core_env(core));
             l = (ivp_fr_info_list_t *)ivp_alloc(allocator, sizeof(*l));
-            if (!l) return;
+            if (!l) return false;
             memset(l, 0, sizeof(*l));
             ivp_pvec_init_with_allocator(&l->infos, allocator);
             core->core_friction_info.for_unmoveables.l_friction_info_hash = l;
+            created = true;
         }
         IVP_IF(1) /* ivp_core.cxx:1484 */
         {
             IVP_ASSERT(ivp_core_get_friction_info(core, info->l_friction_system) == NULL);
         }
-        ivp_pvec_add(&l->infos, info);
+        if (ivp_pvec_add(&l->infos, info) < 0) {
+            if (created) {
+                core->core_friction_info.for_unmoveables.l_friction_info_hash = NULL;
+                ivp_free(ivp_pvec_allocator(&l->infos), l, sizeof(*l));
+            }
+            return false;
+        }
         IVP_IF(1) /* IVP_Friction_Hash::add_friction_info, ivp_i_friction_hash.hxx:17 */
         {
             struct ivp_environment *env = info->l_friction_system->l_environment;
@@ -719,6 +727,7 @@ void ivp_core_add_friction_info(ivp_core_t *core, ivp_fr_info_for_core_t *info)
         IVP_ASSERT(core->core_friction_info.for_moveables.moveable_core_friction_info == NULL);
         core->core_friction_info.for_moveables.moveable_core_friction_info = info;
     }
+    return true;
 }
 
 void ivp_core_unlink_friction_info(ivp_core_t *core, ivp_fr_info_for_core_t *info)

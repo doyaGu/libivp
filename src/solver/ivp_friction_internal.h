@@ -161,14 +161,14 @@ typedef struct ivp_fr_system {
 
 ivp_fr_system_t *ivp_fr_system_create(struct ivp_environment *env);
 void ivp_fr_system_destroy(ivp_fr_system_t *fs);
-void ivp_fr_system_add_core_to_system(ivp_fr_system_t *fs, ivp_core_t *core);
+bool ivp_fr_system_add_core_to_system(ivp_fr_system_t *fs, ivp_core_t *core);
 void ivp_fr_system_remove_core_from_system(ivp_fr_system_t *fs, ivp_core_t *core);
 void ivp_fr_system_add_dist_to_system(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
 void ivp_fr_system_remove_dist_from_system(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
-void ivp_fr_system_dist_added_update_pair_info(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
+bool ivp_fr_system_dist_added_update_pair_info(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
 bool ivp_fr_system_dist_removed_update_pair_info(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
 void ivp_fr_system_delete_friction_distance(ivp_fr_system_t *fs, ivp_contact_pt_t *cp);
-void ivp_fr_system_fusion_friction_systems(ivp_fr_system_t *fs, ivp_fr_system_t *second);
+bool ivp_fr_system_fusion_friction_systems(ivp_fr_system_t *fs, ivp_fr_system_t *second);
 ivp_fr_core_pair_t *ivp_fr_system_find_pair_of_cores(ivp_fr_system_t *fs, ivp_core_t *c0, ivp_core_t *c1);
 ivp_fr_core_pair_t *ivp_fr_system_get_pair_info_for_objs(ivp_fr_system_t *fs, ivp_core_t *c0, ivp_core_t *c1);
 void ivp_fr_system_reset_time(ivp_fr_system_t *fs, double offset);
@@ -198,7 +198,7 @@ void ivp_fr_out_friction_info_obj(ivp_core_t *obj);
 
 ivp_fr_info_for_core_t *ivp_fr_info_create(const ivp_allocator_t *allocator);
 void ivp_fr_info_destroy(ivp_fr_info_for_core_t *info);
-void ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp);
+bool ivp_fr_info_insert_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp);
 void ivp_fr_info_delete_friction_dist(ivp_fr_info_for_core_t *info, ivp_contact_pt_t *cp);
 
 /* ── Contact point API ────────────────────────────────────────────────── */

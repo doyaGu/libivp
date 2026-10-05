@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 
 /* ── IVP_U_FVector<IVP_Collision> ───────────────────────────────────────── */
@@ -56,6 +57,32 @@ void ivp_coll_fvector_clear(ivp_coll_fvector_t *v)
     v->elems = NULL; v->n = 0; v->cap = 0;
 }
 
+bool ivp_coll_fvector_reserve(ivp_coll_fvector_t *v, int minimum)
+{
+    if (!v || minimum < 0 || v->n < 0 || v->cap < 0 || v->n > v->cap)
+        return false;
+    if (minimum <= v->cap) return true;
+
+    int new_capacity = v->cap;
+    while (new_capacity < minimum) {
+        if (new_capacity > (INT_MAX - 1) / 2) {
+            new_capacity = minimum;
+            break;
+        }
+        new_capacity = new_capacity * 2 + 1;
+        if (new_capacity < 8) new_capacity = 8;
+    }
+    if ((size_t)new_capacity > SIZE_MAX / sizeof(*v->elems)) return false;
+    ivp_collision_t **new_elems = (ivp_collision_t **)ivp_realloc(
+        coll_fvector_allocator(v), v->elems,
+        (size_t)v->cap * sizeof(*new_elems),
+        (size_t)new_capacity * sizeof(*new_elems));
+    if (!new_elems) return false;
+    v->elems = new_elems;
+    v->cap = new_capacity;
+    return true;
+}
+
 int ivp_coll_fvector_index_of(const ivp_coll_fvector_t *v, const ivp_collision_t *c)
 {
     int i0 = c->fvector_index[0];
@@ -68,16 +95,8 @@ int ivp_coll_fvector_index_of(const ivp_coll_fvector_t *v, const ivp_collision_t
 
 int ivp_coll_fvector_add(ivp_coll_fvector_t *v, ivp_collision_t *c)
 {
-    if (v->n >= v->cap) {
-        int nc = v->cap * 2 + 1;
-        if (nc < 8) nc = 8;
-        ivp_collision_t **ne = (ivp_collision_t **)ivp_realloc(
-            coll_fvector_allocator(v), v->elems,
-            (size_t)v->cap * sizeof(*ne), (size_t)nc * sizeof(*ne));
-        if (!ne) return -1;
-        v->elems = ne;
-        v->cap = nc;
-    }
+    if (!v || v->n == INT_MAX) return -1;
+    if (v->n >= v->cap && !ivp_coll_fvector_reserve(v, v->n + 1)) return -1;
     IVP_ASSERT(ivp_coll_fvector_index_of(v, c) == -1);
     v->elems[v->n] = c;
     coll_set_fvector_index(c, -1, v->n);
@@ -181,7 +200,9 @@ void ivp_ov_element_add_to_hull_manager(ivp_ov_element_t *el, ivp_hull_mgr_t *hm
 
 void ivp_ov_element_add_oo_collision(ivp_ov_element_t *el, ivp_collision_t *c)
 {
-    ivp_coll_fvector_add(&el->collision_fvector, c);
+    int added = ivp_coll_fvector_add(&el->collision_fvector, c);
+    IVP_ASSERT(added >= 0);
+    IVP_USE(added);
 }
 
 void ivp_ov_element_remove_oo_collision(ivp_ov_element_t *el, ivp_collision_t *c)
