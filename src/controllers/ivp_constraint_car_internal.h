@@ -23,6 +23,7 @@ struct ivp_constraint_state;
 /* IVP_Constraint_Solver_Car (an IVP_Controller_Dependent) */
 struct ivp_constraint_solver_car {
     ivp_sim_ctrl_t               base;                 /* must stay first */
+    ivp_allocator_t              allocator;             /* copied: solver may outlive env */
     ivp_constraint_car_object_t *body_object;
     ivp_constraint_car_object_t *wheel_objects[IVP_CONSTRAINT_CAR_MAX_WHEELS];
     int                          n_wheel_objects;

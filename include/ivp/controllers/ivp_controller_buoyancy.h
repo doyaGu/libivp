@@ -48,6 +48,7 @@
 #define IVP_CONTROLLER_BUOYANCY_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/controllers/ivp_liquid_surface.h>
@@ -81,6 +82,7 @@ typedef struct ivp_buoyancy_object_interpolator {
 /* Per-core dynamic data (reference: one IVP_Controller_Buoyancy per core;
  * buoyancy and dampening are computed for every object of the core). */
 typedef struct ivp_buoyancy_core_data {
+    const ivp_allocator_t *allocator;       /* points to the owning state's copied allocator */
     const ivp_object_t *object;
     ivp_object_handle_t object_handle;  /* entries of deleted objects are recycled */
     ivp_vec3r_t relative_speed_of_current_in_objects_vicinity_old;
@@ -97,6 +99,10 @@ typedef struct ivp_buoyancy_core_data {
 /* ── Buoyancy state ────────────────────────────────────────────────────── */
 
 typedef struct ivp_buoyancy_state {
+    /* Bound to a copy of the environment allocator on first use.  Until
+     * allocator_bound, dynamic state uses the default allocator. */
+    ivp_allocator_t        allocator;
+    bool                   allocator_bound;
     /* Liquid surface plane (used when liquid_surface is NULL) */
     ivp_vec3r_t surface_normal;    /* unit normal pointing OUT of the liquid */
     ivp_real_t  surface_height;    /* normal . p = surface_height on the surface */

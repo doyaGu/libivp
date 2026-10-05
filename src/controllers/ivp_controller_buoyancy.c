@@ -62,6 +62,16 @@ static void buoyancy_defaults(ivp_buoyancy_state_t *state)
     state->active = true;
 }
 
+static const ivp_allocator_t *buoyancy_allocator(const ivp_buoyancy_state_t *state)
+{
+    return state->allocator_bound ? &state->allocator : ivp_default_allocator();
+}
+
+static const ivp_allocator_t *core_data_allocator(const ivp_buoyancy_core_data_t *cd)
+{
+    return cd->allocator ? cd->allocator : ivp_default_allocator();
+}
+
 void ivp_buoyancy_init(ivp_buoyancy_state_t *state,
                        ivp_real_t surface_y,
                        ivp_real_t fluid_density)
@@ -102,19 +112,20 @@ void ivp_buoyancy_set_objects(ivp_buoyancy_state_t *state,
 /* IVP_Controller_Buoyancy::clear_attacher_interpolator */
 static void clear_attacher_interpolator(ivp_buoyancy_core_data_t *cd)
 {
+    const ivp_allocator_t *allocator = core_data_allocator(cd);
     for (int i = 0; i < cd->interpolator_count; i++) {
         ivp_buoyancy_object_interpolator_t *ai = &cd->interpolators[i];
         if (ai->mi) {
             ivp_mi_destroy(ai->mi);
-            ivp_free(ivp_default_allocator(), ai->mi, sizeof(ivp_mi_interpolator_t));
+            ivp_free(allocator, ai->mi, sizeof(ivp_mi_interpolator_t));
             ai->mi = NULL;
         }
-        if (ai->last_input) ivp_mi_vector_free(ai->last_input, NULL);
-        if (ai->last_solution) ivp_mi_vector_free(ai->last_solution, NULL);
+        if (ai->last_input) ivp_mi_vector_free(ai->last_input, allocator);
+        if (ai->last_solution) ivp_mi_vector_free(ai->last_solution, allocator);
         ai->last_input = ai->last_solution = NULL;
     }
     if (cd->interpolators) {
-        ivp_free(ivp_default_allocator(), cd->interpolators,
+        ivp_free(allocator, cd->interpolators,
                  (size_t)cd->interpolator_count * sizeof(ivp_buoyancy_object_interpolator_t));
     }
     cd->interpolators = NULL;
@@ -129,7 +140,7 @@ static void rebuild_attacher_interpolator(ivp_buoyancy_core_data_t *cd, const iv
     int n = ivp_pvec_len(&core->objects);
     if (n <= 0) return;
     cd->interpolators = (ivp_buoyancy_object_interpolator_t *)ivp_alloc(
-        ivp_default_allocator(), (size_t)n * sizeof(ivp_buoyancy_object_interpolator_t));
+        core_data_allocator(cd), (size_t)n * sizeof(ivp_buoyancy_object_interpolator_t));
     if (!cd->interpolators) return;
     memset(cd->interpolators, 0, (size_t)n * sizeof(ivp_buoyancy_object_interpolator_t));
     cd->interpolator_count = n;
@@ -159,9 +170,11 @@ static void core_data_release(ivp_buoyancy_core_data_t *cd)
 }
 
 /* IVP_Controller_Buoyancy constructor: fresh per-core state */
-static void core_data_init(ivp_buoyancy_core_data_t *cd, const ivp_object_t *obj)
+static void core_data_init(ivp_buoyancy_core_data_t *cd, const ivp_object_t *obj,
+                           const ivp_allocator_t *allocator)
 {
     memset(cd, 0, sizeof(*cd));
+    cd->allocator = allocator ? allocator : ivp_default_allocator();
     cd->object = obj;
     cd->object_handle = ivp_environment_get_object_handle(obj);
 }
@@ -177,12 +190,14 @@ void ivp_buoyancy_state_destroy(ivp_buoyancy_state_t *state)
     if (!state) return;
     for (int i = 0; i < state->core_count; i++) core_data_release(core_data_at(state, i));
     if (state->cores_overflow) {
-        ivp_free(ivp_default_allocator(), state->cores_overflow,
+        ivp_free(buoyancy_allocator(state), state->cores_overflow,
                  (size_t)state->cores_overflow_capacity * sizeof(ivp_buoyancy_core_data_t));
     }
     state->cores_overflow = NULL;
     state->cores_overflow_capacity = 0;
     state->core_count = 0;
+    memset(&state->allocator, 0, sizeof(state->allocator));
+    state->allocator_bound = false;
 }
 
 static bool same_handle(ivp_object_handle_t a, ivp_object_handle_t b)
@@ -209,7 +224,7 @@ static ivp_buoyancy_core_data_t *core_data(ivp_buoyancy_state_t *state, const iv
         if (!same_handle(cd->object_handle, h)) {
             /* a new object at the address of a deleted one: new controller */
             core_data_release(cd);
-            core_data_init(cd, obj);
+            core_data_init(cd, obj, buoyancy_allocator(state));
         }
         return cd;
     }
@@ -218,7 +233,7 @@ static ivp_buoyancy_core_data_t *core_data(ivp_buoyancy_state_t *state, const iv
         ivp_buoyancy_core_data_t *cd = core_data_at(state, i);
         if (!core_data_is_stale(cd, env)) continue;
         core_data_release(cd);
-        core_data_init(cd, obj);
+        core_data_init(cd, obj, buoyancy_allocator(state));
         return cd;
     }
     int idx = state->core_count;
@@ -227,7 +242,7 @@ static ivp_buoyancy_core_data_t *core_data(ivp_buoyancy_state_t *state, const iv
         if (o >= state->cores_overflow_capacity) {
             int nc = state->cores_overflow_capacity ? state->cores_overflow_capacity * 2 : IVP_BUOYANCY_INLINE_CORES;
             ivp_buoyancy_core_data_t *n = (ivp_buoyancy_core_data_t *)ivp_realloc(
-                ivp_default_allocator(), state->cores_overflow,
+                buoyancy_allocator(state), state->cores_overflow,
                 (size_t)state->cores_overflow_capacity * sizeof(ivp_buoyancy_core_data_t),
                 (size_t)nc * sizeof(ivp_buoyancy_core_data_t));
             if (!n) return NULL;
@@ -237,7 +252,7 @@ static ivp_buoyancy_core_data_t *core_data(ivp_buoyancy_state_t *state, const iv
     }
     state->core_count++;
     ivp_buoyancy_core_data_t *cd = core_data_at(state, idx);
-    core_data_init(cd, obj);
+    core_data_init(cd, obj, buoyancy_allocator(state));
     return cd;
 }
 
@@ -480,20 +495,21 @@ static bool use_buoyancy_solver(const ivp_buoyancy_state_t *state, ivp_core_t *c
 
 #if !defined(IVP_NO_MD_INTERPOLATION)
 /* the Attacher_Interpolator's interpolator and Last_IO vectors (created on first use) */
-static bool interpolator_ensure(ivp_buoyancy_object_interpolator_t *cd)
+static bool interpolator_ensure(ivp_buoyancy_object_interpolator_t *cd,
+                                const ivp_allocator_t *allocator)
 {
     if (cd->mi && cd->last_input && cd->last_solution) return true;
     if (!cd->mi) {
-        cd->mi = (ivp_mi_interpolator_t *)ivp_alloc(ivp_default_allocator(), sizeof(ivp_mi_interpolator_t));
+        cd->mi = (ivp_mi_interpolator_t *)ivp_alloc(allocator, sizeof(ivp_mi_interpolator_t));
         if (!cd->mi) return false;
-        if (ivp_mi_init(cd->mi, 5, BUOY_INPUT_LEN, BUOY_SOLUTION_LEN, NULL) != 0) {
-            ivp_free(ivp_default_allocator(), cd->mi, sizeof(ivp_mi_interpolator_t));
+        if (ivp_mi_init(cd->mi, 5, BUOY_INPUT_LEN, BUOY_SOLUTION_LEN, allocator) != 0) {
+            ivp_free(allocator, cd->mi, sizeof(ivp_mi_interpolator_t));
             cd->mi = NULL;
             return false;
         }
     }
-    if (!cd->last_input) cd->last_input = ivp_mi_vector_malloc(BUOY_INPUT_LEN, NULL);
-    if (!cd->last_solution) cd->last_solution = ivp_mi_vector_malloc(BUOY_SOLUTION_LEN, NULL);
+    if (!cd->last_input) cd->last_input = ivp_mi_vector_malloc(BUOY_INPUT_LEN, allocator);
+    if (!cd->last_solution) cd->last_solution = ivp_mi_vector_malloc(BUOY_SOLUTION_LEN, allocator);
     cd->last_psi_time = 0;
     return cd->last_input && cd->last_solution;
 }
@@ -637,7 +653,7 @@ static void buoyancy_simulate_core(ivp_buoyancy_state_t *state, ivp_buoyancy_cor
         ivp_mi_vector_init(&solution_values, b_output, BUOY_SOLUTION_LEN);
 
 #if !defined(IVP_NO_MD_INTERPOLATION)
-        if (state->use_interpolation && interpolator_ensure(ai)) {
+        if (state->use_interpolation && interpolator_ensure(ai, core_data_allocator(cd))) {
             const double current_time = environment ? (double)ivp_environment_get_time(environment) : 0.0;
             bool result;
             /* force a solver run after max_interpolation_tries */
@@ -713,6 +729,10 @@ void ivp_controller_buoyancy(const ivp_event_sim_t *event_sim,
 {
     ivp_buoyancy_state_t *state = (ivp_buoyancy_state_t *)ctx;
     if (!state || !state->active || !obj) return;
+    if (!state->allocator_bound) {
+        state->allocator = *ivp_env_get_allocator(event_sim->environment);
+        state->allocator_bound = true;
+    }
     ivp_core_t *core = obj->physical_core;
     if (core->physical_unmoveable) return;
 
@@ -740,11 +760,13 @@ static void *buoy_create_attachment(ivp_attacher_to_cores_t *a, ivp_core_t *core
 {
     ivp_buoyancy_attacher_t *ba = buoy_attacher_of(a);
     ivp_object_t *obj = ivp_attacher_core_object(core);
-    ivp_buoyancy_core_data_t *cd = (ivp_buoyancy_core_data_t *)ivp_alloc(ivp_default_allocator(), sizeof(*cd));
+    const ivp_allocator_t *allocator = buoyancy_allocator(&ba->template_buoyancy);
+    ivp_buoyancy_core_data_t *cd =
+        (ivp_buoyancy_core_data_t *)ivp_alloc(allocator, sizeof(*cd));
     if (!cd) return NULL;
-    core_data_init(cd, obj);
+    core_data_init(cd, obj, allocator);
     if (!ivp_environment_add_controller_to_core(ba->environment, ba->controller, obj)) {
-        ivp_free(ivp_default_allocator(), cd, sizeof(*cd));
+        ivp_free(allocator, cd, sizeof(*cd));
         return NULL;
     }
     return cd;
@@ -760,7 +782,7 @@ static void buoy_delete_attachment(ivp_attacher_to_cores_t *a, ivp_core_t *core,
                                                           ivp_attacher_core_object(core));
     }
     core_data_release(cd);
-    ivp_free(ivp_default_allocator(), cd, sizeof(*cd));
+    ivp_free(core_data_allocator(cd), cd, sizeof(*cd));
 }
 
 static void buoy_free(ivp_buoyancy_attacher_t *ba, bool environment_alive)
@@ -768,7 +790,7 @@ static void buoy_free(ivp_buoyancy_attacher_t *ba, bool environment_alive)
     if (environment_alive && ba->environment) {
         (void)ivp_environment_remove_controller(ba->environment, ba->controller);
     }
-    ivp_free(ivp_default_allocator(), ba, sizeof(*ba));
+    ivp_free(buoyancy_allocator(&ba->template_buoyancy), ba, sizeof(*ba));
 }
 
 /* the set was deleted: P_DELETE_THIS */
@@ -790,11 +812,15 @@ ivp_buoyancy_attacher_t *ivp_buoyancy_attacher_create(ivp_environment_t *env,
                                                       ivp_set_active_t *set_of_cores)
 {
     if (!env || !templ || !set_of_cores) return NULL;
-    ivp_buoyancy_attacher_t *ba = (ivp_buoyancy_attacher_t *)ivp_alloc(ivp_default_allocator(), sizeof(*ba));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ivp_buoyancy_attacher_t *ba =
+        (ivp_buoyancy_attacher_t *)ivp_alloc(allocator, sizeof(*ba));
     if (!ba) return NULL;
     memset(ba, 0, sizeof(*ba));
     /* template_buoyancy = templ (parameters and liquid surface descriptor) */
     ba->template_buoyancy = *templ;
+    ba->template_buoyancy.allocator = *allocator;
+    ba->template_buoyancy.allocator_bound = true;
     ba->template_buoyancy.objects = NULL;
     ba->template_buoyancy.object_count = 0;
     memset(ba->template_buoyancy.cores, 0, sizeof(ba->template_buoyancy.cores));
@@ -806,7 +832,7 @@ ivp_buoyancy_attacher_t *ivp_buoyancy_attacher_create(ivp_environment_t *env,
     ba->controller = ivp_ctrl_attach_create(env, IVP_CP_FORCEFIELDS, ivp_controller_buoyancy,
                                             &ba->template_buoyancy);
     if (!ivp_controller_handle_is_valid(ba->controller)) {
-        ivp_free(ivp_default_allocator(), ba, sizeof(*ba));
+        ivp_free(allocator, ba, sizeof(*ba));
         return NULL;
     }
     if (!ivp_attacher_to_cores_init(&ba->attacher, env, set_of_cores, &buoy_attacher_class, ba)) {

@@ -10,7 +10,6 @@
  * object coordinates (IVP_U_Float_Point) -> core coordinates.
  * Reference types and evaluation order: see ivp_constraint_car_internal.h.
  */
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -417,6 +416,8 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
     car->booster_seconds_until_ready = 0;
     car->fast_turn_factor = car_f(templ->fast_turn_factor);
     car->environment = env;
+    car->allocator = *ivp_env_get_allocator(env);
+    car->allocator_bound = true;
 
     /*** objects ***/
     car->body = templ->car_body;
@@ -432,7 +433,9 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
 
     /*** constraint system ***/
     car->car_constraint_solver =
-        ivp_constraint_solver_car_create(templ->index_x, templ->index_y, templ->index_z, templ->is_left_handed);
+        ivp_constraint_solver_car_create_with_allocator(
+            templ->index_x, templ->index_y, templ->index_z, templ->is_left_handed,
+            ivp_env_get_allocator(env));
     if (!car->car_constraint_solver) {
         car->n_wheels = 0;
         return false;
@@ -642,9 +645,12 @@ fail:
 void ivp_car_system_destroy(ivp_car_system_t *car)
 {
     if (!car) return;
+    const ivp_allocator_t *allocator = car->allocator_bound ? &car->allocator : ivp_default_allocator();
     car_unregister_all(car, false);
     for (int i = 0; i < IVP_CAR_SYSTEM_MAX_WHEELS; i++) {
-        free(car->fix_wheel_constraint[i]);
+        if (car->fix_wheel_constraint[i]) {
+            ivp_free(allocator, car->fix_wheel_constraint[i], sizeof(*car->fix_wheel_constraint[i]));
+        }
         car->fix_wheel_constraint[i] = NULL;
     }
     if (car->car_constraint_solver) {
@@ -758,7 +764,8 @@ void ivp_car_system_fix_wheel(ivp_car_system_t *car, int wheel_nr, bool stop_whe
     if (!stop_wheel) {
         if (wheel_obj) wheel_obj->fix_wheel_constraint = NULL;
         car_remove_controller(car, &car->h_fix_wheel[wheel_nr]);
-        free(car->fix_wheel_constraint[wheel_nr]);
+        ivp_free(&car->allocator, car->fix_wheel_constraint[wheel_nr],
+                 sizeof(*car->fix_wheel_constraint[wheel_nr]));
         car->fix_wheel_constraint[wheel_nr] = NULL;
         return;
     }
@@ -780,14 +787,16 @@ void ivp_car_system_fix_wheel(ivp_car_system_t *car, int wheel_nr, bool stop_whe
     constraint.axis_type[cs_car->y_idx] = IVP_CONSTRAINT_AXIS_FREE;
     constraint.axis_type[cs_car->z_idx] = IVP_CONSTRAINT_AXIS_FREE;
 
-    ivp_constraint_state_t *c = (ivp_constraint_state_t *)calloc(1, sizeof(*c));
+    ivp_constraint_state_t *c =
+        (ivp_constraint_state_t *)ivp_alloc(&car->allocator, sizeof(*c));
     if (!c) return;
+    memset(c, 0, sizeof(*c));
     ivp_constraint_init_from_template(c, &constraint);
     ivp_controller_handle_t handle =
         ivp_environment_add_controller(car->environment, IVP_CP_CONSTRAINTS,
                                        ivp_controller_constraint, c);
     if (!ivp_controller_handle_is_valid(handle)) {
-        free(c);
+        ivp_free(&car->allocator, c, sizeof(*c));
         return;
     }
 

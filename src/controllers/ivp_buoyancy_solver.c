@@ -1182,6 +1182,7 @@ static void values_for_one_ledge(ivp_buoyancy_solver_t *bs, ivp_object_t *object
 /* IVP_U_BigVector<IVP_Compact_Ledge> object_ledges(256) */
 #define BS_INLINE_LEDGES 256
 typedef struct bs_ledge_list {
+    const ivp_allocator_t       *allocator;
     const ivp_compact_ledge_t **ledges;
     const ivp_compact_ledge_t *inline_ledges[BS_INLINE_LEDGES];
     int len, capacity;
@@ -1194,10 +1195,10 @@ static void bs_collect_ledge(void *ctx, const ivp_compact_ledge_t *ledge)
         int nc = l->capacity * 2;
         const ivp_compact_ledge_t **n;
         if (l->ledges == l->inline_ledges) {
-            n = (const ivp_compact_ledge_t **)ivp_alloc(ivp_default_allocator(), (size_t)nc * sizeof(*n));
+            n = (const ivp_compact_ledge_t **)ivp_alloc(l->allocator, (size_t)nc * sizeof(*n));
             if (n) memcpy(n, l->inline_ledges, (size_t)l->len * sizeof(*n));
         } else {
-            n = (const ivp_compact_ledge_t **)ivp_realloc(ivp_default_allocator(), (void *)l->ledges,
+            n = (const ivp_compact_ledge_t **)ivp_realloc(l->allocator, (void *)l->ledges,
                                                           (size_t)l->capacity * sizeof(*n), (size_t)nc * sizeof(*n));
         }
         if (!n) return;
@@ -1230,6 +1231,7 @@ static void values_for_one_polygon(ivp_buoyancy_solver_t *bs, ivp_object_t *obje
     lvf_set_multiple(&s_point, &surface_os->n, -surface_os->hesse_val);
 
     bs_ledge_list_t object_ledges;
+    object_ledges.allocator = ivp_env_get_allocator(object->owner);
     object_ledges.ledges = object_ledges.inline_ledges;
     object_ledges.len = 0;
     object_ledges.capacity = BS_INLINE_LEDGES;
@@ -1239,7 +1241,7 @@ static void values_for_one_polygon(ivp_buoyancy_solver_t *bs, ivp_object_t *obje
         values_for_one_ledge(bs, object, object_ledges.ledges[index], surface_os, &s_point);
     }
     if (object_ledges.ledges != object_ledges.inline_ledges) {
-        ivp_free(ivp_default_allocator(), (void *)object_ledges.ledges,
+        ivp_free(object_ledges.allocator, (void *)object_ledges.ledges,
                  (size_t)object_ledges.capacity * sizeof(*object_ledges.ledges));
     }
 

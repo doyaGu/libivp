@@ -12,13 +12,13 @@
 #include "controllers/ivp_controller_ref.h"
 
 #include <math.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* ── the airboat's IVP_Standard_Gravity_Controller ─────────────────────── */
 
 typedef struct airboat_gravity {
     ivp_sim_ctrl_t base;
+    ivp_allocator_t allocator;       /* copied: user state may outlive environment */
     ivp_vec3f_t    grav_vec;   /* IVP_U_Float_Point */
 } airboat_gravity_t;
 
@@ -112,8 +112,11 @@ bool ivp_airboat_init(ivp_airboat_state_t *state, const ivp_car_system_template_
     ivp_environment_t *env = body->owner;
     ivp_core_t *core = body->physical_core;
 
-    airboat_gravity_t *gravity = (airboat_gravity_t *)calloc(1, sizeof(*gravity));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    airboat_gravity_t *gravity = (airboat_gravity_t *)ivp_alloc(allocator, sizeof(*gravity));
     if (!gravity) return false;
+    memset(gravity, 0, sizeof(*gravity));
+    gravity->allocator = *allocator;
     const ivp_vec3f_t rot_speed_before = core->rot_speed;
     const ivp_vec3r_t speed_before = core->speed;
     ivp_sim_ctrl_t *std_gravity = NULL;
@@ -159,7 +162,8 @@ bool ivp_airboat_init(ivp_airboat_state_t *state, const ivp_car_system_template_
             if (std_gravity) (void)ivp_core_add_core_controller(core, std_gravity);
             core->rot_speed = rot_speed_before;
             core->speed = speed_before;
-            free(gravity);
+            ivp_allocator_t gravity_allocator = gravity->allocator;
+            ivp_free(&gravity_allocator, gravity, sizeof(*gravity));
             return false;
         }
         state->gravity_controller = gravity;
@@ -175,7 +179,8 @@ bool ivp_airboat_init(ivp_airboat_state_t *state, const ivp_car_system_template_
         core->rot_speed = rot_speed_before;
         core->speed = speed_before;
         state->active = false;
-        free(gravity);
+        ivp_allocator_t gravity_allocator = gravity->allocator;
+        ivp_free(&gravity_allocator, gravity, sizeof(*gravity));
         return false;
     }
     state->extra_gravity = (float)tcs->extra_gravity_force;
@@ -244,7 +249,8 @@ void ivp_airboat_destroy(ivp_airboat_state_t *state)
             ivp_sim_ctrl_t *std_gravity = ivp_env_get_standard_gravity_controller(env);
             if (std_gravity) ivp_core_add_core_controller(body->physical_core, std_gravity);
         }
-        free(gravity);
+        ivp_allocator_t gravity_allocator = gravity->allocator;
+        ivp_free(&gravity_allocator, gravity, sizeof(*gravity));
         state->gravity_controller = NULL;
     }
     state->active = false;

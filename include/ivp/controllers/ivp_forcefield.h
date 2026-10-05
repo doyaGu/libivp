@@ -24,6 +24,7 @@
 #define IVP_FORCEFIELD_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/containers/ivp_set.h>
@@ -78,6 +79,8 @@ typedef struct ivp_forcefield_state {
     bool                      i_am_owner_of_set_of_cores; /* stored only (as the reference) */
     bool                      set_is_going_to_be_deleted;
     bool                      set_driven;
+    ivp_allocator_t           allocator;       /* copied: state may outlive environment */
+    bool                      allocator_bound;
     ivp_pvec_t                attached_cores;   /* ivp_core_t* */
     ivp_controller_handle_t   controller;
     ivp_set_active_listener_t set_listener;

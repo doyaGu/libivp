@@ -159,7 +159,9 @@ bool ivp_forcefield_attach_set(ivp_forcefield_state_t *state, ivp_environment_t 
 {
     if (!state || !env || !set_of_cores) return false;
     ivp_forcefield_destroy(state);
-    ivp_pvec_init(&state->attached_cores);
+    state->allocator = *ivp_env_get_allocator(env);
+    state->allocator_bound = true;
+    ivp_pvec_init_with_allocator(&state->attached_cores, &state->allocator);
     state->controller = ivp_ctrl_attach_create(env, IVP_CP_ACTUATOR, ivp_controller_forcefield, state);
     if (!ivp_controller_handle_is_valid(state->controller)) return false;
     state->environment = env;

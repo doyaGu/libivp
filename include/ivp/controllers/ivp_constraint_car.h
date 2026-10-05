@@ -34,6 +34,7 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_result.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/controllers/ivp_controller.h>
@@ -65,6 +66,12 @@ typedef struct ivp_constraint_car_object {
  * (pointing down for the default y-down gravity).  Returns NULL on OOM. */
 ivp_constraint_solver_car_t *ivp_constraint_solver_car_create(int right_idx, int up_idx, int forward_idx,
                                                               bool is_left_hand);
+
+/* Allocator-aware form used when the solver belongs to an environment.
+ * The vtable is copied; its context must outlive the solver. */
+ivp_constraint_solver_car_t *ivp_constraint_solver_car_create_with_allocator(
+    int right_idx, int up_idx, int forward_idx, bool is_left_hand,
+    const ivp_allocator_t *allocator);
 
 /* Reference init_constraint_system: creates the car objects, builds and
  * inverts the push matrix and announces the controller to the environment.

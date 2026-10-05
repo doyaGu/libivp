@@ -15,7 +15,6 @@
  * detached from the environment instead of deleting itself (the owner frees
  * it).
  */
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -268,8 +267,10 @@ static ivp_constraint_car_object_t *car_object_create(ivp_constraint_solver_car_
                                                       ivp_object_t *i_real_obj_app, ivp_object_t *i_real_obj_body,
                                                       const ivp_vec3f_t *target_Bos_override)
 {
-    ivp_constraint_car_object_t *o = (ivp_constraint_car_object_t *)calloc(1, sizeof(*o));
+    ivp_constraint_car_object_t *o =
+        (ivp_constraint_car_object_t *)ivp_alloc(&solver_car->allocator, sizeof(*o));
     if (!o) return NULL;
+    memset(o, 0, sizeof(*o));
     o->real_object = i_real_obj_app;
     o->solver_car = solver_car;
     o->fix_wheel_constraint = NULL;
@@ -301,7 +302,7 @@ static void car_object_destroy(ivp_constraint_car_object_t *o, bool touch_core)
 {
     if (!o) return;
     if (touch_core && o->real_object && o->real_object->physical_core->car_wheel == o) o->real_object->physical_core->car_wheel = NULL;
-    free(o);
+    ivp_free(&o->solver_car->allocator, o, sizeof(*o));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -329,13 +330,18 @@ static const ivp_sim_ctrl_vt_t solver_vt = {
     NULL,
 };
 
-ivp_constraint_solver_car_t *ivp_constraint_solver_car_create(int right_idx, int up_idx, int forward_idx,
-                                                              bool is_left_hand)
+ivp_constraint_solver_car_t *ivp_constraint_solver_car_create_with_allocator(
+    int right_idx, int up_idx, int forward_idx, bool is_left_hand,
+    const ivp_allocator_t *allocator)
 {
-    ivp_constraint_solver_car_t *s = (ivp_constraint_solver_car_t *)calloc(1, sizeof(*s));
+    if (!allocator) allocator = ivp_default_allocator();
+    ivp_constraint_solver_car_t *s =
+        (ivp_constraint_solver_car_t *)ivp_alloc(allocator, sizeof(*s));
     if (!s) return NULL;
+    memset(s, 0, sizeof(*s));
     s->base.vt = &solver_vt;
-    ivp_pvec_init(&s->cores_of_constraint_system);
+    s->allocator = *allocator;
+    ivp_pvec_init_with_allocator(&s->cores_of_constraint_system, &s->allocator);
     memset(s->constraint_is_disabled, 0, sizeof(s->constraint_is_disabled));
     memset(s->c_local_ballsocket, 0, sizeof(s->c_local_ballsocket));
     for (int i = 0; i < IVP_CONSTRAINT_CAR_MAX_WHEELS; i++) s->c_local_ballsocket_handle[i] = ivp_controller_handle_invalid();
@@ -352,6 +358,13 @@ ivp_constraint_solver_car_t *ivp_constraint_solver_car_create(int right_idx, int
     return s;
 }
 
+ivp_constraint_solver_car_t *ivp_constraint_solver_car_create(int right_idx, int up_idx, int forward_idx,
+                                                              bool is_left_hand)
+{
+    return ivp_constraint_solver_car_create_with_allocator(
+        right_idx, up_idx, forward_idx, is_left_hand, NULL);
+}
+
 /* P_DELETE(this->c_local_ballsocket[k]) for all wheels */
 static void solver_delete_local_ballsockets(ivp_constraint_solver_car_t *s, bool silently)
 {
@@ -366,7 +379,7 @@ static void solver_delete_local_ballsockets(ivp_constraint_solver_car_t *s, bool
                 (void)ivp_environment_remove_dependent_controller(s->environment, s->c_local_ballsocket_handle[k],
                                                                   silently);
             }
-            free(s->c_local_ballsocket[k]);
+            ivp_free(&s->allocator, s->c_local_ballsocket[k], sizeof(*s->c_local_ballsocket[k]));
         }
         s->c_local_ballsocket[k] = NULL;
         s->c_local_ballsocket_handle[k] = ivp_controller_handle_invalid();
@@ -421,11 +434,16 @@ void ivp_constraint_solver_car_destroy(ivp_constraint_solver_car_t *s)
         if (s->announced) s->announced = false;
         car_object_destroy(s->body_object, false);
         for (int i = 0; i < s->n_wheel_objects; i++) car_object_destroy(s->wheel_objects[i], false);
-        for (int k = 0; k < IVP_CONSTRAINT_CAR_MAX_WHEELS; k++) free(s->c_local_ballsocket[k]);
+        for (int k = 0; k < IVP_CONSTRAINT_CAR_MAX_WHEELS; k++) {
+            if (s->c_local_ballsocket[k]) {
+                ivp_free(&s->allocator, s->c_local_ballsocket[k], sizeof(*s->c_local_ballsocket[k]));
+            }
+        }
     }
-    if (s->co_matrix_allocated) ivp_gmmz_destroy(&s->co_matrix, NULL);
+    if (s->co_matrix_allocated) ivp_gmmz_destroy(&s->co_matrix, &s->allocator);
     ivp_pvec_clear(&s->cores_of_constraint_system);
-    free(s);
+    ivp_allocator_t allocator = s->allocator;
+    ivp_free(&allocator, s, sizeof(*s));
 }
 
 /* IVP_Constraint_Solver_Car::core_is_going_to_be_deleted_event: the
@@ -622,7 +640,7 @@ static ivp_result_t builder_calc_constraint_matrix(car_builder_t *b)
     int gm_size = b->n_constraints * b->n_appends;
     if (gm_size <= 0) return IVP_ERR_INVALID_ARG;
 
-    ivp_result_t r = ivp_gmmz_init(&b->tmp_matrix, gm_size, NULL);
+    ivp_result_t r = ivp_gmmz_init(&b->tmp_matrix, gm_size, &cs->allocator);
     if (r != IVP_OK) return r;
     b->tmp_matrix.matrix_eps = (double)P_DOUBLE_EPS;
     b->tmp_matrix.aligned_row_len = gm_size;   /* ivp_constraint_car.cxx:737 */
@@ -634,14 +652,14 @@ static ivp_result_t builder_calc_constraint_matrix(car_builder_t *b)
         }
     }
 
-    r = ivp_gmmz_init(&cs->co_matrix, gm_size, NULL);
+    r = ivp_gmmz_init(&cs->co_matrix, gm_size, &cs->allocator);
     if (r != IVP_OK) {
-        ivp_gmmz_destroy(&b->tmp_matrix, NULL);
+        ivp_gmmz_destroy(&b->tmp_matrix, &cs->allocator);
         return r;
     }
     cs->co_matrix_allocated = true;
     ivp_result_t ret_val = ivp_gmmz_invert(&b->tmp_matrix, &cs->co_matrix);
-    ivp_gmmz_destroy(&b->tmp_matrix, NULL);
+    ivp_gmmz_destroy(&b->tmp_matrix, &cs->allocator);
     cs->co_matrix.matrix_eps = (double)P_DOUBLE_EPS;
     return ret_val;
 }
@@ -727,7 +745,7 @@ ivp_result_t ivp_constraint_solver_car_init_constraint_system(ivp_constraint_sol
          * environment-deletion listener failed to register. */
         solver_detach(s, true);
         if (s->co_matrix_allocated) {
-            ivp_gmmz_destroy(&s->co_matrix, NULL);
+            ivp_gmmz_destroy(&s->co_matrix, &s->allocator);
             s->co_matrix_allocated = false;
         }
         s->environment = NULL;
@@ -816,12 +834,19 @@ static void solver_start_plan_B(ivp_constraint_solver_car_t *s)
         ivp_vec3r_t anchorA_Aos;
         lvp_zero(&anchorA_Aos);
 
-        ivp_constraint_state_t *c = (ivp_constraint_state_t *)calloc(1, sizeof(*c));
+        ivp_constraint_state_t *c =
+            (ivp_constraint_state_t *)ivp_alloc(&s->allocator, sizeof(*c));
         if (!c) continue;
+        memset(c, 0, sizeof(*c));
         ivp_constraint_init_ball_socket_tense_Ros(c, app->real_object, &anchorA_Aos, body->real_object, &anchorB_Aos);
+        ivp_controller_handle_t handle = ivp_environment_add_controller(
+            env, IVP_CP_CONSTRAINTS, ivp_controller_constraint, c);
+        if (!ivp_controller_handle_is_valid(handle)) {
+            ivp_free(&s->allocator, c, sizeof(*c));
+            continue;
+        }
         s->c_local_ballsocket[app_nr] = c;
-        s->c_local_ballsocket_handle[app_nr] = ivp_environment_add_controller(env, IVP_CP_CONSTRAINTS,
-                                                                              ivp_controller_constraint, c);
+        s->c_local_ballsocket_handle[app_nr] = handle;
     }
     s->local_translation_in_use = true;
 }

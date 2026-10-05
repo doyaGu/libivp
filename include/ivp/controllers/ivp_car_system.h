@@ -51,6 +51,7 @@
 
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_time.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/controllers/ivp_actuator_suspension.h>
@@ -150,6 +151,8 @@ typedef struct ivp_car_system_wheel_skid_info {   /* IVP_Wheel_Skid_Info */
 
 typedef struct ivp_car_system {
     ivp_environment_t           *environment;
+    ivp_allocator_t              allocator;         /* copied: this state may outlive the environment */
+    bool                         allocator_bound;
     int                          n_wheels;
     int                          n_axes;
     bool                         active;           /* init succeeded and not destroyed */
