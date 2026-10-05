@@ -21,6 +21,7 @@
 #include <ivp/math/ivp_quat.h>
 #include "controllers/ivp_constraint_car_internal.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
@@ -649,6 +650,75 @@ IVP_TEST(car_listener_failure_is_atomic)
     scene_destroy(&sc);
 }
 
+static bool car_init_failure_is_clean(const car_scene_t *sc)
+{
+    if (sc->car.active || sc->car.car_constraint_solver || sc->car.n_wheels != 0 ||
+        sc->body->physical_core->car_wheel) {
+        return false;
+    }
+    for (int i = 0; i < 4; i++) {
+        if (sc->wheels[i]->physical_core->car_wheel ||
+            ivp_controller_handle_is_valid(sc->car.h_spring[i]) ||
+            ivp_controller_handle_is_valid(sc->car.h_torque[i])) {
+            return false;
+        }
+    }
+    return !ivp_controller_handle_is_valid(sc->car.h_torque_body) &&
+           !ivp_controller_handle_is_valid(sc->car.h_down_force) &&
+           !ivp_controller_handle_is_valid(sc->car.h_extra_gravity) &&
+           !ivp_controller_handle_is_valid(sc->car.h_powerslide_back) &&
+           !ivp_controller_handle_is_valid(sc->car.h_powerslide_front);
+}
+
+IVP_TEST(car_controller_registration_failures_are_atomic)
+{
+    int allocation_attempts;
+    {
+        car_scene_t sc;
+        IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+        car_fail_nth_alloc_state_t state = {
+            .base = *sc.env->allocator,
+            .attempts = 0,
+            .fail_at = INT_MAX
+        };
+        *sc.env->allocator = (ivp_allocator_t){
+            .alloc = car_fail_nth_alloc,
+            .realloc = car_fail_nth_realloc,
+            .free = car_fail_nth_free,
+            .ctx = &state
+        };
+        IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+        *sc.env->allocator = state.base;
+        allocation_attempts = state.attempts;
+        scene_destroy(&sc);
+    }
+
+    IVP_ASSERT_TRUE(allocation_attempts > 3);
+    /* Attempts 1 and 2 belong to constraint-solver setup, whose reference
+     * failure path asserts in debug builds; attempt 3 is covered above. */
+    for (int fail_at = 4; fail_at <= allocation_attempts; fail_at++) {
+        car_scene_t sc;
+        IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
+        car_fail_nth_alloc_state_t state = {
+            .base = *sc.env->allocator,
+            .attempts = 0,
+            .fail_at = fail_at
+        };
+        *sc.env->allocator = (ivp_allocator_t){
+            .alloc = car_fail_nth_alloc,
+            .realloc = car_fail_nth_realloc,
+            .free = car_fail_nth_free,
+            .ctx = &state
+        };
+        IVP_ASSERT_FALSE(ivp_car_system_init(&sc.car, &sc.tmpl));
+        *sc.env->allocator = state.base;
+        IVP_ASSERT_TRUE(car_init_failure_is_clean(&sc));
+
+        IVP_ASSERT_TRUE(ivp_car_system_init(&sc.car, &sc.tmpl));
+        scene_destroy(&sc);
+    }
+}
+
 IVP_TEST(fix_wheel_registration_failure_is_atomic)
 {
     car_scene_t sc;
@@ -706,6 +776,7 @@ int main(void)
     IVP_REGISTER(constraint_solver_core_list_failure_is_atomic);
     IVP_REGISTER(constraint_solver_listener_failure_is_atomic);
     IVP_REGISTER(car_listener_failure_is_atomic);
+    IVP_REGISTER(car_controller_registration_failures_are_atomic);
     IVP_REGISTER(fix_wheel_registration_failure_is_atomic);
     IVP_REGISTER(compat_controller_entry_is_noop);
     IVP_RUN_ALL();

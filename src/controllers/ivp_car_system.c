@@ -126,8 +126,9 @@ static inline ivp_vec3r_t car_vr(const ivp_vec3f_t *v)
 }
 
 /* IVP_Actuator_Torque: axis = normized(anchor1.core_pos - anchor0.core_pos) */
-static void car_create_torque(ivp_car_system_t *car, ivp_torque_actuator_state_t *st, ivp_controller_handle_t *h,
-                              ivp_object_t *obj, const car_anchor_t *anchor0, const car_anchor_t *anchor1,
+static bool car_create_torque(ivp_car_system_t *car, ivp_torque_actuator_state_t *st,
+                              ivp_controller_handle_t *h, ivp_object_t *obj,
+                              const car_anchor_t *anchor0, const car_anchor_t *anchor1,
                               float max_rotation_speed)
 {
     ivp_vec3f_t axis;
@@ -138,11 +139,13 @@ static void car_create_torque(ivp_car_system_t *car, ivp_torque_actuator_state_t
     ivp_torque_actuator_state_setup(st, obj, &axis_r, IVP_REAL(0.0), (ivp_real_t)max_rotation_speed);
     st->axis_os = axis_r; /* already axis_in_core_coord_system */
     *h = ivp_environment_add_controller(car->environment, IVP_CP_ACTUATOR, ivp_controller_torque_actuator, st);
+    return ivp_controller_handle_is_valid(*h);
 }
 
 /* IVP_Actuator_Force with push_first_object / !push_second_object */
-static void car_create_force(ivp_car_system_t *car, ivp_force_actuator_state_t *st, ivp_controller_handle_t *h,
-                             ivp_object_t *obj0, const car_anchor_t *anchor0, ivp_object_t *obj1,
+static bool car_create_force(ivp_car_system_t *car, ivp_force_actuator_state_t *st,
+                             ivp_controller_handle_t *h, ivp_object_t *obj0,
+                             const car_anchor_t *anchor0, ivp_object_t *obj1,
                              const car_anchor_t *anchor1, float force)
 {
     ivp_vec3r_t a0 = car_vr(&anchor0->core_pos), a1 = car_vr(&anchor1->core_pos);
@@ -152,6 +155,7 @@ static void car_create_force(ivp_car_system_t *car, ivp_force_actuator_state_t *
     st->anchor_a_os = car_state_anchor(anchor0, &st->anchors[0]);
     st->anchor_b_os = car_state_anchor(anchor1, &st->anchors[1]);
     *h = ivp_environment_add_controller(car->environment, IVP_CP_ACTUATOR, ivp_controller_force_actuator, st);
+    return ivp_controller_handle_is_valid(*h);
 }
 
 static void car_remove_controller_ex(ivp_car_system_t *car, ivp_controller_handle_t *h, bool silently)
@@ -501,6 +505,7 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         sp->max_body_force = (ivp_real_t)car_f(templ->max_body_force[wheel_nr]);
         car->h_spring[wheel_nr] =
             ivp_environment_add_controller(env, IVP_CP_ACTUATOR, ivp_controller_suspension, sp);
+        if (!ivp_controller_handle_is_valid(car->h_spring[wheel_nr])) goto fail;
 
         /* rotation motor (wheel drive) */
         car_anchor_t left, right;
@@ -509,8 +514,11 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         car_anchor_os(car->car_wheel[wheel_nr], &hp, &left);
         hp.k[cs_car->x_idx] = -car_f(templ->wheel_reversed_sign[wheel_nr]);
         car_anchor_os(car->car_wheel[wheel_nr], &hp, &right);
-        car_create_torque(car, &car->car_act_torque[wheel_nr], &car->h_torque[wheel_nr], car->car_wheel[wheel_nr],
-                          &left, &right, car_f(templ->wheel_max_rotation_speed[(wheel_nr & 2) ? 1 : 0]));
+        if (!car_create_torque(car, &car->car_act_torque[wheel_nr], &car->h_torque[wheel_nr],
+                               car->car_wheel[wheel_nr], &left, &right,
+                               car_f(templ->wheel_max_rotation_speed[(wheel_nr & 2) ? 1 : 0]))) {
+            goto fail;
+        }
         car->fix_wheel_constraint[wheel_nr] = NULL;
     }
 
@@ -523,8 +531,10 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         car_anchor_os(car->body, &hp, &left);
         hp.k[cs_car->x_idx] = -1.0f;
         car_anchor_os(car->body, &hp, &right);
-        car_create_torque(car, &car->car_act_torque_body, &car->h_torque_body, car->body, &left, &right,
-                          (float)IVP_PI * 100.0f);
+        if (!car_create_torque(car, &car->car_act_torque_body, &car->h_torque_body,
+                               car->body, &left, &right, (float)IVP_PI * 100.0f)) {
+            goto fail;
+        }
         car->body_counter_torque_factor = car_f(templ->body_counter_torque_factor);
     }
 
@@ -566,8 +576,10 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         hp.k[cs_car->y_idx] = 1e8f; /* real far downwards so it appears vertical */
         if (gravity.k[cs_car->y_idx] > 0) hp.k[cs_car->y_idx] *= -1;
         car_anchor_os(static_object, &hp, &down);
-        car_create_force(car, &car->car_act_down_force, &car->h_down_force, car->body, &center, static_object, &down,
-                         0.0f);
+        if (!car_create_force(car, &car->car_act_down_force, &car->h_down_force,
+                              car->body, &center, static_object, &down, 0.0f)) {
+            goto fail;
+        }
     }
 
     /*** extra gravity ***/
@@ -581,8 +593,11 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         hp.k[cs_car->y_idx] = 1e8f;
         if (gravity.k[cs_car->y_idx] > 0) hp.k[cs_car->y_idx] *= -1;
         car_anchor_os(static_object, &hp, &down);
-        car_create_force(car, &car->car_act_extra_gravity, &car->h_extra_gravity, car->body, &center_cp, static_object,
-                         &down, car_f(templ->extra_gravity_force));
+        if (!car_create_force(car, &car->car_act_extra_gravity, &car->h_extra_gravity,
+                              car->body, &center_cp, static_object, &down,
+                              car_f(templ->extra_gravity_force))) {
+            goto fail;
+        }
     }
 
     /*** powerslides ***/
@@ -596,8 +611,10 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         hp.k[cs_car->x_idx] = 1.0f;
         hp.k[cs_car->z_idx] = 2.0f;
         car_anchor_cs(car->body, &hp, &right);
-        car_create_force(car, &car->car_act_powerslide_back, &car->h_powerslide_back, car->body, &left, car->body,
-                         &right, 0.0f);
+        if (!car_create_force(car, &car->car_act_powerslide_back, &car->h_powerslide_back,
+                              car->body, &left, car->body, &right, 0.0f)) {
+            goto fail;
+        }
 
         hp.k[cs_car->x_idx] = -1.0f;
         hp.k[cs_car->z_idx] = -2.0f;
@@ -605,8 +622,10 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         hp.k[cs_car->x_idx] = 1.0f;
         hp.k[cs_car->z_idx] = -2.0f;
         car_anchor_cs(car->body, &hp, &right);
-        car_create_force(car, &car->car_act_powerslide_front, &car->h_powerslide_front, car->body, &left, car->body,
-                         &right, 0.0f);
+        if (!car_create_force(car, &car->car_act_powerslide_front, &car->h_powerslide_front,
+                              car->body, &left, car->body, &right, 0.0f)) {
+            goto fail;
+        }
     }
 
     for (int w = 0; w < car->n_wheels; w++) ivp_car_system_steer_wheel(car, w, IVP_REAL(0.0));
@@ -614,6 +633,10 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
     car->steering_angle = -1.0f;                   /* make sure next call is not optimized */
     ivp_car_system_set_steering(car, IVP_REAL(0.0)); /* make sure next call gets through */
     return true;
+
+fail:
+    ivp_car_system_destroy(car);
+    return false;
 }
 
 void ivp_car_system_destroy(ivp_car_system_t *car)
