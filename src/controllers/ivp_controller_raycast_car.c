@@ -185,6 +185,10 @@ bool ivp_car_init(ivp_car_state_t *state, const ivp_car_system_template_t *tcs)
     state->handle = ivp_environment_announce_dependent_controller(env, IVP_CP_CONSTRAINTS_MAX,
                                                                   ivp_controller_raycast_car, state,
                                                                   ivp_car_discovery);
+    if (!ivp_controller_handle_is_valid(state->handle)) {
+        state->active = false;
+        return false;
+    }
     state->extra_gravity = (float)tcs->extra_gravity_force;
     {
         ivp_vec3r_t g;

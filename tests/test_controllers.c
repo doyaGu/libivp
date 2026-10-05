@@ -1671,8 +1671,34 @@ IVP_TEST(phantom_overflow_no_repeated_enter_events) {
 }
 
 /* ============================================================
- * RAYCAST CAR TESTS (4)
+ * RAYCAST CAR TESTS (5)
  * ============================================================ */
+
+static void *controller_fail_alloc(size_t size, void *ctx) {
+    (void)size;
+    (void)ctx;
+    return NULL;
+}
+
+IVP_TEST(car_registration_failure_is_atomic) {
+    ivp_environment_t *env = make_env(DT60, true);
+    ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(chassis);
+
+    ivp_allocator_t saved_allocator = *env->allocator;
+    env->allocator->alloc = controller_fail_alloc;
+    ivp_car_state_t state;
+    IVP_ASSERT_FALSE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                         IVP_REAL(0.4), IVP_REAL(0.5)));
+    *env->allocator = saved_allocator;
+
+    IVP_ASSERT_FALSE(state.active);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(state.handle));
+    IVP_ASSERT_TRUE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                        IVP_REAL(0.4), IVP_REAL(0.5)));
+    ivp_car_destroy(&state);
+    ivp_environment_destroy(env);
+}
 
 IVP_TEST(car_init_4wheel) {
     ivp_environment_t *env = make_env(DT60, true);
@@ -2278,7 +2304,8 @@ int main(void) {
     IVP_REGISTER(phantom_attach_to_object);
     IVP_REGISTER(phantom_overflow_no_repeated_enter_events);
 
-    /* Raycast car tests (4) */
+    /* Raycast car tests (5) */
+    IVP_REGISTER(car_registration_failure_is_atomic);
     IVP_REGISTER(car_init_4wheel);
     IVP_REGISTER(car_template_axes);
     IVP_REGISTER(car_steering_engine_brake);
