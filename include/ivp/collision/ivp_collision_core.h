@@ -192,9 +192,12 @@ typedef struct ivp_coll_fvector {
     ivp_collision_t **elems;
     int n;
     int cap;
+    const ivp_allocator_t *allocator;
 } ivp_coll_fvector_t;
 
 void ivp_coll_fvector_init(ivp_coll_fvector_t *v);
+void ivp_coll_fvector_init_with_allocator(ivp_coll_fvector_t *v,
+                                          const ivp_allocator_t *allocator);
 void ivp_coll_fvector_clear(ivp_coll_fvector_t *v);
 int  ivp_coll_fvector_index_of(const ivp_coll_fvector_t *v, const ivp_collision_t *c);
 int  ivp_coll_fvector_add(ivp_coll_fvector_t *v, ivp_collision_t *c);

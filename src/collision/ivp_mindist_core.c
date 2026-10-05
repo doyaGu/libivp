@@ -374,9 +374,11 @@ static inline ivp_mindist_t *rec_from_delegator(ivp_collision_delegator_t *d) {
 ivp_mindist_t *ivp_mindist_create(struct ivp_environment *env, ivp_collision_delegator_t *del, bool recursive)
 {
     IVP_ASSERT(del);   /* ivp_mindist.cxx:110 */
-    ivp_mindist_t *md = (ivp_mindist_t *)calloc(1, sizeof(*md));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ivp_mindist_t *md = (ivp_mindist_t *)ivp_alloc(allocator, sizeof(*md));
     IVP_ASSERT(md);
     if (!md) return NULL;
+    memset(md, 0, sizeof(*md));
     ivp_time_event_init(&md->coll.te, mindist_simulate_time_event);
     md->coll.cvt = &mindist_collision_vt;
     md->coll.delegator = del;
@@ -402,7 +404,7 @@ ivp_mindist_t *ivp_mindist_create(struct ivp_environment *env, ivp_collision_del
     if (recursive) {
         md->rec_delegator.dvt = &rec_delegator_vt;
         md->recursive_status = IVP_MR_NORMAL;
-        ivp_coll_fvector_init(&md->mindists);
+        ivp_coll_fvector_init_with_allocator(&md->mindists, allocator);
         md->spawned_mindist_count = 0;
     }
     /* ivp_mindist.cxx:115 (every build) */
@@ -471,7 +473,7 @@ static void mindist_destroy(ivp_collision_t *c)
         if (syn->l_obj && syn->edge && !obj_is_ball(syn->l_obj)) syn_remove_reference_to_ledge(syn);
     }
     md->coll.delegator->dvt->collision_is_going_to_be_deleted_event(md->coll.delegator, &md->coll);
-    free(md);
+    ivp_free(ivp_env_get_allocator(md->env), md, sizeof(*md));
 }
 
 /* ── print (ivp_mindist.cxx:182-268, "#if defined(DEBUG) || 1") ─────────── */
@@ -1504,9 +1506,11 @@ static void oo_hull_limit_exceeded(ivp_oo_watcher_t *w)
 ivp_oo_watcher_t *ivp_oo_watcher_create(ivp_collision_delegator_t *del, struct ivp_object *obj0,
                                         struct ivp_object *obj1)
 {
-    ivp_oo_watcher_t *w = (ivp_oo_watcher_t *)calloc(1, sizeof(*w));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(obj0->owner);
+    ivp_oo_watcher_t *w = (ivp_oo_watcher_t *)ivp_alloc(allocator, sizeof(*w));
     IVP_ASSERT(w);
     if (!w) return NULL;
+    memset(w, 0, sizeof(*w));
     w->coll.te.index = IVP_MINLIST_UNUSED;
     w->coll.te.simulate_time_event = oo_watcher_simulate_time_event;
     w->coll.cvt = &oo_collision_vt;
@@ -1514,7 +1518,7 @@ ivp_oo_watcher_t *ivp_oo_watcher_create(ivp_collision_delegator_t *del, struct i
     w->coll.fvector_index[0] = w->coll.fvector_index[1] = -1;
     w->del.dvt = &oo_delegator_vt;
     w->env = obj0->owner;
-    ivp_coll_fvector_init(&w->mindists);
+    ivp_coll_fvector_init_with_allocator(&w->mindists, allocator);
     struct ivp_object *objs[2] = { obj0, obj1 };
     for (int i = 0; i < 2; i++) {
         ivp_synapse_oo_t *s = &w->synapses[i];
@@ -1540,7 +1544,7 @@ static void oo_watcher_destroy(ivp_collision_t *c)
     for (int i = 0; i < 2; i++) {
         ivp_hull_mgr_remove_synapse(w->synapses[i].object->hull_manager, &w->synapses[i].lh);
     }
-    free(w);
+    ivp_free(ivp_env_get_allocator(w->env), w, sizeof(*w));
 }
 
 /* ── IVP_Collision_Delegator_Root_Mindist ───────────────────────────────── */

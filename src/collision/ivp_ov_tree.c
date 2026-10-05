@@ -28,11 +28,31 @@ static void coll_set_fvector_index(ivp_collision_t *c, int old, int i)
     }
 }
 
-void ivp_coll_fvector_init(ivp_coll_fvector_t *v) { v->elems = NULL; v->n = 0; v->cap = 0; }
+void ivp_coll_fvector_init_with_allocator(ivp_coll_fvector_t *v,
+                                          const ivp_allocator_t *allocator)
+{
+    v->elems = NULL;
+    v->n = 0;
+    v->cap = 0;
+    v->allocator = allocator;
+}
+
+void ivp_coll_fvector_init(ivp_coll_fvector_t *v)
+{
+    ivp_coll_fvector_init_with_allocator(v, NULL);
+}
+
+static const ivp_allocator_t *coll_fvector_allocator(const ivp_coll_fvector_t *v)
+{
+    return v->allocator ? v->allocator : ivp_default_allocator();
+}
 
 void ivp_coll_fvector_clear(ivp_coll_fvector_t *v)
 {
-    free(v->elems);
+    if (v->elems) {
+        ivp_free(coll_fvector_allocator(v), v->elems,
+                 (size_t)v->cap * sizeof(*v->elems));
+    }
     v->elems = NULL; v->n = 0; v->cap = 0;
 }
 
@@ -51,7 +71,9 @@ int ivp_coll_fvector_add(ivp_coll_fvector_t *v, ivp_collision_t *c)
     if (v->n >= v->cap) {
         int nc = v->cap * 2 + 1;
         if (nc < 8) nc = 8;
-        ivp_collision_t **ne = (ivp_collision_t **)realloc(v->elems, (size_t)nc * sizeof(*ne));
+        ivp_collision_t **ne = (ivp_collision_t **)ivp_realloc(
+            coll_fvector_allocator(v), v->elems,
+            (size_t)v->cap * sizeof(*ne), (size_t)nc * sizeof(*ne));
         IVP_ASSERT(ne);
         if (!ne) return -1;
         v->elems = ne;
@@ -118,15 +140,17 @@ static const ivp_listener_hull_vt_t ov_element_vt = {
 
 ivp_ov_element_t *ivp_ov_element_create(struct ivp_object *obj)
 {
-    ivp_ov_element_t *el = (ivp_ov_element_t *)calloc(1, sizeof(*el));
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(obj->owner);
+    ivp_ov_element_t *el = (ivp_ov_element_t *)ivp_alloc(allocator, sizeof(*el));
     IVP_ASSERT(el);
     if (!el) return NULL;
+    memset(el, 0, sizeof(*el));
     ivp_listener_hull_init(&el->lh, &ov_element_vt);
     el->node = NULL;
     el->radius = -1.0f;
     el->real_object = obj;
     el->hull_manager = NULL;
-    ivp_coll_fvector_init(&el->collision_fvector);
+    ivp_coll_fvector_init_with_allocator(&el->collision_fvector, allocator);
     return el;
 }
 
@@ -142,7 +166,7 @@ void ivp_ov_element_destroy(ivp_ov_element_t *el)
     ivp_ov_tree_remove_ov_element(ivp_env_get_ov_tree(env), el);
     ivp_coll_fvector_clear(&el->collision_fvector);
     if (el->real_object->ov_element == el) el->real_object->ov_element = NULL;
-    free(el);
+    ivp_free(ivp_env_get_allocator(env), el, sizeof(*el));
 }
 
 void ivp_ov_element_add_to_hull_manager(ivp_ov_element_t *el, ivp_hull_mgr_t *hm, double hull_time)
@@ -169,18 +193,20 @@ void ivp_ov_element_remove_oo_collision(ivp_ov_element_t *el, ivp_collision_t *c
 
 /* ── IVP_OV_Node ────────────────────────────────────────────────────────── */
 
-static ivp_ov_node_t *ov_node_create(void)
+static ivp_ov_node_t *ov_node_create(ivp_ov_tree_t *t)
 {
-    ivp_ov_node_t *n = (ivp_ov_node_t *)calloc(1, sizeof(*n));
+    ivp_ov_node_t *n = (ivp_ov_node_t *)ivp_alloc(t->allocator, sizeof(*n));
     IVP_ASSERT(n);
     if (!n) return NULL;
-    ivp_pvec_init(&n->children);
-    ivp_pvec_init(&n->elements);
+    memset(n, 0, sizeof(*n));
+    ivp_pvec_init_with_allocator(&n->children, t->allocator);
+    ivp_pvec_init_with_allocator(&n->elements, t->allocator);
     return n;
 }
 
 static void ov_node_destroy(ivp_ov_node_t *n)
 {
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(&n->children);
     if (n->parent) {
         ivp_pvec_remove(&n->parent->children, n);
     }
@@ -189,7 +215,7 @@ static void ov_node_destroy(ivp_ov_node_t *n)
     }
     ivp_pvec_clear(&n->children);
     ivp_pvec_clear(&n->elements);
-    free(n);
+    ivp_free(allocator, n, sizeof(*n));
 }
 
 /* ── node lookup (IVP_ov_tree_hash; lookup only, order-free) ─────────── */
@@ -454,7 +480,7 @@ static void connect_boxes(ivp_ov_tree_t *t, ivp_ov_node_t *node, ivp_ov_node_t *
             ivp_debug_printf("*** ERROR *** Excessive amount of children: %d\n", ivp_pvec_len(&node->children));
         return;
     }
-    ivp_ov_node_t *new_subnode = ov_node_create();
+    ivp_ov_node_t *new_subnode = ov_node_create(t);
     if (new_node->data.x >= ((double)node->data.x + 1.0) * scale) {
         new_subnode->data.x = (node->data.x + 1) * 2;
     } else if (new_node->data.x >= ((double)node->data.x * 2.0 + 1.0) * half_scale) {
@@ -493,7 +519,7 @@ static void expand_tree(ivp_ov_tree_t *t, const ivp_ov_node_t *new_node)
         ivp_debug_printf("*** ERROR *** Excessive sizelevel (%d) for element\n", t->root->data.sizelevel);
     IVP_ASSERT(t->root->data.sizelevel < 41);
     ivp_ov_node_t *old_root = t->root;
-    ivp_ov_node_t *new_root = ov_node_create();
+    ivp_ov_node_t *new_root = ov_node_create(t);
     int rest_x = old_root->data.x % 2;
     int rest_y = old_root->data.y % 2;
     int rest_z = old_root->data.z % 2;
@@ -607,7 +633,7 @@ double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element
         ivp_pvec_add(&new_node->elements, element);
         element->node = new_node;
     } else {
-        new_node = ov_node_create();
+        new_node = ov_node_create(t);
         new_node->data = t->search_node.data;
         ivp_pvec_add(&new_node->elements, element);
         element->node = new_node;
@@ -634,7 +660,7 @@ double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element
             element->node = t->root;
             ivp_pvec_clear(&new_node->children);
             ivp_pvec_clear(&new_node->elements);
-            free(new_node);
+            ivp_free(t->allocator, new_node, sizeof(*new_node));
             new_node = t->root;
         } else {
             ov_hash_add(t, new_node);
