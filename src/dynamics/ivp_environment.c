@@ -1194,12 +1194,20 @@ static void env_refresh_controller_associations(ivp_environment_t *env)
 }
 
 /* attach libivp "all cores" controllers to a new core */
-void ivp_env_attach_default_controllers(ivp_environment_t *env, ivp_core_t *core)
+bool ivp_env_attach_default_controllers(ivp_environment_t *env, ivp_core_t *core)
 {
     ivp_pvec_t *l = &env->pl->all_core_ctrls;
     for (int i = 0; i < ivp_pvec_len(l); i++) {
-        (void)ivp_ctrl_mgr_add_controller_to_core((ivp_sim_ctrl_t *)ivp_pvec_at(l, i), core);
+        if (!ivp_ctrl_mgr_add_controller_to_core(
+                (ivp_sim_ctrl_t *)ivp_pvec_at(l, i), core)) {
+            for (int k = i - 1; k >= 0; k--) {
+                ivp_ctrl_mgr_remove_controller_from_core(
+                    (ivp_sim_ctrl_t *)ivp_pvec_at(l, k), core);
+            }
+            return false;
+        }
     }
+    return true;
 }
 
 static bool slot_ctrl_set_all_cores(ivp_environment_t *env, slot_ctrl_t *sc)

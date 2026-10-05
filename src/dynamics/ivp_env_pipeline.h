@@ -143,6 +143,6 @@ int  ivp_env_remove_listener_collision_private(ivp_environment_t *env, ivp_objec
 void ivp_env_fire_collision_private(ivp_environment_t *env, ivp_object_t *obj, int flag, const void *event);
 
 /* environment helpers used by the object pipeline */
-void ivp_env_attach_default_controllers(ivp_environment_t *env, ivp_core_t *core);
+bool ivp_env_attach_default_controllers(ivp_environment_t *env, ivp_core_t *core);
 
 #endif /* IVP_ENV_PIPELINE_H */

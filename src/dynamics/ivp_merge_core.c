@@ -411,6 +411,11 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
         ivp_core_delete(&merged_core_for_all->core);
         return false;
     }
+    if (!ivp_env_attach_default_controllers(env, &merged_core_for_all->core)) {
+        free(merge_all_objs.cores);
+        ivp_core_delete(&merged_core_for_all->core);
+        return false;
+    }
     for (int i = 0; i < n_objs; i++) {
         my_obj = objs_to_merge[i];
         /* if (IVP_MTIS_SIMULATED(old_core->movement_state)): the reference has
@@ -436,7 +441,5 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
     for (int i = 0; i < n_objs; i++) ivp_core_delete(merge_all_objs.cores[i]);   /* delete cores[i] */
     free(merge_all_objs.cores);
 
-    /* libivp "all cores" controllers are attached to every new core */
-    ivp_env_attach_default_controllers(env, &merged_core_for_all->core);
     return true;
 }

@@ -105,6 +105,10 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
     ivp_core_t *core = ivp_core_create(attached_object, &q_world_f_object, &position_ws,
                                        false /* physical_unmoveable */, t->enable_piling_optimization);
     if (!core) return;
+    if (!ivp_env_attach_default_controllers(env, core)) {
+        ivp_core_delete(core);
+        return;
+    }
 
     /* get rid of all contact points as they reference the old core */
     ivp_object_unlink_contact_points(attached_object, true);
@@ -133,8 +137,6 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
         if (t->client_data) attached_object->client_data = t->client_data;
         attached_object->extra_radius = (float)t->extra_radius;
         ivp_object_init_object_core(attached_object, t);
-        /* libivp "all cores" controllers are attached to every new core */
-        ivp_env_attach_default_controllers(env, core);
     }
 
     /* set the new speed for next psi and wakeup object */

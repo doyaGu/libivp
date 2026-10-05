@@ -688,6 +688,16 @@ bool ivp_object_pipeline_create(ivp_environment_t *env, ivp_object_t *obj, const
 
     ivp_object_set_movement_state(obj, tmpl->physical_unmoveable ? IVP_MT_STATIC : IVP_MT_NOT_SIM);
 
+    /* Attach all-core controllers before allocating the remaining object
+     * state so failure can discard the new core without publishing it. */
+    if (!ivp_env_attach_default_controllers(env, core)) {
+        ivp_core_unlink_obj_from_core_and_maybe_destroy(core, obj);
+        obj->physical_core = NULL;
+        obj->friction_core = NULL;
+        obj->original_core = NULL;
+        return false;
+    }
+
     /* hull manager */
     obj->hull_manager =
         (struct ivp_hull_mgr *)ivp_alloc(env->allocator, sizeof(ivp_hull_mgr_t));
@@ -719,8 +729,6 @@ bool ivp_object_pipeline_create(ivp_environment_t *env, ivp_object_t *obj, const
     }
     ivp_object_init_object_core(obj, tmpl);
 
-    /* libivp controllers that apply to every core */
-    ivp_env_attach_default_controllers(env, core);
     return true;
 }
 
