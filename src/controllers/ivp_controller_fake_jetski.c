@@ -118,6 +118,8 @@ bool ivp_jetski_init(ivp_jetski_state_t *state, const ivp_car_system_template_t 
     state->booster_seconds_to_go = 0.0f;
     state->down_force_vertical_offset = (float)tcs->body_down_force_vertical_offset;
     state->down_force = 0.0f;
+    const ivp_vec3f_t rot_speed_before = core->rot_speed;
+    const ivp_vec3r_t speed_before = core->speed;
     for (int k = 0; k < 3; k++) {
         core->rot_speed.k[k] = 0.0f;
         core->speed.k[k] = IVP_REAL(0.0);
@@ -132,6 +134,12 @@ bool ivp_jetski_init(ivp_jetski_state_t *state, const ivp_car_system_template_t 
     state->handle = ivp_environment_announce_dependent_controller(env, IVP_CP_CONSTRAINTS_MAX,
                                                                   ivp_controller_fake_jetski, state,
                                                                   ivp_jetski_discovery);
+    if (!ivp_controller_handle_is_valid(state->handle)) {
+        core->rot_speed = rot_speed_before;
+        core->speed = speed_before;
+        state->active = false;
+        return false;
+    }
     state->extra_gravity = (float)tcs->extra_gravity_force;
     {
         ivp_vec3r_t g;

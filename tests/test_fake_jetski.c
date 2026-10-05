@@ -54,6 +54,12 @@ static void step(ivp_environment_t *env, int n) {
 
 static int g_raycast_hits = 0;
 
+static void *jetski_fail_alloc(size_t size, void *ctx) {
+    (void)size;
+    (void)ctx;
+    return NULL;
+}
+
 /* reference do_raycasts: ground plane y = 0 (normal pointing up, -y) */
 static void ground_plane_raycast(void *ctx, const ivp_event_sim_t *es, int n_wheels,
                                  const ivp_ray_solver_template_t *rays,
@@ -114,6 +120,34 @@ IVP_TEST(jetski_init_defaults) {
     IVP_ASSERT_NEAR(state.steering_rate, 0.005f, TOL);
     IVP_ASSERT_NEAR(ivp_jetski_get_orig_axles_distance(&state), 2.0, TOL);
 
+    ivp_jetski_destroy(&state);
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(jetski_registration_failure_is_atomic) {
+    ivp_environment_t *env = make_env(DT60);
+    ivp_object_t *body = make_ball(env, IVP_REAL(50.0), IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0));
+    IVP_ASSERT_NOT_NULL(body);
+    ivp_vec3r_set(&body->physical_core->speed, IVP_REAL(1.0), IVP_REAL(2.0), IVP_REAL(3.0));
+    body->physical_core->rot_speed = ivp_vec3f(4.0f, 5.0f, 6.0f);
+    const ivp_vec3r_t speed_before = body->physical_core->speed;
+    const ivp_vec3f_t rot_speed_before = body->physical_core->rot_speed;
+
+    ivp_car_system_template_t t;
+    make_template(&t, body, IVP_REAL(2.0), IVP_REAL(1.0));
+    ivp_allocator_t saved_allocator = *env->allocator;
+    env->allocator->alloc = jetski_fail_alloc;
+    ivp_jetski_state_t state;
+    IVP_ASSERT_FALSE(ivp_jetski_init(&state, &t));
+    *env->allocator = saved_allocator;
+
+    IVP_ASSERT_FALSE(state.active);
+    IVP_ASSERT_FALSE(ivp_controller_handle_is_valid(state.handle));
+    for (int i = 0; i < 3; i++) {
+        IVP_ASSERT_TRUE(body->physical_core->speed.k[i] == speed_before.k[i]);
+        IVP_ASSERT_TRUE(body->physical_core->rot_speed.k[i] == rot_speed_before.k[i]);
+    }
+    IVP_ASSERT_TRUE(ivp_jetski_init(&state, &t));
     ivp_jetski_destroy(&state);
     ivp_environment_destroy(env);
 }
@@ -185,6 +219,7 @@ IVP_TEST(jetski_grounded_torque_path) {
 
 int main(void) {
     IVP_REGISTER(jetski_init_defaults);
+    IVP_REGISTER(jetski_registration_failure_is_atomic);
     IVP_REGISTER(jetski_steering_front_wheels_only);
     IVP_REGISTER(jetski_booster_changes_body_speed);
     IVP_REGISTER(jetski_grounded_torque_path);
