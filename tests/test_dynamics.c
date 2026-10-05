@@ -1194,6 +1194,18 @@ IVP_TEST(controller_registration_failure_is_atomic) {
         env, IVP_CP_MOTION, controller_count_only, &count_ctx);
     IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
     IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, h));
+
+    h = ivp_environment_create_core_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(h));
+    saved = obj->physical_core->controllers_of_core;
+    obj->physical_core->controllers_of_core = (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_FALSE(ivp_environment_add_controller_to_core(env, h, obj));
+    obj->physical_core->controllers_of_core = saved;
+    IVP_ASSERT_FALSE(ivp_environment_remove_controller_from_core(env, h, obj));
+    IVP_ASSERT_TRUE(ivp_environment_add_controller_to_core(env, h, obj));
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller_from_core(env, h, obj));
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, h));
     ivp_environment_destroy(env);
 }
 
@@ -1593,6 +1605,45 @@ IVP_TEST(controller_attach_to_core_limits_dispatch_scope) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(core_controller_removal_preserves_shared_core_attachment) {
+    ivp_environment_t *env = ivp_environment_create(NULL);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.start_in_simulation = false;
+    ivp_object_t *obj_a = ivp_environment_create_object(env, &tmpl, NULL);
+    ivp_object_t *obj_b = ivp_environment_create_object(env, &tmpl, NULL);
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *unassociated = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_TRUE(obj_a && obj_b && unassociated);
+    ivp_object_t *objects[] = { obj_a, obj_b };
+    IVP_ASSERT_TRUE(ivp_environment_merge_objects(env, objects, 2));
+
+    controller_count_ctx_t count_ctx = {0};
+    ivp_controller_handle_t ctrl = ivp_environment_create_core_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+    IVP_ASSERT_TRUE(ivp_environment_add_controller_to_core(env, ctrl, obj_a));
+    IVP_ASSERT_TRUE(ivp_environment_add_controller_to_core(env, ctrl, obj_b));
+    IVP_ASSERT_FALSE(ivp_environment_remove_controller_from_core(
+        env, ctrl, unassociated));
+
+    IVP_ASSERT_TRUE(ivp_environment_ensure_core_in_simulation(env, obj_a));
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(count_ctx.calls, 1);
+
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller_from_core(env, ctrl, obj_a));
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(count_ctx.calls, 2);
+
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller_from_core(env, ctrl, obj_b));
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(count_ctx.calls, 2);
+
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(ensure_core_in_simulation_wakes_frozen_object) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     IVP_ASSERT_NOT_NULL(env);
@@ -1898,6 +1949,7 @@ int main(void) {
     IVP_REGISTER(controller_dependent_dynamic_discovery_unions_island);
     IVP_REGISTER(controller_dependent_refreshes_object_on_shared_core);
     IVP_REGISTER(controller_attach_to_core_limits_dispatch_scope);
+    IVP_REGISTER(core_controller_removal_preserves_shared_core_attachment);
     IVP_REGISTER(ensure_core_in_simulation_wakes_frozen_object);
     IVP_REGISTER(revive_queue_failure_leaves_core_retryable);
     IVP_REGISTER(force_actuator_executes_once_per_psi);

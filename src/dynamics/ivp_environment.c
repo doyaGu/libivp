@@ -1355,7 +1355,8 @@ static void env_unlink_controller_anchors(ivp_environment_t *env, ivp_controller
 static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *env, int priority,
                                                            ivp_controller_event_fn_t event_fn, void *ctx,
                                                            ivp_controller_mode_t mode,
-                                                           ivp_controller_discovery_fn_t discovery_fn)
+                                                           ivp_controller_discovery_fn_t discovery_fn,
+                                                           bool attach_all_cores)
 {
     ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
     if (!env || !event_fn) return invalid;
@@ -1369,7 +1370,7 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
         return invalid;
     }
     slot->mode = mode;
-    slot->run_for_all_cores = (mode == IVP_CONTROLLER_INDEPENDENT);
+    slot->run_for_all_cores = (mode == IVP_CONTROLLER_INDEPENDENT) && attach_all_cores;
     slot->discovery_fn = discovery_fn;
     slot_ctrl_t *sc = (slot_ctrl_t *)ivp_alloc(env->allocator, sizeof(*sc));
     if (!sc) {
@@ -1399,7 +1400,7 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
             (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
             return invalid;
         }
-    } else if (!slot_ctrl_set_all_cores(env, sc)) {
+    } else if (attach_all_cores && !slot_ctrl_set_all_cores(env, sc)) {
         slot->sim_ctrl = NULL;
         slot_ctrl_free(env, sc);
         (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
@@ -1417,14 +1418,17 @@ ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env, i
     if (!b) {
         /* user controller (IVP_Controller subclass): its own priority,
          * attached to every core */
-        return env_add_controller_internal(env, priority, fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
+        return env_add_controller_internal(env, priority, fn, ctx,
+                                           IVP_CONTROLLER_INDEPENDENT, NULL, true);
     }
     ivp_controller_handle_t h;
     if (b->discovery) {
         /* IVP_Controller_Dependent: announce_controller_to_environment */
-        h = env_add_controller_internal(env, b->priority, fn, ctx, IVP_CONTROLLER_DEPENDENT, b->discovery);
+        h = env_add_controller_internal(env, b->priority, fn, ctx,
+                                        IVP_CONTROLLER_DEPENDENT, b->discovery, false);
     } else {
-        h = env_add_controller_internal(env, b->priority, fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
+        h = env_add_controller_internal(env, b->priority, fn, ctx,
+                                        IVP_CONTROLLER_INDEPENDENT, NULL, true);
     }
     if (ivp_controller_handle_is_valid(h)) {
         if (b->anchors) b->anchors(ctx, true);
@@ -1440,7 +1444,8 @@ ivp_controller_handle_t ivp_environment_add_controller(ivp_environment_t *env, i
 ivp_controller_handle_t ivp_test_environment_add_custom_controller(ivp_environment_t *env, int priority,
                                                                    ivp_controller_fn_t fn, void *ctx)
 {
-    return env_add_controller_internal(env, priority, fn, ctx, IVP_CONTROLLER_INDEPENDENT, NULL);
+    return env_add_controller_internal(env, priority, fn, ctx,
+                                       IVP_CONTROLLER_INDEPENDENT, NULL, true);
 }
 
 ivp_controller_handle_t ivp_test_environment_announce_custom_dependent_controller(
@@ -1448,7 +1453,7 @@ ivp_controller_handle_t ivp_test_environment_announce_custom_dependent_controlle
 {
     if (!discovery_fn) return ivp_controller_handle_invalid();
     return env_add_controller_internal(env, priority, fn, ctx, IVP_CONTROLLER_DEPENDENT,
-                                       discovery_fn);
+                                       discovery_fn, false);
 }
 #endif
 
@@ -1459,7 +1464,8 @@ ivp_controller_handle_t ivp_environment_announce_dependent_controller(ivp_enviro
     if (!env || !fn || !discovery_fn) return ivp_controller_handle_invalid();
     const env_builtin_ctrl_t *b = env_find_builtin_controller(fn);
     ivp_controller_handle_t h =
-        env_add_controller_internal(env, b ? b->priority : priority, fn, ctx, IVP_CONTROLLER_DEPENDENT, discovery_fn);
+        env_add_controller_internal(env, b ? b->priority : priority, fn, ctx,
+                                    IVP_CONTROLLER_DEPENDENT, discovery_fn, false);
     if (ivp_controller_handle_is_valid(h) && b && b->anchors) b->anchors(ctx, true);
     return h;
 }
@@ -1530,19 +1536,9 @@ ivp_controller_handle_t ivp_environment_create_core_controller(ivp_environment_t
 {
     if (!env || !fn) return ivp_controller_handle_invalid();
     const env_builtin_ctrl_t *b = env_find_builtin_controller(fn);
-    ivp_controller_handle_t h = env_add_controller_internal(env, b ? b->priority : priority, fn, ctx,
-                                                            IVP_CONTROLLER_INDEPENDENT, NULL);
-    ivp_controller_slot_t *slot = env_get_controller_slot(env, h);
-    slot_ctrl_t *sc = slot_ctrl_of(slot);
-    if (!slot || !sc) return h;
     /* IVP_Controller_Independent attached to no core yet */
-    slot_ctrl_detach_all(env, sc, true);
-    sc->all_cores = false;
-    sc->dependent = false;
-    slot->mode = IVP_CONTROLLER_INDEPENDENT;
-    slot->run_for_all_cores = false;
-    slot->discovery_fn = NULL;
-    return h;
+    return env_add_controller_internal(env, b ? b->priority : priority, fn, ctx,
+                                       IVP_CONTROLLER_INDEPENDENT, NULL, false);
 }
 
 bool ivp_environment_add_controller_to_core(ivp_environment_t *env, ivp_controller_handle_t controller_handle,
@@ -1552,6 +1548,23 @@ bool ivp_environment_add_controller_to_core(ivp_environment_t *env, ivp_controll
     ivp_controller_slot_t *slot = env_get_controller_slot(env, controller_handle);
     slot_ctrl_t *sc = slot_ctrl_of(slot);
     if (!slot || !sc) return false;
+    const ivp_object_handle_t object_handle = ivp_environment_get_object_handle(object);
+    bool handle_was_present = false;
+    for (int i = 0; i < slot->associated_count; i++) {
+        if (slot->associated_handles[i].slot == object_handle.slot &&
+            slot->associated_handles[i].generation == object_handle.generation) {
+            handle_was_present = true;
+            break;
+        }
+    }
+    if (!ivp_controller_slot_add_associated_handle(slot, object_handle, env->allocator)) return false;
+
+    const bool was_dependent = sc->dependent;
+    const bool was_all_cores = sc->all_cores;
+    const int old_assoc_core_count = ivp_pvec_len(&sc->assoc_cores);
+    const ivp_controller_mode_t old_mode = slot->mode;
+    const bool old_run_for_all_cores = slot->run_for_all_cores;
+    ivp_controller_discovery_fn_t old_discovery_fn = slot->discovery_fn;
     if (sc->dependent || sc->all_cores) {
         slot_ctrl_detach_all(env, sc, true);
         sc->dependent = false;
@@ -1560,8 +1573,26 @@ bool ivp_environment_add_controller_to_core(ivp_environment_t *env, ivp_controll
     slot->mode = IVP_CONTROLLER_INDEPENDENT;
     slot->run_for_all_cores = false;
     slot->discovery_fn = NULL;
-    if (!ivp_controller_slot_add_associated_handle(slot, ivp_environment_get_object_handle(object), env->allocator)) return false;
-    ivp_ctrl_mgr_add_controller_to_core(&sc->base, object->physical_core);
+    if (!ivp_ctrl_mgr_add_controller_to_core(&sc->base, object->physical_core)) {
+        if (!handle_was_present) {
+            (void)ivp_controller_slot_remove_associated_handle(slot, object_handle);
+        }
+        slot->mode = old_mode;
+        slot->run_for_all_cores = old_run_for_all_cores;
+        slot->discovery_fn = old_discovery_fn;
+        if (was_dependent) {
+            sc->dependent = true;
+            sc->assoc_cores.n = old_assoc_core_count;
+            if (old_assoc_core_count > 0) {
+                ivp_ctrl_mgr_announce_controller_to_environment(env, &sc->base);
+            }
+        } else if (was_all_cores) {
+            bool restored = slot_ctrl_set_all_cores(env, sc);
+            IVP_ASSERT(restored);
+            (void)restored;
+        }
+        return false;
+    }
     return true;
 }
 
@@ -1572,8 +1603,24 @@ bool ivp_environment_remove_controller_from_core(ivp_environment_t *env, ivp_con
     ivp_controller_slot_t *slot = env_get_controller_slot(env, controller_handle);
     slot_ctrl_t *sc = slot_ctrl_of(slot);
     if (!slot) return false;
-    if (sc) ivp_ctrl_mgr_remove_controller_from_core(&sc->base, object->physical_core);
-    return ivp_controller_slot_remove_associated_handle(slot, ivp_environment_get_object_handle(object));
+    if (!ivp_controller_slot_remove_associated_handle(
+            slot, ivp_environment_get_object_handle(object))) return false;
+    if (sc) {
+        bool core_still_associated = false;
+        ivp_object_system_t *os = env_object_system(env);
+        for (int i = 0; i < slot->associated_count; i++) {
+            ivp_object_t *remaining = ivp_object_system_get_by_handle(
+                os, slot->associated_handles[i]);
+            if (remaining && remaining->physical_core == object->physical_core) {
+                core_still_associated = true;
+                break;
+            }
+        }
+        if (!core_still_associated) {
+            ivp_ctrl_mgr_remove_controller_from_core(&sc->base, object->physical_core);
+        }
+    }
+    return true;
 }
 
 bool ivp_environment_ensure_core_in_simulation(ivp_environment_t *env, ivp_object_t *object)
