@@ -16,6 +16,7 @@
 #define IVP_BETTER_STATISTICS_MANAGER_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/base/ivp_allocator.h>
 #include <ivp/containers/ivp_pvec.h>
 #include <stdio.h>
 
@@ -54,6 +55,7 @@ typedef struct ivp_better_statistics_data_double_array {
 
 /* IVP_BetterStatisticsmanager_Data_Entity */
 typedef struct ivp_better_statistics_data_entity {
+    ivp_allocator_t allocator; /* copied; owns text and optional array */
     bool enabled; /* use enable / disable / get_state */
     ivp_better_statistics_data_entity_type_t type;
     union {
@@ -72,6 +74,10 @@ typedef struct ivp_better_statistics_data_entity {
  * graph 2. */
 void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t *e,
                                             ivp_better_statistics_data_entity_type_t type);
+void ivp_better_statistics_data_entity_init_with_allocator(
+    ivp_better_statistics_data_entity_t *e,
+    ivp_better_statistics_data_entity_type_t type,
+    const ivp_allocator_t *allocator);
 /* Destructor: frees the array and the text. */
 void ivp_better_statistics_data_entity_destroy(ivp_better_statistics_data_entity_t *e);
 
@@ -111,6 +117,7 @@ struct ivp_better_statistics_callback {
 /* ── IVP_BetterStatisticsmanager ───────────────────────────────────────── */
 
 typedef struct ivp_better_statistics_manager {
+    ivp_allocator_t allocator;       /* copied; owns vector storage */
     bool       enabled;
     ivp_pvec_t output_callbacks;  /* ivp_better_statistics_callback_t* (not owned)    */
     ivp_pvec_t data_entities;     /* ivp_better_statistics_data_entity_t* (not owned) */
@@ -123,6 +130,8 @@ typedef struct ivp_better_statistics_manager {
 
 /* Constructor: enabled, update_interval 1, update_delayed, times 0. */
 void ivp_better_statistics_manager_init(ivp_better_statistics_manager_t *m);
+void ivp_better_statistics_manager_init_with_allocator(
+    ivp_better_statistics_manager_t *m, const ivp_allocator_t *allocator);
 /* Destructor (entities and callbacks are not owned). */
 void ivp_better_statistics_manager_destroy(ivp_better_statistics_manager_t *m);
 

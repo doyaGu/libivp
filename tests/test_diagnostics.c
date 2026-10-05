@@ -889,6 +889,40 @@ IVP_TEST(clustering_visualizer_object_hash)
     ivp_clustering_visualizer_object_hash_destroy(&h);
 }
 
+IVP_TEST(diagnostics_allocator_domain_is_balanced)
+{
+    ivp_allocator_t allocator = ivp_counting_allocator_create(NULL);
+
+    ivp_better_statistics_manager_t manager;
+    ivp_better_statistics_manager_init_with_allocator(&manager, &allocator);
+    ivp_better_statistics_data_entity_t entity;
+    ivp_better_statistics_data_entity_init_with_allocator(
+        &entity, IVP_BSM_INT_ARRAY, &allocator);
+    ivp_better_statistics_data_entity_set_array_size(&entity, 32);
+    ivp_better_statistics_data_entity_set_text(&entity, "tracked");
+    ivp_better_statistics_manager_install_data_entity(&manager, &entity);
+
+    ivp_clustering_visualizer_t visualizer;
+    ivp_clustering_visualizer_init_with_allocator(&visualizer, &allocator);
+    ivp_object_t fake_object;
+    memset(&fake_object, 0, sizeof(fake_object));
+    ivp_vec3f_t center = { { 1.0f, 2.0f, 3.0f } };
+    ivp_clustering_visualizer_longrange_add_object(
+        &visualizer.longrange, &fake_object, &center, IVP_REAL(4.0));
+    ivp_clustering_visualizer_longrange_add_object_to_filter(
+        &visualizer.longrange, &fake_object, IVP_CV_FILTER_ACCEPT);
+
+    ivp_clustering_visualizer_destroy(&visualizer);
+    ivp_better_statistics_manager_destroy(&manager);
+    ivp_better_statistics_data_entity_destroy(&entity);
+
+    ivp_alloc_stats_t stats;
+    ivp_counting_allocator_get_stats(&allocator, &stats);
+    IVP_ASSERT_TRUE(stats.alloc_count > 0);
+    IVP_ASSERT_EQ(stats.current_bytes, 0);
+    ivp_counting_allocator_destroy(&allocator);
+}
+
 int main(void)
 {
     IVP_REGISTER(default_env_creates_simple_counter);
@@ -903,5 +937,6 @@ int main(void)
     IVP_REGISTER(clustering_visualizer_shortrange);
     IVP_REGISTER(clustering_visualizer_longrange);
     IVP_REGISTER(clustering_visualizer_object_hash);
+    IVP_REGISTER(diagnostics_allocator_domain_is_balanced);
     IVP_RUN_ALL();
 }

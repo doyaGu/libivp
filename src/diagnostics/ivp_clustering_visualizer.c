@@ -29,10 +29,17 @@ static uint32_t cv_hash_obj_to_index(const struct ivp_object *obj)
 
 void ivp_clustering_visualizer_object_hash_init(ivp_clustering_visualizer_object_hash_t *h, int create_size)
 {
+    ivp_clustering_visualizer_object_hash_init_with_allocator(h, create_size, NULL);
+}
+
+void ivp_clustering_visualizer_object_hash_init_with_allocator(
+    ivp_clustering_visualizer_object_hash_t *h, int create_size,
+    const ivp_allocator_t *allocator)
+{
     if (!h) return;
     int size = 1;
     while (size < create_size && size < (1 << 30)) size <<= 1;
-    ivp_vhash_init(&h->hash, NULL, size, cv_hash_compare);
+    ivp_vhash_init(&h->hash, allocator, size, cv_hash_compare);
 }
 
 void ivp_clustering_visualizer_object_hash_destroy(ivp_clustering_visualizer_object_hash_t *h)
@@ -118,9 +125,13 @@ typedef struct ivp_cv_shortrange_objectdata {
 static void cv_objectdata_free(ivp_cv_shortrange_objectdata_t *od)
 {
     if (!od) return;
-    for (int i = 0; i < ivp_pvec_len(&od->ledgetree_nodes); i++) free(ivp_pvec_at(&od->ledgetree_nodes, i));
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(&od->ledgetree_nodes);
+    for (int i = 0; i < ivp_pvec_len(&od->ledgetree_nodes); i++) {
+        ivp_free(allocator, ivp_pvec_at(&od->ledgetree_nodes, i),
+                 sizeof(ivp_cv_shortrange_nodedata_t));
+    }
     ivp_pvec_clear(&od->ledgetree_nodes);
-    free(od);
+    ivp_free(allocator, od, sizeof(*od));
 }
 
 /* ── Shortrange: callback ──────────────────────────────────────────────── */
@@ -158,12 +169,16 @@ static void cv_add_node_to_pipeline(ivp_clustering_visualizer_shortrange_t *v,
         }
     }
 
-    ivp_cv_shortrange_nodedata_t *new_nodedata = (ivp_cv_shortrange_nodedata_t *)calloc(1, sizeof(*new_nodedata));
+    ivp_cv_shortrange_nodedata_t *new_nodedata =
+        (ivp_cv_shortrange_nodedata_t *)ivp_alloc(&v->allocator, sizeof(*new_nodedata));
     if (!new_nodedata) return;
+    memset(new_nodedata, 0, sizeof(*new_nodedata));
     new_nodedata->node = node;
     new_nodedata->n_touches = ivp_ledgetree_is_terminal(node) ? 1 : 0; /* no reference counting for non-terminal nodes! */
     new_nodedata->reported_ledge = reported_ledge;
-    ivp_pvec_add(&od->ledgetree_nodes, new_nodedata);
+    if (ivp_pvec_add(&od->ledgetree_nodes, new_nodedata) < 0) {
+        ivp_free(&v->allocator, new_nodedata, sizeof(*new_nodedata));
+    }
 }
 
 /* returns true whenever the node has been aborted (this includes terminal
@@ -273,7 +288,7 @@ void ivp_clustering_visualizer_shortrange_visualize_collisions(ivp_clustering_vi
                 }
 
                 ivp_pvec_remove(&objectdata->ledgetree_nodes, nodedata);
-                free(nodedata);
+                ivp_free(&v->allocator, nodedata, sizeof(*nodedata));
             }
 
             if (objectdata->radius > IVP_REAL(0.0)) {
@@ -344,13 +359,18 @@ void ivp_clustering_visualizer_shortrange_analyze_collision(ivp_clustering_visua
             }
         }
         if (!v->pipelined_private_property_data) {
-            ivp_cv_shortrange_objectdata_t *od = (ivp_cv_shortrange_objectdata_t *)calloc(1, sizeof(*od));
+            ivp_cv_shortrange_objectdata_t *od =
+                (ivp_cv_shortrange_objectdata_t *)ivp_alloc(&v->allocator, sizeof(*od));
             if (!od) continue;
+            memset(od, 0, sizeof(*od));
             od->real_object = v->private_property;
-            ivp_pvec_init(&od->ledgetree_nodes);
+            ivp_pvec_init_with_allocator(&od->ledgetree_nodes, &v->allocator);
             od->center = v->intruder_matrix.pos;
             od->radius = v->intruder_radius;
-            ivp_pvec_add(&v->pipelined_objects, od);
+            if (ivp_pvec_add(&v->pipelined_objects, od) < 0) {
+                cv_objectdata_free(od);
+                continue;
+            }
             v->pipelined_private_property_data = od;
         }
 
@@ -416,18 +436,24 @@ bool ivp_clustering_visualizer_shortrange_get_state(const ivp_clustering_visuali
     return v ? v->enabled : false;
 }
 
-void ivp_clustering_visualizer_shortrange_init(ivp_clustering_visualizer_shortrange_t *v)
+void ivp_clustering_visualizer_shortrange_init_with_allocator(
+    ivp_clustering_visualizer_shortrange_t *v, const ivp_allocator_t *allocator)
 {
     if (!v) return;
     memset(v, 0, sizeof(*v));
+    v->allocator = *(allocator ? allocator : ivp_default_allocator());
     v->enabled = false; /* disabled by default! */
 
-    ivp_clustering_visualizer_object_hash_init(&v->accept_filter_intruder, 64);
-    ivp_clustering_visualizer_object_hash_init(&v->reject_filter_intruder, 64);
-    ivp_clustering_visualizer_object_hash_init(&v->accept_filter_private_property, 64);
-    ivp_clustering_visualizer_object_hash_init(&v->reject_filter_private_property, 64);
-    ivp_pvec_init(&v->output_callbacks);
-    ivp_pvec_init(&v->pipelined_objects);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->accept_filter_intruder, 64, &v->allocator);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->reject_filter_intruder, 64, &v->allocator);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->accept_filter_private_property, 64, &v->allocator);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->reject_filter_private_property, 64, &v->allocator);
+    ivp_pvec_init_with_allocator(&v->output_callbacks, &v->allocator);
+    ivp_pvec_init_with_allocator(&v->pipelined_objects, &v->allocator);
 
     v->private_property = NULL;
     v->intruder = NULL;
@@ -447,6 +473,11 @@ void ivp_clustering_visualizer_shortrange_init(ivp_clustering_visualizer_shortra
     v->stats_n_reported_ledges = 0;
     v->stats_n_sphere_collisiontests = 0;
     v->stats_n_box_collisiontests = 0;
+}
+
+void ivp_clustering_visualizer_shortrange_init(ivp_clustering_visualizer_shortrange_t *v)
+{
+    ivp_clustering_visualizer_shortrange_init_with_allocator(v, NULL);
 }
 
 void ivp_clustering_visualizer_shortrange_destroy(ivp_clustering_visualizer_shortrange_t *v)
@@ -504,7 +535,7 @@ void ivp_clustering_visualizer_longrange_visualize(ivp_clustering_visualizer_lon
         }
 
         ivp_pvec_remove(&v->visualize_data, data);
-        free(data);
+        ivp_free(&v->allocator, data, sizeof(*data));
     }
 }
 
@@ -514,7 +545,7 @@ static void cv_longrange_remove_objectdata(ivp_clustering_visualizer_longrange_t
         ivp_cv_longrange_data_t *data = (ivp_cv_longrange_data_t *)ivp_pvec_at(&v->visualize_data, x);
         if (data->real_object != real_object) continue;
         ivp_pvec_remove(&v->visualize_data, data);
-        free(data);
+        ivp_free(&v->allocator, data, sizeof(*data));
         return;
     }
 }
@@ -539,12 +570,16 @@ void ivp_clustering_visualizer_longrange_add_object(ivp_clustering_visualizer_lo
                                                     ivp_real_t radius)
 {
     if (!v || !real_object || !center) return;
-    ivp_cv_longrange_data_t *data = (ivp_cv_longrange_data_t *)calloc(1, sizeof(*data));
+    ivp_cv_longrange_data_t *data =
+        (ivp_cv_longrange_data_t *)ivp_alloc(&v->allocator, sizeof(*data));
     if (!data) return;
+    memset(data, 0, sizeof(*data));
     data->real_object = real_object;
     data->center = *center;
     data->radius = radius;
-    ivp_pvec_add(&v->visualize_data, data);
+    if (ivp_pvec_add(&v->visualize_data, data) < 0) {
+        ivp_free(&v->allocator, data, sizeof(*data));
+    }
 }
 
 void ivp_clustering_visualizer_longrange_install_visualize_callback(
@@ -606,19 +641,28 @@ bool ivp_clustering_visualizer_longrange_get_state(const ivp_clustering_visualiz
     return v ? v->enabled : false;
 }
 
-void ivp_clustering_visualizer_longrange_init(ivp_clustering_visualizer_longrange_t *v)
+void ivp_clustering_visualizer_longrange_init_with_allocator(
+    ivp_clustering_visualizer_longrange_t *v, const ivp_allocator_t *allocator)
 {
     if (!v) return;
     memset(v, 0, sizeof(*v));
+    v->allocator = *(allocator ? allocator : ivp_default_allocator());
     v->enabled = false;
     v->use_accept_filter = true;
     v->use_reject_filter = true;
     v->visualize_moveable_objects = false;
     v->visualize_unmoveable_objects = false;
-    ivp_pvec_init(&v->graphics_callbacks);
-    ivp_pvec_init(&v->visualize_data);
-    ivp_clustering_visualizer_object_hash_init(&v->accept_filter, 1024);
-    ivp_clustering_visualizer_object_hash_init(&v->reject_filter, 1024);
+    ivp_pvec_init_with_allocator(&v->graphics_callbacks, &v->allocator);
+    ivp_pvec_init_with_allocator(&v->visualize_data, &v->allocator);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->accept_filter, 1024, &v->allocator);
+    ivp_clustering_visualizer_object_hash_init_with_allocator(
+        &v->reject_filter, 1024, &v->allocator);
+}
+
+void ivp_clustering_visualizer_longrange_init(ivp_clustering_visualizer_longrange_t *v)
+{
+    ivp_clustering_visualizer_longrange_init_with_allocator(v, NULL);
 }
 
 void ivp_clustering_visualizer_longrange_destroy(ivp_clustering_visualizer_longrange_t *v)
@@ -626,7 +670,10 @@ void ivp_clustering_visualizer_longrange_destroy(ivp_clustering_visualizer_longr
     if (!v) return;
     ivp_clustering_visualizer_object_hash_destroy(&v->accept_filter);
     ivp_clustering_visualizer_object_hash_destroy(&v->reject_filter);
-    for (int i = 0; i < ivp_pvec_len(&v->visualize_data); i++) free(ivp_pvec_at(&v->visualize_data, i));
+    for (int i = 0; i < ivp_pvec_len(&v->visualize_data); i++) {
+        ivp_free(&v->allocator, ivp_pvec_at(&v->visualize_data, i),
+                 sizeof(ivp_cv_longrange_data_t));
+    }
     ivp_pvec_clear(&v->visualize_data);
     ivp_pvec_clear(&v->graphics_callbacks);
 }
@@ -635,9 +682,15 @@ void ivp_clustering_visualizer_longrange_destroy(ivp_clustering_visualizer_longr
 
 void ivp_clustering_visualizer_init(ivp_clustering_visualizer_t *v)
 {
+    ivp_clustering_visualizer_init_with_allocator(v, NULL);
+}
+
+void ivp_clustering_visualizer_init_with_allocator(
+    ivp_clustering_visualizer_t *v, const ivp_allocator_t *allocator)
+{
     if (!v) return;
-    ivp_clustering_visualizer_shortrange_init(&v->shortrange);
-    ivp_clustering_visualizer_longrange_init(&v->longrange);
+    ivp_clustering_visualizer_shortrange_init_with_allocator(&v->shortrange, allocator);
+    ivp_clustering_visualizer_longrange_init_with_allocator(&v->longrange, allocator);
 }
 
 void ivp_clustering_visualizer_destroy(ivp_clustering_visualizer_t *v)

@@ -1,15 +1,14 @@
 /* ivp_better_statistics_manager.c — port of ivp_physics/ivp_betterstatisticsmanager.cxx */
 #include <ivp/diagnostics/ivp_better_statistics_manager.h>
 
-#include <stdlib.h>
 #include <string.h>
 
 /* p_strdup */
-static char *bsm_strdup(const char *s)
+static char *bsm_strdup(const ivp_allocator_t *allocator, const char *s)
 {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
-    char *d = (char *)malloc(n);
+    char *d = (char *)ivp_alloc(allocator, n);
     if (!d) return NULL;
     memcpy(d, s, n);
     return d;
@@ -35,13 +34,28 @@ void ivp_better_statistics_data_entity_set_array_size(ivp_better_statistics_data
     if (array_size < 0) array_size = 0;
     switch (e->type) {
     case IVP_BSM_INT_ARRAY:
-        free(e->data.int_array.array);
-        e->data.int_array.array = (int *)calloc((size_t)array_size + 1, sizeof(int));
+        if (e->data.int_array.array) {
+            ivp_free(&e->allocator, e->data.int_array.array,
+                     ((size_t)e->data.int_array.size + 1) * sizeof(int));
+        }
+        e->data.int_array.array = (int *)ivp_alloc(
+            &e->allocator, ((size_t)array_size + 1) * sizeof(int));
+        if (e->data.int_array.array) {
+            memset(e->data.int_array.array, 0, ((size_t)array_size + 1) * sizeof(int));
+        }
         e->data.int_array.size = e->data.int_array.array ? array_size : 0;
         break;
     case IVP_BSM_DOUBLE_ARRAY:
-        free(e->data.double_array.array);
-        e->data.double_array.array = (ivp_real_t *)calloc((size_t)array_size + 1, sizeof(ivp_real_t));
+        if (e->data.double_array.array) {
+            ivp_free(&e->allocator, e->data.double_array.array,
+                     ((size_t)e->data.double_array.size + 1) * sizeof(ivp_real_t));
+        }
+        e->data.double_array.array = (ivp_real_t *)ivp_alloc(
+            &e->allocator, ((size_t)array_size + 1) * sizeof(ivp_real_t));
+        if (e->data.double_array.array) {
+            memset(e->data.double_array.array, 0,
+                   ((size_t)array_size + 1) * sizeof(ivp_real_t));
+        }
         e->data.double_array.size = e->data.double_array.array ? array_size : 0;
         break;
     default:
@@ -90,9 +104,9 @@ bool ivp_better_statistics_data_entity_get_state(const ivp_better_statistics_dat
 void ivp_better_statistics_data_entity_set_text(ivp_better_statistics_data_entity_t *e, const char *text_in)
 {
     if (!e) return;
-    char *new_text = bsm_strdup(text_in);
+    char *new_text = bsm_strdup(&e->allocator, text_in);
     if (!new_text) return;
-    free(e->text);
+    if (e->text) ivp_free(&e->allocator, e->text, strlen(e->text) + 1);
     e->text = new_text;
 }
 
@@ -103,14 +117,17 @@ void ivp_better_statistics_data_entity_set_position(ivp_better_statistics_data_e
     e->ypos = y;
 }
 
-void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t *e,
-                                            ivp_better_statistics_data_entity_type_t type_in)
+void ivp_better_statistics_data_entity_init_with_allocator(
+    ivp_better_statistics_data_entity_t *e,
+    ivp_better_statistics_data_entity_type_t type_in,
+    const ivp_allocator_t *allocator)
 {
     if (!e) return;
     memset(e, 0, sizeof(*e));
+    e->allocator = *(allocator ? allocator : ivp_default_allocator());
     e->enabled = true;
     e->type = type_in;
-    e->text = bsm_strdup("Value: ");
+    e->text = bsm_strdup(&e->allocator, "Value: ");
     e->text_color = 0;
     e->xpos = 0;
     e->ypos = 0;
@@ -123,7 +140,8 @@ void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t 
         e->data.double_value = IVP_REAL(0.0);
         break;
     case IVP_BSM_INT_ARRAY:
-        e->data.int_array.array = (int *)calloc(11, sizeof(int));
+        e->data.int_array.array = (int *)ivp_alloc(&e->allocator, 11 * sizeof(int));
+        if (e->data.int_array.array) memset(e->data.int_array.array, 0, 11 * sizeof(int));
         e->data.int_array.size = e->data.int_array.array ? 10 : 0;
         e->data.int_array.max_value = 10;
         e->data.int_array.width = 10;
@@ -135,7 +153,11 @@ void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t 
         e->data.int_array.graph_color = 2;
         break;
     case IVP_BSM_DOUBLE_ARRAY:
-        e->data.double_array.array = (ivp_real_t *)calloc(11, sizeof(ivp_real_t));
+        e->data.double_array.array =
+            (ivp_real_t *)ivp_alloc(&e->allocator, 11 * sizeof(ivp_real_t));
+        if (e->data.double_array.array) {
+            memset(e->data.double_array.array, 0, 11 * sizeof(ivp_real_t));
+        }
         e->data.double_array.size = e->data.double_array.array ? 10 : 0;
         e->data.double_array.max_value = IVP_REAL(10.0);
         e->data.double_array.width = 10;
@@ -151,24 +173,36 @@ void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t 
     }
 }
 
+void ivp_better_statistics_data_entity_init(ivp_better_statistics_data_entity_t *e,
+                                            ivp_better_statistics_data_entity_type_t type_in)
+{
+    ivp_better_statistics_data_entity_init_with_allocator(e, type_in, NULL);
+}
+
 void ivp_better_statistics_data_entity_destroy(ivp_better_statistics_data_entity_t *e)
 {
     if (!e) return;
     switch (e->type) {
     case IVP_BSM_INT_ARRAY:
-        free(e->data.int_array.array);
+        if (e->data.int_array.array) {
+            ivp_free(&e->allocator, e->data.int_array.array,
+                     ((size_t)e->data.int_array.size + 1) * sizeof(int));
+        }
         e->data.int_array.array = NULL;
         e->data.int_array.size = 0;
         break;
     case IVP_BSM_DOUBLE_ARRAY:
-        free(e->data.double_array.array);
+        if (e->data.double_array.array) {
+            ivp_free(&e->allocator, e->data.double_array.array,
+                     ((size_t)e->data.double_array.size + 1) * sizeof(ivp_real_t));
+        }
         e->data.double_array.array = NULL;
         e->data.double_array.size = 0;
         break;
     default:
         break;
     }
-    free(e->text);
+    if (e->text) ivp_free(&e->allocator, e->text, strlen(e->text) + 1);
     e->text = NULL;
 }
 
@@ -254,16 +288,24 @@ bool ivp_better_statistics_manager_get_state(const ivp_better_statistics_manager
     return m ? m->enabled : false;
 }
 
-void ivp_better_statistics_manager_init(ivp_better_statistics_manager_t *m)
+void ivp_better_statistics_manager_init_with_allocator(
+    ivp_better_statistics_manager_t *m, const ivp_allocator_t *allocator)
 {
     if (!m) return;
+    memset(m, 0, sizeof(*m));
+    m->allocator = *(allocator ? allocator : ivp_default_allocator());
     m->enabled = true;
-    ivp_pvec_init(&m->output_callbacks);
-    ivp_pvec_init(&m->data_entities);
+    ivp_pvec_init_with_allocator(&m->output_callbacks, &m->allocator);
+    ivp_pvec_init_with_allocator(&m->data_entities, &m->allocator);
     m->update_interval = IVP_REAL(1.0);
     m->update_delayed = true;
     m->simulation_time = IVP_REAL(0.0);
     m->time_of_last_update = IVP_REAL(0.0);
+}
+
+void ivp_better_statistics_manager_init(ivp_better_statistics_manager_t *m)
+{
+    ivp_better_statistics_manager_init_with_allocator(m, NULL);
 }
 
 void ivp_better_statistics_manager_destroy(ivp_better_statistics_manager_t *m)

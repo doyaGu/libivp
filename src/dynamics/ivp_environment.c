@@ -2104,7 +2104,8 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         ivp_environment_destroy(env);
         return NULL;
     }
-    ivp_better_statistics_manager_init(env->better_statistics_manager);
+    ivp_better_statistics_manager_init_with_allocator(env->better_statistics_manager,
+                                                      env->allocator);
     /* performancecounter: the application's, else new IVP_PerformanceCounter_Simple() */
     if (cfg.performance_counter) {
         env->performance_counter = cfg.performance_counter;

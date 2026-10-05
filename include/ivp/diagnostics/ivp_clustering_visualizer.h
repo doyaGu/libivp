@@ -56,6 +56,9 @@ typedef struct ivp_clustering_visualizer_object_hash {
 
 /* create_size: initial capacity (rounded up to a power of two) */
 void ivp_clustering_visualizer_object_hash_init(ivp_clustering_visualizer_object_hash_t *h, int create_size);
+void ivp_clustering_visualizer_object_hash_init_with_allocator(
+    ivp_clustering_visualizer_object_hash_t *h, int create_size,
+    const ivp_allocator_t *allocator);
 void ivp_clustering_visualizer_object_hash_destroy(ivp_clustering_visualizer_object_hash_t *h);
 void ivp_clustering_visualizer_object_hash_add(ivp_clustering_visualizer_object_hash_t *h, struct ivp_object *obj);
 struct ivp_object *ivp_clustering_visualizer_object_hash_remove(ivp_clustering_visualizer_object_hash_t *h,
@@ -86,6 +89,7 @@ struct ivp_clustering_visualizer_longrange_callback {
 
 /* IVP_Clustering_Visualizer_Longrange */
 typedef struct ivp_clustering_visualizer_longrange {
+    ivp_allocator_t allocator;       /* copied; owns hashes, vectors, and queued data */
     bool enabled;
     ivp_pvec_t graphics_callbacks; /* longrange callbacks (not owned)  */
     ivp_clustering_visualizer_object_hash_t accept_filter;
@@ -100,6 +104,8 @@ typedef struct ivp_clustering_visualizer_longrange {
 
 /* Constructor: disabled, filters as above, 1024 entry filter hashes. */
 void ivp_clustering_visualizer_longrange_init(ivp_clustering_visualizer_longrange_t *v);
+void ivp_clustering_visualizer_longrange_init_with_allocator(
+    ivp_clustering_visualizer_longrange_t *v, const ivp_allocator_t *allocator);
 void ivp_clustering_visualizer_longrange_destroy(ivp_clustering_visualizer_longrange_t *v);
 
 void ivp_clustering_visualizer_longrange_add_object_to_filter(ivp_clustering_visualizer_longrange_t *v,
@@ -175,6 +181,7 @@ struct ivp_cv_shortrange_objectdata;
 
 /* IVP_Clustering_Visualizer_Shortrange */
 typedef struct ivp_clustering_visualizer_shortrange {
+    ivp_allocator_t allocator;       /* copied; owns hashes, vectors, and pipeline data */
     bool enabled;
     ivp_clustering_visualizer_object_hash_t accept_filter_intruder;
     ivp_clustering_visualizer_object_hash_t reject_filter_intruder;
@@ -205,6 +212,8 @@ typedef struct ivp_clustering_visualizer_shortrange {
 
 /* Constructor: disabled, 64 entry filter hashes. */
 void ivp_clustering_visualizer_shortrange_init(ivp_clustering_visualizer_shortrange_t *v);
+void ivp_clustering_visualizer_shortrange_init_with_allocator(
+    ivp_clustering_visualizer_shortrange_t *v, const ivp_allocator_t *allocator);
 void ivp_clustering_visualizer_shortrange_destroy(ivp_clustering_visualizer_shortrange_t *v);
 
 /* When enabled: hand every pipelined node (objects and nodes newest first)
@@ -253,6 +262,8 @@ typedef struct ivp_clustering_visualizer {
 } ivp_clustering_visualizer_t;
 
 void ivp_clustering_visualizer_init(ivp_clustering_visualizer_t *v);
+void ivp_clustering_visualizer_init_with_allocator(
+    ivp_clustering_visualizer_t *v, const ivp_allocator_t *allocator);
 void ivp_clustering_visualizer_destroy(ivp_clustering_visualizer_t *v);
 
 #ifdef IVP_HOME_BUILD
