@@ -457,11 +457,14 @@ bool ivp_car_system_init(ivp_car_system_t *car, const ivp_car_system_template_t 
         car->car_constraint_solver, env, car->body, car->car_wheel, hard_points, car->n_wheels);
     if (init_res != IVP_OK) {
         ivp_message("IVP_Car_System_Real_Wheels: failed to initialize constraint system\n");
-        /* reference IVP_ASSERT(0); libivp's own argument checks (unmoveable or
-         * foreign wheels, solver already in use: IVP_ERR_INVALID_ARG /
-         * IVP_ERR_INVALID_STATE) have no reference counterpart, the reference
-         * fails only for wheel-count and matrix-inversion errors */
-        if (init_res != IVP_ERR_INVALID_ARG && init_res != IVP_ERR_INVALID_STATE) IVP_ASSERT(0);
+        /* reference IVP_ASSERT(0); libivp's argument and allocation failures
+         * have no reference counterpart.  Preserve the assertion only for a
+         * constraint-matrix failure, which is the reference failure mode. */
+        if (init_res != IVP_ERR_INVALID_ARG &&
+            init_res != IVP_ERR_INVALID_STATE &&
+            init_res != IVP_ERR_OUT_OF_MEMORY) {
+            IVP_ASSERT(0);
+        }
         ivp_constraint_solver_car_destroy(car->car_constraint_solver);
         car->car_constraint_solver = NULL;
         car->n_wheels = 0;

@@ -694,9 +694,7 @@ IVP_TEST(car_controller_registration_failures_are_atomic)
     }
 
     IVP_ASSERT_TRUE(allocation_attempts > 3);
-    /* Attempts 1 and 2 belong to constraint-solver setup, whose reference
-     * failure path asserts in debug builds; attempt 3 is covered above. */
-    for (int fail_at = 4; fail_at <= allocation_attempts; fail_at++) {
+    for (int fail_at = 1; fail_at <= allocation_attempts; fail_at++) {
         car_scene_t sc;
         IVP_ASSERT_TRUE(scene_create(&sc, 1.7));
         car_fail_nth_alloc_state_t state = {
