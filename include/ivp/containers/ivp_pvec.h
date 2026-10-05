@@ -69,7 +69,7 @@ static inline bool ivp_pvec_ensure(ivp_pvec_t *v) {
 }
 
 static inline int ivp_pvec_add(ivp_pvec_t *v, void *e) {
-    if (!ivp_pvec_ensure(v)) return -1;
+    if (v->n >= v->cap && !ivp_pvec_ensure(v)) return -1;
     v->elems[v->n] = e;
     return v->n++;
 }
@@ -137,7 +137,7 @@ static inline void ivp_pvec_insert_after(ivp_pvec_t *v, int index, void *e) {
     IVP_ASSERT(index >= 0 && index < v->n);
     if (index < 0 || index >= v->n) return;
     index++;
-    if (!ivp_pvec_ensure(v)) return;
+    if (v->n >= v->cap && !ivp_pvec_ensure(v)) return;
     for (int j = v->n; j > index; j--) v->elems[j] = v->elems[j - 1];
     v->elems[index] = e;
     v->n++;
