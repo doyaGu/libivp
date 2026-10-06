@@ -66,6 +66,7 @@ static const card_t cards[] = {
     { "constraints",      0, "Local 6-DOF constraints: slider, hinge with stops, breakable weld, keyed arm." },
     { "actuators",        0, "Torque turntables, suspension springs and the reference stabilizer." },
     { "waves",            0, "A travelling-wave liquid surface and a buoyancy attacher over a set of cores." },
+    { "hover",            0, "Hover pads on the floating controller, with force limits that fail." },
     /* geometry */
     { "shapes",           1, "Convex hulls: cylinders, cones, prisms, pyramids." },
     { "cut",              1, "Chopping a compact surface into two pieces." },
