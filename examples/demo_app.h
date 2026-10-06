@@ -1609,6 +1609,9 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
     if (overlays) demo_apply_overlays(v, &app->world);
     int frame = 0;
     while (demo_viewer_begin_frame(v, &app->world)) {
+        /* screenshots simulate a fixed step per frame, so N frames always
+         * show the same moment whatever the frame rate */
+        if (shot_path) v->frame_dt = DEMO_FRAME_TIME;
         if (v->reset_requested && app->on_reset) app->on_reset(app);
         if (app->update) app->update(app, v, frame);
         demo_viewer_step(v, &app->world);
