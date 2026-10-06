@@ -17,14 +17,22 @@
 
 typedef struct demo_car_frame {
     const ivp_object_t *chassis;
-    float               rot[9];       /* core orientation, column major */
+    float               pos[3];       /* object origin (the chassis box centre) */
+    float               rot[9];       /* orientation, column major */
 } demo_car_frame_t;
 
-/* World position of a point given in the chassis core system. */
+/* World position of a point of the body, given in the chassis object space.
+ * (The wheel hard points are in the core system instead: a mass centre that
+ * is not at the object origin shifts the two apart.) */
 static inline void demo_car_point(const demo_car_frame_t *f, float x, float y, float z, float out[3])
 {
-    ivp_vec3r_t p = ivp_vec3r((ivp_real_t)x, (ivp_real_t)y, (ivp_real_t)z);
-    demo_core_point_ws(f->chassis, &p, out);
+    for (int k = 0; k < 3; k++) out[k] = f->pos[k] + f->rot[k] * x + f->rot[3 + k] * y + f->rot[6 + k] * z;
+}
+
+static inline void demo_car_core_point(const demo_car_frame_t *f, const ivp_vec3f_t *p, float out[3])
+{
+    ivp_vec3r_t q = ivp_vec3r(p->k[0], p->k[1], p->k[2]);
+    demo_core_point_ws(f->chassis, &q, out);
 }
 
 static inline void demo_car_box(demo_viewer_t *v, const demo_car_frame_t *f,
@@ -51,7 +59,7 @@ static inline void demo_car_wheel(demo_viewer_t *v, const demo_car_frame_t *f, c
     /* hard point and wheel centre: the ray reaches the ground one radius
      * beyond the wheel centre; in the air the spring hangs at full length */
     float hp[3], c[3], dir[3];
-    demo_car_point(f, wh->hp_cs.k[0], wh->hp_cs.k[1], wh->hp_cs.k[2], hp);
+    demo_car_core_point(f, &wh->hp_cs, hp);
     for (int k = 0; k < 3; k++)
         dir[k] = f->rot[0 + k] * wh->spring_direction_cs.k[0] + f->rot[3 + k] * wh->spring_direction_cs.k[1]
                + f->rot[6 + k] * wh->spring_direction_cs.k[2];
@@ -116,7 +124,7 @@ static inline void demo_draw_car(demo_viewer_t *v, const ivp_object_t *chassis, 
     if (!v->solid || !v->renderer) return;
     demo_car_frame_t f;
     f.chassis = chassis;
-    quat_to_col_rot(&chassis->physical_core->q_world_f_core_last_psi, f.rot);
+    demo_object_pose(chassis, f.pos, f.rot);
 
     const float glass[3]  = { 0.10f, 0.15f, 0.22f }, trim[3] = { 0.12f, 0.12f, 0.14f };
     const float roof[3]   = { body[0] * 0.85f, body[1] * 0.85f, body[2] * 0.85f };

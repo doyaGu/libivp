@@ -56,8 +56,25 @@ static int wheels_grounded(const offroad_demo_t *s)
     return n;
 }
 
+/* Largest steering angle that keeps the lateral acceleration v^2 / R below
+ * MAX_LATERAL (R = wheelbase / tan(angle)): the faster, the straighter. At
+ * a full lock of 0.4 rad a 3 m wheelbase turns at 7 m radius and 8 m/s
+ * would be 1 g sideways, which tips any car. */
+#define MAX_SPEED   13.0f     /* m/s: the engine cuts out above this */
+#define MAX_LATERAL 4.5f      /* m/s^2, about 0.45 g */
+#define WHEELBASE   3.0f
+static float limit_steer(const offroad_demo_t *s, float steer)
+{
+    float v = demo_object_speed(s->chassis);
+    float lim = atanf(WHEELBASE * MAX_LATERAL / (v * v + 1.0f));
+    if (lim > (float)STEER_ANGLE) lim = (float)STEER_ANGLE;
+    return steer > lim ? lim : (steer < -lim ? -lim : steer);
+}
+
 static void apply_input(offroad_demo_t *s, float steer, float engine, float brake)
 {
+    steer = limit_steer(s, steer);
+    if (demo_object_speed(s->chassis) > MAX_SPEED) engine = 0.0f;   /* governor */
     ivp_car_set_steering(&s->car, (ivp_real_t)steer);
     ivp_car_set_engine(&s->car, (ivp_real_t)engine);
     ivp_car_set_brake(&s->car, (ivp_real_t)brake);
@@ -94,11 +111,12 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
         for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
         return;
     }
-    /* scripted: settle 1.5 s, drive 4 s with a gentle left bend, brake */
+    /* scripted: settle 1.5 s, then 6 s of throttle with the steering flung from
+     * lock to lock every second, then brake */
     float steer = 0.0f, engine = 0.0f, brake = 0.0f;
-    if (frame >= 90 && frame < 330) engine = (float)ENGINE_FWD;
-    if (frame >= 210 && frame < 330) steer = 0.15f;
-    if (frame >= 330) brake = (float)BRAKE_FORCE;
+    if (frame >= 90 && frame < 450) engine = (float)ENGINE_FWD;
+    if (frame >= 150 && frame < 450) steer = ((frame / 60) & 1) ? (float)STEER_ANGLE : -(float)STEER_ANGLE;
+    if (frame >= 450) brake = (float)BRAKE_FORCE;
     if (frame == 90) memcpy(s->start, c, sizeof(s->start));
     if (frame == 570) {
         s->travelled = demo_distance(c, s->start);
@@ -160,11 +178,11 @@ static bool offroad_check(demo_app_t *app)
     offroad_demo_t *s = (offroad_demo_t *)app->user;
     const char *tag = app->cfg.tag;
     bool ok = true;
-    ok &= demo_check(tag, s->travelled > 20.0f, "the car drove %.1f m over the hills",
+    ok &= demo_check(tag, s->travelled > 20.0f, "the car drove %.1f m over the hills, steering from lock to lock",
                      (double)s->travelled);
     ok &= demo_check(tag, s->lowest_clearance > 0.0f,
                      "the chassis stayed above the terrain (lowest clearance %.2f m)", (double)s->lowest_clearance);
-    ok &= demo_check(tag, s->max_tilt < 55.0f, "the car stayed on its wheels (max tilt %.1f deg)",
+    ok &= demo_check(tag, s->max_tilt < 55.0f, "the car did not roll over (max tilt %.1f deg)",
                      (double)s->max_tilt);
     ok &= demo_check(tag, s->grounded_min_late >= 1, "wheels touch the ground at the end (%d/4)",
                      s->grounded_min_late);
@@ -223,11 +241,15 @@ int main(int argc, char **argv)
     demo_set_box_inertia(&cht, 20.0, 1.0, 0.4, 2.0);
     cht.material.friction = IVP_REAL(0.3);
     cht.material.elasticity = IVP_REAL(0.1);
+    /* ballast low in the chassis: the mass centre sits at the bottom of the box
+     * (up is -Y, so +Y is down), which is what keeps the car on its wheels */
+    cht.use_mass_center_override = true;
+    cht.mass_center_override = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.3), IVP_REAL(0.0));
     demo_template_pose(&cht, NULL, 0.0, -(demo_terrain_height_at(&s->terrain, 0.0f, 0.0f) + 1.6), 0.0);
     s->chassis = demo_create_box_templ(w, &cht, 1.0, 0.4, 2.0);
     if (!s->chassis) return 1;
 
-    if (!ivp_car_init_4wheel(&s->car, s->chassis, IVP_REAL(3.0), IVP_REAL(1.8), IVP_REAL(0.35), IVP_REAL(0.6))) {
+    if (!ivp_car_init_4wheel(&s->car, s->chassis, IVP_REAL(3.0), IVP_REAL(2.0), IVP_REAL(0.35), IVP_REAL(0.6))) {
         fprintf(stderr, "ivp_car_init_4wheel failed\n");
         return 1;
     }
@@ -238,7 +260,9 @@ int main(int argc, char **argv)
         s->car.wheels[i].friction_of_wheel    = 1.2f;
     }
 
-    app.controls    = "Arrows: steer / drive   B: brake";
+    /* anti-roll bars: the 4-wheel default stabilizer is far too soft for a 20 kg body */
+    for (int a = 0; a < 2; a++) ivp_car_change_stabilizer_constant(&s->car, a, 8000.0f);
+    app.controls    = "Arrows: steer / drive (the lock narrows with speed)   B: brake";
     app.viewer_init = offroad_viewer_init;
     app.update      = offroad_update;
     app.on_reset    = offroad_reset;
