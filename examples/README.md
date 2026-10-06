@@ -24,7 +24,7 @@ built but has not been run.
 | Space, Home | reset the scene, reset the camera |
 | F1 | solid or wireframe |
 | F2, F3, F4 | mass centre axes, velocity arrows, recent impacts |
-| F5 | parameter panel: gravity, time scale, sun, ambient, shadows |
+| F5 | parameter panel: gravity, time scale, sun, ambient, shadows, then the example's own sliders (listed below); it flows into a second column when it gets tall |
 | mouse | hover outlines a body, click selects it (Esc clears) and shows its details; hold the left button on a dynamic body to drag it |
 | WASD QE RF, right drag, middle drag, wheel | pan, orbit, pan, zoom |
 | Tab, C | focus the next body, follow it |
@@ -79,6 +79,12 @@ Larger scenes:
 | `platform` | an elevator, a slider and a turntable driven by golem controllers, carrying crates |
 | `compound` | rigid bodies made of several objects with `ivp_object_attach_object`; B breaks them apart |
 
+Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, suspension,
+tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `buoyancy` (water density,
+current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
+strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
+(pull strength). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
+
 ## Writing an example
 
 ```c
@@ -104,7 +110,8 @@ int main(int argc, char **argv) {
 Add it to `examples/CMakeLists.txt` with `ivp_add_example(example_mine example_mine.c)`.
 `update` runs every frame with `viewer == NULL` when headless, so give it a
 script instead of key presses. Extra sliders and checkboxes for the F5 panel:
-`demo_param_float` / `demo_param_bool` from `viewer_init`.
+`demo_param_float` / `demo_param_bool` from `viewer_init`, or `demo_panel_add_float`
+with a callback that pushes the value to the engine.
 
 The framework headers: `demo_app.h` (world, viewer, drawing), `demo_debug.h`
 (picking, impact ring), `demo_panel.h` (the panel widgets, testable without a
