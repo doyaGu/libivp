@@ -4,7 +4,7 @@
  * anchored to a static ceiling bar.  A heavy weight hangs at the end.
  * A ground plane catches anything that falls.  Joints are highlighted.
  * Press K to kick the weight sideways (the chain swings like a pendulum),
- * V toggles the solid / wireframe view.
+ * F1 toggles the solid / wireframe view.
  *
  * Demonstrates: ivp_constraint (ball_socket), chain building,
  *               stacking objects, weight at chain end, HUD text.
@@ -33,7 +33,6 @@ typedef struct rope_demo {
     ivp_object_t          *ceiling, *ground, *weight;
     ivp_object_t          *links[CHAIN_LEN];
     ivp_constraint_state_t constraints[CHAIN_LEN + 1];
-    bool                   wireframe;
     int                    n_kicks;
     float                  max_stretch_ratio;   /* whole run */
     int                    worst_link;
@@ -74,23 +73,13 @@ static void kick(demo_app_t *app)
     s->kick_time = ivp_environment_get_time(app->world.env);
 }
 
-static void rope_viewer_init(demo_app_t *app, demo_viewer_t *v)
-{
-    (void)app;
-    const float light_dir[3] = {0.45f, 0.80f, -0.40f};
-    ivp_render_set_light_dir(v->renderer, light_dir);
-    ivp_render_set_ambient(v->renderer, 0.35f);
-}
-
 static void rope_update(demo_app_t *app, demo_viewer_t *v, int frame)
 {
     rope_demo_t *s = (rope_demo_t *)app->user;
     if (v) {
         if (demo_key_just_pressed(v, SDL_SCANCODE_K)) kick(app);
-        if (demo_key_just_pressed(v, SDL_SCANCODE_V)) s->wireframe = !s->wireframe;
     } else {
         if (frame == 60) kick(app);
-        if (frame == 540) s->wireframe = !s->wireframe;   /* draw both views */
     }
     int worst = -1;
     float ratio = stretch_ratio(s, &worst);
@@ -114,18 +103,10 @@ static void rope_reset(demo_app_t *app)
     s->peak_speed = 0.0f;
 }
 
-static void draw_box(demo_viewer_t *v, const ivp_object_t *obj, bool wire, const float color[3])
-{
-    const demo_body_t *b = demo_body_of(obj);
-    float pos[3], rot[9];
-    demo_object_pose(obj, pos, rot);
-    if (wire) demo_box(v, pos, b->half, rot, color);
-    else demo_solid_box(v, pos, b->half, rot, color);
-}
-
 static void rope_draw(demo_app_t *app, demo_viewer_t *v)
 {
     rope_demo_t *s = (rope_demo_t *)app->user;
+    const bool wire = !v->solid;
     const float c_link[]   = {0.85f, 0.65f, 0.20f};
     const float c_weight[] = {0.90f, 0.25f, 0.20f};
     const float c_ceil[]   = {0.50f, 0.50f, 0.55f};
@@ -134,24 +115,24 @@ static void rope_draw(demo_app_t *app, demo_viewer_t *v)
     const float c_grid[]   = {0.12f, 0.12f, 0.18f};
     const float c_vel[]    = {0.20f, 1.0f,  0.40f};
 
-    if (s->wireframe) demo_draw_grid_ex(v, 12.0f, 2.0f, c_grid);
-    draw_box(v, s->ground, s->wireframe, c_ground);
-    draw_box(v, s->ceiling, s->wireframe, c_ceil);
+    if (wire) demo_draw_grid_ex(v, 12.0f, 2.0f, c_grid);
+    demo_draw_object(v, s->ground, c_ground);
+    demo_draw_object(v, s->ceiling, c_ceil);
 
     float prev[3];
     demo_object_center(s->ceiling, prev);
     for (int i = 0; i < CHAIN_LEN; i++) {
         float lc[3] = {c_link[0], c_link[1], c_link[2]};
         if (i % 2) { lc[0] *= 0.8f; lc[1] *= 0.8f; lc[2] *= 0.8f; }
-        draw_box(v, s->links[i], s->wireframe, lc);
+        demo_draw_object(v, s->links[i], lc);
         float p[3];
         demo_object_center(s->links[i], p);
         float jp[3] = {(prev[0] + p[0]) * 0.5f, (prev[1] + p[1]) * 0.5f, (prev[2] + p[2]) * 0.5f};
-        if (s->wireframe) demo_sphere(v, jp, 0.08f, c_joint);
+        if (wire) demo_sphere(v, jp, 0.08f, c_joint);
         else demo_solid_sphere(v, jp, 0.08f, c_joint);
         prev[0] = p[0]; prev[1] = p[1]; prev[2] = p[2];
     }
-    draw_box(v, s->weight, s->wireframe, c_weight);
+    demo_draw_object(v, s->weight, c_weight);
     if (demo_object_speed(s->weight) > 0.3f) {
         float p[3];
         demo_object_center(s->weight, p);
@@ -162,8 +143,8 @@ static void rope_draw(demo_app_t *app, demo_viewer_t *v)
 
     int worst = -1;
     float ratio = stretch_ratio(s, &worst);
-    demo_hud(v, DEMO_COL_INFO, "Chain: %d links  View: %s (V)  psi: %.4f s  kicks: %d",
-             CHAIN_LEN, s->wireframe ? "wire" : "solid",
+    demo_hud(v, DEMO_COL_INFO, "Chain: %d links  View: %s (F1)  psi: %.4f s  kicks: %d",
+             CHAIN_LEN, wire ? "wire" : "solid",
              (double)ivp_environment_get_delta_psi_time(app->world.env), s->n_kicks);
     demo_hud_object(v, "Weight", s->weight);
     demo_hud(v, DEMO_COL_INFO, "stretch: %.3f (joint %d)  peak swing x: %.2f m",
@@ -310,8 +291,7 @@ int main(int argc, char **argv)
     for (int i = 0; i <= CHAIN_LEN; i++)
         ivp_environment_add_controller(w->env, IVP_CP_CONSTRAINTS, ivp_controller_constraint, &s->constraints[i]);
 
-    app.controls    = "K: kick the weight sideways   V: solid / wireframe view";
-    app.viewer_init = rope_viewer_init;
+    app.controls    = "K: kick the weight sideways";
     app.update      = rope_update;
     app.on_reset    = rope_reset;
     app.draw        = rope_draw;
