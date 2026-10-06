@@ -68,6 +68,7 @@ Physics and controllers:
 | `friction` | six lanes: contact friction, and the three world friction controller modes (ground plane, global, a conveyor belt with a desired speed) |
 | `constraints` | local 6-DOF constraints (a slider with stops, a hinge with limits, a weld that breaks under load) and a keyframed arm whose target is given in the space of a light cart |
 | `actuators` | three torque turntables (speed limit, reverse, the zero-limit default), and two axle rigs with suspension actuators, vertical struts and the reference stabilizer |
+| `waves` | a pool with a travelling-wave liquid surface descriptor; a buoyancy attacher keeps buoyancy on every core of an active set, and a body taken out of the set sinks |
 | `psi_listener` | a PSI listener records trails and a strip chart of each body's mechanical energy: bounces, a tumbling box, a ball that starts sliding and ends up rolling |
 | `check_distance`, `phantom`, `callback`, `active_value` | distance triggers, trigger volumes, object and collision listeners, active value chains |
 | `collision_filter`, `raycasting`, `universe` | collision filters, the ray solver, streaming static objects |
@@ -96,7 +97,7 @@ Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, susp
 tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `airboat` (full throttle, rudder range, pontoon spring), `buoyancy` (water density,
 current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
 strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
-(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
+(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants), `waves` (wave, water, set membership) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
 
 ## Writing an example
 
