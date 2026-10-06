@@ -64,6 +64,7 @@ static const card_t cards[] = {
     { "friction",         0, "Contact friction and the three world friction modes." },
     { "psi_listener",     0, "A PSI listener records trails and an energy chart." },
     { "constraints",      0, "Local 6-DOF constraints: slider, hinge with stops, breakable weld, keyed arm." },
+    { "actuators",        0, "Torque turntables, suspension springs and the reference stabilizer." },
     /* geometry */
     { "shapes",           1, "Convex hulls: cylinders, cones, prisms, pyramids." },
     { "cut",              1, "Chopping a compact surface into two pieces." },
