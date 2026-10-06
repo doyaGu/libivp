@@ -76,6 +76,7 @@ Larger scenes:
 |---|---|
 | `vehicle`, `offroad` | the four-wheel raycast car on a flat ground with ramps, and over 120 m of hills |
 | `boat` | a hull floating through the buoyancy controller, driven by an own controller |
+| `airboat` | Valve's raycast airboat (`ivp_airboat_init`): a game-side ray caster against a heightfield and a water plane, driven from a lake up a beach |
 | `platform` | an elevator, a slider and a turntable driven by golem controllers, carrying crates |
 | `compound` | rigid bodies made of several objects with `ivp_object_attach_object`; B breaks them apart |
 
