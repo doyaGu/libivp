@@ -79,7 +79,38 @@ typedef struct buoyancy_demo {
     ivp_buoyancy_state_t buoy;
     float                max_speed;           /* over the whole run */
     float                foam_peak;           /* speed of Foam after the simulated drag */
+    /* F5 panel tunables, pushed to buoy by buoyancy_apply */
+    float                water_density, flow_x, linear_drag, angular_drag;
+    ivp_environment_t   *env;
 } buoyancy_demo_t;
+
+static void buoyancy_apply_values(buoyancy_demo_t *s)
+{
+    s->buoy.fluid_density = (ivp_real_t)s->water_density;
+    s->buoy.linear_drag   = (ivp_real_t)s->linear_drag;
+    s->buoy.angular_drag  = (ivp_real_t)s->angular_drag;
+    s->buoy.flow_velocity.k[0] = (ivp_real_t)s->flow_x;
+}
+
+/* Panel callback. A body that rests on the floor or in the air sleeps and a
+ * sleeping core runs no controllers, so wake all of them: a lighter water
+ * must lift the sunken ones again. */
+static void buoyancy_apply(void *ctx)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)ctx;
+    buoyancy_apply_values(s);
+    for (int i = 0; i < N_OBJS; i++) ivp_environment_ensure_core_in_simulation(s->env, s->objs[i]);
+}
+
+static void buoyancy_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "water density", &s->water_density, 0.2f, 3.0f, buoyancy_apply, s);
+    demo_panel_add_float(p, "current (X)",   &s->flow_x,        -3.0f, 3.0f, buoyancy_apply, s);
+    demo_panel_add_float(p, "linear drag",   &s->linear_drag,    0.0f, 8.0f, buoyancy_apply, s);
+    demo_panel_add_float(p, "angular drag",  &s->angular_drag,   0.0f, 8.0f, buoyancy_apply, s);
+}
 
 static void give_initial_speed(buoyancy_demo_t *s)
 {
@@ -219,9 +250,10 @@ static void buoyancy_draw(demo_app_t *app, demo_viewer_t *v)
                            : (sub > 0.0f ? "FLOATING" : "ABOVE");
         demo_hud(v, descs[i].col, "%s  depth:%.1f  %s  rel. density %.2f",
                  descs[i].label, (double)depth, status,
-                 (double)(desc_density(&descs[i]) / WATER_DENSITY));
+                 (double)(desc_density(&descs[i]) / s->water_density));
     }
-    demo_hud(v, DEMO_COL_INFO, "Current: +X %.1f m/s", (double)FLOW_SPEED_X);
+    demo_hud(v, DEMO_COL_INFO, "Current: %+.1f m/s along X   water density %.2f", (double)s->flow_x,
+             (double)s->water_density);
 }
 
 static void buoyancy_stats(demo_app_t *app, char *buf, size_t size)
@@ -338,11 +370,16 @@ int main(int argc, char **argv)
     give_initial_speed(s);
 
     ivp_buoyancy_init(&s->buoy, (ivp_real_t)WATER_SURFACE_Y, (ivp_real_t)WATER_DENSITY);
-    s->buoy.linear_drag  = IVP_REAL(3.0);
-    s->buoy.angular_drag = IVP_REAL(2.0);
-    ivp_vec3r_set(&s->buoy.flow_velocity, (ivp_real_t)FLOW_SPEED_X, IVP_REAL(0.0), IVP_REAL(0.0));
+    s->env = w->env;
+    s->water_density = WATER_DENSITY;
+    s->flow_x        = FLOW_SPEED_X;
+    s->linear_drag   = 3.0f;
+    s->angular_drag  = 2.0f;
+    ivp_vec3r_set(&s->buoy.flow_velocity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    buoyancy_apply_values(s);
     ivp_environment_add_controller(w->env, 200, ivp_controller_buoyancy, &s->buoy);
 
+    app.viewer_init = buoyancy_viewer_init;
     app.update   = buoyancy_update;
     app.on_reset = buoyancy_reset;
     app.draw     = buoyancy_draw;
