@@ -608,6 +608,7 @@ static inline bool demo_check(const char *tag, bool ok, const char *fmt, ...)
 }
 
 #include "demo_debug.h"
+#include "demo_panel.h"
 
 /* ── Viewer ───────────────────────────────────────────────────────────── */
 
@@ -637,6 +638,13 @@ typedef struct demo_viewer {
     bool                           solid;            /* F1: solid / wireframe */
     demo_world_t                  *world;
     demo_debug_t                   dbg;              /* hover, selection, overlays */
+    demo_panel_t                   panel;            /* F5: parameters */
+    bool                           ui_captured;      /* the panel owns the mouse */
+    float                          p_gravity;        /* panel values, see demo_ui_apply */
+    float                          p_gravity_dir[3];
+    float                          p_sun_az, p_sun_el;  /* degrees */
+    float                          p_ambient;
+    bool                           p_shadows;
     bool                           prev_lmb;
     demo_mesh_entry_t              meshes[DEMO_MESH_CACHE];
     int                            n_meshes;
@@ -660,6 +668,39 @@ static inline void demo_camera_setup(ivp_camera_t *cam, const demo_config_t *cfg
     ivp_camera_update_orbit(cam);
 }
 
+/* Push the panel values to the renderer and the world. */
+static inline void demo_ui_apply(void *ctx)
+{
+    demo_viewer_t *v = (demo_viewer_t *)ctx;
+    const float d2r = 3.14159265358979f / 180.0f;
+    float az = v->p_sun_az * d2r, el = v->p_sun_el * d2r;
+    /* direction towards the sun; up is -Y in IVP worlds */
+    float dir[3] = { cosf(el) * cosf(az), -sinf(el), cosf(el) * sinf(az) };
+    if (v->renderer) {
+        ivp_render_set_light_dir(v->renderer, dir);
+        ivp_render_set_ambient(v->renderer, v->p_ambient);
+        ivp_render_set_shadows(v->renderer, v->p_shadows);
+    }
+    if (v->world && v->p_gravity >= 0.0f) {
+        ivp_vec3r_t g = ivp_vec3r((ivp_real_t)(v->p_gravity_dir[0] * v->p_gravity),
+                                  (ivp_real_t)(v->p_gravity_dir[1] * v->p_gravity),
+                                  (ivp_real_t)(v->p_gravity_dir[2] * v->p_gravity));
+        ivp_environment_set_gravity(v->world->env, &g);
+    }
+}
+
+/* Register an example parameter in the F5 panel (call from viewer_init). */
+static inline void demo_param_float(demo_viewer_t *v, const char *label, float *value,
+                                    float lo, float hi)
+{
+    demo_panel_add_float(&v->panel, label, value, lo, hi, NULL, NULL);
+}
+
+static inline void demo_param_bool(demo_viewer_t *v, const char *label, bool *value)
+{
+    demo_panel_add_bool(&v->panel, label, value, NULL, NULL);
+}
+
 static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
                                     demo_world_t *w)
 {
@@ -681,6 +722,34 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
     v->world = w;
     demo_debug_init(&v->dbg, w->env);
 
+    /* F5 panel: world and light, then whatever the example registers */
+    demo_panel_init(&v->panel);
+    {
+        ivp_vec3r_t g;
+        ivp_environment_get_gravity(w->env, &g);
+        float gx = (float)g.k[0], gy = (float)g.k[1], gz = (float)g.k[2];
+        float mag = sqrtf(gx * gx + gy * gy + gz * gz);
+        v->p_gravity = mag > 1e-6f ? mag : -1.0f;      /* no gravity: no slider */
+        if (mag > 1e-6f) {
+            v->p_gravity_dir[0] = gx / mag;
+            v->p_gravity_dir[1] = gy / mag;
+            v->p_gravity_dir[2] = gz / mag;
+        }
+        v->p_sun_az = 311.6f;      /* matches the renderer's default light */
+        v->p_sun_el = 53.0f;
+        v->p_ambient = 0.45f;
+        v->p_shadows = true;
+        if (v->p_gravity >= 0.0f)
+            demo_panel_add_float(&v->panel, "Gravity", &v->p_gravity, 0.0f, 30.0f, demo_ui_apply, v);
+        demo_panel_add_float(&v->panel, "Time scale", &v->loop.speed, SIM_SPEED_MIN, SIM_SPEED_MAX,
+                             NULL, NULL);
+        demo_panel_add_float(&v->panel, "Sun direction", &v->p_sun_az, 0.0f, 360.0f, demo_ui_apply, v);
+        demo_panel_add_float(&v->panel, "Sun height", &v->p_sun_el, 10.0f, 90.0f, demo_ui_apply, v);
+        demo_panel_add_float(&v->panel, "Ambient", &v->p_ambient, 0.0f, 1.0f, demo_ui_apply, v);
+        demo_panel_add_bool(&v->panel, "Shadows", &v->p_shadows, demo_ui_apply, v);
+        demo_panel_add_bool(&v->panel, "Solid (F1)", &v->solid, NULL, NULL);
+    }
+
     demo_camera_setup(&v->cam, cfg);
     ivp_camera_store_defaults(&v->cam_defaults, &v->cam);
 
@@ -690,6 +759,7 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
     ivp_example_input_tracker_init(&v->input);
     ivp_example_inspector_init(&v->inspector, cfg->tag);
     sim_loop_init(&v->loop, v->renderer);
+    demo_ui_apply(v);
     if (cfg->sim_dt > 0.0f) v->loop.sim_dt = cfg->sim_dt;
     if (cfg->max_substeps > 0) v->loop.max_substeps = cfg->max_substeps;
     return true;
@@ -764,13 +834,21 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
         float mx, my, ro[3], rd[3];
         SDL_MouseButtonFlags btn = SDL_GetMouseState(&mx, &my);
         bool lmb = (btn & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
-        ivp_render_unproject_ray(v->renderer, mx, my, ro, rd);
-        v->dbg.hover = demo_pick_object(w->env, ro, rd, NULL);
-        if (lmb && !v->prev_lmb) v->dbg.selected = v->dbg.hover;
+        if (demo_key_just_pressed(v, SDL_SCANCODE_F5)) v->panel.open = !v->panel.open;
+        v->ui_captured = demo_panel_update(&v->panel, v->win_w, 150.0f, mx, my, lmb);
+        if (v->ui_captured) {
+            v->dbg.hover = NULL;
+        } else {
+            ivp_render_unproject_ray(v->renderer, mx, my, ro, rd);
+            v->dbg.hover = demo_pick_object(w->env, ro, rd, NULL);
+            if (lmb && !v->prev_lmb) v->dbg.selected = v->dbg.hover;
+        }
         v->prev_lmb = lmb;
         if (demo_key_just_pressed(v, SDL_SCANCODE_ESCAPE)) v->dbg.selected = NULL;
     }
-    ivp_example_dragger_update(&v->dragger, &v->cam, w->env, v->win_w, v->win_h, v->frame_dt);
+    /* the panel keeps the mouse to itself unless a drag is already running */
+    if (!v->ui_captured || v->dragger.active)
+        ivp_example_dragger_update(&v->dragger, &v->cam, w->env, v->win_w, v->win_h, v->frame_dt);
     ivp_example_focus_update(&v->focus, &v->cam, w->env, v->frame_dt);
     v->hud_y = 32.0f;
     return true;
@@ -848,7 +926,7 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
         y += 18.0f;
     }
     ivp_render_draw_text(v->renderer, 10.0f, y,
-                         "Enter:pause  .:step  [ ]:speed  F1:wire  F2:axes  F3:velocity  F4:impacts  Click:select",
+                         "Enter:pause  .:step  [ ]:speed  F1:wire  F2:axes  F3:vel  F4:impacts  F5:panel  Click:select",
                          DEMO_COL_HELP);
     y += 18.0f;
     ivp_example_draw_interaction_hud(v->renderer, 10.0f, y, DEMO_COL_HELP, DEMO_COL_HELP);
@@ -1427,8 +1505,8 @@ static inline const char *demo_screenshot_arg(int argc, char **argv, int *frames
     return NULL;
 }
 
-/* `--overlays`: start with the F2-F4 overlays on and the first dynamic
- * object selected (for screenshots). */
+/* `--overlays`: start with the F2-F4 overlays and the F5 panel on and the
+ * first dynamic object selected (for screenshots). */
 static inline bool demo_has_arg(int argc, char **argv, const char *name)
 {
     for (int i = 1; i < argc; i++)
@@ -1439,6 +1517,7 @@ static inline bool demo_has_arg(int argc, char **argv, const char *name)
 static inline void demo_apply_overlays(demo_viewer_t *v, demo_world_t *w)
 {
     v->dbg.show_axes = v->dbg.show_velocity = v->dbg.show_impacts = true;
+    v->panel.open = true;
     int n = ivp_environment_get_object_count(w->env);
     for (int i = 0; i < n; i++) {
         ivp_object_t *obj = ivp_environment_get_object(w->env, i);
@@ -1473,6 +1552,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
         if (app->draw) app->draw(app, v);
         demo_debug_draw(v);
         demo_debug_panel(v);
+        demo_panel_draw(&v->panel, v->renderer);
         if (app->stats && ivp_example_inspector_tick(&v->inspector)) {
             char buf[512];
             buf[0] = '\0';
