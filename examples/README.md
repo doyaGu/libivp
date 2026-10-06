@@ -83,6 +83,7 @@ Geometry:
 | Example | Shows |
 |---|---|
 | `shapes` | convex hulls (cylinders, cones, prisms, pyramids ...) built with the qhull based builder |
+| `workshop` | the builders on raw geometry: a convex hull of a point soup, convex n-gon and triangle polygons, the inertia solver against the exact tensor, a brick wall compiled top-down and bottom-up, and a solid from a Quake-style BSP tree |
 | `cut`, `ring`, `3ds_import` | chopping a surface, a concave ring from a ledge soup, loading a `.3ds` file |
 | `terrain` | a heightfield as a compact grid with bodies rolling into the valleys |
 | `concave` | closed triangle meshes (L, plus, star, crescent, a bowl) cut into convex parts by `ivp_build_concave_surface`; balls dropped into the bowl stay in it |
