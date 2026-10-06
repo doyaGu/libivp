@@ -31,7 +31,36 @@ typedef struct springs_demo {
     float              late_bridge_force;                /* max |force| after 1.5 s */
     float              early_min, early_max;             /* bridge centre height 1..4 s */
     float              late_min, late_max;               /* 7..10 s */
+    /* F5 panel */
+    ivp_environment_t *env;
+    float              bridge_k, bridge_damp, bungee_k;
 } springs_demo_t;
+
+/* Push the panel values to the springs (the first N_BRIDGE + 1 are the
+ * bridge, the next one the bungee) and wake the bodies they hold. The
+ * springs act explicitly once per PSI, so a damping much above 20 N*s/m
+ * makes the 0.6 kg nodes overshoot (see the comment at the bridge). */
+static void springs_apply(void *ctx)
+{
+    springs_demo_t *s = (springs_demo_t *)ctx;
+    for (int i = 0; i <= N_BRIDGE; i++) {
+        ivp_spring_set_constant(&s->springs[i], (ivp_real_t)s->bridge_k);
+        ivp_spring_set_damp(&s->springs[i], (ivp_real_t)s->bridge_damp);
+    }
+    ivp_spring_set_constant(&s->springs[N_BRIDGE + 1], (ivp_real_t)s->bungee_k);
+    for (int i = 0; i < N_BRIDGE; i++) ivp_environment_ensure_core_in_simulation(s->env, s->nodes[i]);
+    ivp_environment_ensure_core_in_simulation(s->env, s->ball);
+    ivp_environment_ensure_core_in_simulation(s->env, s->bungee);
+}
+
+static void springs_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    springs_demo_t *s = (springs_demo_t *)app->user;
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "bridge k",   &s->bridge_k,    50.0f, 1200.0f, springs_apply, s);
+    demo_panel_add_float(p, "bridge damping",   &s->bridge_damp, 0.0f,  20.0f,   springs_apply, s);
+    demo_panel_add_float(p, "bungee k",   &s->bungee_k,    5.0f,  120.0f,  springs_apply, s);
+}
 
 static float bridge_mean_y(const springs_demo_t *s)
 {
@@ -121,7 +150,7 @@ static void springs_draw(demo_app_t *app, demo_viewer_t *v)
     demo_hud(v, DEMO_COL_INFO, "Bridge sag %.2f m (max %.2f)  max spring force %.1f N (clamp 80)",
              (double)(bridge_mean_y(s) - BRIDGE_Y), (double)s->max_bridge_sag, (double)s->max_bridge_force);
     demo_hud(v, c_bungee, "Bungee length %.2f m (rest %.1f, k=%.0f N/m)",
-             (double)s->springs[N_BRIDGE + 1].current_length, BUNGEE_REST, BUNGEE_K);
+             (double)s->springs[N_BRIDGE + 1].current_length, BUNGEE_REST, (double)s->bungee_k);
 }
 
 static void springs_stats(demo_app_t *app, char *buf, size_t size)
@@ -293,8 +322,13 @@ int main(int argc, char **argv)
     add_spring(&app, s->anchor, ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.3), IVP_REAL(0.0)),
                s->bungee, ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.6), IVP_REAL(0.0)),
                BUNGEE_K, 12.0, BUNGEE_REST, 60.0);
+    s->env = w->env;
+    s->bridge_k = (float)BRIDGE_K;
+    s->bridge_damp = (float)BRIDGE_DAMP;
+    s->bungee_k = (float)BUNGEE_K;
     reset_tracking(s);
 
+    app.viewer_init = springs_viewer_init;
     app.update   = springs_update;
     app.on_reset = springs_reset;
     app.draw     = springs_draw;
