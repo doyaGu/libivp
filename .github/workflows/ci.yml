@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y glslang-tools libx11-dev libxext-dev libxrandr-dev \
-            libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev \
+            libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev \
             libxkbcommon-dev libegl-dev libgl-dev libasound2-dev libudev-dev
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
