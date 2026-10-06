@@ -185,10 +185,10 @@ int main(int argc, char **argv)
     demo_config_defaults(&app.cfg);
     app.cfg.title        = "IVP Stiff Spring -- Regular vs Implicit";
     app.cfg.tag          = "stiff_spring";
-    app.cfg.orbit_dist   = 28.0f;
+    app.cfg.orbit_dist   = 20.0f;
     app.cfg.orbit_yaw    = 0.0f;
     app.cfg.orbit_pitch  = -15.0f;
-    app.cfg.target[1]    = -5.0f;
+    app.cfg.target[1]    = -7.0f;
     app.cfg.grid_extent  = 20.0f;
     app.cfg.grid_spacing = 2.0f;
 

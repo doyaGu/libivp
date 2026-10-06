@@ -167,7 +167,7 @@ int main(int argc, char **argv)
     demo_config_defaults(&app.cfg);
     app.cfg.title       = "IVP Example: Snowflake";
     app.cfg.tag         = "snowflake";
-    app.cfg.orbit_dist  = 25.0f;
+    app.cfg.orbit_dist  = 12.0f;
     app.cfg.orbit_pitch = -25.0f;
     app.cfg.target[1]   = -2.0f;
     app.cfg.friction    = 0.5;

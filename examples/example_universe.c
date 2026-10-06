@@ -236,7 +236,7 @@ int main(int argc, char **argv)
     demo_config_defaults(&app.cfg);
     app.cfg.title       = "IVP Example: Universe Manager";
     app.cfg.tag         = "universe";
-    app.cfg.orbit_dist  = 28.0f;
+    app.cfg.orbit_dist  = 17.0f;
     app.cfg.orbit_pitch = -35.0f;
     app.cfg.target[1]   = -1.0f;
     app.cfg.friction    = 0.5;

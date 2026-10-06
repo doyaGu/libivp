@@ -172,11 +172,11 @@ int main(int argc, char **argv)
     demo_config_defaults(&app.cfg);
     app.cfg.title        = "IVP 3DS Import Example";
     app.cfg.tag          = "3ds_import";
-    app.cfg.orbit_dist   = 15.0f;
+    app.cfg.orbit_dist   = 8.0f;
     app.cfg.orbit_yaw    = 25.0f;
     app.cfg.orbit_pitch  = -20.0f;
-    app.cfg.target[1]    = -3.0f;
-    app.cfg.grid_extent  = 20.0f;
+    app.cfg.target[1]    = -0.8f;
+    app.cfg.grid_extent  = 8.0f;
 
     import_demo_t *s = (import_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
@@ -196,7 +196,7 @@ int main(int argc, char **argv)
     ivp_object_template_init(&gt);
     gt.mass = IVP_REAL(0.0);
     gt.physical_unmoveable = true;
-    s->ground = demo_create_box_templ(w, &gt, 20.0, 0.5, 20.0);
+    s->ground = demo_create_box_templ(w, &gt, 8.0, 0.5, 8.0);
 
     /* Dynamic imported object (inertia from the compact surface) */
     ivp_object_template_t ot;
