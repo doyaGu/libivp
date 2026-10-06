@@ -140,10 +140,10 @@ typedef struct rect_vertex {
     float col[4];
 } rect_vertex_t;
 
-static void push_rect(ivp_renderer_t *r, float x, float y, float w, float h,
-                      const float col[3], float alpha)
+static void push_rect_layer(ivp_renderer_t *r, int layer, float x, float y, float w,
+                            float h, const float col[3], float alpha)
 {
-    rect_vertex_t *v = (rect_vertex_t *)ivp_gpu_stream_push(&r->stream_rect, 6);
+    rect_vertex_t *v = (rect_vertex_t *)ivp_gpu_stream_push(&r->stream_rect[layer], 6);
     if (!v) return;
     const float xs[6] = { x, x + w, x, x + w, x + w, x };
     const float ys[6] = { y, y,     y + h, y,   y + h, y + h };
@@ -157,10 +157,45 @@ static void push_rect(ivp_renderer_t *r, float x, float y, float w, float h,
     }
 }
 
+static void push_rect(ivp_renderer_t *r, float x, float y, float w, float h,
+                      const float col[3], float alpha)
+{
+    push_rect_layer(r, IVP_RECT_FRONT, x, y, w, h, col, alpha);
+}
+
 void ivp_render_draw_rect(ivp_renderer_t *r, float x, float y, float w, float h,
                           const float color[3], float alpha)
 {
     push_rect(r, x, y, w, h, color, alpha);
+}
+
+void ivp_render_draw_panel(ivp_renderer_t *r, float x, float y, float w, float h,
+                           const float color[3], float alpha)
+{
+    push_rect_layer(r, IVP_RECT_PANEL, x, y, w, h, color, alpha);
+}
+
+void ivp_render_set_backdrop(ivp_renderer_t *r, const float top[3], const float bottom[3])
+{
+    if (!top || !bottom) { r->backdrop_on = false; return; }
+    memcpy(r->backdrop_top, top, sizeof(r->backdrop_top));
+    memcpy(r->backdrop_bottom, bottom, sizeof(r->backdrop_bottom));
+    r->backdrop_on = true;
+}
+
+void ivp_hud_push_backdrop(ivp_renderer_t *r)
+{
+    rect_vertex_t *v = (rect_vertex_t *)ivp_gpu_stream_push(&r->stream_rect[IVP_RECT_BACKDROP], 6);
+    if (!v) return;
+    const float w = (float)r->width, h = (float)r->height;
+    const float xs[6] = { 0, w, 0, w, w, 0 };
+    const float ys[6] = { 0, 0, h, 0, h, h };
+    const int bottom[6] = { 0, 0, 1, 0, 1, 1 };
+    for (int i = 0; i < 6; i++) {
+        const float *c = bottom[i] ? r->backdrop_bottom : r->backdrop_top;
+        v[i].pos[0] = xs[i];  v[i].pos[1] = ys[i];
+        v[i].col[0] = c[0];   v[i].col[1] = c[1];   v[i].col[2] = c[2];   v[i].col[3] = 1.0f;
+    }
 }
 
 /* ── Text drawing ──────────────────────────────────────────────────────── */

@@ -254,27 +254,32 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         }
     }
 
-    /* 2D filled rectangles: panels and text.  Position + rgba, blended. */
+    /* 2D filled rectangles in three layers.  Position + rgba, blended. */
     {
         ivp_gpu_attrib_desc_t attrs[2] = {
             { 0, 2, 0 },
             { 1, 4, 2 * (int)sizeof(float) },
         };
-        ivp_gpu_stream_desc_t desc = {0};
-        desc.capacity     = cfg.max_hud_vertices * 4;
-        desc.stride       = 6 * (int)sizeof(float);
-        desc.attribs      = attrs;
-        desc.attrib_count = 2;
-        desc.blend        = true;
-        desc.depth_always = true;   /* same pass as the scene: keep its depth target */
-        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-        res = ivp_gpu_stream_create(&r->stream_rect, &r->gpu, &desc,
-                                    r->shaders.vs_rect, r->shaders.vs_rect_len,
-                                    r->shaders.fs_rect, r->shaders.fs_rect_len);
-        if (res != IVP_OK) {
-            ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
-            ivp_proto_shapes_destroy(&r->protos, &r->gpu);
-            goto fail_inst;
+        const int caps[3] = { 64, 4096, cfg.max_hud_vertices * 4 };
+        for (int i = 0; i < 3; i++) {
+            ivp_gpu_stream_desc_t desc = {0};
+            desc.capacity     = caps[i];
+            desc.stride       = 6 * (int)sizeof(float);
+            desc.attribs      = attrs;
+            desc.attrib_count = 2;
+            desc.blend        = true;
+            desc.depth_always = true;   /* same pass as the scene: keep its depth target */
+            desc.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+            res = ivp_gpu_stream_create(&r->stream_rect[i], &r->gpu, &desc,
+                                        r->shaders.vs_rect, r->shaders.vs_rect_len,
+                                        r->shaders.fs_rect, r->shaders.fs_rect_len);
+            if (res != IVP_OK) {
+                for (int k = 0; k < i; k++)
+                    ivp_gpu_stream_destroy(&r->stream_rect[k], &r->gpu);
+                ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
+                ivp_proto_shapes_destroy(&r->protos, &r->gpu);
+                goto fail_inst;
+            }
         }
     }
 
@@ -351,7 +356,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
     ivp_capture_destroy(r);
     ivp_shadow_destroy(r);
-    ivp_gpu_stream_destroy(&r->stream_rect, &r->gpu);
+    for (int i = 0; i < 3; i++) ivp_gpu_stream_destroy(&r->stream_rect[i], &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
     ivp_solid_destroy_meshes(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
@@ -461,7 +466,7 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_gpu_stream_reset(&r->stream_2d);
     ivp_gpu_stream_reset(&r->stream_tri);
     ivp_gpu_stream_reset(&r->stream_overlay);
-    ivp_gpu_stream_reset(&r->stream_rect);
+    for (int i = 0; i < 3; i++) ivp_gpu_stream_reset(&r->stream_rect[i]);
     r->overlay_mode = false;
     ivp_solid_begin_frame(r);
     r->culled_count = 0;
@@ -472,12 +477,15 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
 {
     if (!r->cmd || !r->swapchain_tex) return;
 
+    /* Sky gradient: a window sized quad in the first rectangle layer */
+    if (r->backdrop_on) ivp_hud_push_backdrop(r);
+
     /* Upload all streams + instance buffers */
     ivp_gpu_stream_upload(&r->stream_3d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_overlay, &r->gpu, r->cmd);
-    ivp_gpu_stream_upload(&r->stream_rect, &r->gpu, r->cmd);
+    for (int i = 0; i < 3; i++) ivp_gpu_stream_upload(&r->stream_rect[i], &r->gpu, r->cmd);
     ivp_solid_upload(r);
 
     /* Depth pass from the light, before the main pass reads it */
@@ -525,6 +533,13 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
 
     SDL_GPUViewport vp = { 0, 0, (float)r->width, (float)r->height, 0.0f, 1.0f };
     SDL_SetGPUViewport(pass, &vp);
+
+    /* 2D projection shared by the rectangle layers and the HUD lines */
+    float ortho[16];
+    ivp_render_mat4_ortho(ortho, 0.0f, (float)r->width, (float)r->height, 0.0f, -1.0f, 1.0f);
+
+    /* ── Backdrop first, the scene draws over it ───────────────────────── */
+    ivp_gpu_stream_draw(&r->stream_rect[IVP_RECT_BACKDROP], pass, r->cmd, ortho, 64);
 
     /* ── 3D wireframe draw (push constant = VP matrix, 64 bytes) ──────── */
     ivp_gpu_stream_draw(&r->stream_3d, pass, r->cmd,
@@ -591,14 +606,10 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     /* ── Overlay lines: after the solids, no depth test ──────────────── */
     ivp_gpu_stream_draw(&r->stream_overlay, pass, r->cmd, r->vp_mat, 64);
 
-    /* ── 2D HUD overlay (ortho matrix, 64 bytes) ─────────────────────── */
-    {
-        float ortho[16];
-        ivp_render_mat4_ortho(ortho, 0.0f, (float)r->width,
-                              (float)r->height, 0.0f, -1.0f, 1.0f);
-        ivp_gpu_stream_draw(&r->stream_rect, pass, r->cmd, ortho, 64);
-        ivp_gpu_stream_draw(&r->stream_2d, pass, r->cmd, ortho, 64);
-    }
+    /* ── 2D HUD: panels, then text and widgets, then lines ──────────────── */
+    ivp_gpu_stream_draw(&r->stream_rect[IVP_RECT_PANEL], pass, r->cmd, ortho, 64);
+    ivp_gpu_stream_draw(&r->stream_rect[IVP_RECT_FRONT], pass, r->cmd, ortho, 64);
+    ivp_gpu_stream_draw(&r->stream_2d, pass, r->cmd, ortho, 64);
 
     SDL_EndGPURenderPass(pass);
 
@@ -621,7 +632,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_advance(&r->stream_2d, NULL);
     ivp_gpu_stream_advance(&r->stream_tri, NULL);
     ivp_gpu_stream_advance(&r->stream_overlay, NULL);
-    ivp_gpu_stream_advance(&r->stream_rect, NULL);
+    for (int i = 0; i < 3; i++) ivp_gpu_stream_advance(&r->stream_rect[i], NULL);
     ivp_solid_advance(r);
 
     r->cmd = NULL;

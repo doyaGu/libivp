@@ -296,6 +296,13 @@ void ivp_render_set_ambient(ivp_renderer_t *r, float ambient);
 void ivp_render_draw_rect(ivp_renderer_t *r, float x, float y, float w, float h,
                           const float color[3], float alpha);
 
+/* Same, but under the text and widgets of the frame (a backing plate). */
+void ivp_render_draw_panel(ivp_renderer_t *r, float x, float y, float w, float h,
+                           const float color[3], float alpha);
+
+/* Vertical gradient behind the scene (NULL, NULL = plain clear colour). */
+void ivp_render_set_backdrop(ivp_renderer_t *r, const float top[3], const float bottom[3]);
+
 void ivp_render_draw_text(ivp_renderer_t *r,
                           float x, float y,
                           const char *text,
