@@ -564,6 +564,7 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_stats.c
         src/render/ivp_render_frustum.c
         src/render/ivp_render_solid.c
+        src/render/ivp_render_capture.c
     )
     add_library(ivp_render STATIC ${IVP_RENDER_SOURCES})
     add_dependencies(ivp_render ivp_render_shaders)

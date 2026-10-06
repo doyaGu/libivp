@@ -303,6 +303,13 @@ typedef struct ivp_render_stats {
     float fps;
 } ivp_render_stats_t;
 
+/* ── Screenshots ───────────────────────────────────────────────────────── */
+
+/* Save the next completed frame (HUD included) as an RGB PNG.  The file is
+ * written when ivp_renderer_end_frame returns; NULL cancels a pending request. */
+void ivp_render_request_capture(ivp_renderer_t *r, const char *png_path);
+bool ivp_render_capture_pending(const ivp_renderer_t *r);
+
 void ivp_render_stats_get(const ivp_renderer_t *r, ivp_render_stats_t *stats);
 
 #ifdef __cplusplus

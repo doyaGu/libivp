@@ -74,6 +74,14 @@ typedef struct ivp_solid_instance {
 ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
 void         ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
 
+/* ── Screenshot hooks (defined in ivp_render_capture.c) ────────────────── */
+
+bool ivp_png_write_rgb(const char *path, const unsigned char *rgb, int w, int h);
+SDL_GPUTexture *ivp_capture_target(ivp_renderer_t *r);   /* NULL: not capturing */
+void ivp_capture_record(ivp_renderer_t *r);              /* blit + download */
+void ivp_capture_finish(ivp_renderer_t *r, SDL_GPUFence *fence);
+void ivp_capture_destroy(ivp_renderer_t *r);
+
 /* ── Renderer struct ───────────────────────────────────────────────────── */
 
 struct ivp_renderer {
@@ -127,6 +135,12 @@ struct ivp_renderer {
 
     /* Callbacks */
     ivp_render_callbacks_t   callbacks;
+
+    /* Screenshot (ivp_render_capture.c) */
+    char                     capture_path[512];
+    SDL_GPUTexture          *capture_tex;
+    SDL_GPUTransferBuffer   *capture_tb;
+    int                      capture_w, capture_h;
 
     /* Per-frame GPU command state (valid between begin_frame / end_frame) */
     SDL_GPUCommandBuffer    *cmd;

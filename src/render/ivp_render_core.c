@@ -284,6 +284,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
     }
 
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
+    ivp_capture_destroy(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
     if (r->inst_pipeline && r->gpu.device) {
         SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
@@ -407,17 +408,21 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     SDL_GPUColorTargetInfo ct = {0};
     SDL_GPUDepthStencilTargetInfo dt = {0};
 
+    /* A capture frame renders into the renderer's own texture instead. */
+    SDL_GPUTexture *out_tex = ivp_capture_target(r);
+    if (!out_tex) out_tex = r->swapchain_tex;
+
     if (r->msaa.enabled) {
         /* Render to MSAA color target, resolve to swapchain */
         ct.texture         = r->msaa.color_tex;
-        ct.resolve_texture = r->swapchain_tex;
+        ct.resolve_texture = out_tex;
         ct.load_op         = SDL_GPU_LOADOP_CLEAR;
         ct.store_op        = SDL_GPU_STOREOP_RESOLVE;
         ct.clear_color     = (SDL_FColor){ r->clear_col[0], r->clear_col[1],
                                             r->clear_col[2], r->clear_col[3] };
         dt.texture         = r->msaa.depth_tex;
     } else {
-        ct.texture     = r->swapchain_tex;
+        ct.texture     = out_tex;
         ct.load_op     = SDL_GPU_LOADOP_CLEAR;
         ct.store_op    = SDL_GPU_STOREOP_STORE;
         ct.clear_color = (SDL_FColor){ r->clear_col[0], r->clear_col[1],
@@ -503,8 +508,11 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     if (r->callbacks.pre_swap_cb)
         r->callbacks.pre_swap_cb(r->callbacks.pre_swap_cb_ud);
 
+    ivp_capture_record(r);
+
     /* Submit and acquire fence for triple-buffering */
     SDL_GPUFence *frame_fence = SDL_SubmitGPUCommandBufferAndAcquireFence(r->cmd);
+    ivp_capture_finish(r, frame_fence);
 
     /* Store frame fence in the ring (released in begin_frame 3 frames later) */
     r->frame_fences[r->frame_ring] = frame_fence;
