@@ -62,6 +62,7 @@ static const card_t cards[] = {
     { "universe",         0, "Streaming static objects in and out of the simulation." },
     { "buoyancy",         0, "Bodies of different density in water with a current." },
     { "friction",         0, "Contact friction and the three world friction modes." },
+    { "psi_listener",     0, "A PSI listener records trails and an energy chart." },
     /* geometry */
     { "shapes",           1, "Convex hulls: cylinders, cones, prisms, pyramids." },
     { "cut",              1, "Chopping a compact surface into two pieces." },
