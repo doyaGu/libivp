@@ -70,6 +70,7 @@ endfunction()
 # self-check (exit code 1 on failure).
 ivp_add_example(example_freefall example_freefall.c)
 ivp_add_example(example_cubes example_cubes.c)
+ivp_add_example(example_shapes example_shapes.c)
 ivp_add_example(example_springs example_springs.c)
 ivp_add_example(example_rope example_rope.c)
 ivp_add_example(example_buoyancy example_buoyancy.c)

@@ -609,6 +609,16 @@ static inline bool demo_check(const char *tag, bool ok, const char *fmt, ...)
 
 /* ── Viewer ───────────────────────────────────────────────────────────── */
 
+/* Solid meshes of polygon bodies, built from the compact surface on first
+ * use.  The key is the object; the signature (triangle count + coordinate
+ * sum) detects a recycled address with a different shape. */
+#define DEMO_MESH_CACHE 512
+typedef struct demo_mesh_entry {
+    const void        *key;
+    unsigned           sig;
+    ivp_render_mesh_t *mesh;
+} demo_mesh_entry_t;
+
 typedef struct demo_viewer {
     ivp_renderer_t                *renderer;
     ivp_camera_t                   cam;
@@ -622,6 +632,9 @@ typedef struct demo_viewer {
     float                          frame_dt;
     int                            win_w, win_h;
     bool                           reset_requested;  /* Space this frame */
+    bool                           solid;            /* F1: solid / wireframe */
+    demo_mesh_entry_t              meshes[DEMO_MESH_CACHE];
+    int                            n_meshes;
     float                          hud_y;
     bool                           key_prev[SDL_SCANCODE_COUNT];
     /* primitives submitted by the draw callbacks; with renderer == NULL
@@ -659,6 +672,7 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
     }
     ivp_renderer_set_clear_color(v->renderer, 0.26f, 0.30f, 0.36f, 1.0f);
     v->title = cfg->title;
+    v->solid = true;
 
     demo_camera_setup(&v->cam, cfg);
     ivp_camera_store_defaults(&v->cam_defaults, &v->cam);
@@ -677,6 +691,8 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
 static inline void demo_viewer_destroy(demo_viewer_t *v, demo_world_t *w)
 {
     ivp_example_dragger_detach(&v->dragger, w->env);
+    for (int i = 0; i < v->n_meshes; i++) ivp_render_mesh_destroy(v->meshes[i].mesh);
+    v->n_meshes = 0;
     if (v->renderer) ivp_renderer_destroy(v->renderer);
     v->renderer = NULL;
 }
@@ -711,6 +727,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
     v->frame_dt = sim_loop_begin(&v->loop, v->renderer);
 
     ivp_example_input_tracker_update(&v->input);
+    if (demo_key_just_pressed(v, SDL_SCANCODE_F1)) v->solid = !v->solid;
     v->reset_requested = false;
     if (v->input.scene_reset_requested) {
         demo_world_restore_state(w);
@@ -963,17 +980,138 @@ static inline void demo_draw_surface(demo_viewer_t *v, const ivp_object_t *obj,
     ivp_surman_get_all_terminal_ledges(obj->surman, demo_wire_ledge, &c);
 }
 
-/* ive::draw_object_box / draw_object_ball for any helper-created object. */
+/* ── Solid meshes of compact surfaces ─────────────────────────────────── */
+
+typedef struct demo_mesh_ctx {
+    float    *pos;       /* 9 floats per triangle, NULL while counting */
+    int       n_tri;
+    unsigned  sig;
+} demo_mesh_ctx_t;
+
+/* Triangles of one convex ledge, wound counter-clockwise seen from outside
+ * (flipped away from the ledge centroid when the compact winding differs). */
+static inline void demo_mesh_ledge(void *ctx, const ivp_compact_ledge_t *ledge)
+{
+    demo_mesh_ctx_t *c = (demo_mesh_ctx_t *)ctx;
+    const ivp_compact_poly_point_t *pts = ivp_ledge_get_point_array(ledge);
+    const ivp_compact_triangle_t *tris = ivp_ledge_get_first_triangle(ledge);
+    int n_tri = ivp_ledge_get_n_triangles(ledge);
+
+    float centre[3] = { 0.0f, 0.0f, 0.0f };
+    if (c->pos) {
+        for (int t = 0; t < n_tri; t++)
+            for (int e = 0; e < 3; e++) {
+                const float *p = pts[ivp_edge_get_start_point_index(&tris[t].edges[e])].k;
+                for (int k = 0; k < 3; k++) centre[k] += p[k];
+            }
+        for (int k = 0; k < 3; k++) centre[k] /= (float)(3 * n_tri > 0 ? 3 * n_tri : 1);
+    }
+    for (int t = 0; t < n_tri; t++) {
+        const float *p[3];
+        for (int e = 0; e < 3; e++) p[e] = pts[ivp_edge_get_start_point_index(&tris[t].edges[e])].k;
+        if (c->pos) {
+            float u[3] = { p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2] };
+            float w[3] = { p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2] };
+            float n[3] = { u[1]*w[2]-u[2]*w[1], u[2]*w[0]-u[0]*w[2], u[0]*w[1]-u[1]*w[0] };
+            float out = n[0]*(p[0][0]-centre[0]) + n[1]*(p[0][1]-centre[1]) + n[2]*(p[0][2]-centre[2]);
+            const int order[3] = { 0, out < 0.0f ? 2 : 1, out < 0.0f ? 1 : 2 };
+            float *dst = c->pos + 9 * c->n_tri;
+            for (int e = 0; e < 3; e++) memcpy(dst + 3 * e, p[order[e]], 3 * sizeof(float));
+        }
+        for (int e = 0; e < 3; e++) c->sig = c->sig * 31u + (unsigned)(int)(p[e][0] * 1024.0f)
+                                                        + (unsigned)(int)(p[e][1] * 512.0f)
+                                                        + (unsigned)(int)(p[e][2] * 256.0f);
+        c->n_tri++;
+    }
+}
+
+/* Mesh for the object's surface, or NULL (no renderer, empty, too big). */
+static inline ivp_render_mesh_t *demo_surface_mesh(demo_viewer_t *v, const ivp_object_t *obj)
+{
+    if (!v->renderer || !obj->surman) return NULL;
+
+    demo_mesh_ctx_t count = { NULL, 0, 0 };
+    ivp_surman_get_all_terminal_ledges(obj->surman, demo_mesh_ledge, &count);
+
+    demo_mesh_entry_t *e = NULL;
+    for (int i = 0; i < v->n_meshes; i++)
+        if (v->meshes[i].key == obj) { e = &v->meshes[i]; break; }
+    if (e && e->sig == count.sig) return e->mesh;
+    if (!e && v->n_meshes >= DEMO_MESH_CACHE) return NULL;
+    if (count.n_tri <= 0) return NULL;
+
+    float *pos = (float *)malloc((size_t)count.n_tri * 9 * sizeof(float));
+    int *idx = (int *)malloc((size_t)count.n_tri * 3 * sizeof(int));
+    ivp_render_mesh_t *mesh = NULL;
+    if (pos && idx) {
+        demo_mesh_ctx_t fill = { pos, 0, 0 };
+        ivp_surman_get_all_terminal_ledges(obj->surman, demo_mesh_ledge, &fill);
+        for (int i = 0; i < count.n_tri * 3; i++) idx[i] = i;
+        mesh = ivp_render_mesh_create(v->renderer, pos, count.n_tri * 3, idx, count.n_tri);
+    }
+    free(pos);
+    free(idx);
+    if (!e) e = &v->meshes[v->n_meshes++];
+    else ivp_render_mesh_destroy(e->mesh);       /* address reused, new shape */
+    e->key = obj;
+    e->sig = count.sig;
+    e->mesh = mesh;
+    return mesh;
+}
+
+static inline void demo_solid_mesh(demo_viewer_t *v, ivp_render_mesh_t *mesh,
+                                   const float pos[3], const float rot[9],
+                                   const float color[3])
+{
+    bool draw = demo_prim(v, pos, rot);
+    if (!(demo_finite3(rot) && demo_finite3(rot + 3) && demo_finite3(rot + 6))) {
+        v->n_bad_prims++;
+        draw = false;
+    }
+    if (!draw || !mesh) return;
+    float m[16] = {
+        rot[0], rot[1], rot[2], 0.0f,
+        rot[3], rot[4], rot[5], 0.0f,
+        rot[6], rot[7], rot[8], 0.0f,
+        pos[0], pos[1], pos[2], 1.0f };
+    ivp_render_draw_solid_mesh(v->renderer, mesh, m, color);
+}
+
+/* ive::draw_object_box / draw_object_ball for any helper-created object.
+ * Solid and lit by default; F1 switches to wireframe. */
 static inline void demo_draw_object(demo_viewer_t *v, const ivp_object_t *obj,
                                     const float color[3])
 {
     const demo_body_t *b = demo_body_of(obj);
+    float pos[3], rot[9];
+    demo_object_pose(obj, pos, rot);
+
+    if (v->solid && v->renderer) {
+        if (!b || b->shape == DEMO_SHAPE_POLY) {
+            ivp_render_mesh_t *mesh = demo_surface_mesh(v, obj);
+            if (mesh) {
+                demo_solid_mesh(v, mesh, pos, rot, color);
+                return;
+            }
+        } else if (b->shape == DEMO_SHAPE_BOX) {
+            demo_solid_box(v, pos, b->half, rot, color);
+            return;
+        } else if (b->shape == DEMO_SHAPE_BALL) {
+            demo_solid_sphere(v, pos, b->radius, color);
+            /* a lighter dot on the surface so that rolling is visible */
+            float dot[3] = { pos[0] + rot[0] * b->radius, pos[1] + rot[1] * b->radius,
+                             pos[2] + rot[2] * b->radius };
+            const float mark[3] = { color[0] * 0.4f + 0.6f, color[1] * 0.4f + 0.6f,
+                                    color[2] * 0.4f + 0.6f };
+            demo_solid_sphere(v, dot, b->radius * 0.22f, mark);
+            return;
+        }
+    }
+
     if (!b) {
         demo_draw_surface(v, obj, color);
         return;
     }
-    float pos[3], rot[9];
-    demo_object_pose(obj, pos, rot);
     switch (b->shape) {
     case DEMO_SHAPE_BOX:
         demo_box(v, pos, b->half, rot, color);
