@@ -98,12 +98,14 @@ static void motion_update(demo_app_t *app, demo_viewer_t *v, int frame)
         if (demo_key_just_pressed(v, SDL_SCANCODE_2)) s->current_mode = 1;
         if (demo_key_just_pressed(v, SDL_SCANCODE_3)) s->current_mode = 2;
         const bool *keys = SDL_GetKeyboardState(NULL);
-        float mx = 0.0f, mz = 0.0f;
-        if (keys[SDL_SCANCODE_LEFT])  mx -= 1.0f;
-        if (keys[SDL_SCANCODE_RIGHT]) mx += 1.0f;
-        if (keys[SDL_SCANCODE_UP])    mz -= 1.0f;
-        if (keys[SDL_SCANCODE_DOWN])  mz += 1.0f;
-        apply_input(app, mx, mz);
+        /* arrows move the cue on screen: right / forward of the camera, in world X and Z */
+        float sx = 0.0f, sy = 0.0f, right[2], forward[2];
+        if (keys[SDL_SCANCODE_LEFT])  sx -= 1.0f;
+        if (keys[SDL_SCANCODE_RIGHT]) sx += 1.0f;
+        if (keys[SDL_SCANCODE_UP])    sy += 1.0f;
+        if (keys[SDL_SCANCODE_DOWN])  sy -= 1.0f;
+        demo_camera_ground_axes(v, right, forward);
+        apply_input(app, right[0] * sx + forward[0] * sy, right[1] * sx + forward[1] * sy);
         return;
     }
     /* scripted: the cue rests (and freezes) for 2 s, then

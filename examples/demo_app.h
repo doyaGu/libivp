@@ -829,6 +829,22 @@ static inline void demo_viewer_forget(demo_viewer_t *v, const ivp_object_t *obj)
     }
 }
 
+/* Horizontal screen axes of the camera as world directions on the XZ plane:
+ * `right` and `forward` (into the screen), both unit length. Arrow keys that
+ * move something should use these, not the world axes: the view can be
+ * turned anywhere, and the world is Y down, so "+X" is not "right". */
+static inline void demo_camera_ground_axes(const demo_viewer_t *v, float right[2], float forward[2])
+{
+    float fx = v->cam.target[0] - v->cam.eye[0], fz = v->cam.target[2] - v->cam.eye[2];
+    float len = sqrtf(fx * fx + fz * fz);
+    if (len < 1e-6f) { fx = 0.0f; fz = 1.0f; len = 1.0f; }       /* looking straight down */
+    fx /= len;  fz /= len;
+    forward[0] = fx;  forward[1] = fz;
+    /* right = forward x up; the camera's up is -Y in IVP worlds */
+    right[0] = -fz * v->cam.up[1];
+    right[1] = fx * v->cam.up[1];
+}
+
 /* Edge triggered key query (SDL scancode). */
 static inline bool demo_key_just_pressed(demo_viewer_t *v, SDL_Scancode sc)
 {
