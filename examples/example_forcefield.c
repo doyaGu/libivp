@@ -28,6 +28,8 @@ typedef struct forcefield_demo {
     int                    n_obj;
     ivp_forcefield_state_t ff;
     int                    current_mode;
+    float                  strength;            /* scales the field of every mode; also on the F5 panel */
+    ivp_environment_t     *env;
     /* headless measurements */
     float                  fall_vy[N_OBJECTS];      /* vertical speed 0.5 s after the start */
     float                  wind_x0[N_OBJECTS];      /* x when the wind started */
@@ -37,6 +39,45 @@ typedef struct forcefield_demo {
 
 static const char *mode_names[] = {"REDUCED GRAVITY", "HORIZONTAL WIND", "VISCOUS DRAG"};
 
+/* The field law of a mode at the panel strength. */
+static void set_field(forcefield_demo_t *s, int mode)
+{
+    const ivp_real_t k = (ivp_real_t)s->strength;
+    switch (mode) {
+    case 0:
+        /* REDUCED GRAVITY: upward acceleration partially cancels gravity.
+         * Net effect: ~3.8 m/s^2 down (all objects equally). */
+        s->ff.mode = IVP_FORCEFIELD_CONSTANT;
+        s->ff.value = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0) * k, IVP_REAL(0.0));
+        break;
+    case 1:
+        /* HORIZONTAL WIND: constant force in +X direction.  Light objects
+         * (0.5kg) accelerate at 30 m/s^2, heavy (10kg) at 1.5 m/s^2. */
+        s->ff.mode = IVP_FORCEFIELD_FORCE;
+        s->ff.value = ivp_vec3r(IVP_REAL(15.0) * k, IVP_REAL(0.0), IVP_REAL(0.0));
+        break;
+    default:
+        /* VISCOUS DRAG: velocity-proportional resistance, coefficient 5. */
+        s->ff.mode = IVP_FORCEFIELD_DRAG;
+        s->ff.value = ivp_vec3r(IVP_REAL(5.0) * k, IVP_REAL(5.0) * k, IVP_REAL(5.0) * k);
+        break;
+    }
+}
+
+/* Panel callback: a new strength acts at once, also on the sleeping objects. */
+static void strength_changed(void *ctx)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)ctx;
+    set_field(s, s->current_mode);
+    for (int i = 0; i < s->n_obj; i++) ivp_environment_ensure_core_in_simulation(s->env, s->objs[i].obj);
+}
+
+static void forcefield_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    forcefield_demo_t *s = (forcefield_demo_t *)app->user;
+    demo_panel_add_float(&v->panel, "field strength", &s->strength, 0.0f, 3.0f, strength_changed, s);
+}
+
 /* Switch the field law.  Resting objects may be frozen (not simulated, so
  * no controller reaches them): wake every object so that the new field
  * acts at once. */
@@ -44,25 +85,7 @@ static void set_mode(demo_app_t *app, int mode)
 {
     forcefield_demo_t *s = (forcefield_demo_t *)app->user;
     s->current_mode = mode;
-    switch (mode) {
-    case 0:
-        /* REDUCED GRAVITY: upward acceleration partially cancels gravity.
-         * Net effect: ~3.8 m/s^2 down (all objects equally). */
-        s->ff.mode = IVP_FORCEFIELD_CONSTANT;
-        s->ff.value = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0), IVP_REAL(0.0));
-        break;
-    case 1:
-        /* HORIZONTAL WIND: constant force in +X direction.  Light objects
-         * (0.5kg) accelerate at 30 m/s^2, heavy (10kg) at 1.5 m/s^2. */
-        s->ff.mode = IVP_FORCEFIELD_FORCE;
-        s->ff.value = ivp_vec3r(IVP_REAL(15.0), IVP_REAL(0.0), IVP_REAL(0.0));
-        break;
-    default:
-        /* VISCOUS DRAG: velocity-proportional resistance, coefficient 5. */
-        s->ff.mode = IVP_FORCEFIELD_DRAG;
-        s->ff.value = ivp_vec3r(IVP_REAL(5.0), IVP_REAL(5.0), IVP_REAL(5.0));
-        break;
-    }
+    set_field(s, mode);
     for (int i = 0; i < s->n_obj; i++)
         ivp_environment_ensure_core_in_simulation(app->world.env, s->objs[i].obj);
     printf("[forcefield] t=%.2f mode %s\n", ivp_environment_get_time(app->world.env), mode_names[mode]);
@@ -121,12 +144,17 @@ static void forcefield_draw(demo_app_t *app, demo_viewer_t *v)
         demo_axes(v, org, NULL, 1.5f);
     }
     static const char *desc[] = {
-        "Upward accel -6 m/s^2 (net ~3.8 down, all equal)",
-        "Horizontal force +X 15N (light blown, heavy resist)",
-        "Drag coeff 5 (moving objects slow down)"
+        "Upward accel %.1f m/s^2 (net %.1f down, all equal)",
+        "Horizontal force +X %.1f N (light blown, heavy resist)",
+        "Drag coeff %.1f (moving objects slow down)"
     };
+    const double base[] = { 6.0, 15.0, 5.0 };
+    const double val = base[s->current_mode] * (double)s->strength;
     demo_hud(v, c_mode, "Mode: %s  [1]Gravity [2]Wind [3]Drag", mode_names[s->current_mode]);
-    demo_hud(v, DEMO_COL_INFO, "%s", desc[s->current_mode]);
+    char line[96];
+    if (s->current_mode == 0) snprintf(line, sizeof(line), desc[0], val, app->world.env->gravity.k[1] - val);
+    else snprintf(line, sizeof(line), desc[s->current_mode], val);
+    demo_hud(v, DEMO_COL_INFO, "%s", line);
     demo_hud(v, DEMO_COL_INFO, "Red=0.5kg  Green=3kg  Blue=10kg  Airborne: %d", airborne);
 }
 
@@ -280,8 +308,11 @@ int main(int argc, char **argv)
     ivp_vec3r_t ff_val = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-6.0), IVP_REAL(0.0));
     ivp_forcefield_state_init(&s->ff, IVP_FORCEFIELD_CONSTANT, &ff_val);
     ivp_environment_add_controller(w->env, 100, ivp_controller_forcefield, &s->ff);
+    s->env = w->env;
+    s->strength = 1.0f;
 
     app.controls = "1: reduced gravity   2: horizontal wind   3: viscous drag";
+    app.viewer_init = forcefield_viewer_init;
     app.update   = forcefield_update;
     app.draw     = forcefield_draw;
     app.stats    = forcefield_stats;
