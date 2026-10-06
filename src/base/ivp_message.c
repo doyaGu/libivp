@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static ivp_message_output_fn_t s_output   = NULL;
 static void                   *s_userdata = NULL;
@@ -60,7 +61,14 @@ void ivp_message(const char *fmt, ...)
     vsnprintf(buffer_tmp, sizeof(buffer_tmp), fmt, args);
     va_end(args);
 
+    static const char prefix[] = "[havok] ";
     char buffer[IVP_MAX_ERROR_BUFFER_LEN];
-    snprintf(buffer, sizeof(buffer), "[havok] %s", buffer_tmp);
+    const size_t prefix_len = sizeof(prefix) - 1;
+    const size_t max_text_len = sizeof(buffer) - sizeof(prefix);
+    size_t text_len = strlen(buffer_tmp);
+    if (text_len > max_text_len) text_len = max_text_len;
+    memcpy(buffer, prefix, prefix_len);
+    memcpy(buffer + prefix_len, buffer_tmp, text_len);
+    buffer[prefix_len + text_len] = '\0';
     ivp_message_emit(buffer);
 }

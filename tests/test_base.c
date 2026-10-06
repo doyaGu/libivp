@@ -4,10 +4,29 @@
 #include <ivp/base/ivp_result.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_arena.h>
+#include <ivp/base/ivp_message.h>
 #include <ivp/base/ivp_u_memory.h>
 #include <ivp/base/ivp_time.h>
 #include <stdint.h>
 #include <limits.h>
+
+typedef struct message_capture {
+    char text[10000];
+    size_t length;
+    int calls;
+} message_capture_t;
+
+static void capture_message(const char *text, void *userdata) {
+    message_capture_t *capture = (message_capture_t *)userdata;
+    capture->length = strlen(text);
+    size_t copy_len = capture->length;
+    if (copy_len >= sizeof(capture->text)) {
+        copy_len = sizeof(capture->text) - 1;
+    }
+    memcpy(capture->text, text, copy_len);
+    capture->text[copy_len] = '\0';
+    capture->calls++;
+}
 
 /* ── Result tests ───────────────────────────────────────────────────────── */
 
@@ -21,6 +40,24 @@ IVP_TEST(result_str) {
     IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_OK), "OK") == 0);
     IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_ERR_INVALID_ARG), "INVALID_ARG") == 0);
     IVP_ASSERT_TRUE(strcmp(ivp_result_str(IVP_ERR_SINGULAR_MATRIX), "SINGULAR_MATRIX") == 0);
+}
+
+IVP_TEST(message_prefix_preserves_bounded_output) {
+    char input[10000];
+    memset(input, 'x', sizeof(input) - 1);
+    input[sizeof(input) - 1] = '\0';
+    message_capture_t capture = {0};
+
+    ivp_set_message_output(capture_message, &capture);
+    ivp_message("%s", input);
+    ivp_set_message_output(NULL, NULL);
+
+    IVP_ASSERT_EQ(capture.calls, 1);
+    IVP_ASSERT_EQ(capture.length, sizeof(capture.text) - 1);
+    IVP_ASSERT_TRUE(memcmp(capture.text, "[havok] ", 8) == 0);
+    IVP_ASSERT_EQ(capture.text[8], 'x');
+    IVP_ASSERT_EQ(capture.text[sizeof(capture.text) - 2], 'x');
+    IVP_ASSERT_EQ(capture.text[sizeof(capture.text) - 1], '\0');
 }
 
 /* ── Default allocator tests ────────────────────────────────────────────── */
@@ -428,6 +465,7 @@ IVP_TEST(types_coord_index) {
 int main(void) {
     IVP_REGISTER(result_ok);
     IVP_REGISTER(result_str);
+    IVP_REGISTER(message_prefix_preserves_bounded_output);
     IVP_REGISTER(default_alloc_basic);
     IVP_REGISTER(default_alloc_realloc);
     IVP_REGISTER(aligned_alloc_16);

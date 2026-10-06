@@ -34,8 +34,9 @@ void ivp_set_message_output(ivp_message_output_fn_t fn, void *userdata);
 void ivp_debug_printf(const char *fmt, ...) IVP_PRINTF_FMT(1, 2);
 void ivp_debug_vprintf(const char *fmt, va_list args) IVP_PRINTF_FMT(1, 0);
 
-/* ivp_message (ivu_string.cxx): "[havok] " + formatted text (the reference
- * truncates the text to MAX_ERROR_BUFFER_LEN - 1 = 9999 characters). */
+/* ivp_message (ivu_string.cxx): "[havok] " + formatted text. The reference
+ * uses a 10000-byte buffer for both formatting passes, so the final prefixed
+ * output is limited to 9999 characters (9991 characters of payload). */
 void ivp_message(const char *fmt, ...) IVP_PRINTF_FMT(1, 2);
 
 #ifdef __cplusplus
