@@ -1,0 +1,23 @@
+#include <metal_stdlib>
+using namespace metal;
+
+/* Depth-only pass from the light: same vertex layout as tri3d_inst. */
+struct VSIn {
+    float3 aPos [[attribute(0)]];
+    float3 aNrm [[attribute(1)]];
+    float4 iRow0 [[attribute(2)]];
+    float4 iRow1 [[attribute(3)]];
+    float4 iRow2 [[attribute(4)]];
+    float4 iRow3 [[attribute(5)]];
+    float3 iCol  [[attribute(6)]];
+};
+
+struct Uniforms {
+    float4x4 light_vp;
+};
+
+vertex float4 vs_main(VSIn in [[stage_in]],
+                      constant Uniforms& u [[buffer(0)]]) {
+    float4x4 model = float4x4(in.iRow0, in.iRow1, in.iRow2, in.iRow3);
+    return u.light_vp * (model * float4(in.aPos, 1.0));
+}

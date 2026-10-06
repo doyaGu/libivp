@@ -13,12 +13,16 @@ struct VSIn {
 
 struct VSOut {
     float4 pos [[position]];
-    float3 col;
+    float3 amb;   /* ambient part of the colour */
+    float3 dif;   /* diffuse part, attenuated by the shadow */
+    float4 sc;    /* xy = shadow map uv, z = light space depth, w = shadows on */
 };
 
 struct Uniforms {
     float4x4 vp;
-    float4   light_dir;   /* xyz = direction, w = ambient */
+    float4   light_dir;   /* xyz = direction towards the light, w = ambient */
+    float4x4 light_vp;    /* world -> light clip space, depth in [0,1] */
+    float4   shadow;      /* x = 1 when the shadow map is valid */
 };
 
 vertex VSOut vs_main(VSIn in [[stage_in]],
@@ -36,6 +40,11 @@ vertex VSOut vs_main(VSIn in [[stage_in]],
     float3 nrm_ws = normalize(nm * in.aNrm);
     float ndotl = max(dot(nrm_ws, u.light_dir.xyz), 0.0f);
     float ambient = u.light_dir.w * (0.75f - 0.25f * nrm_ws.y);  /* sky (-Y) / ground */
-    out.col = in.iCol * (0.7f * ndotl + ambient);
+    out.amb = in.iCol * ambient;
+    out.dif = in.iCol * (0.7f * ndotl);
+
+    /* shadow lookup position, pushed along the normal against acne */
+    float4 lp = u.light_vp * float4(world_pos.xyz + nrm_ws * 0.04f, 1.0f);
+    out.sc = float4(lp.x * 0.5f + 0.5f, 0.5f - lp.y * 0.5f, lp.z, u.shadow.x);
     return out;
 }

@@ -693,6 +693,19 @@ static void builtin(ivp_proto_shapes_t *ps, int i,
     }
 }
 
+bool ivp_solid_has_instances(const ivp_renderer_t *r)
+{
+    if (!r->protos.ready) return false;
+    const ivp_gpu_instance_buf_t *b[BUILTIN_COUNT] = {
+        &r->protos.sphere_instances, &r->protos.box_instances,
+        &r->protos.cylinder_instances, &r->protos.cone_instances };
+    for (int i = 0; i < BUILTIN_COUNT; i++)
+        if (b[i]->count > 0) return true;
+    for (const ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        if (u->instances.count > 0) return true;
+    return false;
+}
+
 void ivp_solid_begin_frame(ivp_renderer_t *r)
 {
     if (!r->protos.ready) return;

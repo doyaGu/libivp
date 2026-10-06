@@ -97,6 +97,8 @@ typedef struct ivp_gpu_stream_desc {
     SDL_GPUPrimitiveType        primitive_type;   /* explicitly set by caller */
     SDL_GPUCullMode             cull_mode;        /* 0 = NONE (default) */
     int                         num_uniform_bufs; /* 0 = auto (1 for MSL) */
+    int                         fs_num_samplers;  /* fragment shader texture samplers */
+    bool                        depth_only;       /* no colour target, 1 sample, depth bias (shadow pass) */
     /* Optional: second vertex buffer for instancing (slot 1) */
     const ivp_gpu_attrib_desc_t *inst_attribs;
     int                         inst_attrib_count;
@@ -203,6 +205,17 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
     const unsigned char *vs_code, size_t vs_len,
     const unsigned char *fs_code, size_t fs_len);
 
+/* ── Shadow map (depth texture + comparison sampler) ──────────────────── */
+
+typedef struct ivp_gpu_shadow_map {
+    SDL_GPUTexture *tex;
+    SDL_GPUSampler *smp;
+    int             size;     /* square, texels */
+} ivp_gpu_shadow_map_t;
+
+bool ivp_gpu_shadow_map_create(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev, int size);
+void ivp_gpu_shadow_map_destroy(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev);
+
 /* ── Shader blob loading ───────────────────────────────────────────────── */
 
 /* Shader blob cache (one per renderer, not global). */
@@ -213,6 +226,9 @@ typedef struct ivp_shader_cache {
     unsigned char *vs_tri3d;    size_t vs_tri3d_len;
     unsigned char *fs_tri3d;    size_t fs_tri3d_len;
     unsigned char *vs_inst;     size_t vs_inst_len;
+    unsigned char *fs_inst;     size_t fs_inst_len;
+    unsigned char *vs_shadow;   size_t vs_shadow_len;
+    unsigned char *fs_shadow;   size_t fs_shadow_len;
 } ivp_shader_cache_t;
 
 ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,

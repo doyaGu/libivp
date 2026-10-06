@@ -208,10 +208,11 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         desc.depth_write      = true;
         desc.primitive_type   = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
         desc.cull_mode        = SDL_GPU_CULLMODE_NONE;
+        desc.fs_num_samplers  = 1;   /* shadow map */
 
         r->inst_pipeline = ivp_gpu_create_pipeline(&r->gpu, &desc,
             r->shaders.vs_inst, r->shaders.vs_inst_len,
-            r->shaders.fs_tri3d, r->shaders.fs_tri3d_len);
+            r->shaders.fs_inst, r->shaders.fs_inst_len);
         if (!r->inst_pipeline) { res = IVP_ERR_RENDER_SHADER; goto fail_tri; }
     }
 
@@ -240,6 +241,10 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
             goto fail_inst;
         }
     }
+
+    /* Shadow map and depth pass; the renderer works without them */
+    if (!ivp_shadow_init(r))
+        fprintf(stderr, "shadows unavailable\n");
 
     /* MSAA targets */
     {
@@ -308,6 +313,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
 
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
     ivp_capture_destroy(r);
+    ivp_shadow_destroy(r);
     ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
     ivp_solid_destroy_meshes(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
@@ -365,6 +371,10 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     }
     ivp_camera_compute_matrices(cam, r->width, r->height,
                                 r->view_mat, r->proj_mat, r->vp_mat);
+    if (cam) {
+        memcpy(r->cam_target, cam->target, sizeof(r->cam_target));
+        r->cam_dist = cam->mode == IVP_CAMERA_MODE_FLY ? 30.0f : cam->orbit_distance;
+    }
 
     /* Extract frustum planes from VP matrix */
     ivp_frustum_extract(&r->frustum, r->vp_mat);
@@ -425,6 +435,9 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_overlay, &r->gpu, r->cmd);
     ivp_solid_upload(r);
+
+    /* Depth pass from the light, before the main pass reads it */
+    ivp_shadow_render(r);
 
     /* ── Render pass setup (MSAA or direct) ───────────────────────────── */
     SDL_GPUColorTargetInfo ct = {0};
@@ -498,14 +511,23 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
         struct {
             float vp[16];
             float light_dir[4];
+            float light_vp[16];
+            float shadow[4];
         } inst_uniform;
+        memset(&inst_uniform, 0, sizeof(inst_uniform));
         memcpy(inst_uniform.vp, r->vp_mat, 64);
         memcpy(inst_uniform.light_dir, r->lighting.light_dir, 12);
         inst_uniform.light_dir[3] = r->lighting.ambient;
+        memcpy(inst_uniform.light_vp, r->light_vp, 64);
+        inst_uniform.shadow[0] = r->shadow_valid ? 1.0f : 0.0f;
 
         SDL_BindGPUGraphicsPipeline(pass, r->inst_pipeline);
         SDL_PushGPUVertexUniformData(r->cmd, 0,
             &inst_uniform, (Uint32)sizeof(inst_uniform));
+        if (r->shadow_map.tex) {
+            SDL_GPUTextureSamplerBinding sb = { r->shadow_map.tex, r->shadow_map.smp };
+            SDL_BindGPUFragmentSamplers(pass, 0, &sb, 1);
+        }
 
         ivp_solid_draw(r, pass);
     }

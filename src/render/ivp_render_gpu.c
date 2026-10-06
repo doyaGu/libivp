@@ -95,6 +95,15 @@ ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,
     SDL_snprintf(name, sizeof(name), "tri3d_inst.vert.%s", ext);
     ok = ok && load_shader_file(&cache->vs_inst, &cache->vs_inst_len, name);
 
+    SDL_snprintf(name, sizeof(name), "tri3d_inst.frag.%s", ext);
+    ok = ok && load_shader_file(&cache->fs_inst, &cache->fs_inst_len, name);
+
+    SDL_snprintf(name, sizeof(name), "shadow.vert.%s", ext);
+    ok = ok && load_shader_file(&cache->vs_shadow, &cache->vs_shadow_len, name);
+
+    SDL_snprintf(name, sizeof(name), "shadow.frag.%s", ext);
+    ok = ok && load_shader_file(&cache->fs_shadow, &cache->fs_shadow_len, name);
+
     if (!ok) {
         ivp_shader_cache_free(cache);
         return IVP_ERR_RENDER_SHADER;
@@ -110,6 +119,9 @@ void ivp_shader_cache_free(ivp_shader_cache_t *cache)
     if (cache->vs_tri3d) { SDL_free(cache->vs_tri3d); cache->vs_tri3d = NULL; }
     if (cache->fs_tri3d) { SDL_free(cache->fs_tri3d); cache->fs_tri3d = NULL; }
     if (cache->vs_inst)  { SDL_free(cache->vs_inst);  cache->vs_inst  = NULL; }
+    if (cache->fs_inst)  { SDL_free(cache->fs_inst);  cache->fs_inst  = NULL; }
+    if (cache->vs_shadow) { SDL_free(cache->vs_shadow); cache->vs_shadow = NULL; }
+    if (cache->fs_shadow) { SDL_free(cache->fs_shadow); cache->fs_shadow = NULL; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -306,6 +318,57 @@ void ivp_gpu_msaa_destroy(ivp_gpu_msaa_t *msaa, ivp_gpu_device_t *dev)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * Shadow map
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+bool ivp_gpu_shadow_map_create(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev, int size)
+{
+    memset(map, 0, sizeof(*map));
+
+    SDL_GPUTextureCreateInfo ci = {0};
+    ci.type                 = SDL_GPU_TEXTURETYPE_2D;
+    ci.format               = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+    ci.width                = (Uint32)size;
+    ci.height               = (Uint32)size;
+    ci.layer_count_or_depth = 1;
+    ci.num_levels           = 1;
+    ci.sample_count         = SDL_GPU_SAMPLECOUNT_1;
+    ci.usage                = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET |
+                              SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    map->tex = SDL_CreateGPUTexture(dev->device, &ci);
+    if (!map->tex) {
+        fprintf(stderr, "shadow map texture failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    SDL_GPUSamplerCreateInfo si = {0};
+    si.min_filter     = SDL_GPU_FILTER_LINEAR;     /* hardware 2x2 PCF */
+    si.mag_filter     = SDL_GPU_FILTER_LINEAR;
+    si.mipmap_mode    = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+    si.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    si.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    si.enable_compare = true;
+    si.compare_op     = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+    map->smp = SDL_CreateGPUSampler(dev->device, &si);
+    if (!map->smp) {
+        fprintf(stderr, "shadow sampler failed: %s\n", SDL_GetError());
+        SDL_ReleaseGPUTexture(dev->device, map->tex);
+        map->tex = NULL;
+        return false;
+    }
+    map->size = size;
+    return true;
+}
+
+void ivp_gpu_shadow_map_destroy(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev)
+{
+    if (map->smp) SDL_ReleaseGPUSampler(dev->device, map->smp);
+    if (map->tex) SDL_ReleaseGPUTexture(dev->device, map->tex);
+    memset(map, 0, sizeof(*map));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * GPU stream (triple-buffered)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -347,6 +410,7 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
     fs_ci.entrypoint  = is_msl ? "fs_main" : "main";
     fs_ci.format      = dev->shader_format;
     fs_ci.stage       = SDL_GPU_SHADERSTAGE_FRAGMENT;
+    fs_ci.num_samplers = (Uint32)desc->fs_num_samplers;
 
     SDL_GPUShader *fs = SDL_CreateGPUShader(dev->device, &fs_ci);
     if (!fs) {
@@ -427,12 +491,20 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
     gp.depth_stencil_state = dss;
     gp.target_info.color_target_descriptions = &ct;
     gp.target_info.num_color_targets         = 1;
+    if (desc->depth_only) {
+        gp.target_info.color_target_descriptions = NULL;
+        gp.target_info.num_color_targets         = 0;
+        gp.rasterizer_state.enable_depth_bias         = true;
+        gp.rasterizer_state.depth_bias_constant_factor = 2.0f;
+        gp.rasterizer_state.depth_bias_slope_factor    = 2.5f;
+    }
     gp.target_info.has_depth_stencil_target  = desc->depth_test || desc->depth_write ||
                                                desc->depth_always;
     gp.target_info.depth_stencil_format      = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     gp.rasterizer_state.fill_mode            = SDL_GPU_FILLMODE_FILL;
     gp.rasterizer_state.cull_mode            = cull;
-    gp.multisample_state.sample_count        = dev->sample_count;
+    gp.multisample_state.sample_count        = desc->depth_only ? SDL_GPU_SAMPLECOUNT_1
+                                                                : dev->sample_count;
 
     SDL_GPUGraphicsPipeline *pipe = SDL_CreateGPUGraphicsPipeline(dev->device, &gp);
 

@@ -1,0 +1,6 @@
+#include <metal_stdlib>
+using namespace metal;
+
+/* Depth only: nothing to write, the pipeline has no colour target. */
+fragment void fs_main() {
+}

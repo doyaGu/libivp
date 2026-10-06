@@ -96,6 +96,15 @@ void ivp_solid_upload(ivp_renderer_t *r);
 void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass);
 void ivp_solid_advance(ivp_renderer_t *r);
 void ivp_solid_destroy_meshes(ivp_renderer_t *r);
+bool ivp_solid_has_instances(const ivp_renderer_t *r);
+
+/* ── Shadows (defined in ivp_render_shadow.c) ──────────────────────────── */
+
+void ivp_shadow_light_matrix(float out[16], const float light_dir[3],
+                             const float center[3], float extent, int map_size);
+bool ivp_shadow_init(ivp_renderer_t *r);
+void ivp_shadow_destroy(ivp_renderer_t *r);
+void ivp_shadow_render(ivp_renderer_t *r);
 
 /* ── Screenshot hooks (defined in ivp_render_capture.c) ────────────────── */
 
@@ -125,6 +134,15 @@ struct ivp_renderer {
     SDL_GPUGraphicsPipeline *inst_pipeline;
     ivp_proto_shapes_t       protos;
     ivp_render_mesh_t       *meshes;      /* user meshes, singly linked */
+
+    /* Directional light shadow (ivp_render_shadow.c) */
+    ivp_gpu_shadow_map_t     shadow_map;
+    SDL_GPUGraphicsPipeline *shadow_pipeline;
+    bool                     shadows_enabled;
+    bool                     shadow_valid;   /* the map holds this frame's depth */
+    float                    light_vp[16];
+    float                    cam_target[3];  /* centre of the shadow box */
+    float                    cam_dist;       /* sizes the shadow box */
 
     /* MSAA */
     ivp_gpu_msaa_t           msaa;

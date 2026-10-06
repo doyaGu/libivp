@@ -1,0 +1,29 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSOut {
+    float4 pos [[position]];
+    float3 amb;
+    float3 dif;
+    float4 sc;
+};
+
+constant float SHADOW_TEXEL = 1.0f / 2048.0f;
+constant float SHADOW_BIAS  = 0.0008f;
+
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        depth2d<float> shadow_map [[texture(0)]],
+                        sampler shadow_smp [[sampler(0)]]) {
+    float vis = 1.0f;
+    if (in.sc.w > 0.5f && in.sc.z <= 1.0f &&
+        in.sc.x >= 0.0f && in.sc.x <= 1.0f && in.sc.y >= 0.0f && in.sc.y <= 1.0f) {
+        float ref = in.sc.z - SHADOW_BIAS;
+        float sum = 0.0f;
+        for (int y = -1; y <= 1; y++)
+            for (int x = -1; x <= 1; x++)
+                sum += shadow_map.sample_compare(shadow_smp,
+                           in.sc.xy + float2(x, y) * SHADOW_TEXEL, ref);
+        vis = sum / 9.0f;
+    }
+    return float4(in.amb + in.dif * vis, 1.0f);
+}

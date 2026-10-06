@@ -276,6 +276,10 @@ void ivp_render_draw_solid_mesh(ivp_renderer_t *r,
 
 /* ── Lighting control ──────────────────────────────────────────────────── */
 
+/* Directional light shadows for the solid primitives (on by default). */
+void ivp_render_set_shadows(ivp_renderer_t *r, bool on);
+bool ivp_render_get_shadows(const ivp_renderer_t *r);
+
 void ivp_render_set_light_dir(ivp_renderer_t *r, const float dir[3]);
 void ivp_render_set_ambient(ivp_renderer_t *r, float ambient);
 
