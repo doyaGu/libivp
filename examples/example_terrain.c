@@ -15,9 +15,7 @@
  */
 #include "demo_app.h"
 
-#include <ivp/builder/ivp_build_grid.h>
-#include <ivp/geometry/ivp_compact_grid.h>
-#include <ivp/geometry/ivp_surman_grid.h>
+#include "demo_terrain.h"
 
 #define N          26          /* grid points per side */
 #define FIELD      1.0f        /* metres between points */
@@ -27,13 +25,8 @@
 #define N_BODIES   (N_BALLS + N_BOXES + N_HULLS)
 
 typedef struct terrain_demo {
-    float                heights[N * N];     /* row * N + column, metres up */
-    float                h_min, h_max;
-    ivp_compact_grid_t  *grid;
-    ivp_surman_compact_grid_t surman;
-    ivp_object_t        *ground;
+    demo_terrain_t       terrain;
     ivp_object_t        *bodies[N_BODIES];
-    ivp_render_mesh_t   *mesh;               /* window only */
 } terrain_demo_t;
 
 static float terrain_height(int r, int c)
@@ -46,44 +39,10 @@ static float terrain_height(int r, int c)
     return bowl + hills + ridge + 0.6f;
 }
 
-/* World position of grid point (r, c): rows run along +X, columns along +Z,
- * the height along -Y (IVP worlds are Y down). */
-static void grid_point(const terrain_demo_t *s, int r, int c, float p[3])
-{
-    p[0] = ((float)r - 0.5f * (N - 1)) * FIELD;
-    p[1] = -s->heights[r * N + c];
-    p[2] = ((float)c - 0.5f * (N - 1)) * FIELD;
-}
-
-/* Two triangles per cell, wound counter-clockwise seen from above (-Y). */
-static ivp_render_mesh_t *build_mesh(ivp_renderer_t *rend, const terrain_demo_t *s)
-{
-    static float pos[N * N * 3];
-    static int idx[(N - 1) * (N - 1) * 6];
-    for (int r = 0; r < N; r++)
-        for (int c = 0; c < N; c++) grid_point(s, r, c, &pos[(r * N + c) * 3]);
-
-    int n = 0;
-    for (int r = 0; r < N - 1; r++)
-        for (int c = 0; c < N - 1; c++) {
-            int a = r * N + c, b = a + 1, d = a + N, e = d + 1;
-            const int tri[2][3] = { { a, b, d }, { b, e, d } };
-            for (int t = 0; t < 2; t++) {
-                const float *p0 = &pos[tri[t][0] * 3], *p1 = &pos[tri[t][1] * 3], *p2 = &pos[tri[t][2] * 3];
-                float ny = (p1[2] - p0[2]) * (p2[0] - p0[0]) - (p1[0] - p0[0]) * (p2[2] - p0[2]);
-                bool up = ny < 0.0f;                      /* normal towards -Y */
-                idx[n++] = tri[t][0];
-                idx[n++] = up ? tri[t][1] : tri[t][2];
-                idx[n++] = up ? tri[t][2] : tri[t][1];
-            }
-        }
-    return ivp_render_mesh_create(rend, pos, N * N, idx, n / 3);
-}
-
 static void terrain_viewer_init(demo_app_t *app, demo_viewer_t *v)
 {
     terrain_demo_t *s = (terrain_demo_t *)app->user;
-    s->mesh = build_mesh(v->renderer, s);
+    demo_terrain_make_mesh(&s->terrain, v->renderer);
 }
 
 static const float palette[][3] = {
@@ -94,21 +53,9 @@ static const float palette[][3] = {
 static void terrain_draw(demo_app_t *app, demo_viewer_t *v)
 {
     terrain_demo_t *s = (terrain_demo_t *)app->user;
-    const float c_land[3] = { 0.36f, 0.58f, 0.34f };
+    const float c_land[3] = { 0.36f, 0.58f, 0.34f }, c_wire[3] = { 0.30f, 0.62f, 0.30f };
 
-    if (v->solid && s->mesh) {
-        const float origin[3] = { 0.0f, 0.0f, 0.0f }, id[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-        demo_solid_mesh(v, s->mesh, origin, id, c_land);
-    } else {
-        const float c_wire[3] = { 0.30f, 0.62f, 0.30f };
-        for (int r = 0; r < N; r++)
-            for (int c = 0; c < N; c++) {
-                float p[3], q[3];
-                grid_point(s, r, c, p);
-                if (r + 1 < N) { grid_point(s, r + 1, c, q); demo_line(v, p, q, c_wire); }
-                if (c + 1 < N) { grid_point(s, r, c + 1, q); demo_line(v, p, q, c_wire); }
-            }
-    }
+    demo_terrain_draw(v, &s->terrain, v->solid ? c_land : c_wire);
 
     int resting = 0;
     for (int i = 0; i < N_BODIES; i++) {
@@ -116,7 +63,7 @@ static void terrain_draw(demo_app_t *app, demo_viewer_t *v)
         if (demo_object_speed(s->bodies[i]) < 0.1f) resting++;
     }
     demo_hud(v, DEMO_COL_INFO, "%d bodies on a %dx%d heightfield (%.1f .. %.1f m), %d at rest",
-             N_BODIES, N, N, (double)s->h_min, (double)s->h_max, resting);
+             N_BODIES, N, N, (double)s->terrain.h_min, (double)s->terrain.h_max, resting);
 }
 
 static void terrain_stats(demo_app_t *app, char *buf, size_t size)
@@ -141,7 +88,7 @@ static bool terrain_check(demo_app_t *app)
         float p[3];
         demo_object_center(s->bodies[i], p);
         /* up is -Y: a body that fell through the surface lies below its lowest point */
-        if (p[1] < -s->h_min + 0.2f) on_top++;
+        if (p[1] < -s->terrain.h_min + 0.2f) on_top++;
         if (fabsf(p[0]) < half && fabsf(p[2]) < half) inside++;
     }
     ok &= demo_check(tag, on_top == N_BODIES, "%d/%d bodies stay on the terrain", on_top, N_BODIES);
@@ -183,42 +130,13 @@ int main(int argc, char **argv)
     if (!s) return 1;
     app.user = s;
 
-    s->h_min = 1e9f;
-    s->h_max = -1e9f;
+    float heights[N * N];
     for (int r = 0; r < N; r++)
-        for (int c = 0; c < N; c++) {
-            float h = terrain_height(r, c);
-            s->heights[r * N + c] = h;
-            if (h < s->h_min) s->h_min = h;
-            if (h > s->h_max) s->h_max = h;
-        }
-
-    /* compact grid: rows -> x, columns -> z, heights -> -y */
-    ivp_template_compact_grid_t gt;
-    ivp_template_compact_grid_init(&gt);
-    gt.row_info.n_points = N;
-    gt.row_info.maps_to = 0;
-    gt.row_info.invert_axis = false;
-    gt.column_info.n_points = N;
-    gt.column_info.maps_to = 2;
-    gt.column_info.invert_axis = false;
-    gt.height_maps_to = 1;
-    gt.height_invert_axis = true;
-    gt.grid_field_size = FIELD;
-    s->grid = ivp_gridbuild_array_to_compact_grid(NULL, &gt, s->heights);
-    if (!s->grid) {
+        for (int c = 0; c < N; c++) heights[r * N + c] = terrain_height(r, c);
+    if (!demo_terrain_create(&app.world, &s->terrain, N, FIELD, heights, app.cfg.friction,
+                             app.cfg.elasticity)) {
         fprintf(stderr, "[terrain] grid build failed\n");
         return 1;
-    }
-    ivp_surman_compact_grid_init(&s->surman, s->grid);
-
-    {
-        ivp_object_template_t t;
-        demo_template_static(&t, &app.world.mat);
-        t.type = IVP_OBJECT_POLYGON;
-        demo_template_pose(&t, NULL, -0.5 * (N - 1) * FIELD, 0.0, -0.5 * (N - 1) * FIELD);
-        s->ground = ivp_environment_create_object(app.world.env, &t, &s->surman.base);
-        if (!s->ground) return 1;
     }
 
     /* deterministic drop pattern over the bowl */
@@ -229,7 +147,7 @@ int main(int argc, char **argv)
         seed = seed * 1664525u + 1013904223u;
         double rad = 1.5 + ((seed >> 8) & 1023) / 1023.0 * 6.0;
         double x = rad * cos(ang), z = rad * sin(ang);
-        double y = -(s->h_max + 2.5 + 0.45 * i);
+        double y = -((double)s->terrain.h_max + 2.5 + 0.45 * i);
         ivp_object_t *o;
         if (i < N_BALLS) {
             double r = 0.35 + 0.1 * (i % 4);
@@ -251,7 +169,7 @@ int main(int argc, char **argv)
 
     int rc = demo_run(&app, argc, argv);
     demo_world_destroy(&app.world);
-    ivp_compact_grid_free(NULL, s->grid);
+    demo_terrain_destroy(&s->terrain);
     free(s);
     return rc;
 }
