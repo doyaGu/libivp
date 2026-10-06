@@ -41,7 +41,7 @@ static const double OBJ_HS = 0.2;
 
 typedef struct black_hole {
     ivp_vec3r_t             center;
-    double                  strength;
+    float                   strength;     /* inverse-square pull; also on the F5 panel */
     ivp_controller_handle_t handle;
     ivp_object_t           *objects[NUM_OBJECTS];
     long                    n_calls;       /* controller invocations */
@@ -75,7 +75,7 @@ static void black_hole_controller(const ivp_event_sim_t *es, ivp_object_t *obj, 
     }
     double dist = sqrt(dist2);
     if (dist < 0.5) return;
-    double force_mag = bh->strength / dist2;
+    double force_mag = (double)bh->strength / dist2;
     if (force_mag > 50.0) force_mag = 50.0;
     double scale = force_mag * (double)es->delta_time / dist;
     /* async_add_speed_object_ws (the core is in simulation already) */
@@ -100,6 +100,12 @@ static void hole_distances(const black_hole_t *bh, float *mean, float *max)
     *max = worst;
 }
 
+static void black_hole_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    black_hole_t *bh = (black_hole_t *)app->user;
+    demo_param_float(v, "strength", &bh->strength, 0.0f, 300.0f);
+}
+
 static void black_hole_update(demo_app_t *app, demo_viewer_t *v, int frame)
 {
     black_hole_t *bh = (black_hole_t *)app->user;
@@ -120,7 +126,7 @@ static void black_hole_draw(demo_app_t *app, demo_viewer_t *v)
     float mean, max;
     hole_distances(bh, &mean, &max);
     demo_hud(v, DEMO_COL_INFO, "Objects: %d   strength: %.0f   world gravity: %s", NUM_OBJECTS,
-             bh->strength, bh->gravity_on ? "ON (9.81)" : "OFF");
+             (double)bh->strength, bh->gravity_on ? "ON (9.81)" : "OFF");
     demo_hud(v, DEMO_COL_INFO, "Mean distance to the hole: %.2f m   max: %.2f m",
              (double)mean, (double)max);
 }
@@ -170,7 +176,7 @@ int main(int argc, char **argv)
     if (!bh) return 1;
     app.user = bh;
     bh->center = ivp_vec3r(0, 0, 0);
-    bh->strength = 80.0;
+    bh->strength = 80.0f;
 
     for (int i = 0; i < NUM_OBJECTS; i++) {
         double angle = i * 2.3998;
@@ -195,6 +201,7 @@ int main(int argc, char **argv)
     set_world_gravity(&app, false);
 
     app.controls = "G: toggle the world gravity (reference: on)";
+    app.viewer_init = black_hole_viewer_init;
     app.update = black_hole_update;
     app.draw  = black_hole_draw;
     app.stats = black_hole_stats;
