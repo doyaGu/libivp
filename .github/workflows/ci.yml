@@ -45,7 +45,7 @@ jobs:
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
       - name: Build
         run: cmake --build build --parallel
-      - name: Render math test
-        run: ctest --test-dir build -R test_render_math --output-on-failure
+      - name: Render and panel tests
+        run: ctest --test-dir build -R "test_render_math|test_demo_panel" --output-on-failure
       - name: Run every example headless
         run: ctest --test-dir build -L smoke --output-on-failure
