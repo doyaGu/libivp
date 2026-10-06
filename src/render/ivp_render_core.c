@@ -285,6 +285,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
 
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
     ivp_capture_destroy(r);
+    ivp_solid_destroy_meshes(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
     if (r->inst_pipeline && r->gpu.device) {
         SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
@@ -383,10 +384,7 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_gpu_stream_reset(&r->stream_3d);
     ivp_gpu_stream_reset(&r->stream_2d);
     ivp_gpu_stream_reset(&r->stream_tri);
-    if (r->protos.ready) {
-        ivp_gpu_instance_buf_reset(&r->protos.sphere_instances);
-        ivp_gpu_instance_buf_reset(&r->protos.box_instances);
-    }
+    ivp_solid_begin_frame(r);
     r->culled_count = 0;
     return true;
 }
@@ -399,10 +397,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_upload(&r->stream_3d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
-    if (r->protos.ready) {
-        ivp_gpu_instance_buf_upload(&r->protos.sphere_instances, &r->gpu, r->cmd);
-        ivp_gpu_instance_buf_upload(&r->protos.box_instances, &r->gpu, r->cmd);
-    }
+    ivp_solid_upload(r);
 
     /* ── Render pass setup (MSAA or direct) ───────────────────────────── */
     SDL_GPUColorTargetInfo ct = {0};
@@ -485,13 +480,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
         SDL_PushGPUVertexUniformData(r->cmd, 0,
             &inst_uniform, (Uint32)sizeof(inst_uniform));
 
-        if (r->protos.sphere_instances.count > 0)
-            ivp_gpu_proto_mesh_draw_instanced(&r->protos.sphere,
-                &r->protos.sphere_instances, pass);
-
-        if (r->protos.box_instances.count > 0)
-            ivp_gpu_proto_mesh_draw_instanced(&r->protos.box,
-                &r->protos.box_instances, pass);
+        ivp_solid_draw(r, pass);
     }
 
     /* ── 2D HUD overlay (ortho matrix, 64 bytes) ─────────────────────── */
@@ -522,10 +511,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_advance(&r->stream_3d, NULL);
     ivp_gpu_stream_advance(&r->stream_2d, NULL);
     ivp_gpu_stream_advance(&r->stream_tri, NULL);
-    if (r->protos.ready) {
-        ivp_gpu_instance_buf_advance(&r->protos.sphere_instances, NULL);
-        ivp_gpu_instance_buf_advance(&r->protos.box_instances, NULL);
-    }
+    ivp_solid_advance(r);
 
     r->cmd = NULL;
     r->swapchain_tex = NULL;

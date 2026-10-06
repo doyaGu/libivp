@@ -225,6 +225,51 @@ void ivp_render_draw_solid_aabb(ivp_renderer_t *r,
                                 const float min[3], const float max[3],
                                 const float color[3]);
 
+/* Solid cylinder between the axis end points a and b. */
+void ivp_render_draw_solid_cylinder(ivp_renderer_t *r,
+                                    const float a[3], const float b[3],
+                                    float radius,
+                                    const float color[3]);
+
+/* Solid cone; same arguments as ivp_render_draw_wire_cone. */
+void ivp_render_draw_solid_cone(ivp_renderer_t *r,
+                                const float apex[3],
+                                const float base_center[3],
+                                float base_radius,
+                                const float color[3]);
+
+/* Solid capsule: cylinder between a and b plus a hemisphere at each end. */
+void ivp_render_draw_solid_capsule(ivp_renderer_t *r,
+                                   const float a[3], const float b[3],
+                                   float radius,
+                                   const float color[3]);
+
+/* ── Static solid meshes ───────────────────────────────────────────────── */
+
+/* A triangle mesh uploaded once and drawn many times, instanced and lit like
+ * the primitives above.  Triangles must wind counter-clockwise seen from
+ * outside; normals are flat (one per triangle).  Returns NULL if the mesh is
+ * empty, an index is out of range, or it needs more than 65535 vertices
+ * (3 per triangle, so at most 21845 triangles).  `positions` is
+ * 3 floats per vertex, `indices` 3 per triangle. */
+typedef struct ivp_render_mesh ivp_render_mesh_t;
+
+ivp_render_mesh_t *ivp_render_mesh_create(ivp_renderer_t *r,
+                                          const float *positions,
+                                          int vertex_count,
+                                          const int *indices,
+                                          int triangle_count);
+
+/* Frees the mesh; r may be NULL.  Meshes still alive when the renderer is
+ * destroyed are released with it. */
+void ivp_render_mesh_destroy(ivp_render_mesh_t *mesh);
+
+/* model: column-major 4x4 (mesh space -> world). */
+void ivp_render_draw_solid_mesh(ivp_renderer_t *r,
+                                ivp_render_mesh_t *mesh,
+                                const float model[16],
+                                const float color[3]);
+
 /* ── Lighting control ──────────────────────────────────────────────────── */
 
 void ivp_render_set_light_dir(ivp_renderer_t *r, const float dir[3]);

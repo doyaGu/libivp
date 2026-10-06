@@ -58,10 +58,25 @@ typedef struct ivp_render_lighting {
 typedef struct ivp_proto_shapes {
     ivp_gpu_proto_mesh_t    sphere;
     ivp_gpu_proto_mesh_t    box;
+    ivp_gpu_proto_mesh_t    cylinder;   /* radius 1, y in [-1,1] */
+    ivp_gpu_proto_mesh_t    cone;       /* base radius 1 at y=-1, apex y=+1 */
     ivp_gpu_instance_buf_t  sphere_instances;
     ivp_gpu_instance_buf_t  box_instances;
+    ivp_gpu_instance_buf_t  cylinder_instances;
+    ivp_gpu_instance_buf_t  cone_instances;
     bool                    ready;
 } ivp_proto_shapes_t;
+
+/* User mesh (ivp_render_mesh_create): static geometry drawn instanced with
+ * the same pipeline.  Linked into ivp_renderer.meshes. */
+struct ivp_render_mesh {
+    ivp_renderer_t         *renderer;
+    ivp_render_mesh_t      *next;
+    ivp_gpu_proto_mesh_t    mesh;
+    ivp_gpu_instance_buf_t  instances;
+    float                   center[3];   /* bounding sphere, mesh space */
+    float                   radius;
+};
 
 /* Instance data layout (must match instanced vertex shader attributes). */
 typedef struct ivp_solid_instance {
@@ -73,6 +88,14 @@ typedef struct ivp_solid_instance {
 /* Proto shape lifecycle (defined in ivp_render_solid.c). */
 ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
 void         ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
+
+/* Per-frame hooks for the built-in shapes and every user mesh
+ * (defined in ivp_render_solid.c). */
+void ivp_solid_begin_frame(ivp_renderer_t *r);
+void ivp_solid_upload(ivp_renderer_t *r);
+void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass);
+void ivp_solid_advance(ivp_renderer_t *r);
+void ivp_solid_destroy_meshes(ivp_renderer_t *r);
 
 /* ── Screenshot hooks (defined in ivp_render_capture.c) ────────────────── */
 
@@ -99,6 +122,7 @@ struct ivp_renderer {
     /* Instanced solid rendering */
     SDL_GPUGraphicsPipeline *inst_pipeline;
     ivp_proto_shapes_t       protos;
+    ivp_render_mesh_t       *meshes;      /* user meshes, singly linked */
 
     /* MSAA */
     ivp_gpu_msaa_t           msaa;

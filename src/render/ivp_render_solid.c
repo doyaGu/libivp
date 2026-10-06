@@ -9,6 +9,7 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_assert.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ── Prototype vertex: position + normal ───────────────────────────────── */
@@ -157,8 +158,135 @@ static void box_build(proto_vertex_t verts[BOX_VERTS], Uint16 indices[BOX_TRIS *
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * Cylinder and cone generation (radius 1, y in [-1,1], axis = +Y)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define SHAPE_SEGMENTS   24
+#define CYL_VERTS        (4 * SHAPE_SEGMENTS + 2)
+#define CYL_TRIS         (4 * SHAPE_SEGMENTS)
+#define CONE_VERTS       (3 * SHAPE_SEGMENTS + 1)
+#define CONE_TRIS        (2 * SHAPE_SEGMENTS)
+
+typedef struct shape_builder {
+    proto_vertex_t *verts;
+    Uint16         *indices;
+    int             nv, ni;
+} shape_builder_t;
+
+static int shape_vert(shape_builder_t *b, float x, float y, float z,
+                      float nx, float ny, float nz)
+{
+    proto_vertex_t *v = &b->verts[b->nv];
+    float len = sqrtf(nx*nx + ny*ny + nz*nz);
+    if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
+    v->pos[0] = x;  v->pos[1] = y;  v->pos[2] = z;
+    v->nrm[0] = nx; v->nrm[1] = ny; v->nrm[2] = nz;
+    return b->nv++;
+}
+
+/* Emit a triangle, flipping it when its winding disagrees with the vertex
+ * normals so every generated face is counter-clockwise from outside. */
+static void shape_tri(shape_builder_t *b, int i0, int i1, int i2)
+{
+    const proto_vertex_t *a = &b->verts[i0], *c = &b->verts[i1], *d = &b->verts[i2];
+    float e1[3] = { c->pos[0]-a->pos[0], c->pos[1]-a->pos[1], c->pos[2]-a->pos[2] };
+    float e2[3] = { d->pos[0]-a->pos[0], d->pos[1]-a->pos[1], d->pos[2]-a->pos[2] };
+    float n[3]  = { e1[1]*e2[2]-e1[2]*e2[1],
+                    e1[2]*e2[0]-e1[0]*e2[2],
+                    e1[0]*e2[1]-e1[1]*e2[0] };
+    float dot = n[0]*(a->nrm[0]+c->nrm[0]+d->nrm[0])
+              + n[1]*(a->nrm[1]+c->nrm[1]+d->nrm[1])
+              + n[2]*(a->nrm[2]+c->nrm[2]+d->nrm[2]);
+    if (dot < 0.0f) { int t = i1; i1 = i2; i2 = t; }
+    b->indices[b->ni++] = (Uint16)i0;
+    b->indices[b->ni++] = (Uint16)i1;
+    b->indices[b->ni++] = (Uint16)i2;
+}
+
+static void shape_angle(int i, float *c, float *s)
+{
+    float a = 6.28318530717958647692f * (float)i / (float)SHAPE_SEGMENTS;
+    *c = cosf(a);
+    *s = sinf(a);
+}
+
+static void cylinder_build(proto_vertex_t verts[CYL_VERTS], Uint16 indices[CYL_TRIS * 3],
+                           int *nv, int *ni)
+{
+    shape_builder_t b = { verts, indices, 0, 0 };
+    const int N = SHAPE_SEGMENTS;
+    int side0 = b.nv;
+    for (int i = 0; i < N; i++) {              /* side: top/bottom pair per column */
+        float c, s;  shape_angle(i, &c, &s);
+        shape_vert(&b, c,  1.0f, s, c, 0.0f, s);
+        shape_vert(&b, c, -1.0f, s, c, 0.0f, s);
+    }
+    for (int i = 0; i < N; i++) {
+        int j = (i + 1) % N;
+        int t0 = side0 + 2*i, b0 = t0 + 1, t1 = side0 + 2*j, b1 = t1 + 1;
+        shape_tri(&b, t0, b0, b1);
+        shape_tri(&b, t0, b1, t1);
+    }
+    for (int cap = 0; cap < 2; cap++) {        /* caps: +Y then -Y */
+        float y = cap ? -1.0f : 1.0f;
+        int centre = shape_vert(&b, 0.0f, y, 0.0f, 0.0f, y, 0.0f);
+        int ring0 = b.nv;
+        for (int i = 0; i < N; i++) {
+            float c, s;  shape_angle(i, &c, &s);
+            shape_vert(&b, c, y, s, 0.0f, y, 0.0f);
+        }
+        for (int i = 0; i < N; i++)
+            shape_tri(&b, centre, ring0 + i, ring0 + (i + 1) % N);
+    }
+    *nv = b.nv;  *ni = b.ni;
+}
+
+static void cone_build(proto_vertex_t verts[CONE_VERTS], Uint16 indices[CONE_TRIS * 3],
+                       int *nv, int *ni)
+{
+    shape_builder_t b = { verts, indices, 0, 0 };
+    const int N = SHAPE_SEGMENTS;
+    /* Side normal of a cone with base radius 1 and height 2: (2c, 1, 2s). */
+    int ring0 = b.nv;
+    for (int i = 0; i < N; i++) {
+        float c, s;  shape_angle(i, &c, &s);
+        shape_vert(&b, c, -1.0f, s, 2.0f*c, 1.0f, 2.0f*s);
+    }
+    int tip0 = b.nv;
+    for (int i = 0; i < N; i++) {              /* one apex copy per segment */
+        float c, s;  shape_angle(i, &c, &s);
+        float c1, s1;  shape_angle(i + 1, &c1, &s1);
+        float mx = c + c1, mz = s + s1;        /* mid-angle direction */
+        shape_vert(&b, 0.0f, 1.0f, 0.0f, mx, 1.0f, mz);
+    }
+    for (int i = 0; i < N; i++)
+        shape_tri(&b, ring0 + i, ring0 + (i + 1) % N, tip0 + i);
+    int centre = shape_vert(&b, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f);
+    int cap0 = b.nv;
+    for (int i = 0; i < N; i++) {
+        float c, s;  shape_angle(i, &c, &s);
+        shape_vert(&b, c, -1.0f, s, 0.0f, -1.0f, 0.0f);
+    }
+    for (int i = 0; i < N; i++)
+        shape_tri(&b, centre, cap0 + i, cap0 + (i + 1) % N);
+    *nv = b.nv;  *ni = b.ni;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * Proto shape initialization / teardown
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+static ivp_result_t shapes_upload_generated(ivp_gpu_proto_mesh_t *out,
+                                            ivp_gpu_device_t *dev, bool cone)
+{
+    proto_vertex_t verts[CYL_VERTS > CONE_VERTS ? CYL_VERTS : CONE_VERTS];
+    Uint16 idx[(CYL_TRIS > CONE_TRIS ? CYL_TRIS : CONE_TRIS) * 3];
+    int nv, ni;
+    if (cone) cone_build(verts, idx, &nv, &ni);
+    else      cylinder_build(verts, idx, &nv, &ni);
+    return ivp_gpu_proto_mesh_upload(out, dev, verts, nv,
+                                     (int)sizeof(proto_vertex_t), idx, ni);
+}
 
 ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev)
 {
@@ -175,7 +303,7 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
         res = ivp_gpu_proto_mesh_upload(&ps->sphere, dev,
             ico.verts, ico.nv, (int)sizeof(proto_vertex_t),
             ico.indices, ico.ni);
-        if (res != IVP_OK) return res;
+        if (res != IVP_OK) goto fail;
     }
 
     /* Unit box */
@@ -186,11 +314,13 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
         res = ivp_gpu_proto_mesh_upload(&ps->box, dev,
             bv, BOX_VERTS, (int)sizeof(proto_vertex_t),
             bi, BOX_TRIS * 3);
-        if (res != IVP_OK) {
-            ivp_gpu_proto_mesh_destroy(&ps->sphere, dev);
-            return res;
-        }
+        if (res != IVP_OK) goto fail;
     }
+
+    res = shapes_upload_generated(&ps->cylinder, dev, false);
+    if (res != IVP_OK) goto fail;
+    res = shapes_upload_generated(&ps->cone, dev, true);
+    if (res != IVP_OK) goto fail;
 
     /* Instance buffers (capacity: 4096 instances each) */
     res = ivp_gpu_instance_buf_create(&ps->sphere_instances, dev,
@@ -198,6 +328,14 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
     if (res != IVP_OK) goto fail;
 
     res = ivp_gpu_instance_buf_create(&ps->box_instances, dev,
+        4096, (int)sizeof(ivp_solid_instance_t));
+    if (res != IVP_OK) goto fail;
+
+    res = ivp_gpu_instance_buf_create(&ps->cylinder_instances, dev,
+        4096, (int)sizeof(ivp_solid_instance_t));
+    if (res != IVP_OK) goto fail;
+
+    res = ivp_gpu_instance_buf_create(&ps->cone_instances, dev,
         4096, (int)sizeof(ivp_solid_instance_t));
     if (res != IVP_OK) goto fail;
 
@@ -211,8 +349,12 @@ fail:
 
 void ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev)
 {
+    ivp_gpu_instance_buf_destroy(&ps->cone_instances, dev);
+    ivp_gpu_instance_buf_destroy(&ps->cylinder_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->box_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->sphere_instances, dev);
+    ivp_gpu_proto_mesh_destroy(&ps->cone, dev);
+    ivp_gpu_proto_mesh_destroy(&ps->cylinder, dev);
     ivp_gpu_proto_mesh_destroy(&ps->box, dev);
     ivp_gpu_proto_mesh_destroy(&ps->sphere, dev);
     ps->ready = false;
@@ -327,4 +469,284 @@ void ivp_render_set_ambient(ivp_renderer_t *r, float ambient)
     if (ambient < 0.0f) ambient = 0.0f;
     if (ambient > 1.0f) ambient = 1.0f;
     r->lighting.ambient = ambient;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Cylinder / cone / capsule
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Model matrix for a unit shape (radius 1, y in [-1,1]) mapped onto the
+ * segment p0 -> p1: +Y along the segment, centred on its midpoint, scaled by
+ * `radius` across and half the length along.  Returns the bounding radius,
+ * or a negative value when the segment is degenerate. */
+static float segment_model(float m[16], const float p0[3], const float p1[3],
+                           float radius)
+{
+    float y[3] = { p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2] };
+    float len = sqrtf(y[0]*y[0] + y[1]*y[1] + y[2]*y[2]);
+    if (!(len > 1e-9f)) return -1.0f;
+    y[0] /= len;  y[1] /= len;  y[2] /= len;
+
+    /* x: any unit vector perpendicular to y */
+    float x[3];
+    if (fabsf(y[0]) < 0.9f) { x[0] = 0.0f; x[1] = -y[2]; x[2] = y[1]; }
+    else                    { x[0] = y[2]; x[1] = 0.0f;  x[2] = -y[0]; }
+    float xl = sqrtf(x[0]*x[0] + x[1]*x[1] + x[2]*x[2]);
+    x[0] /= xl;  x[1] /= xl;  x[2] /= xl;
+    float z[3] = { y[1]*x[2]-y[2]*x[1], y[2]*x[0]-y[0]*x[2], y[0]*x[1]-y[1]*x[0] };
+
+    float half = len * 0.5f;
+    memset(m, 0, 16 * sizeof(float));
+    for (int k = 0; k < 3; k++) {
+        m[0 + k]  = x[k] * radius;
+        m[4 + k]  = y[k] * half;
+        m[8 + k]  = z[k] * radius;
+        m[12 + k] = (p0[k] + p1[k]) * 0.5f;
+    }
+    m[15] = 1.0f;
+    return sqrtf(half*half + radius*radius);
+}
+
+static void queue_shape(ivp_renderer_t *r, ivp_gpu_instance_buf_t *buf,
+                        const float m[16], const float centre[3], float bound_r,
+                        const float color[3])
+{
+    if (!ivp_frustum_test_sphere(&r->frustum, centre, bound_r)) {
+        r->culled_count++;
+        return;
+    }
+    ivp_solid_instance_t *inst = (ivp_solid_instance_t *)
+        ivp_gpu_instance_buf_push(buf, 1);
+    if (!inst) return;
+    memcpy(inst->transform, m, 16 * sizeof(float));
+    memcpy(inst->color, color, 3 * sizeof(float));
+    inst->_pad = 0.0f;
+}
+
+void ivp_render_draw_solid_cylinder(ivp_renderer_t *r,
+                                    const float a[3], const float b[3],
+                                    float radius, const float color[3])
+{
+    if (!r->protos.ready) return;
+    float m[16];
+    float br = segment_model(m, a, b, radius);
+    if (br < 0.0f) return;
+    queue_shape(r, &r->protos.cylinder_instances, m, &m[12], br, color);
+}
+
+void ivp_render_draw_solid_cone(ivp_renderer_t *r,
+                                const float apex[3],
+                                const float base_center[3],
+                                float base_radius, const float color[3])
+{
+    if (!r->protos.ready) return;
+    float m[16];
+    /* The prototype has its apex at +Y, so run the segment base -> apex. */
+    float br = segment_model(m, base_center, apex, base_radius);
+    if (br < 0.0f) return;
+    queue_shape(r, &r->protos.cone_instances, m, &m[12], br, color);
+}
+
+void ivp_render_draw_solid_capsule(ivp_renderer_t *r,
+                                   const float a[3], const float b[3],
+                                   float radius, const float color[3])
+{
+    ivp_render_draw_solid_cylinder(r, a, b, radius, color);
+    ivp_render_draw_solid_sphere(r, a, radius, color);
+    ivp_render_draw_solid_sphere(r, b, radius, color);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Static meshes
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define MESH_MAX_VERTS      65535
+#define MESH_INSTANCE_CAP   1024
+
+ivp_render_mesh_t *ivp_render_mesh_create(ivp_renderer_t *r,
+                                          const float *positions,
+                                          int vertex_count,
+                                          const int *indices,
+                                          int triangle_count)
+{
+    if (!r || !r->protos.ready || !positions || !indices ||
+        vertex_count <= 0 || triangle_count <= 0 ||
+        triangle_count > MESH_MAX_VERTS / 3)
+        return NULL;
+    for (int i = 0; i < triangle_count * 3; i++)
+        if (indices[i] < 0 || indices[i] >= vertex_count) return NULL;
+
+    int nv = triangle_count * 3;
+    proto_vertex_t *verts = (proto_vertex_t *)malloc((size_t)nv * sizeof(*verts));
+    Uint16 *idx = (Uint16 *)malloc((size_t)nv * sizeof(*idx));
+    ivp_render_mesh_t *m = (ivp_render_mesh_t *)calloc(1, sizeof(*m));
+    if (!verts || !idx || !m) goto fail;
+
+    /* Unroll to flat-shaded vertices; collect the bounds on the way. */
+    float mn[3] = {  1e30f,  1e30f,  1e30f };
+    float mx[3] = { -1e30f, -1e30f, -1e30f };
+    for (int t = 0; t < triangle_count; t++) {
+        const float *p[3];
+        for (int k = 0; k < 3; k++) {
+            p[k] = positions + 3 * indices[3*t + k];
+            for (int c = 0; c < 3; c++) {
+                if (p[k][c] < mn[c]) mn[c] = p[k][c];
+                if (p[k][c] > mx[c]) mx[c] = p[k][c];
+            }
+        }
+        float e1[3] = { p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2] };
+        float e2[3] = { p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2] };
+        float n[3]  = { e1[1]*e2[2]-e1[2]*e2[1],
+                        e1[2]*e2[0]-e1[0]*e2[2],
+                        e1[0]*e2[1]-e1[1]*e2[0] };
+        float nl = sqrtf(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+        if (nl > 1e-20f) { n[0] /= nl; n[1] /= nl; n[2] /= nl; }
+        for (int k = 0; k < 3; k++) {
+            proto_vertex_t *v = &verts[3*t + k];
+            memcpy(v->pos, p[k], 3 * sizeof(float));
+            memcpy(v->nrm, n, 3 * sizeof(float));
+            idx[3*t + k] = (Uint16)(3*t + k);
+        }
+    }
+    float rad2 = 0.0f;
+    for (int c = 0; c < 3; c++) {
+        m->center[c] = (mn[c] + mx[c]) * 0.5f;
+        float h = (mx[c] - mn[c]) * 0.5f;
+        rad2 += h * h;
+    }
+    m->radius = sqrtf(rad2);
+
+    if (ivp_gpu_proto_mesh_upload(&m->mesh, &r->gpu, verts, nv,
+                                  (int)sizeof(proto_vertex_t), idx, nv) != IVP_OK)
+        goto fail;
+    if (ivp_gpu_instance_buf_create(&m->instances, &r->gpu, MESH_INSTANCE_CAP,
+                                    (int)sizeof(ivp_solid_instance_t)) != IVP_OK) {
+        ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+        goto fail;
+    }
+    free(verts);
+    free(idx);
+    m->renderer = r;
+    m->next = r->meshes;
+    r->meshes = m;
+    return m;
+
+fail:
+    free(verts);
+    free(idx);
+    free(m);
+    return NULL;
+}
+
+static void mesh_release(ivp_render_mesh_t *m)
+{
+    ivp_renderer_t *r = m->renderer;
+    /* The GPU may still read the buffers of frames in flight. */
+    if (r->gpu.device) SDL_WaitForGPUIdle(r->gpu.device);
+    ivp_gpu_instance_buf_destroy(&m->instances, &r->gpu);
+    ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+    free(m);
+}
+
+void ivp_render_mesh_destroy(ivp_render_mesh_t *mesh)
+{
+    if (!mesh) return;
+    ivp_renderer_t *r = mesh->renderer;
+    for (ivp_render_mesh_t **pp = &r->meshes; *pp; pp = &(*pp)->next) {
+        if (*pp == mesh) { *pp = mesh->next; break; }
+    }
+    mesh_release(mesh);
+}
+
+void ivp_render_draw_solid_mesh(ivp_renderer_t *r, ivp_render_mesh_t *mesh,
+                                const float model[16], const float color[3])
+{
+    if (!r->protos.ready || !mesh) return;
+
+    /* Bounding sphere through the model matrix (largest axis scale). */
+    float wc[3], s2 = 0.0f;
+    for (int k = 0; k < 3; k++)
+        wc[k] = model[k]*mesh->center[0] + model[4+k]*mesh->center[1] +
+                model[8+k]*mesh->center[2] + model[12+k];
+    for (int c = 0; c < 3; c++) {
+        float l2 = model[4*c]*model[4*c] + model[4*c+1]*model[4*c+1] +
+                   model[4*c+2]*model[4*c+2];
+        if (l2 > s2) s2 = l2;
+    }
+    queue_shape(r, &mesh->instances, model, wc, mesh->radius * sqrtf(s2), color);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Per-frame hooks
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define BUILTIN_COUNT 4
+
+static void builtin(ivp_proto_shapes_t *ps, int i,
+                    ivp_gpu_proto_mesh_t **mesh, ivp_gpu_instance_buf_t **inst)
+{
+    switch (i) {
+    case 0:  *mesh = &ps->sphere;   *inst = &ps->sphere_instances;   break;
+    case 1:  *mesh = &ps->box;      *inst = &ps->box_instances;      break;
+    case 2:  *mesh = &ps->cylinder; *inst = &ps->cylinder_instances; break;
+    default: *mesh = &ps->cone;     *inst = &ps->cone_instances;     break;
+    }
+}
+
+void ivp_solid_begin_frame(ivp_renderer_t *r)
+{
+    if (!r->protos.ready) return;
+    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        builtin(&r->protos, i, &m, &b);
+        ivp_gpu_instance_buf_reset(b);
+    }
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        ivp_gpu_instance_buf_reset(&u->instances);
+}
+
+void ivp_solid_upload(ivp_renderer_t *r)
+{
+    if (!r->protos.ready) return;
+    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        builtin(&r->protos, i, &m, &b);
+        ivp_gpu_instance_buf_upload(b, &r->gpu, r->cmd);
+    }
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        ivp_gpu_instance_buf_upload(&u->instances, &r->gpu, r->cmd);
+}
+
+void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass)
+{
+    if (!r->protos.ready) return;
+    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        builtin(&r->protos, i, &m, &b);
+        if (b->count > 0) ivp_gpu_proto_mesh_draw_instanced(m, b, pass);
+    }
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        if (u->instances.count > 0)
+            ivp_gpu_proto_mesh_draw_instanced(&u->mesh, &u->instances, pass);
+}
+
+void ivp_solid_advance(ivp_renderer_t *r)
+{
+    if (!r->protos.ready) return;
+    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        builtin(&r->protos, i, &m, &b);
+        ivp_gpu_instance_buf_advance(b, NULL);
+    }
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        ivp_gpu_instance_buf_advance(&u->instances, NULL);
+}
+
+void ivp_solid_destroy_meshes(ivp_renderer_t *r)
+{
+    while (r->meshes) {
+        ivp_render_mesh_t *m = r->meshes;
+        r->meshes = m->next;
+        mesh_release(m);
+    }
 }
