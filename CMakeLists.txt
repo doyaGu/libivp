@@ -489,6 +489,9 @@ if (IVP_BUILD_RENDER)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     )
     target_link_libraries(ivp_render PUBLIC SDL3::SDL3)
+    if (NOT MSVC)
+        target_link_libraries(ivp_render PRIVATE m)
+    endif ()
     target_compile_definitions(ivp_render PRIVATE
         IVP_RENDER_SHADER_DIR_FALLBACK="${IVP_SHADER_BIN_DIR}"
     )
