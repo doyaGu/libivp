@@ -26,11 +26,6 @@
 #define WATER_DENSITY  1.0f        /* masses are 1/1000 of real ones, see example_buoyancy */
 #define N_CRATES       6
 
-#define THRUST_ACCEL   3.2f        /* m/s^2 at full throttle */
-#define REVERSE_ACCEL  1.6f
-#define YAW_ACCEL      1.1f        /* rad/s^2 at full rudder */
-#define KEEL           4.0f        /* 1/s: sideways slip damping */
-
 static const double HULL_HALF[3] = { 1.6, 0.3, 0.65 };
 
 typedef struct boat_demo {
@@ -47,7 +42,30 @@ typedef struct boat_demo {
     float                speed_cruise;
     float                max_tilt;
     float                crate_moved;
+    /* tunables, also on the F5 panel */
+    float                thrust;              /* m/s^2 at full throttle; reverse is half */
+    float                yaw_accel;           /* rad/s^2 at full rudder */
+    float                keel;                /* 1/s: sideways slip damping */
+    float                linear_drag, angular_drag;   /* water drag of the buoyancy controller */
 } boat_demo_t;
+
+static void boat_apply(void *ctx)
+{
+    boat_demo_t *s = (boat_demo_t *)ctx;
+    s->buoy.linear_drag  = (ivp_real_t)s->linear_drag;
+    s->buoy.angular_drag = (ivp_real_t)s->angular_drag;
+}
+
+static void boat_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    boat_demo_t *s = (boat_demo_t *)app->user;
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "thrust",       &s->thrust,       0.5f, 8.0f, NULL, NULL);
+    demo_panel_add_float(p, "rudder",       &s->yaw_accel,    0.2f, 3.0f, NULL, NULL);
+    demo_panel_add_float(p, "keel",         &s->keel,         0.0f, 10.0f, NULL, NULL);
+    demo_panel_add_float(p, "linear drag",  &s->linear_drag,  0.0f, 8.0f, boat_apply, s);
+    demo_panel_add_float(p, "angular drag", &s->angular_drag, 0.0f, 8.0f, boat_apply, s);
+}
 
 /* Heading of the hull's forward (+X) axis in the water plane, degrees. */
 static float heading_deg(const ivp_object_t *hull)
@@ -72,15 +90,15 @@ static void boat_drive(const ivp_event_sim_t *es, ivp_object_t *obj, void *ctx)
     const float side[3] = { rot[6], rot[7], rot[8] };         /* hull +Z */
     if (pos[1] < WATER_Y - 0.25f) return;                     /* propeller out of the water */
 
-    float accel = s->throttle > 0.0f ? s->throttle * THRUST_ACCEL : s->throttle * REVERSE_ACCEL;
+    float accel = s->throttle > 0.0f ? s->throttle * s->thrust : s->throttle * 0.5f * s->thrust;
     float lateral = (float)(core->speed.k[0]) * side[0] + (float)(core->speed.k[1]) * side[1]
                   + (float)(core->speed.k[2]) * side[2];
     for (int i = 0; i < 3; i++)
-        core->speed_change.k[i] += (ivp_real_t)((fwd[i] * accel - side[i] * lateral * KEEL) * dt);
+        core->speed_change.k[i] += (ivp_real_t)((fwd[i] * accel - side[i] * lateral * s->keel) * dt);
 
     /* rudder: yaw about the world vertical, expressed in the core system
      * (the hull's own Y axis is vertical for a level boat) */
-    core->rot_speed_change.k[1] += (ivp_real_t)(s->steer * YAW_ACCEL * dt);
+    core->rot_speed_change.k[1] += (ivp_real_t)(s->steer * s->yaw_accel * dt);
 }
 
 static void boat_update(demo_app_t *app, demo_viewer_t *v, int frame)
@@ -293,13 +311,18 @@ int main(int argc, char **argv)
     }
 
     ivp_buoyancy_init(&s->buoy, (ivp_real_t)WATER_Y, (ivp_real_t)WATER_DENSITY);
-    s->buoy.linear_drag  = IVP_REAL(3.0);
-    s->buoy.angular_drag = IVP_REAL(2.0);
+    s->thrust = 3.2f;
+    s->yaw_accel = 1.1f;
+    s->keel = 4.0f;
+    s->linear_drag = 3.0f;
+    s->angular_drag = 2.0f;
+    boat_apply(s);
     ivp_environment_add_controller(w->env, 200, ivp_controller_buoyancy, &s->buoy);
 
     s->drive_handle = ivp_environment_add_controller(w->env, IVP_CP_ACTUATOR, boat_drive, s);
     ivp_environment_add_controller_to_core(w->env, s->drive_handle, s->hull);
 
+    app.viewer_init = boat_viewer_init;
     app.update   = boat_update;
     app.on_reset = boat_reset;
     app.draw     = boat_draw;
