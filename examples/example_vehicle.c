@@ -11,6 +11,7 @@
 #include "demo_app.h"
 
 #include <ivp/controllers/ivp_controller_raycast_car.h>
+#include "demo_car.h"
 #include <ivp/math/ivp_fast_math.h>
 
 #define ENGINE_FWD   200.0    /* N, balanced for the 20 kg chassis */
@@ -100,7 +101,7 @@ static void vehicle_draw(demo_app_t *app, demo_viewer_t *v)
 {
     vehicle_demo_t *s = (vehicle_demo_t *)app->user;
     const float c_ground[]  = {0.22f, 0.24f, 0.30f};
-    const float c_chassis[] = {0.2f, 0.6f, 1.0f};
+    const float c_chassis[] = {0.2f, 0.45f, 0.9f};
     const float c_ramp[]    = {0.6f, 0.5f, 0.3f};
     const float c_obs[]     = {0.9f, 0.5f, 0.2f};
     const float c_wheel_g[] = {0.2f, 1.0f, 0.3f};  /* grounded */
@@ -115,9 +116,10 @@ static void vehicle_draw(demo_app_t *app, demo_viewer_t *v)
     demo_draw_object(v, s->chassis, c_chassis);
     if (demo_object_speed(s->chassis) > 0.5f) demo_draw_velocity(v, s->chassis, c_vel);
 
-    /* Wheel contact points + suspension visualization (hard points are in
-     * the chassis core system) */
-    for (int i = 0; i < s->car.n_wheels; i++) {
+    /* solid view: the car model; wire view: wheel contact points and suspension
+     * (hard points are in the chassis core system) */
+    demo_draw_car(v, s->chassis, &s->car, c_chassis);
+    for (int i = 0; i < s->car.n_wheels && !v->solid; i++) {
         const ivp_car_wheel_t *wh = &s->car.wheels[i];
         ivp_vec3r_t hp_cs = ivp_vec3r(wh->hp_cs.k[0], wh->hp_cs.k[1], wh->hp_cs.k[2]);
         float hp[3];

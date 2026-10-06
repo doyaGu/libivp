@@ -13,6 +13,7 @@
 #include "demo_terrain.h"
 
 #include <ivp/controllers/ivp_controller_raycast_car.h>
+#include "demo_car.h"
 
 #define N          61             /* terrain points per side */
 #define FIELD      2.0f           /* metres between points: 120 m square */
@@ -118,40 +119,22 @@ static void offroad_draw(demo_app_t *app, demo_viewer_t *v)
     offroad_demo_t *s = (offroad_demo_t *)app->user;
     const float c_land[3]    = { 0.40f, 0.55f, 0.32f };
     const float c_wire[3]    = { 0.30f, 0.62f, 0.30f };
-    const float c_chassis[3] = { 0.20f, 0.60f, 1.00f };
+    const float c_chassis[3] = { 0.85f, 0.18f, 0.16f };
     const float c_crate[3]   = { 0.90f, 0.55f, 0.20f };
     const float c_wheel[3]   = { 0.12f, 0.12f, 0.14f };
-    const float c_susp[3]    = { 1.0f, 1.0f, 0.2f };
 
     demo_terrain_draw(v, &s->terrain, v->solid ? c_land : c_wire);
     for (int i = 0; i < N_CRATES; i++) demo_draw_object(v, s->crates[i], c_crate);
     demo_draw_object(v, s->chassis, c_chassis);
 
-    /* wheels: solid cylinders at the contact, or at the hard point when airborne */
-    float pos[3], rot[9];
-    demo_object_pose(s->chassis, pos, rot);
-    for (int i = 0; i < s->car.n_wheels; i++) {
-        const ivp_car_wheel_t *wh = &s->car.wheels[i];
-        ivp_vec3r_t hp_cs = ivp_vec3r(wh->hp_cs.k[0], wh->hp_cs.k[1], wh->hp_cs.k[2]);
-        float hp[3];
-        demo_core_point_ws(s->chassis, &hp_cs, hp);
-        float centre[3];
-        if (wh->grounded) {
-            float cp[3];
-            vec3r_to_float3(&wh->contact_point_ws, cp);
-            /* the wheel centre is one radius above the contact point along the hull's up axis */
-            for (int k = 0; k < 3; k++) centre[k] = cp[k] - rot[3 + k] * wh->wheel_radius;
-            demo_line(v, hp, centre, c_susp);
-        } else {
-            memcpy(centre, hp, sizeof(centre));
-        }
-        if (v->solid && v->renderer) {
-            const float w = 0.16f;
-            const float a[3] = { centre[0] - rot[6] * 0.0f - rot[0] * w, centre[1] - rot[1] * w, centre[2] - rot[2] * w };
-            const float b[3] = { centre[0] + rot[0] * w, centre[1] + rot[1] * w, centre[2] + rot[2] * w };
-            ivp_render_draw_solid_cylinder(v->renderer, a, b, wh->wheel_radius, c_wheel);
-        } else {
-            demo_sphere(v, centre, wh->wheel_radius, c_wheel);
+    demo_draw_car(v, s->chassis, &s->car, c_chassis);
+    if (!v->solid) {
+        for (int i = 0; i < s->car.n_wheels; i++) {
+            const ivp_car_wheel_t *wh = &s->car.wheels[i];
+            ivp_vec3r_t hp_cs = ivp_vec3r(wh->hp_cs.k[0], wh->hp_cs.k[1], wh->hp_cs.k[2]);
+            float hp[3];
+            demo_core_point_ws(s->chassis, &hp_cs, hp);
+            demo_sphere(v, hp, wh->wheel_radius, c_wheel);
         }
     }
 
