@@ -23,9 +23,12 @@ void main() {
     vec4 world_pos = model * vec4(aPos, 1.0);
     gl_Position = pc.vp * world_pos;
 
-    mat3 nm = mat3(model);
+    /* cofactor matrix = inverse transpose up to a positive scale, so normals
+     * stay correct under non-uniform scaling (cylinders, cones, boxes) */
+    vec3 c0 = model[0].xyz, c1 = model[1].xyz, c2 = model[2].xyz;
+    mat3 nm = mat3(cross(c1, c2), cross(c2, c0), cross(c0, c1));
     vec3 nrm_ws = normalize(nm * aNrm);
     float ndotl = max(dot(nrm_ws, pc.light_dir.xyz), 0.0);
-    float ambient = pc.light_dir.w;
-    vCol = iCol * (ndotl + ambient);
+    float ambient = pc.light_dir.w * (0.75 - 0.25 * nrm_ws.y);  /* sky (-Y) / ground */
+    vCol = iCol * (0.7 * ndotl + ambient);
 }

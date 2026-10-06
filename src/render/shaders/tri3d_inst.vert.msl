@@ -29,10 +29,13 @@ vertex VSOut vs_main(VSIn in [[stage_in]],
     VSOut out;
     out.pos = u.vp * world_pos;
 
-    float3x3 nm = float3x3(model[0].xyz, model[1].xyz, model[2].xyz);
+    /* cofactor matrix = inverse transpose up to a positive scale, so normals
+     * stay correct under non-uniform scaling (cylinders, cones, boxes) */
+    float3 c0 = model[0].xyz, c1 = model[1].xyz, c2 = model[2].xyz;
+    float3x3 nm = float3x3(cross(c1, c2), cross(c2, c0), cross(c0, c1));
     float3 nrm_ws = normalize(nm * in.aNrm);
     float ndotl = max(dot(nrm_ws, u.light_dir.xyz), 0.0f);
-    float ambient = u.light_dir.w;
-    out.col = in.iCol * (ndotl + ambient);
+    float ambient = u.light_dir.w * (0.75f - 0.25f * nrm_ws.y);  /* sky (-Y) / ground */
+    out.col = in.iCol * (0.7f * ndotl + ambient);
     return out;
 }

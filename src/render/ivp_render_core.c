@@ -228,9 +228,10 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
 
     /* Lighting defaults */
     {
-        float default_dir[3] = { 0.577f, 0.577f, -0.577f };
+        /* IVP worlds are Y down (gravity +Y, camera up -Y): light from above */
+        float default_dir[3] = { 0.40f, -0.80f, -0.45f };
         memcpy(r->lighting.light_dir, default_dir, sizeof(default_dir));
-        r->lighting.ambient = 0.25f;
+        r->lighting.ambient = 0.45f;
     }
 
     /* Timing */
