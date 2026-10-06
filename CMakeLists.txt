@@ -369,6 +369,14 @@ if (NOT MSVC)
             APPEND PROPERTY COMPILE_OPTIONS "-fno-strict-aliasing")
 endif ()
 
+if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    # GEOMPACK's f2c translation shifts array base pointers to preserve
+    # Fortran's one-based indexing. GCC diagnoses the intentional pointer
+    # adjustment as an out-of-bounds access after inlining.
+    set_property(SOURCE src/builder/ivp_geompack.c APPEND PROPERTY
+            COMPILE_OPTIONS "-Wno-array-bounds")
+endif ()
+
 # Apply strict warning flags
 if (MSVC)
     target_compile_options(ivp PRIVATE /W4 /WX)

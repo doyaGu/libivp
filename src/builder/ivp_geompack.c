@@ -1256,7 +1256,7 @@ static void dsphdc_(ivp_geompack_t *gp) {
 		    en[0] = normals[f * 3 + 2] * ab[2] - normals[f * 3 + 3] * ab[1];
 		    en[1] = normals[f * 3 + 3] * ab[0] - normals[f * 3 + 1] * ab[2];
 		    en[2] = normals[f * 3 + 1] * ab[1] - normals[f * 3 + 2] * ab[0];
-		    if (fflag != sf > 0) {
+		    if (fflag != (sf > 0)) {
 			en[0] = -en[0];
 			en[1] = -en[1];
 			en[2] = -en[2];

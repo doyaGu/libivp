@@ -85,7 +85,8 @@ static int pc_offset_from_lineslist(const ivp_pc_templ_line_t *lines, int n,
     return -1;
 }
 
-double ivp_pc_plane_area_size(const double *pts, const int *ids, int n, const double *normal)
+double ivp_pc_plane_area_size(const double *pts, const int *ids, int n,
+                              const double normal[3])
 {
     double sum = 0.0;
     const double *p0 = &pts[3 * ids[0]];
