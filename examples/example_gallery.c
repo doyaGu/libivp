@@ -69,6 +69,7 @@ static const card_t cards[] = {
     { "hover",            0, "Hover pads on the floating controller, with force limits that fail." },
     { "zones",            0, "Phantom volumes whose core sets drive a force field and two attachers." },
     { "contacts",         0, "Collision, friction and object listeners as instruments: a scale, a brake, drop tests." },
+    { "sensors",          0, "Radar and sphere probe queries, the look-ahead ranges and the collision tolerance." },
     /* geometry */
     { "shapes",           1, "Convex hulls: cylinders, cones, prisms, pyramids." },
     { "cut",              1, "Chopping a compact surface into two pieces." },
