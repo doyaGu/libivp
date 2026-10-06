@@ -1537,7 +1537,7 @@ static inline int demo_run_headless(demo_app_t *app, int frames)
 }
 
 /* First command line argument that is not one of the framework options
- * (--headless/-H [N], --screenshot FILE [N], --overlays), or NULL. */
+ * (--headless/-H [N], --screenshot FILE [N], --overlays, --no-shadows), or NULL. */
 static inline const char *demo_positional_arg(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -1551,7 +1551,8 @@ static inline const char *demo_positional_arg(int argc, char **argv)
             if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
             continue;
         }
-        if (strcmp(argv[i], "--overlays") == 0 || is_num) continue;
+        if (strcmp(argv[i], "--overlays") == 0 || strcmp(argv[i], "--no-shadows") == 0 || is_num)
+            continue;
         return argv[i];
     }
     return NULL;
@@ -1597,7 +1598,7 @@ static inline void demo_apply_overlays(demo_viewer_t *v, demo_world_t *w)
 }
 
 static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int shot_frames,
-                                  bool overlays)
+                                  bool overlays, bool no_shadows)
 {
     demo_viewer_t *v = (demo_viewer_t *)calloc(1, sizeof(*v));
     if (!v) return 1;
@@ -1607,6 +1608,10 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
     }
     if (app->viewer_init) app->viewer_init(app, v);
     if (overlays) demo_apply_overlays(v, &app->world);
+    if (no_shadows) {
+        v->p_shadows = false;
+        demo_ui_apply(v);
+    }
     int frame = 0;
     while (demo_viewer_begin_frame(v, &app->world)) {
         /* screenshots simulate a fixed step per frame, so N frames always
@@ -1655,7 +1660,8 @@ static inline int demo_run(demo_app_t *app, int argc, char **argv)
     if (frames > 0) return demo_run_headless(app, frames);
     int shot_frames;
     const char *shot = demo_screenshot_arg(argc, argv, &shot_frames);
-    return demo_run_viewer(app, shot, shot_frames, demo_has_arg(argc, argv, "--overlays"));
+    return demo_run_viewer(app, shot, shot_frames, demo_has_arg(argc, argv, "--overlays"),
+                           demo_has_arg(argc, argv, "--no-shadows"));
 }
 
 #endif /* IVP_EXAMPLE_DEMO_APP_H */
