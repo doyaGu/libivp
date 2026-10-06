@@ -1267,7 +1267,23 @@ static inline int demo_run_headless(demo_app_t *app, int frames)
     return ok ? 0 : 1;
 }
 
-static inline int demo_run_viewer(demo_app_t *app)
+/* `--screenshot FILE [N]`: render N frames (default 60), save the last one
+ * as a PNG and exit.  Returns NULL when the option is absent. */
+static inline const char *demo_screenshot_arg(int argc, char **argv, int *frames)
+{
+    *frames = 60;
+    for (int i = 1; i + 1 < argc; i++) {
+        if (strcmp(argv[i], "--screenshot") != 0) continue;
+        if (i + 2 < argc && argv[i + 2][0] >= '0' && argv[i + 2][0] <= '9') {
+            int n = atoi(argv[i + 2]);
+            if (n > 0) *frames = n;
+        }
+        return argv[i + 1];
+    }
+    return NULL;
+}
+
+static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int shot_frames)
 {
     demo_viewer_t *v = (demo_viewer_t *)calloc(1, sizeof(*v));
     if (!v) return 1;
@@ -1293,8 +1309,17 @@ static inline int demo_run_viewer(demo_app_t *app)
             app->stats(app, buf, sizeof(buf));
             ivp_example_inspector_log(&v->inspector, "%s", buf);
         }
+        if (shot_path && frame == shot_frames - 1)
+            ivp_render_request_capture(v->renderer, shot_path);
         demo_viewer_end_frame(v, app->controls);
         frame++;
+        if (shot_path && frame >= shot_frames) {
+            if (ivp_render_capture_pending(v->renderer))
+                fprintf(stderr, "[%s] screenshot not written\n", app->cfg.tag);
+            else
+                printf("[%s] screenshot %s\n", app->cfg.tag, shot_path);
+            break;
+        }
     }
     demo_viewer_destroy(v, &app->world);
     free(v);
@@ -1307,7 +1332,9 @@ static inline int demo_run(demo_app_t *app, int argc, char **argv)
     demo_world_save_state(&app->world);
     int frames = demo_headless_frames(argc, argv);
     if (frames > 0) return demo_run_headless(app, frames);
-    return demo_run_viewer(app);
+    int shot_frames;
+    const char *shot = demo_screenshot_arg(argc, argv, &shot_frames);
+    return demo_run_viewer(app, shot, shot_frames);
 }
 
 #endif /* IVP_EXAMPLE_DEMO_APP_H */
