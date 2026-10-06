@@ -36,52 +36,54 @@ void ivp_cmatrix_identity(ivp_cmatrix_t *m)
     m->rows[0][0] = m->rows[1][1] = m->rows[2][2] = 1.0;
 }
 
-static void m3_copy(m3_t out, const m3_t a)
+static void m3_copy_impl(m3_t out, const m3_t a)
 {
     memcpy(out, a, sizeof(m3_t));
 }
 
 /* out = a * b */
-static void m3_mmult(const m3_t a, const m3_t b, m3_t out)
+static void m3_mmult_impl(const m3_t a, const m3_t b, m3_t out)
 {
     m3_t r;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             r[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
-    m3_copy(out, r);
+    m3_copy_impl(out, (const double (*)[3])r);
 }
 
 /* out = a^T * b (reference mimult3) */
-static void m3_mimult(const m3_t a, const m3_t b, m3_t out)
+static void m3_mimult_impl(const m3_t a, const m3_t b, m3_t out)
 {
     m3_t r;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             r[i][j] = a[0][i] * b[0][j] + a[1][i] * b[1][j] + a[2][i] * b[2][j];
-    m3_copy(out, r);
+    m3_copy_impl(out, (const double (*)[3])r);
 }
 
 /* out = a * b^T (reference mi2mult3) */
-static void m3_mi2mult(const m3_t a, const m3_t b, m3_t out)
+static void m3_mi2mult_impl(const m3_t a, const m3_t b, m3_t out)
 {
     m3_t r;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             r[i][j] = a[i][0] * b[j][0] + a[i][1] * b[j][1] + a[i][2] * b[j][2];
-    m3_copy(out, r);
+    m3_copy_impl(out, (const double (*)[3])r);
 }
 
-static void m3_vmult(const m3_t a, const double v[3], double out[3])
+static void m3_vmult_impl(const m3_t a, const double v[3], double out[3])
 {
     double r[3];
-    for (int i = 0; i < 3; i++) r[i] = a[i][0] * v[0] + a[i][1] * v[1] + a[i][2] * v[2];
+    for (int i = 0; i < 3; i++)
+        r[i] = a[i][0] * v[0] + a[i][1] * v[1] + a[i][2] * v[2];
     out[0] = r[0]; out[1] = r[1]; out[2] = r[2];
 }
 
-static void m3_vimult(const m3_t a, const double v[3], double out[3])
+static void m3_vimult_impl(const m3_t a, const double v[3], double out[3])
 {
     double r[3];
-    for (int i = 0; i < 3; i++) r[i] = a[0][i] * v[0] + a[1][i] * v[1] + a[2][i] * v[2];
+    for (int i = 0; i < 3; i++)
+        r[i] = a[0][i] * v[0] + a[1][i] * v[1] + a[2][i] * v[2];
     out[0] = r[0]; out[1] = r[1]; out[2] = r[2];
 }
 
@@ -95,15 +97,28 @@ static void m3_transpose(m3_t a)
         }
 }
 
-static void m3_get_row(const m3_t a, int r, double out[3])
+static void m3_get_row_impl(const m3_t a, int r, double out[3])
 {
     out[0] = a[r][0]; out[1] = a[r][1]; out[2] = a[r][2];
 }
 
-static void m3_get_col(const m3_t a, int c, double out[3])
+static void m3_get_col_impl(const m3_t a, int c, double out[3])
 {
     out[0] = a[0][c]; out[1] = a[1][c]; out[2] = a[2][c];
 }
+
+/* C17 does not implicitly add const to the element type behind a pointer
+ * to an array; C23 does.  Make that read-only conversion explicit while
+ * retaining the matrix type and the reference expression order. */
+#define M3_READ(m) ((const double (*)[3])(m))
+#define m3_copy(out, a) m3_copy_impl((out), M3_READ(a))
+#define m3_mmult(a, b, out) m3_mmult_impl(M3_READ(a), M3_READ(b), (out))
+#define m3_mimult(a, b, out) m3_mimult_impl(M3_READ(a), M3_READ(b), (out))
+#define m3_mi2mult(a, b, out) m3_mi2mult_impl(M3_READ(a), M3_READ(b), (out))
+#define m3_vmult(a, v, out) m3_vmult_impl(M3_READ(a), (v), (out))
+#define m3_vimult(a, v, out) m3_vimult_impl(M3_READ(a), (v), (out))
+#define m3_get_row(a, r, out) m3_get_row_impl(M3_READ(a), (r), (out))
+#define m3_get_col(a, c, out) m3_get_col_impl(M3_READ(a), (c), (out))
 
 static void m3_set_col(m3_t a, int c, const double v[3])
 {
@@ -827,14 +842,16 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     core_psi_matrix(c->obj_a, &m_ws_f_Acs);
 
     /* translation system */
-    const double (*m_fs_f_Rcs)[3] = c->m_Rfs_f_Rcs.rows;
+    const double (*m_fs_f_Rcs)[3] = M3_READ(c->m_Rfs_f_Rcs.rows);
     m3_t m_fs_f_ws, m_fs_f_Acs;
     m3_mi2mult(m_fs_f_Rcs, m_ws_f_Rcs.rows, m_fs_f_ws);
     m3_mmult(m_fs_f_ws, m_ws_f_Acs.rows, m_fs_f_Acs);
 
     /* rotation system and pretension */
-    const double (*m_Rrs_f_Rcs)[3] = c->has_rot ? c->m_Rrs_f_Rcs : c->m_Rfs_f_Rcs.rows;
-    const double (*m_Ars_f_Acs)[3] = c->has_rot ? c->m_Ars_f_Acs : c->m_Afs_f_Acs.rows;
+    const double (*m_Rrs_f_Rcs)[3] =
+        M3_READ(c->has_rot ? c->m_Rrs_f_Rcs : c->m_Rfs_f_Rcs.rows);
+    const double (*m_Ars_f_Acs)[3] =
+        M3_READ(c->has_rot ? c->m_Ars_f_Acs : c->m_Afs_f_Acs.rows);
     m3_t m_rs_f_Rcs_buffer;
     const double (*pm_rs_f_Rcs)[3] = m_Rrs_f_Rcs;
     m3_t m_rs_f_ws, m_rs_f_Acs;
@@ -851,7 +868,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         m3_mmult(m_rs_f_ws, m_ws_f_Acs.rows, m_rs_f_Acs);
     } else if (rotdims == 1) {
         /* cardan joint */
-        pm_rs_f_Rcs = m_rs_f_Rcs_buffer;
+        pm_rs_f_Rcs = M3_READ(m_rs_f_Rcs_buffer);
         double fixed_axisArs_Acs[3], fixed_axisArs_ws[3], fixed_axisArs_Rcs[3], fixed_axisRrs_Rcs[3];
         m3_get_row(m_Ars_f_Acs, mapR[0], fixed_axisArs_Acs);
         m3_vmult(m_ws_f_Acs.rows, fixed_axisArs_Acs, fixed_axisArs_ws);
@@ -894,7 +911,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         m3_t m_rs_f_Ars;
         m3_mi2mult(m_rs_f_Acs, m_Ars_f_Acs, m_rs_f_Ars);
         double q[4];
-        matrix_to_quat(m_rs_f_Ars, q);
+        matrix_to_quat(M3_READ(m_rs_f_Ars), q);
         drRA_now_rs[0] = 2.0 * fast_asin(q[0]);
         drRA_now_rs[1] = 2.0 * fast_asin(q[1]);
         drRA_now_rs[2] = 2.0 * fast_asin(q[2]);

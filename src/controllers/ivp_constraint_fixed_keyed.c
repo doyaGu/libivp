@@ -78,7 +78,7 @@ void ivp_fixed_keyed_init(ivp_fixed_keyed_state_t *state,
     ivp_vec3r_set_zero(&state->target_vel_ros);
 
     double q[4];
-    ivp_rm_m3_to_quat(rel, q);
+    ivp_rm_m3_to_quat((const double (*)[3])rel, q);
     ivp_rm_quatr_from_quat(q, &state->target_orient_0);
     state->target_orient_1 = state->target_orient_0;
     state->orient_keyed = false;
@@ -251,7 +251,7 @@ void ivp_controller_fixed_keyed(const ivp_event_sim_t *event_sim,
                           m_Aws_f_Aos[i][1] * m_Rws_f_Rrs[j][1] +
                           m_Aws_f_Aos[i][2] * m_Rws_f_Rrs[j][2];
         double q[4];
-        ivp_rm_m3_to_quat(m, q);
+        ivp_rm_m3_to_quat((const double (*)[3])m, q);
         ivp_vec3f_t drRA_rs;
         drRA_rs.k[0] = 2.0f * (float)ivp_rm_fast_asin(q[0]);
         drRA_rs.k[1] = 2.0f * (float)ivp_rm_fast_asin(q[1]);
