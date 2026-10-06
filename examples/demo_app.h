@@ -892,6 +892,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
         bool lmb = (btn & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
         if (v->fake_mouse) { mx = v->fake_mx; my = v->fake_my; }
         if (demo_key_just_pressed(v, SDL_SCANCODE_F5)) v->panel.open = !v->panel.open;
+        v->panel.max_h = (float)v->win_h - 150.0f - 120.0f;       /* clear of the help text below */
         v->ui_captured = demo_panel_update(&v->panel, v->win_w, 150.0f, mx, my, lmb);
         if (v->ui_captured) {
             v->dbg.hover = NULL;

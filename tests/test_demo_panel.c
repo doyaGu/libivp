@@ -16,7 +16,7 @@ static void on_change(void *ctx) { (void)ctx; s_changes++; }
 #define PX    720.0f
 
 /* centre of the slider track of float row 0 */
-static float track_y(void) { return TOP + DEMO_PANEL_HEAD_H + 28.0f; }
+static float track_y(void) { return TOP + DEMO_PANEL_HEAD_H + 26.0f; }
 
 IVP_TEST(panel_closed_does_not_capture) {
     demo_panel_t p;
@@ -81,7 +81,7 @@ IVP_TEST(panel_rows_stack_and_hit_the_right_one) {
     demo_panel_add_bool(&p, "b", &b, NULL, NULL);
     p.open = true;
 
-    /* the checkbox row starts after the 42 px float row */
+    /* the checkbox row starts after the float row */
     float by = TOP + DEMO_PANEL_HEAD_H + DEMO_PANEL_FLOAT_H + 8.0f;
     demo_panel_update(&p, WIN_W, TOP, PX + 20, by, true);
     IVP_ASSERT_TRUE(b);
@@ -112,12 +112,36 @@ IVP_TEST(panel_capacity_is_bounded) {
     IVP_ASSERT_FALSE(demo_panel_add_bool(&p, "b", (bool[]){ false }, NULL, NULL));
 }
 
+IVP_TEST(panel_rows_flow_into_a_second_column) {
+    demo_panel_t p;
+    float f[5] = { 0 };
+    demo_panel_init(&p);
+    for (int i = 0; i < 5; i++) demo_panel_add_float(&p, "f", &f[i], 0.0f, 1.0f, NULL, NULL);
+    p.open = true;
+    /* room for three float rows per column */
+    p.max_h = DEMO_PANEL_HEAD_H + 3 * DEMO_PANEL_FLOAT_H + DEMO_PANEL_PAD;
+    demo_panel_update(&p, WIN_W, TOP, 0.0f, 0.0f, false);
+    IVP_ASSERT_EQ(p.n_cols, 2);
+    IVP_ASSERT_EQ(p.params[2].col, 0);
+    IVP_ASSERT_EQ(p.params[3].col, 1);
+    IVP_ASSERT_NEAR(p.params[3].ry, DEMO_PANEL_HEAD_H, 1e-6);
+    IVP_ASSERT_NEAR(p.w, 2 * DEMO_PANEL_WIDTH, 1e-6);
+
+    /* a press in the middle of the second column's first track moves row 3 only */
+    float x0, x1, ty;
+    demo_panel_track(&p, &p.params[3], &x0, &x1, &ty);
+    demo_panel_update(&p, WIN_W, TOP, (x0 + x1) * 0.5f, ty, true);
+    IVP_ASSERT_NEAR(f[3], 0.5f, 1e-3);
+    IVP_ASSERT_NEAR(f[0], 0.0f, 1e-6);
+}
+
 int main(void) {
     IVP_REGISTER(panel_closed_does_not_capture);
     IVP_REGISTER(panel_slider_follows_the_mouse);
     IVP_REGISTER(panel_checkbox_toggles_once_per_click);
     IVP_REGISTER(panel_rows_stack_and_hit_the_right_one);
     IVP_REGISTER(panel_ignores_clicks_outside);
+    IVP_REGISTER(panel_rows_flow_into_a_second_column);
     IVP_REGISTER(panel_capacity_is_bounded);
     IVP_RUN_ALL();
 }
