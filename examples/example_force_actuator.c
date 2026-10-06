@@ -18,10 +18,9 @@
 /* 15 N attraction on 3 kg cubes = 5 m/s^2.  Note: real magnetic force has
  * inverse-square falloff with distance; this constant force is a
  * simplification for demonstration. */
-#define MAGNET_FORCE   (-15.0)
+#define MAGNET_FORCE   (-15.0)    /* N, negative = attraction */
 #define TOGGLE_PERIOD  5.0
 #define CUBE_HS        1.0
-#define PUSH_SPEED     3.0      /* P: push the cubes apart (m/s each) */
 
 typedef struct force_demo {
     ivp_object_t              *ground, *cube_a, *cube_b;
@@ -34,6 +33,11 @@ typedef struct force_demo {
     float                      dist_at_toggle;   /* when it was switched off */
     int                        n_pushes;
     float                      dist_after_push_on;   /* max distance after the push, magnet on */
+    /* F5 panel */
+    ivp_environment_t         *env;
+    float                      magnet_force;     /* N, negative = attraction */
+    float                      push_speed;       /* P: push the cubes apart (m/s each) */
+    bool                       auto_toggle;      /* switch the magnet every TOGGLE_PERIOD */
 } force_demo_t;
 
 static float anchor_distance(const force_demo_t *s)
@@ -47,14 +51,33 @@ static float anchor_distance(const force_demo_t *s)
 static void set_magnet(force_demo_t *s, bool on)
 {
     s->magnet_on = on;
-    ivp_force_actuator_set_force(&s->fa, on ? (ivp_real_t)MAGNET_FORCE : IVP_REAL(0.0));
+    ivp_force_actuator_set_force(&s->fa, on ? (ivp_real_t)s->magnet_force : IVP_REAL(0.0));
+}
+
+/* Panel callback: the magnet is on with the new force; cubes at rest sleep,
+ * so wake them. */
+static void force_apply(void *ctx)
+{
+    force_demo_t *s = (force_demo_t *)ctx;
+    if (s->magnet_on) set_magnet(s, true);
+    ivp_environment_ensure_core_in_simulation(s->env, s->cube_a);
+    ivp_environment_ensure_core_in_simulation(s->env, s->cube_b);
+}
+
+static void force_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    force_demo_t *s = (force_demo_t *)app->user;
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "magnet (N)", &s->magnet_force, -60.0f, 60.0f, force_apply, s);
+    demo_panel_add_float(p, "push (m/s)", &s->push_speed,   0.5f,   10.0f, NULL, NULL);
+    demo_panel_add_bool(p, "switch every 5 s",  &s->auto_toggle,  NULL, NULL);
 }
 
 static void push_apart(demo_app_t *app)
 {
     force_demo_t *s = (force_demo_t *)app->user;
-    demo_async_add_speed_ws(app->world.env, s->cube_a, -PUSH_SPEED, 0.0, 0.0);
-    demo_async_add_speed_ws(app->world.env, s->cube_b, PUSH_SPEED, 0.0, 0.0);
+    demo_async_add_speed_ws(app->world.env, s->cube_a, -(double)s->push_speed, 0.0, 0.0);
+    demo_async_add_speed_ws(app->world.env, s->cube_b, (double)s->push_speed, 0.0, 0.0);
     s->n_pushes++;
     printf("[force_actuator] t=%.2f push apart (magnet %s)\n", ivp_environment_get_time(app->world.env),
            s->magnet_on ? "ON" : "OFF");
@@ -71,7 +94,8 @@ static void force_update(demo_app_t *app, demo_viewer_t *v, int frame)
     }
     /* Toggle the magnet every 5 seconds of simulated time */
     double t = ivp_environment_get_time(app->world.env);
-    if (t >= s->next_toggle) {
+    if (!s->auto_toggle) s->next_toggle = t + TOGGLE_PERIOD;    /* the timer starts when it is switched on */
+    if (s->auto_toggle && t >= s->next_toggle) {
         s->next_toggle += TOGGLE_PERIOD;
         set_magnet(s, !s->magnet_on);
         s->toggle_count++;
@@ -211,12 +235,17 @@ int main(int argc, char **argv)
                                        (ivp_real_t)MAGNET_FORCE, true, true);
     }
     ivp_environment_add_controller(w->env, 100, ivp_controller_force_actuator, &s->fa);
+    s->env = w->env;
+    s->magnet_force = (float)MAGNET_FORCE;
+    s->push_speed = 3.0f;
+    s->auto_toggle = true;
     s->magnet_on = true;
     s->next_toggle = TOGGLE_PERIOD;
     s->start_dist = anchor_distance(s);
     s->min_dist_on = 1e9f;
 
     app.controls = "P: push the cubes apart";
+    app.viewer_init = force_viewer_init;
     app.update   = force_update;
     app.on_reset = force_reset;
     app.draw     = force_draw;
