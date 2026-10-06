@@ -291,6 +291,11 @@ void ivp_render_set_ambient(ivp_renderer_t *r, float ambient);
 
 /* ── 2D HUD text ───────────────────────────────────────────────────────── */
 
+/* Filled 2D rectangle in window pixels (origin top left), alpha blended.
+ * Drawn in call order together with the text, under the 2D lines. */
+void ivp_render_draw_rect(ivp_renderer_t *r, float x, float y, float w, float h,
+                          const float color[3], float alpha);
+
 void ivp_render_draw_text(ivp_renderer_t *r,
                           float x, float y,
                           const char *text,

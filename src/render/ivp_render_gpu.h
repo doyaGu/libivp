@@ -230,6 +230,8 @@ typedef struct ivp_shader_cache {
     unsigned char *fs_inst;     size_t fs_inst_len;
     unsigned char *vs_shadow;   size_t vs_shadow_len;
     unsigned char *fs_shadow;   size_t fs_shadow_len;
+    unsigned char *vs_rect;     size_t vs_rect_len;
+    unsigned char *fs_rect;     size_t fs_rect_len;
 } ivp_shader_cache_t;
 
 ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,

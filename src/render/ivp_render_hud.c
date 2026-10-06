@@ -133,6 +133,36 @@ static void push_hud_line(ivp_renderer_t *r,
     memcpy(v[1].col, col, 3 * sizeof(float));
 }
 
+/* ── Filled rectangles ─────────────────────────────────────────────────── */
+
+typedef struct rect_vertex {
+    float pos[2];
+    float col[4];
+} rect_vertex_t;
+
+static void push_rect(ivp_renderer_t *r, float x, float y, float w, float h,
+                      const float col[3], float alpha)
+{
+    rect_vertex_t *v = (rect_vertex_t *)ivp_gpu_stream_push(&r->stream_rect, 6);
+    if (!v) return;
+    const float xs[6] = { x, x + w, x, x + w, x + w, x };
+    const float ys[6] = { y, y,     y + h, y,   y + h, y + h };
+    for (int i = 0; i < 6; i++) {
+        v[i].pos[0] = xs[i];
+        v[i].pos[1] = ys[i];
+        v[i].col[0] = col[0];
+        v[i].col[1] = col[1];
+        v[i].col[2] = col[2];
+        v[i].col[3] = alpha;
+    }
+}
+
+void ivp_render_draw_rect(ivp_renderer_t *r, float x, float y, float w, float h,
+                          const float color[3], float alpha)
+{
+    push_rect(r, x, y, w, h, color, alpha);
+}
+
 /* ── Text drawing ──────────────────────────────────────────────────────── */
 
 void ivp_render_draw_text_scaled(ivp_renderer_t *r,
@@ -152,12 +182,16 @@ void ivp_render_draw_text_scaled(ivp_renderer_t *r,
         const unsigned char *g = ivp_hud_font_data[ch - FONT_FIRST];
         for (int row = 0; row < IVP_RENDER_HUD_FONT_H; row++) {
             unsigned char bits = g[row];
-            for (int col = 0; col < IVP_RENDER_HUD_FONT_W; col++) {
-                if (bits & (1 << (IVP_RENDER_HUD_FONT_W - 1 - col))) {
-                    float px = cx + (float)col * sc;
-                    float py = cy + (float)row * sc;
-                    push_hud_line(r, px, py, px + sc, py, color);
-                }
+            /* one rectangle per horizontal run of lit pixels */
+            int col = 0;
+            while (col < IVP_RENDER_HUD_FONT_W) {
+                if (!(bits & (1 << (IVP_RENDER_HUD_FONT_W - 1 - col)))) { col++; continue; }
+                int run = 1;
+                while (col + run < IVP_RENDER_HUD_FONT_W &&
+                       (bits & (1 << (IVP_RENDER_HUD_FONT_W - 1 - (col + run))))) run++;
+                push_rect(r, cx + (float)col * sc, cy + (float)row * sc,
+                          (float)run * sc, sc, color, 1.0f);
+                col += run;
             }
         }
         cx += (IVP_RENDER_HUD_FONT_W + 1) * sc;

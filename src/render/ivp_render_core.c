@@ -254,6 +254,30 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         }
     }
 
+    /* 2D filled rectangles: panels and text.  Position + rgba, blended. */
+    {
+        ivp_gpu_attrib_desc_t attrs[2] = {
+            { 0, 2, 0 },
+            { 1, 4, 2 * (int)sizeof(float) },
+        };
+        ivp_gpu_stream_desc_t desc = {0};
+        desc.capacity     = cfg.max_hud_vertices * 4;
+        desc.stride       = 6 * (int)sizeof(float);
+        desc.attribs      = attrs;
+        desc.attrib_count = 2;
+        desc.blend        = true;
+        desc.depth_always = true;   /* same pass as the scene: keep its depth target */
+        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        res = ivp_gpu_stream_create(&r->stream_rect, &r->gpu, &desc,
+                                    r->shaders.vs_rect, r->shaders.vs_rect_len,
+                                    r->shaders.fs_rect, r->shaders.fs_rect_len);
+        if (res != IVP_OK) {
+            ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
+            ivp_proto_shapes_destroy(&r->protos, &r->gpu);
+            goto fail_inst;
+        }
+    }
+
     /* Shadow map and depth pass; the renderer works without them */
     if (!ivp_shadow_init(r))
         fprintf(stderr, "shadows unavailable\n");
@@ -327,6 +351,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
     ivp_capture_destroy(r);
     ivp_shadow_destroy(r);
+    ivp_gpu_stream_destroy(&r->stream_rect, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
     ivp_solid_destroy_meshes(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
@@ -436,6 +461,7 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_gpu_stream_reset(&r->stream_2d);
     ivp_gpu_stream_reset(&r->stream_tri);
     ivp_gpu_stream_reset(&r->stream_overlay);
+    ivp_gpu_stream_reset(&r->stream_rect);
     r->overlay_mode = false;
     ivp_solid_begin_frame(r);
     r->culled_count = 0;
@@ -451,6 +477,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_overlay, &r->gpu, r->cmd);
+    ivp_gpu_stream_upload(&r->stream_rect, &r->gpu, r->cmd);
     ivp_solid_upload(r);
 
     /* Depth pass from the light, before the main pass reads it */
@@ -569,6 +596,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
         float ortho[16];
         ivp_render_mat4_ortho(ortho, 0.0f, (float)r->width,
                               (float)r->height, 0.0f, -1.0f, 1.0f);
+        ivp_gpu_stream_draw(&r->stream_rect, pass, r->cmd, ortho, 64);
         ivp_gpu_stream_draw(&r->stream_2d, pass, r->cmd, ortho, 64);
     }
 
@@ -593,6 +621,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_advance(&r->stream_2d, NULL);
     ivp_gpu_stream_advance(&r->stream_tri, NULL);
     ivp_gpu_stream_advance(&r->stream_overlay, NULL);
+    ivp_gpu_stream_advance(&r->stream_rect, NULL);
     ivp_solid_advance(r);
 
     r->cmd = NULL;

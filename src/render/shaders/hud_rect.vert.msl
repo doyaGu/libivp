@@ -1,0 +1,14 @@
+#include <metal_stdlib>
+using namespace metal;
+
+/* Filled 2D rectangles (triangle list) with alpha: HUD panels and text. */
+struct VSIn { float2 aPos [[attribute(0)]]; float4 aCol [[attribute(1)]]; };
+struct VSOut { float4 pos [[position]]; float4 col; };
+struct Uniforms { float4x4 proj; };
+
+vertex VSOut vs_main(VSIn in [[stage_in]], constant Uniforms& u [[buffer(0)]]) {
+    VSOut out;
+    out.pos = u.proj * float4(in.aPos, 0.0, 1.0);
+    out.col = in.aCol;
+    return out;
+}

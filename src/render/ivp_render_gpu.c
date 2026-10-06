@@ -104,6 +104,12 @@ ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,
     SDL_snprintf(name, sizeof(name), "shadow.frag.%s", ext);
     ok = ok && load_shader_file(&cache->fs_shadow, &cache->fs_shadow_len, name);
 
+    SDL_snprintf(name, sizeof(name), "hud_rect.vert.%s", ext);
+    ok = ok && load_shader_file(&cache->vs_rect, &cache->vs_rect_len, name);
+
+    SDL_snprintf(name, sizeof(name), "hud_rect.frag.%s", ext);
+    ok = ok && load_shader_file(&cache->fs_rect, &cache->fs_rect_len, name);
+
     if (!ok) {
         ivp_shader_cache_free(cache);
         return IVP_ERR_RENDER_SHADER;
@@ -122,6 +128,8 @@ void ivp_shader_cache_free(ivp_shader_cache_t *cache)
     if (cache->fs_inst)  { SDL_free(cache->fs_inst);  cache->fs_inst  = NULL; }
     if (cache->vs_shadow) { SDL_free(cache->vs_shadow); cache->vs_shadow = NULL; }
     if (cache->fs_shadow) { SDL_free(cache->fs_shadow); cache->fs_shadow = NULL; }
+    if (cache->vs_rect)  { SDL_free(cache->vs_rect);  cache->vs_rect  = NULL; }
+    if (cache->fs_rect)  { SDL_free(cache->fs_rect);  cache->fs_rect  = NULL; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

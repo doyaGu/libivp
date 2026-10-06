@@ -430,6 +430,7 @@ if (IVP_BUILD_RENDER)
         tri3d.vert tri3d.frag
         tri3d_inst.vert tri3d_inst.frag
         shadow.vert shadow.frag
+        hud_rect.vert hud_rect.frag
     )
     set(IVP_SHADER_OUTPUTS)
     foreach (SHADER ${IVP_SHADER_NAMES})
