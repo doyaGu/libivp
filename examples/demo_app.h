@@ -935,6 +935,13 @@ static inline void demo_box(demo_viewer_t *v, const float pos[3], const float ha
     if (draw) ivp_render_draw_wire_box(v->renderer, pos, half, rot, color);
 }
 
+/* Opacity of the solids drawn next (1 = opaque).  Translucent solids are
+ * blended after the opaque ones and cast no shadow. */
+static inline void demo_set_alpha(demo_viewer_t *v, float alpha)
+{
+    if (v->renderer) ivp_render_set_solid_alpha(v->renderer, alpha);
+}
+
 static inline void demo_solid_box(demo_viewer_t *v, const float pos[3], const float half[3],
                                   const float rot[9], const float color[3])
 {

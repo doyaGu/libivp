@@ -127,6 +127,11 @@ static void phantom_draw(demo_app_t *app, demo_viewer_t *v)
     {
         float pc[3];
         vec3r_to_float3(&s->phantom.center_ws, pc);
+        if (v->solid) {
+            demo_set_alpha(v, 0.22f);
+            demo_solid_sphere(v, pc, (float)s->phantom.radius, c_phantom);
+            demo_set_alpha(v, 1.0f);
+        }
         demo_sphere(v, pc, (float)s->phantom.radius, c_phantom);
     }
     for (int i = 0; i < N_DROP; i++) {

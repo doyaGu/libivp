@@ -152,6 +152,17 @@ static void buoyancy_draw(demo_app_t *app, demo_viewer_t *v)
         demo_thick_line(v, a, b, c_water, 3);
     }
 
+    /* The water body: a translucent slab down to the sea floor */
+    if (v->solid) {
+        const float ext = 12.0f;
+        const float depth = SEA_FLOOR_Y - WATER_SURFACE_Y;
+        const float centre[3] = { 0.0f, WATER_SURFACE_Y + depth * 0.5f, 0.0f };
+        const float half[3] = { ext, depth * 0.5f, ext };
+        demo_set_alpha(v, 0.28f);
+        demo_solid_box(v, centre, half, NULL, c_water);
+        demo_set_alpha(v, 1.0f);
+    }
+
     /* Flow direction arrow in the water */
     {
         float fa[3] = {-8.0f, WATER_SURFACE_Y, 8.0f};
