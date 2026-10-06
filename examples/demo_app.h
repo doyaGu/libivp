@@ -502,11 +502,36 @@ static inline void demo_async_push_ws(ivp_environment_t *env, ivp_object_t *obj,
 
 /* World pose of the object frame (core pose combined with the object's
  * shift_core_f_object / q_core_f_object, like IVP_Cache_Object). */
+/* The physics moves a body once per PSI (1/60 s), the window draws faster and
+ * unevenly (120 Hz, sub-steps of 1/300 s): drawn at its last PSI pose a moving
+ * body would advance in jerks, and the follow camera chasing it would shake the
+ * picture. While the window runs, g_demo_render_time holds the simulated time
+ * and poses are extrapolated from the last PSI with the body's velocities.
+ * Headless runs leave it at -1, so checks see the exact PSI poses. */
+static double g_demo_render_time = -1.0;
+
+static inline double demo_extrapolation_dt(const ivp_core_t *core)
+{
+    if (g_demo_render_time < 0.0) return 0.0;
+    double dt = g_demo_render_time - (double)core->time_of_last_psi;
+    return dt < 0.0 ? 0.0 : (dt > 0.05 ? 0.05 : dt);
+}
+
 static inline void demo_object_pose(const ivp_object_t *obj, float pos[3], float rot[9])
 {
     const ivp_core_t *core = obj->physical_core;
     ivp_quatr_t q = core->q_world_f_core_last_psi;
     ivp_vec3r_t p = core->pos_world_f_core_last_psi;
+    const double dt = demo_extrapolation_dt(core);
+    if (dt > 0.0) {
+        for (int k = 0; k < 3; k++) p.k[k] += core->speed.k[k] * (ivp_real_t)dt;
+        /* spin in the core system: q * (w dt / 2, 1), normalised */
+        ivp_quatr_t dq = ivp_quatr_make(0.5 * dt * (double)core->rot_speed.k[0],
+                                        0.5 * dt * (double)core->rot_speed.k[1],
+                                        0.5 * dt * (double)core->rot_speed.k[2], 1.0);
+        ivp_quat_mult(&q, &q, &dq);
+        ivp_quat_fast_normalize(&q);
+    }
     if (!obj->shift_core_f_object_is_zero) {
         ivp_mat3r_t m;
         ivp_quat_to_mat3(&q, &m);
@@ -546,6 +571,8 @@ static inline void demo_core_point_ws(const ivp_object_t *obj, const ivp_vec3r_t
 static inline void demo_object_center(const ivp_object_t *obj, float out[3])
 {
     vec3r_to_float3(&obj->physical_core->pos_world_f_core_last_psi, out);
+    const double dt = demo_extrapolation_dt(obj->physical_core);
+    for (int k = 0; k < 3 && dt > 0.0; k++) out[k] += (float)(obj->physical_core->speed.k[k] * dt);
 }
 
 static inline float demo_object_speed(const ivp_object_t *obj)
@@ -1649,6 +1676,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
         if (v->reset_requested && app->on_reset) app->on_reset(app);
         if (app->update) app->update(app, v, frame);
         demo_viewer_step(v, &app->world);
+        g_demo_render_time = (double)ivp_environment_get_time(app->world.env);
         if (app->cfg.grid_extent >= 0.0f) {
             demo_draw_grid_ex(v, app->cfg.grid_extent > 0.0f ? app->cfg.grid_extent : 30.0f,
                               app->cfg.grid_spacing > 0.0f ? app->cfg.grid_spacing : 1.0f,
@@ -1676,6 +1704,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
             break;
         }
     }
+    g_demo_render_time = -1.0;
     demo_viewer_destroy(v, &app->world);
     free(v);
     return 0;
