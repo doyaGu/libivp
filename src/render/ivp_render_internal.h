@@ -64,6 +64,8 @@ typedef struct ivp_proto_shapes {
     ivp_gpu_instance_buf_t  box_instances;
     ivp_gpu_instance_buf_t  cylinder_instances;
     ivp_gpu_instance_buf_t  cone_instances;
+    /* translucent instances of sphere, box, cylinder, cone (blend pass) */
+    ivp_gpu_instance_buf_t  blend[4];
     bool                    ready;
 } ivp_proto_shapes_t;
 
@@ -74,6 +76,7 @@ struct ivp_render_mesh {
     ivp_render_mesh_t      *next;
     ivp_gpu_proto_mesh_t    mesh;
     ivp_gpu_instance_buf_t  instances;
+    ivp_gpu_instance_buf_t  blend_instances;
     float                   center[3];   /* bounding sphere, mesh space */
     float                   radius;
 };
@@ -82,7 +85,7 @@ struct ivp_render_mesh {
 typedef struct ivp_solid_instance {
     float transform[16];  /* column-major 4×4 model matrix */
     float color[3];
-    float _pad;
+    float alpha;          /* 1 = opaque; < 1 is drawn in the blend pass */
 } ivp_solid_instance_t;
 
 /* Proto shape lifecycle (defined in ivp_render_solid.c). */
@@ -94,6 +97,7 @@ void         ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *
 void ivp_solid_begin_frame(ivp_renderer_t *r);
 void ivp_solid_upload(ivp_renderer_t *r);
 void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass);
+void ivp_solid_draw_blend(ivp_renderer_t *r, SDL_GPURenderPass *pass);
 void ivp_solid_advance(ivp_renderer_t *r);
 void ivp_solid_destroy_meshes(ivp_renderer_t *r);
 bool ivp_solid_has_instances(const ivp_renderer_t *r);
@@ -132,6 +136,8 @@ struct ivp_renderer {
 
     /* Instanced solid rendering */
     SDL_GPUGraphicsPipeline *inst_pipeline;
+    SDL_GPUGraphicsPipeline *inst_pipeline_blend;   /* alpha blended, no depth write */
+    float                    solid_alpha;           /* applies to the next solid draws */
     ivp_proto_shapes_t       protos;
     ivp_render_mesh_t       *meshes;      /* user meshes, singly linked */
 

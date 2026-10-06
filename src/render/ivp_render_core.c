@@ -194,7 +194,7 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
             { 3, 4, 4  * (int)sizeof(float) },  /* iRow1 */
             { 4, 4, 8  * (int)sizeof(float) },  /* iRow2 */
             { 5, 4, 12 * (int)sizeof(float) },  /* iRow3 */
-            { 6, 3, 16 * (int)sizeof(float) },  /* iCol  */
+            { 6, 4, 16 * (int)sizeof(float) },  /* iCol: rgb + alpha */
         };
         ivp_gpu_stream_desc_t desc = {0};
         desc.capacity         = 1;  /* dummy: pipeline only, no stream buf */
@@ -214,6 +214,18 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
             r->shaders.vs_inst, r->shaders.vs_inst_len,
             r->shaders.fs_inst, r->shaders.fs_inst_len);
         if (!r->inst_pipeline) { res = IVP_ERR_RENDER_SHADER; goto fail_tri; }
+
+        /* Same shaders, alpha blended, depth tested but not written */
+        desc.blend       = true;
+        desc.depth_write = false;
+        r->inst_pipeline_blend = ivp_gpu_create_pipeline(&r->gpu, &desc,
+            r->shaders.vs_inst, r->shaders.vs_inst_len,
+            r->shaders.fs_inst, r->shaders.fs_inst_len);
+        if (!r->inst_pipeline_blend) {
+            SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
+            res = IVP_ERR_RENDER_SHADER;
+            goto fail_tri;
+        }
     }
 
     /* Proto shapes (icosphere + unit box + instance buffers) */
@@ -277,6 +289,7 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
     return IVP_OK;
 
 fail_inst:
+    SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline_blend);
     SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
 fail_tri:
     ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
@@ -320,6 +333,10 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
     if (r->inst_pipeline && r->gpu.device) {
         SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
         r->inst_pipeline = NULL;
+    }
+    if (r->inst_pipeline_blend && r->gpu.device) {
+        SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline_blend);
+        r->inst_pipeline_blend = NULL;
     }
     ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_2d, &r->gpu);
@@ -530,6 +547,18 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
         }
 
         ivp_solid_draw(r, pass);
+
+        /* translucent solids over the opaque ones */
+        if (r->inst_pipeline_blend) {
+            SDL_BindGPUGraphicsPipeline(pass, r->inst_pipeline_blend);
+            SDL_PushGPUVertexUniformData(r->cmd, 0,
+                &inst_uniform, (Uint32)sizeof(inst_uniform));
+            if (r->shadow_map.tex) {
+                SDL_GPUTextureSamplerBinding sb = { r->shadow_map.tex, r->shadow_map.smp };
+                SDL_BindGPUFragmentSamplers(pass, 0, &sb, 1);
+            }
+            ivp_solid_draw_blend(r, pass);
+        }
     }
 
     /* ── Overlay lines: after the solids, no depth test ──────────────── */

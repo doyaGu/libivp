@@ -98,6 +98,7 @@ typedef struct ivp_gpu_stream_desc {
     SDL_GPUCullMode             cull_mode;        /* 0 = NONE (default) */
     int                         num_uniform_bufs; /* 0 = auto (1 for MSL) */
     int                         fs_num_samplers;  /* fragment shader texture samplers */
+    bool                        blend;            /* straight alpha blending */
     bool                        depth_only;       /* no colour target, 1 sample, depth bias (shadow pass) */
     /* Optional: second vertex buffer for instancing (slot 1) */
     const ivp_gpu_attrib_desc_t *inst_attribs;

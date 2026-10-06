@@ -229,6 +229,12 @@ void ivp_render_draw_solid_aabb(ivp_renderer_t *r,
                                 const float min[3], const float max[3],
                                 const float color[3]);
 
+/* Opacity of the solid primitives and meshes drawn after this call (1 =
+ * opaque, the value at the start of every frame).  Translucent solids are
+ * drawn after the opaque ones, blended, without writing depth and without
+ * casting shadows; they are not sorted against each other. */
+void ivp_render_set_solid_alpha(ivp_renderer_t *r, float alpha);
+
 /* Solid cylinder between the axis end points a and b. */
 void ivp_render_draw_solid_cylinder(ivp_renderer_t *r,
                                     const float a[3], const float b[3],

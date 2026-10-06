@@ -276,6 +276,28 @@ static void cone_build(proto_vertex_t verts[CONE_VERTS], Uint16 indices[CONE_TRI
  * Proto shape initialization / teardown
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+#define BUILTIN_COUNT 4    /* sphere, box, cylinder, cone */
+
+static void builtin(ivp_proto_shapes_t *ps, int i,
+                    ivp_gpu_proto_mesh_t **mesh, ivp_gpu_instance_buf_t **inst)
+{
+    switch (i) {
+    case 0:  *mesh = &ps->sphere;   *inst = &ps->sphere_instances;   break;
+    case 1:  *mesh = &ps->box;      *inst = &ps->box_instances;      break;
+    case 2:  *mesh = &ps->cylinder; *inst = &ps->cylinder_instances; break;
+    default: *mesh = &ps->cone;     *inst = &ps->cone_instances;     break;
+    }
+}
+
+/* Instance buffer a draw of built-in shape i goes to (opaque or blend). */
+static ivp_gpu_instance_buf_t *builtin_buf(ivp_renderer_t *r, int i)
+{
+    ivp_gpu_proto_mesh_t *m;
+    ivp_gpu_instance_buf_t *b;
+    builtin(&r->protos, i, &m, &b);
+    return r->solid_alpha < 0.999f ? &r->protos.blend[i] : b;
+}
+
 static ivp_result_t shapes_upload_generated(ivp_gpu_proto_mesh_t *out,
                                             ivp_gpu_device_t *dev, bool cone)
 {
@@ -339,6 +361,12 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
         4096, (int)sizeof(ivp_solid_instance_t));
     if (res != IVP_OK) goto fail;
 
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        res = ivp_gpu_instance_buf_create(&ps->blend[i], dev,
+            512, (int)sizeof(ivp_solid_instance_t));
+        if (res != IVP_OK) goto fail;
+    }
+
     ps->ready = true;
     return IVP_OK;
 
@@ -349,6 +377,8 @@ fail:
 
 void ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev)
 {
+    for (int i = 0; i < BUILTIN_COUNT; i++)
+        ivp_gpu_instance_buf_destroy(&ps->blend[i], dev);
     ivp_gpu_instance_buf_destroy(&ps->cone_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->cylinder_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->box_instances, dev);
@@ -392,12 +422,12 @@ void ivp_render_draw_solid_sphere(ivp_renderer_t *r,
     }
 
     ivp_solid_instance_t *inst = (ivp_solid_instance_t *)
-        ivp_gpu_instance_buf_push(&r->protos.sphere_instances, 1);
+        ivp_gpu_instance_buf_push(builtin_buf(r, 0), 1);
     if (!inst) return;
 
     make_scale_translate_mat4(inst->transform, pos, radius, radius, radius);
     memcpy(inst->color, color, 3 * sizeof(float));
-    inst->_pad = 0.0f;
+    inst->alpha = r->solid_alpha;
 }
 
 void ivp_render_draw_solid_box(ivp_renderer_t *r,
@@ -418,7 +448,7 @@ void ivp_render_draw_solid_box(ivp_renderer_t *r,
     }
 
     ivp_solid_instance_t *inst = (ivp_solid_instance_t *)
-        ivp_gpu_instance_buf_push(&r->protos.box_instances, 1);
+        ivp_gpu_instance_buf_push(builtin_buf(r, 1), 1);
     if (!inst) return;
 
     if (rot) {
@@ -443,7 +473,7 @@ void ivp_render_draw_solid_box(ivp_renderer_t *r,
                                   half_size[0], half_size[1], half_size[2]);
     }
     memcpy(inst->color, color, 3 * sizeof(float));
-    inst->_pad = 0.0f;
+    inst->alpha = r->solid_alpha;
 }
 
 void ivp_render_draw_solid_aabb(ivp_renderer_t *r,
@@ -520,7 +550,7 @@ static void queue_shape(ivp_renderer_t *r, ivp_gpu_instance_buf_t *buf,
     if (!inst) return;
     memcpy(inst->transform, m, 16 * sizeof(float));
     memcpy(inst->color, color, 3 * sizeof(float));
-    inst->_pad = 0.0f;
+    inst->alpha = r->solid_alpha;
 }
 
 void ivp_render_draw_solid_cylinder(ivp_renderer_t *r,
@@ -531,7 +561,7 @@ void ivp_render_draw_solid_cylinder(ivp_renderer_t *r,
     float m[16];
     float br = segment_model(m, a, b, radius);
     if (br < 0.0f) return;
-    queue_shape(r, &r->protos.cylinder_instances, m, &m[12], br, color);
+    queue_shape(r, builtin_buf(r, 2), m, &m[12], br, color);
 }
 
 void ivp_render_draw_solid_cone(ivp_renderer_t *r,
@@ -544,7 +574,7 @@ void ivp_render_draw_solid_cone(ivp_renderer_t *r,
     /* The prototype has its apex at +Y, so run the segment base -> apex. */
     float br = segment_model(m, base_center, apex, base_radius);
     if (br < 0.0f) return;
-    queue_shape(r, &r->protos.cone_instances, m, &m[12], br, color);
+    queue_shape(r, builtin_buf(r, 3), m, &m[12], br, color);
 }
 
 void ivp_render_draw_solid_capsule(ivp_renderer_t *r,
@@ -624,6 +654,12 @@ ivp_render_mesh_t *ivp_render_mesh_create(ivp_renderer_t *r,
         ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
         goto fail;
     }
+    if (ivp_gpu_instance_buf_create(&m->blend_instances, &r->gpu, MESH_INSTANCE_CAP / 4,
+                                    (int)sizeof(ivp_solid_instance_t)) != IVP_OK) {
+        ivp_gpu_instance_buf_destroy(&m->instances, &r->gpu);
+        ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+        goto fail;
+    }
     free(verts);
     free(idx);
     m->renderer = r;
@@ -643,6 +679,7 @@ static void mesh_release(ivp_render_mesh_t *m)
     ivp_renderer_t *r = m->renderer;
     /* The GPU may still read the buffers of frames in flight. */
     if (r->gpu.device) SDL_WaitForGPUIdle(r->gpu.device);
+    ivp_gpu_instance_buf_destroy(&m->blend_instances, &r->gpu);
     ivp_gpu_instance_buf_destroy(&m->instances, &r->gpu);
     ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
     free(m);
@@ -673,25 +710,13 @@ void ivp_render_draw_solid_mesh(ivp_renderer_t *r, ivp_render_mesh_t *mesh,
                    model[4*c+2]*model[4*c+2];
         if (l2 > s2) s2 = l2;
     }
-    queue_shape(r, &mesh->instances, model, wc, mesh->radius * sqrtf(s2), color);
+    queue_shape(r, r->solid_alpha < 0.999f ? &mesh->blend_instances : &mesh->instances,
+                model, wc, mesh->radius * sqrtf(s2), color);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Per-frame hooks
  * ═══════════════════════════════════════════════════════════════════════════ */
-
-#define BUILTIN_COUNT 4
-
-static void builtin(ivp_proto_shapes_t *ps, int i,
-                    ivp_gpu_proto_mesh_t **mesh, ivp_gpu_instance_buf_t **inst)
-{
-    switch (i) {
-    case 0:  *mesh = &ps->sphere;   *inst = &ps->sphere_instances;   break;
-    case 1:  *mesh = &ps->box;      *inst = &ps->box_instances;      break;
-    case 2:  *mesh = &ps->cylinder; *inst = &ps->cylinder_instances; break;
-    default: *mesh = &ps->cone;     *inst = &ps->cone_instances;     break;
-    }
-}
 
 bool ivp_solid_has_instances(const ivp_renderer_t *r)
 {
@@ -713,9 +738,13 @@ void ivp_solid_begin_frame(ivp_renderer_t *r)
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
         ivp_gpu_instance_buf_reset(b);
+        ivp_gpu_instance_buf_reset(&r->protos.blend[i]);
     }
-    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next) {
         ivp_gpu_instance_buf_reset(&u->instances);
+        ivp_gpu_instance_buf_reset(&u->blend_instances);
+    }
+    r->solid_alpha = 1.0f;
 }
 
 void ivp_solid_upload(ivp_renderer_t *r)
@@ -725,9 +754,12 @@ void ivp_solid_upload(ivp_renderer_t *r)
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
         ivp_gpu_instance_buf_upload(b, &r->gpu, r->cmd);
+        ivp_gpu_instance_buf_upload(&r->protos.blend[i], &r->gpu, r->cmd);
     }
-    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next) {
         ivp_gpu_instance_buf_upload(&u->instances, &r->gpu, r->cmd);
+        ivp_gpu_instance_buf_upload(&u->blend_instances, &r->gpu, r->cmd);
+    }
 }
 
 void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass)
@@ -743,6 +775,21 @@ void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass)
             ivp_gpu_proto_mesh_draw_instanced(&u->mesh, &u->instances, pass);
 }
 
+/* Translucent instances; the caller binds the blend pipeline. */
+void ivp_solid_draw_blend(ivp_renderer_t *r, SDL_GPURenderPass *pass)
+{
+    if (!r->protos.ready) return;
+    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    for (int i = 0; i < BUILTIN_COUNT; i++) {
+        builtin(&r->protos, i, &m, &b);
+        if (r->protos.blend[i].count > 0)
+            ivp_gpu_proto_mesh_draw_instanced(m, &r->protos.blend[i], pass);
+    }
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+        if (u->blend_instances.count > 0)
+            ivp_gpu_proto_mesh_draw_instanced(&u->mesh, &u->blend_instances, pass);
+}
+
 void ivp_solid_advance(ivp_renderer_t *r)
 {
     if (!r->protos.ready) return;
@@ -750,9 +797,19 @@ void ivp_solid_advance(ivp_renderer_t *r)
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
         ivp_gpu_instance_buf_advance(b, NULL);
+        ivp_gpu_instance_buf_advance(&r->protos.blend[i], NULL);
     }
-    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
+    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next) {
         ivp_gpu_instance_buf_advance(&u->instances, NULL);
+        ivp_gpu_instance_buf_advance(&u->blend_instances, NULL);
+    }
+}
+
+void ivp_render_set_solid_alpha(ivp_renderer_t *r, float alpha)
+{
+    if (!(alpha >= 0.0f)) alpha = 0.0f;       /* also NaN */
+    if (alpha > 1.0f) alpha = 1.0f;
+    r->solid_alpha = alpha;
 }
 
 void ivp_solid_destroy_meshes(ivp_renderer_t *r)

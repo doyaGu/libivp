@@ -16,11 +16,12 @@ layout(location=2) in vec4 iRow0;
 layout(location=3) in vec4 iRow1;
 layout(location=4) in vec4 iRow2;
 layout(location=5) in vec4 iRow3;
-layout(location=6) in vec3 iCol;
+layout(location=6) in vec4 iCol;
 
 layout(location=0) out vec3 vAmb;
 layout(location=1) out vec3 vDif;
 layout(location=2) out vec4 vSc;
+layout(location=3) out float vAlpha;
 
 void main() {
     mat4 model = mat4(iRow0, iRow1, iRow2, iRow3);
@@ -34,8 +35,9 @@ void main() {
     vec3 nrm_ws = normalize(nm * aNrm);
     float ndotl = max(dot(nrm_ws, u.light_dir.xyz), 0.0);
     float ambient = u.light_dir.w * (0.75 - 0.25 * nrm_ws.y);  /* sky (-Y) / ground */
-    vAmb = iCol * ambient;
-    vDif = iCol * (0.7 * ndotl);
+    vAmb = iCol.rgb * ambient;
+    vDif = iCol.rgb * (0.7 * ndotl);
+    vAlpha = iCol.a;
 
     /* shadow lookup position, pushed along the normal against acne */
     vec4 lp = u.light_vp * vec4(world_pos.xyz + nrm_ws * 0.04, 1.0);

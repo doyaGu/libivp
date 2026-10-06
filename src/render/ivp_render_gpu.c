@@ -478,6 +478,15 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
 
     SDL_GPUColorTargetDescription ct = {0};
     ct.format = dev->swapchain_format;
+    if (desc->blend) {
+        ct.blend_state.enable_blend          = true;
+        ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+        ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        ct.blend_state.color_blend_op        = SDL_GPU_BLENDOP_ADD;
+        ct.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        ct.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        ct.blend_state.alpha_blend_op        = SDL_GPU_BLENDOP_ADD;
+    }
 
     SDL_GPUPrimitiveType prim = desc->primitive_type;
 

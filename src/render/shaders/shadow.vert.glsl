@@ -10,7 +10,7 @@ layout(location=2) in vec4 iRow0;
 layout(location=3) in vec4 iRow1;
 layout(location=4) in vec4 iRow2;
 layout(location=5) in vec4 iRow3;
-layout(location=6) in vec3 iCol;
+layout(location=6) in vec4 iCol;
 
 void main() {
     mat4 model = mat4(iRow0, iRow1, iRow2, iRow3);

@@ -61,7 +61,7 @@ bool ivp_shadow_init(ivp_renderer_t *r)
     ivp_gpu_attrib_desc_t inst_attrs[5] = {
         { 2, 4, 0 }, { 3, 4, 4 * (int)sizeof(float) },
         { 4, 4, 8 * (int)sizeof(float) }, { 5, 4, 12 * (int)sizeof(float) },
-        { 6, 3, 16 * (int)sizeof(float) },
+        { 6, 4, 16 * (int)sizeof(float) },
     };
     desc.capacity          = 1;
     desc.stride            = 6 * (int)sizeof(float);

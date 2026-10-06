@@ -6,6 +6,7 @@ struct VSOut {
     float3 amb;
     float3 dif;
     float4 sc;
+    float  alpha;
 };
 
 constant float SHADOW_TEXEL = 1.0f / 2048.0f;
@@ -25,5 +26,5 @@ fragment float4 fs_main(VSOut in [[stage_in]],
                            in.sc.xy + float2(x, y) * SHADOW_TEXEL, ref);
         vis = sum / 9.0f;
     }
-    return float4(in.amb + in.dif * vis, 1.0f);
+    return float4(in.amb + in.dif * vis, in.alpha);
 }

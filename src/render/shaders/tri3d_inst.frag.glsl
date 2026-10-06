@@ -5,6 +5,7 @@ layout(set=2, binding=0) uniform sampler2DShadow uShadow;
 layout(location=0) in vec3 vAmb;
 layout(location=1) in vec3 vDif;
 layout(location=2) in vec4 vSc;
+layout(location=3) in float vAlpha;
 layout(location=0) out vec4 FragColor;
 
 const float SHADOW_TEXEL = 1.0 / 2048.0;
@@ -21,5 +22,5 @@ void main() {
                 sum += texture(uShadow, vec3(vSc.xy + vec2(x, y) * SHADOW_TEXEL, ref));
         vis = sum / 9.0;
     }
-    FragColor = vec4(vAmb + vDif * vis, 1.0);
+    FragColor = vec4(vAmb + vDif * vis, vAlpha);
 }

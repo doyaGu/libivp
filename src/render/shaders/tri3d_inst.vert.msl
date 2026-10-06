@@ -8,7 +8,7 @@ struct VSIn {
     float4 iRow1 [[attribute(3)]];
     float4 iRow2 [[attribute(4)]];
     float4 iRow3 [[attribute(5)]];
-    float3 iCol  [[attribute(6)]];
+    float4 iCol  [[attribute(6)]];
 };
 
 struct VSOut {
@@ -16,6 +16,7 @@ struct VSOut {
     float3 amb;   /* ambient part of the colour */
     float3 dif;   /* diffuse part, attenuated by the shadow */
     float4 sc;    /* xy = shadow map uv, z = light space depth, w = shadows on */
+    float  alpha;
 };
 
 struct Uniforms {
@@ -40,8 +41,9 @@ vertex VSOut vs_main(VSIn in [[stage_in]],
     float3 nrm_ws = normalize(nm * in.aNrm);
     float ndotl = max(dot(nrm_ws, u.light_dir.xyz), 0.0f);
     float ambient = u.light_dir.w * (0.75f - 0.25f * nrm_ws.y);  /* sky (-Y) / ground */
-    out.amb = in.iCol * ambient;
-    out.dif = in.iCol * (0.7f * ndotl);
+    out.amb = in.iCol.rgb * ambient;
+    out.dif = in.iCol.rgb * (0.7f * ndotl);
+    out.alpha = in.iCol.a;
 
     /* shadow lookup position, pushed along the normal against acne */
     float4 lp = u.light_vp * float4(world_pos.xyz + nrm_ws * 0.04f, 1.0f);
