@@ -70,6 +70,7 @@ Geometry:
 | `shapes` | convex hulls (cylinders, cones, prisms, pyramids ...) built with the qhull based builder |
 | `cut`, `ring`, `3ds_import` | chopping a surface, a concave ring from a ledge soup, loading a `.3ds` file |
 | `terrain` | a heightfield as a compact grid with bodies rolling into the valleys |
+| `concave` | closed triangle meshes (L, plus, star, crescent, a bowl) cut into convex parts by `ivp_build_concave_surface`; balls dropped into the bowl stay in it |
 
 Larger scenes:
 
@@ -85,7 +86,7 @@ Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, susp
 tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `buoyancy` (water density,
 current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
 strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
-(pull strength) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
+(pull strength), `concave` (draw the convex parts) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
 
 ## Writing an example
 
