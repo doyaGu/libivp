@@ -71,6 +71,15 @@ static float limit_steer(const offroad_demo_t *s, float steer)
     return steer > lim ? lim : (steer < -lim ? -lim : steer);
 }
 
+/* Speed along the car's forward (+Z) axis, negative when rolling backwards. */
+static float demo_forward_speed(const offroad_demo_t *s)
+{
+    float rot[9];
+    quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
+    const ivp_vec3r_t *v = &s->chassis->physical_core->speed;
+    return (float)(v->k[0] * rot[6] + v->k[1] * rot[7] + v->k[2] * rot[8]);
+}
+
 static void apply_input(offroad_demo_t *s, float steer, float engine, float brake)
 {
     steer = limit_steer(s, steer);
@@ -105,7 +114,12 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
         if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_UP])    engine = (float)ENGINE_FWD;
-        if (keys[SDL_SCANCODE_DOWN])  engine = (float)ENGINE_REV;
+        if (keys[SDL_SCANCODE_DOWN]) {
+            /* like a pedal: brake while rolling forward, reverse once stopped */
+            float fwd = demo_forward_speed(s);
+            if (fwd > 0.8f) brake = (float)BRAKE_FORCE;
+            else engine = (float)ENGINE_REV;
+        }
         if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
         apply_input(s, steer, engine, brake);
         for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
@@ -262,7 +276,7 @@ int main(int argc, char **argv)
 
     /* anti-roll bars: the 4-wheel default stabilizer is far too soft for a 20 kg body */
     for (int a = 0; a < 2; a++) ivp_car_change_stabilizer_constant(&s->car, a, 8000.0f);
-    app.controls    = "Arrows: steer / drive (the lock narrows with speed)   B: brake";
+    app.controls    = "Up/Down: drive, brake, reverse   Left/Right: steer (narrows with speed)   B: handbrake";
     app.viewer_init = offroad_viewer_init;
     app.update      = offroad_update;
     app.on_reset    = offroad_reset;

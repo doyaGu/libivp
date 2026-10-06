@@ -67,7 +67,15 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
         if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_UP])    engine = (float)ENGINE_FWD;
-        if (keys[SDL_SCANCODE_DOWN])  engine = (float)ENGINE_REV;
+        if (keys[SDL_SCANCODE_DOWN]) {
+            /* like a pedal: brake while rolling forward, reverse once stopped */
+            float rot[9];
+            quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
+            const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
+            float fwd = (float)(sp->k[0] * rot[6] + sp->k[1] * rot[7] + sp->k[2] * rot[8]);
+            if (fwd > 0.8f) brake = (float)BRAKE_FORCE;
+            else engine = (float)ENGINE_REV;
+        }
         if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
         apply_input(s, steer, engine, brake);
         /* follow camera: track the chassis */
@@ -265,7 +273,7 @@ int main(int argc, char **argv)
         s->car.wheels[i].friction_of_wheel    = 1.2f;
     }
 
-    app.controls = "Arrows: steer / drive   B: brake";
+    app.controls = "Up/Down: drive, brake, reverse   Left/Right: steer   B: handbrake";
     app.update   = vehicle_update;
     app.draw     = vehicle_draw;
     app.stats    = vehicle_stats;
