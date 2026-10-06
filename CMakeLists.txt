@@ -692,6 +692,12 @@ if (IVP_BUILD_TESTS)
         target_link_libraries(test_render_math PRIVATE ivp_render)
         target_include_directories(test_render_math PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
         set_tests_properties(test_render_math PROPERTIES LABELS "unit")
+
+        # The examples' parameter panel takes the mouse as arguments.
+        ivp_add_test(test_demo_panel tests/test_demo_panel.c)
+        target_link_libraries(test_demo_panel PRIVATE ivp_render)
+        target_include_directories(test_demo_panel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+        set_tests_properties(test_demo_panel PROPERTIES LABELS "unit")
     endif ()
     set_tests_properties(test_math_ref PROPERTIES LABELS "unit")
     set_tests_properties(test_active_value_ref PROPERTIES LABELS "unit")
