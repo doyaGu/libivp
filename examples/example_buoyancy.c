@@ -154,10 +154,12 @@ static void buoyancy_draw(demo_app_t *app, demo_viewer_t *v)
 
     /* The water body: a translucent slab down to the sea floor */
     if (v->solid) {
-        const float ext = 12.0f;
-        const float depth = SEA_FLOOR_Y - WATER_SURFACE_Y;
+        /* a hair inside the walls and above the floor: coplanar faces z-fight */
+        const float inset = 0.03f;
+        const float ext = 12.0f - 0.3f - inset;       /* wall faces at |x| = 11.7 */
+        const float depth = SEA_FLOOR_Y - WATER_SURFACE_Y - inset;
         const float centre[3] = { 0.0f, WATER_SURFACE_Y + depth * 0.5f, 0.0f };
-        const float half[3] = { ext, depth * 0.5f, ext };
+        const float half[3] = { ext, depth * 0.5f, 12.0f };
         demo_set_alpha(v, 0.28f);
         demo_solid_box(v, centre, half, NULL, c_water);
         demo_set_alpha(v, 1.0f);
