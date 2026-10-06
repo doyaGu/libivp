@@ -21,6 +21,10 @@ static void drag_controller_apply(const ivp_event_sim_t *event_sim,
 
     ivp_vec3r_t dv;
     ivp_vec3r_scale(&dv, &dragger->force, obj->physical_core->inv_mass * dt);
+    /* the force is clamped, not the acceleration: a 0.2 kg body would get 350 m/s^2 */
+    double a = ivp_vec3r_length(&dv) / (double)dt;
+    if (a > (double)dragger->settings.max_accel && a > 1e-9)
+        ivp_vec3r_scale(&dv, &dv, (ivp_real_t)((double)dragger->settings.max_accel / a));
     ivp_vec3r_add(&obj->physical_core->speed_change, &obj->physical_core->speed_change, &dv);
 }
 
@@ -119,6 +123,7 @@ void ivp_example_dragger_init(ivp_example_dragger_t *dragger)
     dragger->settings.stiffness = 22.0f;
     dragger->settings.damping = 8.5f;
     dragger->settings.max_force = 70.0f;
+    dragger->settings.max_accel = 45.0f;
     dragger->settings.ramp_rate = 4.0f;
     dragger_clear(dragger);
 }
@@ -228,6 +233,8 @@ void ivp_example_dragger_update(ivp_example_dragger_t *dragger,
     }
 
     if (dragger->active && lmb_down && ray_ok && dragger->target) {
+        /* a frozen body runs no controllers: keep the dragged one awake */
+        ivp_environment_ensure_core_in_simulation(env, dragger->target);
         dragger->target_ws[0] = ray_o[0] + ray_d[0] * dragger->depth;
         dragger->target_ws[1] = ray_o[1] + ray_d[1] * dragger->depth;
         dragger->target_ws[2] = ray_o[2] + ray_d[2] * dragger->depth;

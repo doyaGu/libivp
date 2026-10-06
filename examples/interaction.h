@@ -18,6 +18,7 @@ typedef struct ivp_example_drag_settings {
     float stiffness;
     float damping;
     float max_force;
+    float max_accel;        /* m/s^2: light bodies must not be flung (force * inv_mass) */
     float ramp_rate;
 } ivp_example_drag_settings_t;
 
