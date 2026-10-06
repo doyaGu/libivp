@@ -71,6 +71,7 @@ Physics and controllers:
 | `waves` | a pool with a travelling-wave liquid surface descriptor; a buoyancy attacher keeps buoyancy on every core of an active set, and a body taken out of the set sinks |
 | `hover` | four hover pads on the floating controller over a heightfield: one that follows the hills, one too weak to lift itself, one that cannot be pulled down, one that hovers higher |
 | `zones` | three phantom volumes whose intruding-core sets drive a set-driven force field (updraft), the generic `ivp_attacher_to_cores` with an own speed-limit attachment, and a buoyancy attacher (a tank); the bodies sit in clusters |
+| `contacts` | listeners as instruments: a scale that sums the contact normal forces of a crate stack, a brake that counts the eliminated friction energy, drop tests that read the speed around the first impact, and a global object listener |
 | `psi_listener` | a PSI listener records trails and a strip chart of each body's mechanical energy: bounces, a tumbling box, a ball that starts sliding and ends up rolling |
 | `check_distance`, `phantom`, `callback`, `active_value` | distance triggers, trigger volumes, object and collision listeners, active value chains |
 | `collision_filter`, `raycasting`, `universe` | collision filters, the ray solver, streaming static objects |
