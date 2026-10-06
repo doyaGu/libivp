@@ -79,20 +79,6 @@ static int build_demo_3ds(unsigned char *buf) {
     return pos;
 }
 
-/* The .3ds file argument: the first argument that is neither the headless
- * switch nor its frame count (NULL = built-in tetrahedron). */
-static const char *file_argument(int argc, char **argv)
-{
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-H") == 0) {
-            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
-            continue;
-        }
-        return argv[i];
-    }
-    return NULL;
-}
-
 typedef struct import_demo {
     const char   *source;           /* file name or "built-in tetrahedron" */
     int           n_vertices, n_triangles, n_ledges;
@@ -158,7 +144,7 @@ static bool import_check(demo_app_t *app)
 int main(int argc, char **argv)
 {
     /* ── Load 3DS ──────────────────────────────────────────────────────── */
-    const char *file = file_argument(argc, argv);
+    const char *file = demo_positional_arg(argc, argv);   /* NULL = built-in tetrahedron */
     ivp_3ds_scene_t scene;
     memset(&scene, 0, sizeof(scene));
     ivp_result_t r;

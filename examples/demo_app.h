@@ -75,7 +75,7 @@
  * arguments. */
 #define DEMO_COL_GRID       ((const float[3]){0.30f, 0.30f, 0.30f})
 #define DEMO_COL_TITLE      ((const float[3]){1.00f, 1.00f, 1.00f})
-#define DEMO_COL_HELP       ((const float[3]){0.60f, 0.60f, 0.60f})
+#define DEMO_COL_HELP       ((const float[3]){0.78f, 0.82f, 0.88f})
 #define DEMO_COL_INFO       ((const float[3]){0.70f, 0.90f, 0.70f})
 #define DEMO_COL_OBJECT_A   ((const float[3]){0.20f, 0.80f, 1.00f})
 #define DEMO_COL_OBJECT_B   ((const float[3]){1.00f, 0.60f, 0.20f})
@@ -649,6 +649,7 @@ typedef struct demo_viewer {
     demo_mesh_entry_t              meshes[DEMO_MESH_CACHE];
     int                            n_meshes;
     float                          hud_y;
+    float                          hud_w;            /* widest info line this frame */
     bool                           key_prev[SDL_SCANCODE_COUNT];
     /* primitives submitted by the draw callbacks; with renderer == NULL
      * (headless draw smoke test) they are only counted and validated */
@@ -717,6 +718,10 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
         return false;
     }
     ivp_renderer_set_clear_color(v->renderer, 0.26f, 0.30f, 0.36f, 1.0f);
+    {   /* sky: deeper blue overhead, hazy towards the horizon */
+        const float top[3] = { 0.16f, 0.26f, 0.42f }, bottom[3] = { 0.50f, 0.60f, 0.72f };
+        ivp_render_set_backdrop(v->renderer, top, bottom);
+    }
     v->title = cfg->title;
     v->solid = true;
     v->world = w;
@@ -851,6 +856,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
         ivp_example_dragger_update(&v->dragger, &v->cam, w->env, v->win_w, v->win_h, v->frame_dt);
     ivp_example_focus_update(&v->focus, &v->cam, w->env, v->frame_dt);
     v->hud_y = 32.0f;
+    v->hud_w = 0.0f;
     return true;
 }
 
@@ -869,7 +875,11 @@ static inline void demo_hud(demo_viewer_t *v, const float color[3], const char *
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     v->n_prims++;
-    if (v->renderer) ivp_render_draw_text(v->renderer, 10.0f, v->hud_y, buf, color);
+    if (v->renderer) {
+        ivp_render_draw_text(v->renderer, 10.0f, v->hud_y, buf, color);
+        float tw = ivp_render_text_width(buf, 2);
+        if (tw > v->hud_w) v->hud_w = tw;
+    }
     v->hud_y += 18.0f;
 }
 
@@ -918,16 +928,43 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
             s = e + 1;
         }
     }
+    static const char shared_keys[] =
+        "Enter:pause  .:step  [ ]:speed  F1:wire  F2:axes  F3:vel  F4:impacts  F5:panel  Click:select";
     float y = (float)v->win_h - 18.0f * (float)(n_lines + 4) - 10.0f;
+
+    /* backing plates under the text blocks */
+    {
+        const float plate[3] = { 0.03f, 0.05f, 0.08f };
+        char title[192];
+        snprintf(title, sizeof(title), "%s   FPS: %.0f", v->title ? v->title : "",
+                 (double)v->loop.fps_display);
+        float tw = ivp_render_text_width(title, 2);
+        if (v->hud_w > tw) tw = v->hud_w;
+        ivp_render_draw_panel(v->renderer, 4.0f, 4.0f, tw + 12.0f, v->hud_y - 2.0f, plate, 0.45f);
+
+        float bw = ivp_render_text_width(shared_keys, 2);
+        for (int i = 0; i < n_lines; i++) {
+            float lw = (float)lens[i] * 12.0f;
+            if (lw > bw) bw = lw;
+        }
+        const char *hud3[3] = { ivp_example_interaction_hud_primary_line(),
+                                ivp_example_interaction_hud_secondary_line(),
+                                ivp_example_interaction_hud_tertiary_line() };
+        for (int i = 0; i < 3; i++) {
+            float lw = hud3[i] ? ivp_render_text_width(hud3[i], 2) : 0.0f;
+            if (lw > bw) bw = lw;
+        }
+        ivp_render_draw_panel(v->renderer, 4.0f, y - 4.0f, bw + 12.0f,
+                              (float)v->win_h - y, plate, 0.45f);
+    }
+
     for (int i = 0; i < n_lines; i++) {
         char buf[192];
         snprintf(buf, sizeof(buf), "%.*s", lens[i], lines[i]);
         ivp_render_draw_text(v->renderer, 10.0f, y, buf, DEMO_COL_HIGHLIGHT);
         y += 18.0f;
     }
-    ivp_render_draw_text(v->renderer, 10.0f, y,
-                         "Enter:pause  .:step  [ ]:speed  F1:wire  F2:axes  F3:vel  F4:impacts  F5:panel  Click:select",
-                         DEMO_COL_HELP);
+    ivp_render_draw_text(v->renderer, 10.0f, y, shared_keys, DEMO_COL_HELP);
     y += 18.0f;
     ivp_example_draw_interaction_hud(v->renderer, 10.0f, y, DEMO_COL_HELP, DEMO_COL_HELP);
     ivp_renderer_end_frame(v->renderer);
@@ -1370,6 +1407,16 @@ static inline void demo_debug_panel(demo_viewer_t *v)
     snprintf(line[4], sizeof(line[4]), "friction %.2f  elasticity %.2f",
              (double)obj->material.friction, (double)obj->material.elasticity);
     float y = 36.0f + (v->loop.paused || v->loop.speed != 1.0f ? 18.0f : 0.0f);
+    {
+        float lw = 0.0f;
+        for (int i = 0; i < 5; i++) {
+            float w = ivp_render_text_width(line[i], 2);
+            if (w > lw) lw = w;
+        }
+        const float plate[3] = { 0.03f, 0.05f, 0.08f };
+        ivp_render_draw_panel(v->renderer, (float)v->win_w - lw - 18.0f, y - 4.0f,
+                              lw + 16.0f, 5 * 18.0f + 4.0f, plate, 0.45f);
+    }
     for (int i = 0; i < 5; i++) {
         ivp_render_draw_text_aligned(v->renderer, (float)v->win_w - 10.0f, y, line[i],
                                      i == 0 ? (sel ? DEMO_COL_FOCUS : DEMO_COL_HIGHLIGHT) : DEMO_COL_INFO,
@@ -1487,6 +1534,27 @@ static inline int demo_run_headless(demo_app_t *app, int frames)
     if (app->check) ok = app->check(app) && ok;
     printf("[%s] self-check %s\n", tag, ok ? "PASSED" : "FAILED");
     return ok ? 0 : 1;
+}
+
+/* First command line argument that is not one of the framework options
+ * (--headless/-H [N], --screenshot FILE [N], --overlays), or NULL. */
+static inline const char *demo_positional_arg(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        const bool is_num = argv[i][0] >= '0' && argv[i][0] <= '9';
+        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-H") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
+            continue;
+        }
+        if (strcmp(argv[i], "--screenshot") == 0) {
+            i++;                                   /* the file */
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
+            continue;
+        }
+        if (strcmp(argv[i], "--overlays") == 0 || is_num) continue;
+        return argv[i];
+    }
+    return NULL;
 }
 
 /* `--screenshot FILE [N]`: render N frames (default 60), save the last one
