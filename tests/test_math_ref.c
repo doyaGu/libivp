@@ -13,6 +13,8 @@
  *            (used where the float build feeds float-rounded intermediate
  *            state back into the formula).
  *   EXACT    bit-exact in every build (always-double / always-float API).
+ *   LIBM_EQ  bit-exact on the macOS arm64 parity platform; elsewhere within
+ *            16 ULP for values produced from the system sin/cos functions.
  */
 #include "ivp_test.h"
 #include <ivp/math/ivp_vec3.h>
@@ -20,6 +22,7 @@
 #include <ivp/math/ivp_quat.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_fast_math.h>
+#include <math.h>
 #include <stdio.h>
 
 static int check_val(double actual, double ref, int mode, double ftol,
@@ -41,17 +44,74 @@ static int check_val(double actual, double ref, int mode, double ftol,
     return 0;
 }
 
+#define IVP_LIBM_MAX_ULPS 16
+
+static bool libm_value_matches(double actual, double ref) {
+#ifdef IVP_REAL_DOUBLE
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    return actual == ref;
+#else
+    if (actual == ref) return true;
+    if (!isfinite(actual) || !isfinite(ref)) return false;
+    double lower = ref;
+    double upper = ref;
+    for (int i = 0; i < IVP_LIBM_MAX_ULPS; ++i) {
+        lower = nextafter(lower, -INFINITY);
+        upper = nextafter(upper, INFINITY);
+    }
+    return actual >= lower && actual <= upper;
+#endif
+#else
+    float actual_f = (float)actual;
+    float ref_f = (float)ref;
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    return actual_f == ref_f;
+#else
+    if (actual_f == ref_f) return true;
+    if (!isfinite(actual_f) || !isfinite(ref_f)) return false;
+    float lower = (float)ref;
+    float upper = (float)ref;
+    for (int i = 0; i < IVP_LIBM_MAX_ULPS; ++i) {
+        lower = nextafterf(lower, -INFINITY);
+        upper = nextafterf(upper, INFINITY);
+    }
+    return actual_f >= lower && actual_f <= upper;
+#endif
+#endif
+}
+
+static int check_libm_val(double actual, double ref, double ftol,
+                          const char *what, int line) {
+#ifndef IVP_REAL_DOUBLE
+    if (ftol > 0.0 && fabs(actual - ref) <= ftol) return 0;
+#else
+    (void)ftol;
+#endif
+    if (libm_value_matches(actual, ref)) return 0;
+    fprintf(stderr,
+            "  MISMATCH %s: got %a (%.17g) expected %a (%.17g), "
+            "limit %d ULP, line %d\n",
+            what, actual, actual, ref, ref, IVP_LIBM_MAX_ULPS, line);
+    return 1;
+}
+
 #define REF_EQ(a, r)        do { if (check_val((double)(a), (r), 0, 0.0, #a, __LINE__)) { (*_fail_count)++; return; } } while (0)
 #define REF_NEAR(a, r, tol) do { if (check_val((double)(a), (r), 1, (tol), #a, __LINE__)) { (*_fail_count)++; return; } } while (0)
 #define EXACT(a, r)         do { if (check_val((double)(a), (r), 2, 0.0, #a, __LINE__)) { (*_fail_count)++; return; } } while (0)
+#define LIBM_EQ(a, r)       do { if (check_libm_val((double)(a), (r), 0.0, #a, __LINE__)) { (*_fail_count)++; return; } } while (0)
+#define LIBM_NEAR(a, r, t)  do { if (check_libm_val((double)(a), (r), (t), #a, __LINE__)) { (*_fail_count)++; return; } } while (0)
 
 #define Q_EQ(q, r)  do { REF_EQ((q).x, (r)[0]); REF_EQ((q).y, (r)[1]); REF_EQ((q).z, (r)[2]); REF_EQ((q).w, (r)[3]); } while (0)
 #define Q_NEAR(q, r, t) do { REF_NEAR((q).x, (r)[0], t); REF_NEAR((q).y, (r)[1], t); REF_NEAR((q).z, (r)[2], t); REF_NEAR((q).w, (r)[3], t); } while (0)
 #define V_EQ(v, r)  do { REF_EQ((v).k[0], (r)[0]); REF_EQ((v).k[1], (r)[1]); REF_EQ((v).k[2], (r)[2]); } while (0)
 #define V_NEAR(v, r, t) do { REF_NEAR((v).k[0], (r)[0], t); REF_NEAR((v).k[1], (r)[1], t); REF_NEAR((v).k[2], (r)[2], t); } while (0)
 #define V_EXACT(v, r) do { EXACT((v).k[0], (r)[0]); EXACT((v).k[1], (r)[1]); EXACT((v).k[2], (r)[2]); } while (0)
+#define V_LIBM_EQ(v, r) do { LIBM_EQ((v).k[0], (r)[0]); LIBM_EQ((v).k[1], (r)[1]); LIBM_EQ((v).k[2], (r)[2]); } while (0)
+#define V_LIBM_NEAR(v, r, t) do { LIBM_NEAR((v).k[0], (r)[0], t); LIBM_NEAR((v).k[1], (r)[1], t); LIBM_NEAR((v).k[2], (r)[2], t); } while (0)
 #define M_EQ(m, r)  do { for (int i_ = 0; i_ < 9; i_++) REF_EQ((m).rows[i_ / 3].k[i_ % 3], (r)[i_]); } while (0)
 #define M_NEAR(m, r, t) do { for (int i_ = 0; i_ < 9; i_++) REF_NEAR((m).rows[i_ / 3].k[i_ % 3], (r)[i_], t); } while (0)
+#define M_LIBM_EQ(m, r) do { for (int i_ = 0; i_ < 9; i_++) LIBM_EQ((m).rows[i_ / 3].k[i_ % 3], (r)[i_]); } while (0)
+#define M_LIBM_NEAR(m, r, t) do { for (int i_ = 0; i_ < 9; i_++) LIBM_NEAR((m).rows[i_ / 3].k[i_ % 3], (r)[i_], t); } while (0)
 
 /* Vector semantics of ivp_vec3r_*: IVP_U_Point with IVP_REAL_DOUBLE,
  * IVP_U_Float_Point in the float build. */
@@ -503,12 +563,12 @@ IVP_TEST(ref_point_helpers) {
     ivp_vec3r_rotate(&r, IVP_INDEX_Y, 0.7f);
     static const double pt_ry[3] = { 0x1.adcf2c062badbp+0, -0x1.b33334p+0, 0x1.8712bc3abe61fp+0 };
     static const double fp_ry[3] = { 0x1.adcf2cp+0, -0x1.b33334p+0, 0x1.8712bcp+0 };
-    V_EXACT(r, PT_OR_FP(pt_ry, fp_ry));
+    V_LIBM_EQ(r, PT_OR_FP(pt_ry, fp_ry));
     r = p;
     ivp_vec3r_rotate(&r, IVP_INDEX_Z, -1.2f);
     static const double pt_rz[3] = { -0x1.79cb5ae812751p+0, -0x1.ca8eafe7d852fp-1, 0x1.2p+1 };
     static const double fp_rz[3] = { -0x1.79cb5ap+0, -0x1.ca8ebp-1, 0x1.2p+1 };
-    V_EXACT(r, PT_OR_FP(pt_rz, fp_rz));
+    V_LIBM_EQ(r, PT_OR_FP(pt_rz, fp_rz));
 
     const ivp_vec3r_t vb = {{ (ivp_real_t)1.25f, (ivp_real_t)0.5f, (ivp_real_t)-0.75f }};
     ivp_vec3r_t c;
@@ -683,23 +743,23 @@ IVP_TEST(ref_matrix3_rotation_distance_mi2mult) {
         0x1.8799656bf1a0dp-1, 0.0, 0x1.49d6e6460fba8p-1,
         0.0, 1.0, 0.0,
         -0x1.49d6e6460fba8p-1, 0.0, 0x1.8799656bf1a0dp-1 };
-    M_EQ(nm, ry);
+    M_LIBM_EQ(nm, ry);
     ivp_mat3r_init_rotation(&nm, IVP_INDEX_X, (ivp_real_t)-1.3f);
     static const double rx[9] = {
         1.0, 0.0, 0.0,
         0.0, 0x1.11eb3997fd91dp-2, 0x1.ed577f2ec09b1p-1,
         0.0, -0x1.ed577f2ec09b1p-1, 0x1.11eb3997fd91dp-2 };
-    M_EQ(nm, rx);
+    M_LIBM_EQ(nm, rx);
     ivp_mat3r_t m;
     set_m(&m, M_IN);
-    REF_NEAR(ivp_mat3r_quad_rot_distance(&m, &nm), 0x1.c6584ee043e3p+1, 1e-5);
+    LIBM_NEAR(ivp_mat3r_quad_rot_distance(&m, &nm), 0x1.c6584ee043e3p+1, 1e-5);
     ivp_mat3r_t mo;
     ivp_mat3r_mi2mult(&mo, &m, &nm);
     static const double mi2[9] = {
         0x1.ccccccp-1, 0x1.cca4ecb1d11acp-4, 0x1.5ec9f240aea33p-2,
         0x1.666666p-2, 0x1.431bed226119ap-3, -0x1.e25ee1bb2b7ebp-1,
         -0x1.333334p-3, 0x1.eefa076759a0bp-1, 0x1.2699392d9fc28p-3 };
-    M_NEAR(mo, mi2, 1e-6);
+    M_LIBM_NEAR(mo, mi2, 1e-6);
 }
 
 /* ═══ IVP_U_Matrix ══════════════════════════════════════════════════════ */
@@ -722,7 +782,7 @@ IVP_TEST(ref_matrix_init_rot_multiple_and_invert) {
     ivp_transform_r_t m;
     const ivp_vec3r_t ang = {{ (ivp_real_t)0.3f, (ivp_real_t)-1.1f, (ivp_real_t)0.6f }};
     ivp_transform_init_rot_multiple(&m, &ang, 0.5);
-    M_EQ(m.rot, ROT_MULT);
+    M_LIBM_EQ(m.rot, ROT_MULT);
     static const double zero[3] = { 0.0, 0.0, 0.0 };
     V_EXACT(m.pos, zero);
     const ivp_vec3r_t ang2 = {{ 0.0f, (ivp_real_t)0.4f, 0.0f }};
@@ -731,7 +791,7 @@ IVP_TEST(ref_matrix_init_rot_multiple_and_invert) {
         0x1.64b6bd9da4771p-1, 0.0, 0x1.6f494c7357ac5p-1,
         0.0, 1.0, -0.0,
         -0x1.6f494c7357ac5p-1, 0.0, 0x1.64b6bd9da4771p-1 };
-    M_EQ(m.rot, rmy);
+    M_LIBM_EQ(m.rot, rmy);
 
     static const float g_v[9] = { 2.0f, -0.5f, 0.25f, 0.75f, 1.5f, -1.0f, 0.125f, 0.3f, 1.25f };
     ivp_transform_r_t g, gi;
@@ -764,8 +824,8 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         0x1.9a6287737b39ap-1, 0x1.53543a9e30a48p-2, -0x1.fdacda92ff27bp-2,
         0x1.12f0886b0257fp-1, -0x1.0c5465c0837fcp-5, 0x1.af9759986816fp-1 };
     static const double rzv[3] = { -0x1.ba76808504dd8p-1, 0x1.52f6cdc8d7543p+0, -0x1.4p+1 };
-    M_NEAR(out.rot, rz, 1e-6);
-    V_NEAR(out.pos, rzv, 1e-6);
+    M_LIBM_NEAR(out.rot, rz, 1e-6);
+    V_LIBM_NEAR(out.pos, rzv, 1e-6);
 
     ivp_transform_rotate_invers(&out, &m, IVP_INDEX_X, 0.4f);
     static const double rix[9] = {
@@ -773,8 +833,8 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         0x1.2b36f5d438f03p-2, 0x1.9faa9f9872a63p-1, -0x1.02cf8d6c8a6cep-1,
         0x1.12f0886b0257fp-1, 0x1.313eddd964b87p-2, 0x1.940d77d7e54cdp-1 };
     static const double rixv[3] = { 0x1p-1, 0x1.8p+0, -0x1.4p+1 };
-    M_NEAR(out.rot, rix, 1e-6);
-    V_NEAR(out.pos, rixv, 1e-6);
+    M_LIBM_NEAR(out.rot, rix, 1e-6);
+    V_LIBM_NEAR(out.pos, rixv, 1e-6);
 
     /* IVP_U_Matrix::interpolate is element-wise (not orthonormal) */
     ivp_transform_interpolate(&out, &m, &m2, (ivp_real_t)0.3f);
@@ -783,8 +843,8 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         0x1.a2e68ae4a0212p-3, 0x1.ec25dc8ec1222p-1, -0x1.ac7811e4ac9d1p-4,
         0x1.09493cf62cdfap-2, -0x1.77a95ad56323cp-6, 0x1.bb96bcac050dep-1 };
     static const double ipv[3] = { 0x1.99999p-5, 0x1.1fffffcp+0, -0x1.b33331p-1 };
-    M_NEAR(out.rot, ip, 1e-6);
-    V_NEAR(out.pos, ipv, 1e-6);
+    M_LIBM_NEAR(out.rot, ip, 1e-6);
+    V_LIBM_NEAR(out.pos, ipv, 1e-6);
 
     ivp_transform_compose(&out, &m, &m2);
     static const double mm[9] = {
@@ -792,13 +852,13 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         0x1.4f2f82894a8cep-2, 0x1.e3a3cd561e225p-1, -0x1.86ce3b685af9p-6,
         0x1.54aa95e2f38a4p-3, -0x1.0c5465c0837fcp-5, 0x1.f8969ddcaa2bep-1 };
     static const double mmv[3] = { -0x1.ec67c9e0e004ap+0, 0x1.fdc400dd0be35p-1, -0x1.085bcd38cc214p-1 };
-    M_NEAR(out.rot, mm, 1e-6);
-    V_NEAR(out.pos, mmv, 1e-6);
+    M_LIBM_NEAR(out.rot, mm, 1e-6);
+    V_LIBM_NEAR(out.pos, mmv, 1e-6);
     /* in-place (m_out == this) is allowed in the reference */
     ivp_transform_r_t inplace = m;
     ivp_transform_compose(&inplace, &inplace, &m2);
-    M_NEAR(inplace.rot, mm, 1e-6);
-    V_NEAR(inplace.pos, mmv, 1e-6);
+    M_LIBM_NEAR(inplace.rot, mm, 1e-6);
+    V_LIBM_NEAR(inplace.pos, mmv, 1e-6);
 
     ivp_transform_inv_compose(&out, &m, &m2);
     static const double mi[9] = {
@@ -806,8 +866,8 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         -0x1.26f01c32e8aaep-2, 0x1.e3a3cd561e225p-1, -0x1.423a29a3f59e2p-3,
         -0x1.9bcad0c989affp-1, -0x1.320c9f687ee6ep-3, 0x1.267a3e8ead487p-1 };
     static const double miv[3] = { 0x1.66b1f566b6d71p+0, -0x1.bdfda71aa2d7ep-1, 0x1.6649ddaf15895p+2 };
-    M_NEAR(out.rot, mi, 1e-6);
-    V_NEAR(out.pos, miv, 1e-5);
+    M_LIBM_NEAR(out.rot, mi, 1e-6);
+    V_LIBM_NEAR(out.pos, miv, 1e-5);
 
     ivp_transform_mi2mult(&out, &m, &m2);
     static const double m2i[9] = {
@@ -815,10 +875,10 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
         0x1.b0023cc7468afp-3, 0x1.e3a3cd561e225p-1, -0x1.0176f879a7959p-2,
         0x1.a54e3fba71e06p-1, -0x1.0c5465c0837fcp-5, 0x1.22748f4459f92p-1 };
     static const double m2iv[3] = { 0x1.bb1e13e24ca18p+1, 0x1.1d528424b15eap+1, -0x1.af77871ee67f4p+1 };
-    M_NEAR(out.rot, m2i, 1e-6);
-    V_NEAR(out.pos, m2iv, 1e-5);
+    M_LIBM_NEAR(out.rot, m2i, 1e-6);
+    V_LIBM_NEAR(out.pos, m2iv, 1e-5);
 
-    REF_NEAR(ivp_transform_quad_distance(&m, &m2), 0x1.1fde09bae323ep+5, 1e-4);
+    LIBM_NEAR(ivp_transform_quad_distance(&m, &m2), 0x1.1fde09bae323ep+5, 1e-4);
 }
 
 int main(void) {
