@@ -218,6 +218,12 @@ typedef struct ivp_surman_polygon {
 void ivp_surman_polygon_init(ivp_surman_polygon_t *sm,
                               const ivp_compact_surface_t *surface);
 
+/* The compact surface of a plain polygon surface manager; NULL for every
+ * other kind (balls, compact grids ...).  Surface managers of other kinds
+ * also report IVP_SURMAN_POLYGON from get_type, so do not cast on the type
+ * alone. */
+const ivp_compact_surface_t *ivp_surman_get_polygon_surface(const ivp_surman_t *sm);
+
 /* Shared polygon implementations (used by the grid surface manager too). */
 void ivp_surman_polygon_surface_ledges_within_radius(
     const ivp_compact_surface_t *surface,

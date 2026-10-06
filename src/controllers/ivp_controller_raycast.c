@@ -135,16 +135,38 @@ bool ivp_controller_world_raycast(ivp_environment_t *env,
             }
             continue;
         }
-        if (!o->surman || ivp_surman_get_type(o->surman) != IVP_SURMAN_POLYGON) continue;
-        const ivp_surman_polygon_t *sp = (const ivp_surman_polygon_t *)o->surman;
-        if (!sp->compact_surface) continue;
+        if (!o->surman) continue;
+        const ivp_compact_surface_t *surface = ivp_surman_get_polygon_surface(o->surman);
+        if (!surface) {
+            /* another kind of surface manager (a compact grid terrain ...):
+             * let the engine's ray solver walk its ledges */
+            ivp_ray_solver_template_t templ;
+            templ.ray_start_point = *start_ws;
+            templ.ray_normized_direction = *dir_ws;
+            templ.ray_length = best;
+            templ.ray_flags = IVP_RAY_SOLVER_ALL;
+            ivp_ray_solver_min_t rs;
+            ivp_ray_solver_min_init(&rs, &templ);
+            ivp_ray_solver_check_object(&rs.base, o);
+            const ivp_ray_hit_t *h = ivp_ray_solver_min_get_ray_hit(&rs);
+            if (!h || h->hit_distance < IVP_REAL(0.0) || h->hit_distance > best) continue;
+            best = h->hit_distance;
+            ivp_vec3r_t n_ws;
+            ivp_transform_dir(&n_ws, m, &h->hit_normal);
+            if (ivp_vec3r_normalize(&n_ws) != IVP_OK) ivp_vec3r_scale(&n_ws, dir_ws, IVP_REAL(-1.0));
+            if (ivp_vec3r_dot(&n_ws, dir_ws) > IVP_REAL(0.0)) ivp_vec3r_scale(&n_ws, &n_ws, IVP_REAL(-1.0));
+            *out_normal_ws = n_ws;
+            if (out_object) *out_object = o;
+            found = true;
+            continue;
+        }
 
         ivp_ray_input_t ray;
         ivp_transform_inv_point(&ray.origin, m, start_ws);
         ivp_transform_inv_dir(&ray.direction, m, dir_ws);
         ray.max_distance = best;
         ivp_ray_hit_t hit;
-        if (!ray_surface_os(sp->compact_surface, &ray, &hit)) continue;
+        if (!ray_surface_os(surface, &ray, &hit)) continue;
         if (hit.hit_distance < IVP_REAL(0.0) || hit.hit_distance > best) continue;
         best = hit.hit_distance;
         ivp_vec3r_t n_ws;

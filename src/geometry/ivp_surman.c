@@ -238,6 +238,12 @@ void ivp_surman_polygon_init(ivp_surman_polygon_t *sm,
     sm->compact_surface = surface;
 }
 
+const ivp_compact_surface_t *ivp_surman_get_polygon_surface(const ivp_surman_t *sm)
+{
+    if (!sm || sm->vtable != &s_polygon_vtable) return NULL;
+    return ((const ivp_surman_polygon_t *)sm)->compact_surface;
+}
+
 /* ── Ball surface manager implementation ────────────────────────────────── */
 
 /* IVP_SurfaceManager_Ball::compact_ledge: zeroed ledge + one triangle */

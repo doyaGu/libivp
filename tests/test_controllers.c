@@ -36,6 +36,8 @@
 #include <ivp/controllers/ivp_actuator_rot_mot.h>
 #include <ivp/controllers/ivp_actuator_torque.h>
 #include <ivp/builder/ivp_build_surface.h>
+#include <ivp/builder/ivp_build_grid.h>
+#include <ivp/geometry/ivp_surman_grid.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
@@ -1809,6 +1811,56 @@ IVP_TEST(car_suspension_grounded) {
     ivp_environment_destroy(env);
 }
 
+/* The default wheel ray caster used to read a compact grid as a polygon
+ * surface (the grid surface manager also reports IVP_SURMAN_POLYGON), so a
+ * car never touched grid terrain. */
+IVP_TEST(car_default_raycast_hits_compact_grid) {
+    ivp_environment_t *env = make_env(DT60, true);
+
+    enum { N = 8 };
+    float heights[N * N];
+    for (int i = 0; i < N * N; i++) heights[i] = 0.0f;
+    ivp_template_compact_grid_t gt;
+    ivp_template_compact_grid_init(&gt);
+    gt.row_info.n_points = N;
+    gt.row_info.maps_to = 0;
+    gt.row_info.invert_axis = false;
+    gt.column_info.n_points = N;
+    gt.column_info.maps_to = 2;
+    gt.column_info.invert_axis = false;
+    gt.height_maps_to = 1;
+    gt.height_invert_axis = true;
+    gt.grid_field_size = 4.0f;
+    ivp_compact_grid_t *grid = ivp_gridbuild_array_to_compact_grid(NULL, &gt, heights);
+    IVP_ASSERT_NOT_NULL(grid);
+    ivp_surman_compact_grid_t surman;
+    ivp_surman_compact_grid_init(&surman, grid);
+
+    ivp_object_template_t gtempl;
+    ivp_object_template_init(&gtempl);
+    gtempl.type = IVP_OBJECT_POLYGON;
+    gtempl.mass = IVP_REAL(1e6);
+    gtempl.physical_unmoveable = true;
+    ivp_vec3r_set(&gtempl.position, IVP_REAL(-14.0), IVP_REAL(0.0), IVP_REAL(-14.0));
+    IVP_ASSERT_NOT_NULL(ivp_environment_create_object(env, &gtempl, &surman.base));
+
+    ivp_object_t *chassis = make_ball(env, IVP_REAL(100.0), IVP_REAL(0.0), IVP_REAL(-1.5), IVP_REAL(0.0));
+    ivp_car_state_t state;
+    IVP_ASSERT_TRUE(ivp_car_init_4wheel(&state, chassis, IVP_REAL(2.5), IVP_REAL(1.8),
+                                        IVP_REAL(0.4), IVP_REAL(2.0)));
+    step(env, 2);
+    int grounded = 0;
+    for (int i = 0; i < state.n_wheels; i++) grounded += state.wheels[i].grounded ? 1 : 0;
+    IVP_ASSERT_EQ(grounded, 4);
+    /* the contact lies on the terrain plane y = 0 */
+    for (int i = 0; i < state.n_wheels; i++)
+        IVP_ASSERT_NEAR(state.wheels[i].contact_point_ws.k[1], 0.0, 1e-3);
+
+    ivp_car_destroy(&state);
+    ivp_environment_destroy(env);
+    ivp_compact_grid_free(NULL, grid);
+}
+
 /* ============================================================
  * CHECK DIST TESTS (3)
  * ============================================================ */
@@ -2310,6 +2362,7 @@ int main(void) {
     IVP_REGISTER(car_template_axes);
     IVP_REGISTER(car_steering_engine_brake);
     IVP_REGISTER(car_suspension_grounded);
+    IVP_REGISTER(car_default_raycast_hits_compact_grid);
 
     /* Check dist tests (4) */
     IVP_REGISTER(check_dist_init_setup);
