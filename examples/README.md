@@ -43,6 +43,7 @@ which handles solid / wire, shadows and the hover and selection outlines.
 | `--screenshot FILE [N]` | render N frames (default 60) at a fixed 1/60 s step, save the last as a PNG, exit |
 | `--overlays` | start with F2-F4 and the F5 panel on and the first dynamic body selected |
 | `--no-shadows` | start with the shadow map off |
+| `--mouse X Y` | pretend the mouse is at window pixel (X, Y): hover outline and details in a screenshot |
 
 ## The examples
 

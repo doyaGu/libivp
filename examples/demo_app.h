@@ -646,6 +646,8 @@ typedef struct demo_viewer {
     float                          p_ambient;
     bool                           p_shadows;
     bool                           prev_lmb;
+    bool                           fake_mouse;       /* --mouse X Y: use these coordinates */
+    float                          fake_mx, fake_my;
     demo_mesh_entry_t              meshes[DEMO_MESH_CACHE];
     int                            n_meshes;
     float                          hud_y;
@@ -792,6 +794,12 @@ static inline void demo_viewer_forget(demo_viewer_t *v, const ivp_object_t *obj)
     }
     if (v->focus.focused == obj) v->focus.focused = NULL;
     demo_debug_forget(&v->dbg, obj);
+    for (int i = 0; i < v->n_meshes; i++) {          /* its solid mesh */
+        if (v->meshes[i].key != obj) continue;
+        ivp_render_mesh_destroy(v->meshes[i].mesh);
+        v->meshes[i] = v->meshes[--v->n_meshes];
+        break;
+    }
 }
 
 /* Edge triggered key query (SDL scancode). */
@@ -839,6 +847,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
         float mx, my, ro[3], rd[3];
         SDL_MouseButtonFlags btn = SDL_GetMouseState(&mx, &my);
         bool lmb = (btn & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
+        if (v->fake_mouse) { mx = v->fake_mx; my = v->fake_my; }
         if (demo_key_just_pressed(v, SDL_SCANCODE_F5)) v->panel.open = !v->panel.open;
         v->ui_captured = demo_panel_update(&v->panel, v->win_w, 150.0f, mx, my, lmb);
         if (v->ui_captured) {
@@ -1551,6 +1560,10 @@ static inline const char *demo_positional_arg(int argc, char **argv)
             if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') i++;
             continue;
         }
+        if (strcmp(argv[i], "--mouse") == 0) {
+            i += 2;                                /* X and Y */
+            continue;
+        }
         if (strcmp(argv[i], "--overlays") == 0 || strcmp(argv[i], "--no-shadows") == 0 || is_num)
             continue;
         return argv[i];
@@ -1597,8 +1610,21 @@ static inline void demo_apply_overlays(demo_viewer_t *v, demo_world_t *w)
     }
 }
 
+/* `--mouse X Y`: pretend the mouse is at window pixel (X, Y), for hover
+ * outlines in screenshots. Returns false when the option is absent. */
+static inline bool demo_mouse_arg(int argc, char **argv, float *x, float *y)
+{
+    for (int i = 1; i + 2 < argc; i++) {
+        if (strcmp(argv[i], "--mouse") != 0) continue;
+        *x = (float)atof(argv[i + 1]);
+        *y = (float)atof(argv[i + 2]);
+        return true;
+    }
+    return false;
+}
+
 static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int shot_frames,
-                                  bool overlays, bool no_shadows)
+                                  bool overlays, bool no_shadows, bool fake_mouse, float mx, float my)
 {
     demo_viewer_t *v = (demo_viewer_t *)calloc(1, sizeof(*v));
     if (!v) return 1;
@@ -1608,6 +1634,9 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
     }
     if (app->viewer_init) app->viewer_init(app, v);
     if (overlays) demo_apply_overlays(v, &app->world);
+    v->fake_mouse = fake_mouse;
+    v->fake_mx = mx;
+    v->fake_my = my;
     if (no_shadows) {
         v->p_shadows = false;
         demo_ui_apply(v);
@@ -1660,8 +1689,10 @@ static inline int demo_run(demo_app_t *app, int argc, char **argv)
     if (frames > 0) return demo_run_headless(app, frames);
     int shot_frames;
     const char *shot = demo_screenshot_arg(argc, argv, &shot_frames);
+    float mx = 0.0f, my = 0.0f;
+    bool fake_mouse = demo_mouse_arg(argc, argv, &mx, &my);
     return demo_run_viewer(app, shot, shot_frames, demo_has_arg(argc, argv, "--overlays"),
-                           demo_has_arg(argc, argv, "--no-shadows"));
+                           demo_has_arg(argc, argv, "--no-shadows"), fake_mouse, mx, my);
 }
 
 #endif /* IVP_EXAMPLE_DEMO_APP_H */
