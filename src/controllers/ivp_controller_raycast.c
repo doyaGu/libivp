@@ -165,7 +165,7 @@ bool ivp_controller_world_raycast(ivp_environment_t *env,
         ivp_transform_inv_point(&ray.origin, m, start_ws);
         ivp_transform_inv_dir(&ray.direction, m, dir_ws);
         ray.max_distance = best;
-        ivp_ray_hit_t hit;
+        ivp_ray_hit_t hit = {0};
         if (!ray_surface_os(surface, &ray, &hit)) continue;
         if (hit.hit_distance < IVP_REAL(0.0) || hit.hit_distance > best) continue;
         best = hit.hit_distance;
