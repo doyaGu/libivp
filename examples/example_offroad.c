@@ -19,8 +19,6 @@
 #define FIELD      2.0f           /* metres between points: 120 m square */
 #define N_CRATES   14
 
-#define ENGINE_FWD   220.0
-#define ENGINE_REV  -110.0
 #define BRAKE_FORCE  200.0
 #define STEER_ANGLE  0.4
 
@@ -35,6 +33,13 @@ typedef struct offroad_demo {
     float            max_tilt;
     float            lowest_clearance;      /* chassis centre above the terrain, min over the run */
     int              grounded_min_late;
+    /* tunables, also on the F5 panel */
+    float            engine;                /* N, forward; reverse is half */
+    float            max_speed;             /* m/s, the engine cuts out above this */
+    float            max_lateral;           /* m/s^2 the steering may ask for */
+    float            spring_k, spring_damp; /* wheel suspension */
+    float            wheel_friction;
+    float            stabilizer;            /* anti-roll bar constant */
 } offroad_demo_t;
 
 /* Gentle rolling hills; the start area around the origin is nearly flat. */
@@ -57,16 +62,14 @@ static int wheels_grounded(const offroad_demo_t *s)
 }
 
 /* Largest steering angle that keeps the lateral acceleration v^2 / R below
- * MAX_LATERAL (R = wheelbase / tan(angle)): the faster, the straighter. At
+ * max_lateral (R = wheelbase / tan(angle)): the faster, the straighter. At
  * a full lock of 0.4 rad a 3 m wheelbase turns at 7 m radius and 8 m/s
  * would be 1 g sideways, which tips any car. */
-#define MAX_SPEED   13.0f     /* m/s: the engine cuts out above this */
-#define MAX_LATERAL 4.5f      /* m/s^2, about 0.45 g */
 #define WHEELBASE   3.0f
 static float limit_steer(const offroad_demo_t *s, float steer)
 {
     float v = demo_object_speed(s->chassis);
-    float lim = atanf(WHEELBASE * MAX_LATERAL / (v * v + 1.0f));
+    float lim = atanf(WHEELBASE * s->max_lateral / (v * v + 1.0f));
     if (lim > (float)STEER_ANGLE) lim = (float)STEER_ANGLE;
     return steer > lim ? lim : (steer < -lim ? -lim : steer);
 }
@@ -83,16 +86,37 @@ static float demo_forward_speed(const offroad_demo_t *s)
 static void apply_input(offroad_demo_t *s, float steer, float engine, float brake)
 {
     steer = limit_steer(s, steer);
-    if (demo_object_speed(s->chassis) > MAX_SPEED) engine = 0.0f;   /* governor */
+    if (demo_object_speed(s->chassis) > s->max_speed) engine = 0.0f;   /* governor */
     ivp_car_set_steering(&s->car, (ivp_real_t)steer);
     ivp_car_set_engine(&s->car, (ivp_real_t)engine);
     ivp_car_set_brake(&s->car, (ivp_real_t)brake);
+}
+
+/* Push the suspension and anti-roll tunables to the car. */
+static void offroad_apply(void *ctx)
+{
+    offroad_demo_t *s = (offroad_demo_t *)ctx;
+    for (int i = 0; i < s->car.n_wheels; i++) {
+        s->car.wheels[i].spring_constant      = s->spring_k;
+        s->car.wheels[i].spring_damp_relax    = s->spring_damp;
+        s->car.wheels[i].spring_damp_compress = s->spring_damp;
+        s->car.wheels[i].friction_of_wheel    = s->wheel_friction;
+    }
+    for (int a = 0; a < 2; a++) ivp_car_change_stabilizer_constant(&s->car, a, s->stabilizer);
 }
 
 static void offroad_viewer_init(demo_app_t *app, demo_viewer_t *v)
 {
     offroad_demo_t *s = (offroad_demo_t *)app->user;
     demo_terrain_make_mesh(&s->terrain, v->renderer);
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "engine (N)",  &s->engine,         50.0f, 500.0f,  NULL, NULL);
+    demo_panel_add_float(p, "top speed",   &s->max_speed,      4.0f,  30.0f,   NULL, NULL);
+    demo_panel_add_float(p, "lateral limit",     &s->max_lateral,    1.0f,  12.0f,   NULL, NULL);
+    demo_panel_add_float(p, "spring k",          &s->spring_k,       200.0f, 2500.0f, offroad_apply, s);
+    demo_panel_add_float(p, "spring damping",    &s->spring_damp,    5.0f,  200.0f,  offroad_apply, s);
+    demo_panel_add_float(p, "tyre friction",     &s->wheel_friction, 0.2f,  2.5f,    offroad_apply, s);
+    demo_panel_add_float(p, "anti-roll bar",     &s->stabilizer,     0.0f,  20000.0f, offroad_apply, s);
 }
 
 static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
@@ -113,12 +137,12 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
         float steer = 0.0f, engine = 0.0f, brake = 0.0f;
         if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_UP])    engine = (float)ENGINE_FWD;
+        if (keys[SDL_SCANCODE_UP])    engine = s->engine;
         if (keys[SDL_SCANCODE_DOWN]) {
             /* like a pedal: brake while rolling forward, reverse once stopped */
             float fwd = demo_forward_speed(s);
             if (fwd > 0.8f) brake = (float)BRAKE_FORCE;
-            else engine = (float)ENGINE_REV;
+            else engine = -0.5f * s->engine;
         }
         if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
         apply_input(s, steer, engine, brake);
@@ -128,7 +152,7 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
     /* scripted: settle 1.5 s, then 6 s of throttle with the steering flung from
      * lock to lock every second, then brake */
     float steer = 0.0f, engine = 0.0f, brake = 0.0f;
-    if (frame >= 90 && frame < 450) engine = (float)ENGINE_FWD;
+    if (frame >= 90 && frame < 450) engine = s->engine;
     if (frame >= 150 && frame < 450) steer = ((frame / 60) & 1) ? (float)STEER_ANGLE : -(float)STEER_ANGLE;
     if (frame >= 450) brake = (float)BRAKE_FORCE;
     if (frame == 90) memcpy(s->start, c, sizeof(s->start));
@@ -267,15 +291,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "ivp_car_init_4wheel failed\n");
         return 1;
     }
-    for (int i = 0; i < s->car.n_wheels; i++) {
-        s->car.wheels[i].spring_constant      = 800.0f;
-        s->car.wheels[i].spring_damp_relax    = 60.0f;
-        s->car.wheels[i].spring_damp_compress = 60.0f;
-        s->car.wheels[i].friction_of_wheel    = 1.2f;
-    }
-
-    /* anti-roll bars: the 4-wheel default stabilizer is far too soft for a 20 kg body */
-    for (int a = 0; a < 2; a++) ivp_car_change_stabilizer_constant(&s->car, a, 8000.0f);
+    s->engine = 220.0f;
+    s->max_speed = 13.0f;
+    s->max_lateral = 4.5f;                 /* about 0.45 g */
+    s->spring_k = 800.0f;
+    s->spring_damp = 60.0f;
+    s->wheel_friction = 1.2f;
+    s->stabilizer = 8000.0f;               /* the 4-wheel default is far too soft for a 20 kg body */
+    offroad_apply(s);
     app.controls    = "Up/Down: drive, brake, reverse   Left/Right: steer (narrows with speed)   B: handbrake";
     app.viewer_init = offroad_viewer_init;
     app.update      = offroad_update;
