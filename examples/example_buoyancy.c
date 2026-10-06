@@ -31,6 +31,9 @@
 
 /* ── Object descriptors ────────────────────────────────────────────────── */
 #define N_OBJS 7
+#define FOAM   5            /* index of the biggest, lightest body */
+#define DRAG_FORCE     70.0f   /* the mouse dragger (interaction.c) */
+#define DRAG_MAX_ACCEL 45.0f
 
 typedef struct {
     const char *label;
@@ -48,7 +51,7 @@ static const obj_desc_t descs[N_OBJS] = {
     {"Ball  1.5kg",   1.5f, {0.55f,0,0},        { 0.0f,-7.0f, 0.0f}, {0.3f, 0.8f, 1.0f},  true },
     {"Steel 8.0kg",   8.0f, {0.5f,0.5f,0.5f},  { 3.0f,-4.0f, 0.0f}, {0.65f,0.65f,0.70f}, false},
     {"Brick 3.0kg",   3.0f, {0.7f,0.35f,0.5f}, { 6.0f,-6.0f, 0.0f}, {0.85f,0.40f,0.25f}, false},
-    {"Foam  0.2kg",   0.2f, {0.8f,0.8f,0.8f},  {-4.5f,-9.0f, 3.0f}, {1.0f, 1.0f, 0.8f},  false},
+    {"Foam  0.8kg",   0.8f, {0.8f,0.8f,0.8f},  {-4.5f,-9.0f, 3.0f}, {1.0f, 1.0f, 0.8f},  false},
     {"Lead  12kg",   12.0f, {0.4f,0.4f,0.4f},  { 4.5f,-8.0f,-3.0f}, {0.3f, 0.3f, 0.4f},  false},
 };
 
@@ -75,6 +78,7 @@ typedef struct buoyancy_demo {
     ivp_object_t        *objs[N_OBJS];
     ivp_buoyancy_state_t buoy;
     float                max_speed;           /* over the whole run */
+    float                foam_peak;           /* speed of Foam after the simulated drag */
 } buoyancy_demo_t;
 
 static void give_initial_speed(buoyancy_demo_t *s)
@@ -101,7 +105,20 @@ static void buoyancy_update(demo_app_t *app, demo_viewer_t *v, int frame)
 {
     buoyancy_demo_t *s = (buoyancy_demo_t *)app->user;
     (void)v;
-    (void)frame;
+    if (!v) {
+        /* what a mouse drag does to the lightest big body: pull Foam under water
+         * with the dragger's force and acceleration limit for one second, then let go */
+        if (frame >= 200 && frame < 260) {
+            ivp_core_t *c = s->objs[FOAM]->physical_core;
+            float a = fminf(DRAG_FORCE * (float)c->inv_mass, DRAG_MAX_ACCEL);
+            c->speed_change.k[1] += (ivp_real_t)(a / 60.0f);
+            ivp_environment_ensure_core_in_simulation(app->world.env, s->objs[FOAM]);
+        }
+        if (frame > 260) {
+            float sp = demo_object_speed(s->objs[FOAM]);
+            if (sp > s->foam_peak) s->foam_peak = sp;
+        }
+    }
     for (int i = 0; i < N_OBJS; i++) {
         float speed = demo_object_speed(s->objs[i]);
         if (speed > s->max_speed) s->max_speed = speed;
@@ -248,6 +265,8 @@ static bool buoyancy_check(demo_app_t *app)
                              d->label, (double)(density / WATER_DENSITY), (double)p[1], (double)SEA_FLOOR_Y, (double)speed);
         }
     }
+    ok &= demo_check(tag, s->foam_peak < 15.0f,
+                     "Foam pulled under water and let go stays tame (peak %.1f m/s)", (double)s->foam_peak);
     ok &= demo_check(tag, s->max_speed < 30.0f, "plausible speeds (max %.2f m/s)", (double)s->max_speed);
     return ok;
 }
