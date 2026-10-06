@@ -439,7 +439,7 @@ void *ivp_vhash_store_remove_hash(ivp_vhash_store_t *h, void *key,
     if (!h || !h->elems || h->size_mm < 0) return NULL;
     int pos = (int)(hash_index & (uint32_t)h->size_mm);
 
-    ivp_vhash_store_elem_t *e;
+    ivp_vhash_store_elem_t *e = NULL;
     for (int searched = 0; searched < h->size; searched++, pos = (pos + 1) & h->size_mm) {
         e = &h->elems[pos];
         IVP_ASSERT(e->elem); /* was e->key_elem */
@@ -447,7 +447,7 @@ void *ivp_vhash_store_remove_hash(ivp_vhash_store_t *h, void *key,
         if ((e->hash_index | IVP_VHASH_TOUCH_BIT) != hash_index) continue;
         if (e->key_elem == key) break;
     }
-    if (!e->key_elem || e->key_elem != key) return NULL;
+    if (!e || !e->key_elem || e->key_elem != key) return NULL;
 
     void *removed = e->elem;
     h->nelems--;
