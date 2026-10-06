@@ -607,6 +607,8 @@ static inline bool demo_check(const char *tag, bool ok, const char *fmt, ...)
     return ok;
 }
 
+#include "demo_debug.h"
+
 /* ── Viewer ───────────────────────────────────────────────────────────── */
 
 /* Solid meshes of polygon bodies, built from the compact surface on first
@@ -633,6 +635,9 @@ typedef struct demo_viewer {
     int                            win_w, win_h;
     bool                           reset_requested;  /* Space this frame */
     bool                           solid;            /* F1: solid / wireframe */
+    demo_world_t                  *world;
+    demo_debug_t                   dbg;              /* hover, selection, overlays */
+    bool                           prev_lmb;
     demo_mesh_entry_t              meshes[DEMO_MESH_CACHE];
     int                            n_meshes;
     float                          hud_y;
@@ -673,6 +678,8 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
     ivp_renderer_set_clear_color(v->renderer, 0.26f, 0.30f, 0.36f, 1.0f);
     v->title = cfg->title;
     v->solid = true;
+    v->world = w;
+    demo_debug_init(&v->dbg, w->env);
 
     demo_camera_setup(&v->cam, cfg);
     ivp_camera_store_defaults(&v->cam_defaults, &v->cam);
@@ -691,6 +698,7 @@ static inline bool demo_viewer_init(demo_viewer_t *v, const demo_config_t *cfg,
 static inline void demo_viewer_destroy(demo_viewer_t *v, demo_world_t *w)
 {
     ivp_example_dragger_detach(&v->dragger, w->env);
+    demo_debug_destroy(&v->dbg, w->env);
     for (int i = 0; i < v->n_meshes; i++) ivp_render_mesh_destroy(v->meshes[i].mesh);
     v->n_meshes = 0;
     if (v->renderer) ivp_renderer_destroy(v->renderer);
@@ -708,6 +716,7 @@ static inline void demo_viewer_forget(demo_viewer_t *v, const ivp_object_t *obj)
         ivp_vec3r_set_zero(&v->dragger.force);
     }
     if (v->focus.focused == obj) v->focus.focused = NULL;
+    demo_debug_forget(&v->dbg, obj);
 }
 
 /* Edge triggered key query (SDL scancode). */
@@ -728,6 +737,9 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
 
     ivp_example_input_tracker_update(&v->input);
     if (demo_key_just_pressed(v, SDL_SCANCODE_F1)) v->solid = !v->solid;
+    if (demo_key_just_pressed(v, SDL_SCANCODE_F2)) v->dbg.show_axes = !v->dbg.show_axes;
+    if (demo_key_just_pressed(v, SDL_SCANCODE_F3)) v->dbg.show_velocity = !v->dbg.show_velocity;
+    if (demo_key_just_pressed(v, SDL_SCANCODE_F4)) v->dbg.show_impacts = !v->dbg.show_impacts;
     if (demo_key_just_pressed(v, SDL_SCANCODE_RETURN)) v->loop.paused = !v->loop.paused;
     if (demo_key_just_pressed(v, SDL_SCANCODE_PERIOD)) {
         v->loop.paused = true;
@@ -747,6 +759,17 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
     }
 
     ivp_renderer_get_size(v->renderer, &v->win_w, &v->win_h);
+    demo_debug_tick(&v->dbg, v->frame_dt);
+    {   /* hover follows the mouse; a click selects (or clears) */
+        float mx, my, ro[3], rd[3];
+        SDL_MouseButtonFlags btn = SDL_GetMouseState(&mx, &my);
+        bool lmb = (btn & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
+        ivp_render_unproject_ray(v->renderer, mx, my, ro, rd);
+        v->dbg.hover = demo_pick_object(w->env, ro, rd, NULL);
+        if (lmb && !v->prev_lmb) v->dbg.selected = v->dbg.hover;
+        v->prev_lmb = lmb;
+        if (demo_key_just_pressed(v, SDL_SCANCODE_ESCAPE)) v->dbg.selected = NULL;
+    }
     ivp_example_dragger_update(&v->dragger, &v->cam, w->env, v->win_w, v->win_h, v->frame_dt);
     ivp_example_focus_update(&v->focus, &v->cam, w->env, v->frame_dt);
     v->hud_y = 32.0f;
@@ -817,17 +840,18 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
             s = e + 1;
         }
     }
-    float y = (float)v->win_h - 18.0f * (float)(n_lines + 3) - 10.0f;
+    float y = (float)v->win_h - 18.0f * (float)(n_lines + 4) - 10.0f;
     for (int i = 0; i < n_lines; i++) {
         char buf[192];
         snprintf(buf, sizeof(buf), "%.*s", lens[i], lines[i]);
         ivp_render_draw_text(v->renderer, 10.0f, y, buf, DEMO_COL_HIGHLIGHT);
         y += 18.0f;
     }
+    ivp_render_draw_text(v->renderer, 10.0f, y,
+                         "Enter:pause  .:step  [ ]:speed  F1:wire  F2:axes  F3:velocity  F4:impacts  Click:select",
+                         DEMO_COL_HELP);
+    y += 18.0f;
     ivp_example_draw_interaction_hud(v->renderer, 10.0f, y, DEMO_COL_HELP, DEMO_COL_HELP);
-    ivp_render_draw_text_aligned(v->renderer, (float)v->win_w - 10.0f, (float)v->win_h - 28.0f,
-                                 "Enter:pause  .:step  [ ]:speed  \\:speed 1x  F1:wireframe",
-                                 DEMO_COL_HELP, IVP_TEXT_ALIGN_RIGHT);
     ivp_renderer_end_frame(v->renderer);
 }
 
@@ -1094,41 +1118,17 @@ static inline void demo_solid_mesh(demo_viewer_t *v, ivp_render_mesh_t *mesh,
     ivp_render_draw_solid_mesh(v->renderer, mesh, m, color);
 }
 
-/* ive::draw_object_box / draw_object_ball for any helper-created object.
- * Solid and lit by default; F1 switches to wireframe. */
-static inline void demo_draw_object(demo_viewer_t *v, const ivp_object_t *obj,
-                                    const float color[3])
+/* Wireframe of a helper-created object (ive::draw_object_box / _ball). */
+static inline void demo_draw_object_wire(demo_viewer_t *v, const ivp_object_t *obj,
+                                         const float color[3])
 {
     const demo_body_t *b = demo_body_of(obj);
-    float pos[3], rot[9];
-    demo_object_pose(obj, pos, rot);
-
-    if (v->solid && v->renderer) {
-        if (!b || b->shape == DEMO_SHAPE_POLY) {
-            ivp_render_mesh_t *mesh = demo_surface_mesh(v, obj);
-            if (mesh) {
-                demo_solid_mesh(v, mesh, pos, rot, color);
-                return;
-            }
-        } else if (b->shape == DEMO_SHAPE_BOX) {
-            demo_solid_box(v, pos, b->half, rot, color);
-            return;
-        } else if (b->shape == DEMO_SHAPE_BALL) {
-            demo_solid_sphere(v, pos, b->radius, color);
-            /* a lighter dot on the surface so that rolling is visible */
-            float dot[3] = { pos[0] + rot[0] * b->radius, pos[1] + rot[1] * b->radius,
-                             pos[2] + rot[2] * b->radius };
-            const float mark[3] = { color[0] * 0.4f + 0.6f, color[1] * 0.4f + 0.6f,
-                                    color[2] * 0.4f + 0.6f };
-            demo_solid_sphere(v, dot, b->radius * 0.22f, mark);
-            return;
-        }
-    }
-
     if (!b) {
         demo_draw_surface(v, obj, color);
         return;
     }
+    float pos[3], rot[9];
+    demo_object_pose(obj, pos, rot);
     switch (b->shape) {
     case DEMO_SHAPE_BOX:
         demo_box(v, pos, b->half, rot, color);
@@ -1146,6 +1146,46 @@ static inline void demo_draw_object(demo_viewer_t *v, const ivp_object_t *obj,
     default:
         demo_draw_surface(v, obj, color);
         break;
+    }
+}
+
+/* Draw any helper-created object.  Solid and lit by default (F1 switches to
+ * wireframe); the hovered and the selected object get a wire outline. */
+static inline void demo_draw_object(demo_viewer_t *v, const ivp_object_t *obj,
+                                    const float color[3])
+{
+    const demo_body_t *b = demo_body_of(obj);
+    float pos[3], rot[9];
+    demo_object_pose(obj, pos, rot);
+
+    bool drawn = false;
+    if (v->solid && v->renderer) {
+        if (!b || b->shape == DEMO_SHAPE_POLY) {
+            ivp_render_mesh_t *mesh = demo_surface_mesh(v, obj);
+            if (mesh) {
+                demo_solid_mesh(v, mesh, pos, rot, color);
+                drawn = true;
+            }
+        } else if (b->shape == DEMO_SHAPE_BOX) {
+            demo_solid_box(v, pos, b->half, rot, color);
+            drawn = true;
+        } else if (b->shape == DEMO_SHAPE_BALL) {
+            demo_solid_sphere(v, pos, b->radius, color);
+            /* a lighter dot on the surface so that rolling is visible */
+            float dot[3] = { pos[0] + rot[0] * b->radius, pos[1] + rot[1] * b->radius,
+                             pos[2] + rot[2] * b->radius };
+            const float mark[3] = { color[0] * 0.4f + 0.6f, color[1] * 0.4f + 0.6f,
+                                    color[2] * 0.4f + 0.6f };
+            demo_solid_sphere(v, dot, b->radius * 0.22f, mark);
+            drawn = true;
+        }
+    }
+    if (!drawn) demo_draw_object_wire(v, obj, color);
+
+    if (obj == v->dbg.selected || obj == v->dbg.hover) {
+        if (v->renderer) ivp_render_set_overlay(v->renderer, true);
+        demo_draw_object_wire(v, obj, obj == v->dbg.selected ? DEMO_COL_FOCUS : DEMO_COL_HIGHLIGHT);
+        if (v->renderer) ivp_render_set_overlay(v->renderer, false);
     }
 }
 
@@ -1171,6 +1211,86 @@ static inline void demo_draw_velocity(demo_viewer_t *v, const ivp_object_t *obj,
                     p[1] + (float)obj->physical_core->speed.k[1] * VEL_ARROW_SCALE,
                     p[2] + (float)obj->physical_core->speed.k[2] * VEL_ARROW_SCALE };
     demo_arrow(v, p, to, color, VEL_ARROW_HEAD);
+}
+
+/* ── Debug overlays and the object info panel ─────────────────────────── */
+
+/* F2 axes, F3 velocity arrows, F4 impact markers. */
+static inline void demo_debug_draw(demo_viewer_t *v)
+{
+    demo_debug_t *d = &v->dbg;
+    if (!v->world) return;
+    if (v->renderer) ivp_render_set_overlay(v->renderer, true);
+    if (d->show_axes || d->show_velocity) {
+        int n = ivp_environment_get_object_count(v->world->env);
+        for (int i = 0; i < n; i++) {
+            const ivp_object_t *obj = ivp_environment_get_object(v->world->env, i);
+            if (!obj || ivp_object_is_unmoveable(obj)) continue;
+            if (d->show_axes) {
+                float pos[3], rot[9];
+                demo_object_pose(obj, pos, rot);
+                float c[3];
+                demo_object_center(obj, c);
+                demo_axes(v, c, rot, 0.5f);
+            }
+            if (d->show_velocity) demo_draw_velocity(v, obj, DEMO_COL_VELOCITY);
+        }
+    }
+    if (d->show_impacts) {
+        for (int i = 0; i < DEMO_MAX_IMPACTS; i++) {
+            const demo_impact_t *im = &d->impacts[i];
+            if (im->age < 0.0f) continue;
+            float life = 1.0f - im->age / DEMO_IMPACT_LIFE;     /* 1 -> 0 */
+            float size = 0.1f + 0.02f * im->speed;
+            if (size > 0.6f) size = 0.6f;
+            const float col[3] = { 1.0f, 0.3f + 0.5f * (1.0f - life), 0.2f };
+            demo_cross(v, im->pos, size * (0.4f + 0.6f * life), col);
+            float tip[3] = { im->pos[0] + im->nrm[0] * size * 2.0f,
+                             im->pos[1] + im->nrm[1] * size * 2.0f,
+                             im->pos[2] + im->nrm[2] * size * 2.0f };
+            demo_arrow(v, im->pos, tip, col, size * 0.5f);
+        }
+    }
+    if (v->renderer) ivp_render_set_overlay(v->renderer, false);
+}
+
+/* Details of the selected (else the hovered) object, top right. */
+static inline void demo_debug_panel(demo_viewer_t *v)
+{
+    if (!v->renderer) return;
+    const ivp_object_t *obj = v->dbg.selected ? v->dbg.selected : v->dbg.hover;
+    if (!obj) return;
+    const bool sel = obj == v->dbg.selected;
+    const demo_body_t *b = demo_body_of(obj);
+    static const char *const shape_name[] = { "box", "ball", "polygon" };
+    const char *shape = b && (int)b->shape >= 0 && (int)b->shape < 3 ? shape_name[b->shape] : "object";
+
+    float c[3];
+    demo_object_center(obj, c);
+    ivp_vec3f_t w = {{ 0 }};
+    ivp_object_get_rot_speed(obj, &w);
+    float wmag = sqrtf((float)(w.k[0] * w.k[0] + w.k[1] * w.k[1] + w.k[2] * w.k[2]));
+    const ivp_core_t *core = obj->physical_core;
+
+    char line[5][96];
+    snprintf(line[0], sizeof(line[0]), "%s: %s", sel ? "Selected" : "Hover", shape);
+    snprintf(line[1], sizeof(line[1]), "pos  %.2f  %.2f  %.2f", (double)c[0], (double)c[1], (double)c[2]);
+    snprintf(line[2], sizeof(line[2]), "speed %.2f m/s   spin %.2f rad/s",
+             (double)demo_object_speed(obj), (double)wmag);
+    if (ivp_object_is_unmoveable(obj))
+        snprintf(line[3], sizeof(line[3]), "static");
+    else
+        snprintf(line[3], sizeof(line[3]), "mass %.2f kg%s", (double)core->mass,
+                 ivp_object_is_frozen(obj) ? "   [frozen]" : "");
+    snprintf(line[4], sizeof(line[4]), "friction %.2f  elasticity %.2f",
+             (double)obj->material.friction, (double)obj->material.elasticity);
+    float y = 36.0f + (v->loop.paused || v->loop.speed != 1.0f ? 18.0f : 0.0f);
+    for (int i = 0; i < 5; i++) {
+        ivp_render_draw_text_aligned(v->renderer, (float)v->win_w - 10.0f, y, line[i],
+                                     i == 0 ? (sel ? DEMO_COL_FOCUS : DEMO_COL_HIGHLIGHT) : DEMO_COL_INFO,
+                                     IVP_TEXT_ALIGN_RIGHT);
+        y += 18.0f;
+    }
 }
 
 /* ive::app_draw_grid (any extent / spacing) */
@@ -1300,7 +1420,30 @@ static inline const char *demo_screenshot_arg(int argc, char **argv, int *frames
     return NULL;
 }
 
-static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int shot_frames)
+/* `--overlays`: start with the F2-F4 overlays on and the first dynamic
+ * object selected (for screenshots). */
+static inline bool demo_has_arg(int argc, char **argv, const char *name)
+{
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], name) == 0) return true;
+    return false;
+}
+
+static inline void demo_apply_overlays(demo_viewer_t *v, demo_world_t *w)
+{
+    v->dbg.show_axes = v->dbg.show_velocity = v->dbg.show_impacts = true;
+    int n = ivp_environment_get_object_count(w->env);
+    for (int i = 0; i < n; i++) {
+        ivp_object_t *obj = ivp_environment_get_object(w->env, i);
+        if (obj && !ivp_object_is_unmoveable(obj) && demo_body_of(obj)) {
+            v->dbg.selected = obj;
+            break;
+        }
+    }
+}
+
+static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int shot_frames,
+                                  bool overlays)
 {
     demo_viewer_t *v = (demo_viewer_t *)calloc(1, sizeof(*v));
     if (!v) return 1;
@@ -1309,6 +1452,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
         return 1;
     }
     if (app->viewer_init) app->viewer_init(app, v);
+    if (overlays) demo_apply_overlays(v, &app->world);
     int frame = 0;
     while (demo_viewer_begin_frame(v, &app->world)) {
         if (v->reset_requested && app->on_reset) app->on_reset(app);
@@ -1320,6 +1464,8 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
                               DEMO_COL_GRID);
         }
         if (app->draw) app->draw(app, v);
+        demo_debug_draw(v);
+        demo_debug_panel(v);
         if (app->stats && ivp_example_inspector_tick(&v->inspector)) {
             char buf[512];
             buf[0] = '\0';
@@ -1351,7 +1497,7 @@ static inline int demo_run(demo_app_t *app, int argc, char **argv)
     if (frames > 0) return demo_run_headless(app, frames);
     int shot_frames;
     const char *shot = demo_screenshot_arg(argc, argv, &shot_frames);
-    return demo_run_viewer(app, shot, shot_frames);
+    return demo_run_viewer(app, shot, shot_frames, demo_has_arg(argc, argv, "--overlays"));
 }
 
 #endif /* IVP_EXAMPLE_DEMO_APP_H */

@@ -162,7 +162,6 @@ int main(int argc, char **argv)
     shapes_demo_t *s = (shapes_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
     app.user = s;
-    app.controls = "F1:wireframe";
 
     s->ground = demo_create_box(&app.world, NULL, 10.0, 0.5, 10.0, 0.0, NULL, 0.0, 0.0, 0.0);
 
