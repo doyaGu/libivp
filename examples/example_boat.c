@@ -43,6 +43,7 @@ typedef struct boat_demo {
     float                throttle, steer;     /* -1 .. 1, set by update() */
     /* headless measurements */
     float                heading0, heading1;
+    bool                 frozen_before;       /* the boat slept before it was driven */
     float                speed_cruise;
     float                max_tilt;
     float                crate_moved;
@@ -92,19 +93,26 @@ static void boat_update(demo_app_t *app, demo_viewer_t *v, int frame)
         const bool *keys = SDL_GetKeyboardState(NULL);
         s->throttle = (keys[SDL_SCANCODE_UP] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 1.0f : 0.0f);
         s->steer = (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f);
+    } else {
+        /* scripted: rest 6 s (the boat freezes), full motor 1.5 s, then
+         * half motor and rudder 2 s */
+        s->throttle = frame < 360 ? 0.0f : (frame < 450 ? 1.0f : 0.6f);
+        s->steer = (frame >= 450 && frame < 570) ? 1.0f : 0.0f;
+        if (frame == 359) s->frozen_before = ivp_object_is_frozen(s->hull);
+        if (frame == 449) {
+            s->speed_cruise = demo_object_speed(s->hull);
+            s->heading0 = heading_deg(s->hull);
+        }
+        if (frame == 570) s->heading1 = heading_deg(s->hull);
+    }
+    /* a boat resting on the water freezes, and a frozen core runs no controllers */
+    if (s->throttle != 0.0f || s->steer != 0.0f)
+        ivp_environment_ensure_core_in_simulation(app->world.env, s->hull);
+    if (v) {
         float target[3];
         demo_object_center(s->hull, target);
         for (int k = 0; k < 3; k++) v->cam.target[k] += (target[k] - v->cam.target[k]) * 0.04f;
-        return;
     }
-    /* scripted: settle 1 s, full motor 1.5 s, then half motor and rudder 3 s */
-    s->throttle = frame < 60 ? 0.0f : (frame < 150 ? 1.0f : 0.6f);
-    s->steer = (frame >= 150 && frame < 330) ? 1.0f : 0.0f;
-    if (frame == 149) {
-        s->speed_cruise = demo_object_speed(s->hull);
-        s->heading0 = heading_deg(s->hull);
-    }
-    if (frame == 330) s->heading1 = heading_deg(s->hull);
 }
 
 static void boat_reset(demo_app_t *app)
@@ -193,6 +201,7 @@ static bool boat_check(demo_app_t *app)
     bool ok = true;
     float c[3];
     demo_object_center(s->hull, c);
+    ok &= demo_check(tag, s->frozen_before, "the resting boat had frozen before it was driven");
     ok &= demo_check(tag, s->max_tilt < 30.0f, "the hull stays upright (max tilt %.1f deg)",
                      (double)s->max_tilt);
     ok &= demo_check(tag, fabsf(c[0]) < POOL_X && fabsf(c[2]) < POOL_Z,
