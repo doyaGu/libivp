@@ -46,6 +46,7 @@ add_dependencies(ivp_example_runtime ivp_render_shaders)
 
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
+    set_property(GLOBAL APPEND PROPERTY IVP_EXAMPLE_TARGETS ${NAME})
     add_executable(${NAME} ${SOURCE})
     target_link_libraries(${NAME} PRIVATE ivp_example_interaction ivp_example_inspect)
     add_dependencies(${NAME} ivp_example_runtime)
@@ -108,3 +109,8 @@ ivp_add_example(example_hinge example_hinge.c)
 ivp_add_example(example_maxforce example_maxforce.c)
 ivp_add_example(example_ring example_ring.c)
 ivp_add_example(example_push example_push.c)
+
+# ── The launcher: its headless check lists the executables next to it ────────
+get_property(IVP_ALL_EXAMPLES GLOBAL PROPERTY IVP_EXAMPLE_TARGETS)
+ivp_add_example(example_gallery example_gallery.c)
+add_dependencies(example_gallery ${IVP_ALL_EXAMPLES})

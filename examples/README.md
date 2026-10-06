@@ -12,6 +12,13 @@ cmake --build build
 python3 tools/smoke_test_examples.py --build-dir build   # all of them (ctest -L smoke)
 ```
 
+`example_gallery` is a launcher: a window with a card per example. Click a card
+(or Enter) to open the example in its own window, H or a right click runs its
+headless self-check and marks the card, X checks all of them
+(`example_gallery --check-all` does that without a window). Its `--headless`
+check fails when an example has no card, so a new example needs an entry in the
+card list of `example_gallery.c`.
+
 Building needs `glslangValidator` (the shaders) and fetches SDL3 unless it is
 installed. The renderer prefers Metal shaders on macOS; the SPIR-V path is
 built but has not been run.
