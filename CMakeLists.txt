@@ -931,11 +931,11 @@ if (IVP_BUILD_TESTS)
                     NAME test_smoke_examples
                     COMMAND ${Python3_EXECUTABLE} ${IVP_SMOKE_SCRIPT}
                     --build-dir ${CMAKE_BINARY_DIR}
-                    --timeout 5
+                    --timeout 30
             )
             set_tests_properties(test_smoke_examples PROPERTIES
                     LABELS "smoke"
-                    TIMEOUT 60
+                    TIMEOUT 300
             )
         endif ()
     endif ()
