@@ -728,6 +728,14 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
 
     ivp_example_input_tracker_update(&v->input);
     if (demo_key_just_pressed(v, SDL_SCANCODE_F1)) v->solid = !v->solid;
+    if (demo_key_just_pressed(v, SDL_SCANCODE_RETURN)) v->loop.paused = !v->loop.paused;
+    if (demo_key_just_pressed(v, SDL_SCANCODE_PERIOD)) {
+        v->loop.paused = true;
+        v->loop.step_requests++;
+    }
+    if (demo_key_just_pressed(v, SDL_SCANCODE_LEFTBRACKET)) sim_loop_scale_speed(&v->loop, 0.5f);
+    if (demo_key_just_pressed(v, SDL_SCANCODE_RIGHTBRACKET)) sim_loop_scale_speed(&v->loop, 2.0f);
+    if (demo_key_just_pressed(v, SDL_SCANCODE_BACKSLASH)) v->loop.speed = 1.0f;
     v->reset_requested = false;
     if (v->input.scene_reset_requested) {
         demo_world_restore_state(w);
@@ -786,6 +794,12 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
         snprintf(buf, sizeof(buf), "%s   FPS: %.0f", v->title ? v->title : "",
                  (double)v->loop.fps_display);
         ivp_render_draw_text(v->renderer, 10.0f, 10.0f, buf, DEMO_COL_TITLE);
+        if (v->loop.paused || v->loop.speed != 1.0f) {
+            snprintf(buf, sizeof(buf), v->loop.paused ? "PAUSED  speed x%g" : "speed x%g",
+                     (double)v->loop.speed);
+            ivp_render_draw_text_aligned(v->renderer, (float)v->win_w - 10.0f, 10.0f,
+                                         buf, DEMO_COL_WARNING, IVP_TEXT_ALIGN_RIGHT);
+        }
     }
 
     int n_lines = 0;
@@ -811,6 +825,9 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
         y += 18.0f;
     }
     ivp_example_draw_interaction_hud(v->renderer, 10.0f, y, DEMO_COL_HELP, DEMO_COL_HELP);
+    ivp_render_draw_text_aligned(v->renderer, (float)v->win_w - 10.0f, (float)v->win_h - 28.0f,
+                                 "Enter:pause  .:step  [ ]:speed  \\:speed 1x  F1:wireframe",
+                                 DEMO_COL_HELP, IVP_TEXT_ALIGN_RIGHT);
     ivp_renderer_end_frame(v->renderer);
 }
 

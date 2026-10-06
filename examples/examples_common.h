@@ -208,7 +208,15 @@ typedef struct {
     int    frame_count;
     float  fps_timer;
     float  fps_display;
+    /* playback control */
+    bool   paused;
+    int    step_requests;   /* single frames to run while paused */
+    float  speed;           /* time scale, 1 = real time */
 } sim_loop_t;
+
+#define SIM_SPEED_MIN 0.0625f
+#define SIM_SPEED_MAX 4.0f
+#define SIM_STEP_TIME (1.0f / 60.0f)   /* simulated time of one single step */
 
 static inline void sim_loop_init(sim_loop_t *sl, const ivp_renderer_t *r) {
     sl->t_prev       = ivp_renderer_get_time(r);
@@ -218,6 +226,16 @@ static inline void sim_loop_init(sim_loop_t *sl, const ivp_renderer_t *r) {
     sl->frame_count  = 0;
     sl->fps_timer    = 0.0f;
     sl->fps_display  = 0.0f;
+    sl->paused       = false;
+    sl->step_requests = 0;
+    sl->speed        = 1.0f;
+}
+
+/* Halve / double the time scale within [SIM_SPEED_MIN, SIM_SPEED_MAX]. */
+static inline void sim_loop_scale_speed(sim_loop_t *sl, float factor) {
+    sl->speed *= factor;
+    if (sl->speed < SIM_SPEED_MIN) sl->speed = SIM_SPEED_MIN;
+    if (sl->speed > SIM_SPEED_MAX) sl->speed = SIM_SPEED_MAX;
 }
 
 /* Returns frame_dt. Call at top of each frame. */
@@ -240,6 +258,15 @@ static inline float sim_loop_begin(sim_loop_t *sl, const ivp_renderer_t *r) {
 /* Step physics with fixed timestep accumulator. Returns substep count. */
 static inline int sim_loop_step(sim_loop_t *sl, ivp_environment_t *env,
                                 float frame_dt) {
+    if (sl->paused) {
+        /* a requested step advances exactly SIM_STEP_TIME */
+        if (sl->step_requests <= 0) return 0;
+        sl->step_requests--;
+        frame_dt = SIM_STEP_TIME;
+    } else {
+        frame_dt *= sl->speed;
+        sl->step_requests = 0;
+    }
     sl->sim_accum += frame_dt;
     int substeps = 0;
     while (sl->sim_accum >= sl->sim_dt && substeps < sl->max_substeps) {
