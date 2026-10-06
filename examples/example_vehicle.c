@@ -14,9 +14,6 @@
 #include "demo_car.h"
 #include <ivp/math/ivp_fast_math.h>
 
-#define ENGINE_FWD   200.0    /* N, balanced for the 20 kg chassis */
-#define ENGINE_REV  -100.0
-#define BRAKE_FORCE  200.0    /* ~1 g deceleration */
 #define STEER_ANGLE  0.4      /* rad */
 
 typedef struct vehicle_demo {
@@ -31,7 +28,37 @@ typedef struct vehicle_demo {
     float           heading0, heading1;  /* yaw before / after steering */
     float           brake_v0, brake_v1;  /* speed when braking starts / 1.5 s later */
     float           max_tilt;
+    /* tunables, also on the F5 panel */
+    float           engine;              /* N, balanced for the 20 kg chassis; reverse is half */
+    float           brake;               /* N, 200 is about 1 g deceleration */
+    float           spring_k, spring_damp, wheel_friction;
 } vehicle_demo_t;
+
+/* The 4-wheel defaults are 50000 N/m and 3000 N*s/m; tuned for the 20 kg
+ * chassis. The compression damping must be tuned as well: with 3000 N*s/m a
+ * 6 m/s landing made each shock push with 18000 N for one 1/66 s PSI and the
+ * car was launched 100 m high. */
+static void vehicle_apply(void *ctx)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)ctx;
+    for (int i = 0; i < s->car.n_wheels; i++) {
+        s->car.wheels[i].spring_constant      = s->spring_k;
+        s->car.wheels[i].spring_damp_relax    = s->spring_damp;
+        s->car.wheels[i].spring_damp_compress = s->spring_damp;
+        s->car.wheels[i].friction_of_wheel    = s->wheel_friction;
+    }
+}
+
+static void vehicle_viewer_init(demo_app_t *app, demo_viewer_t *v)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "engine (N)",     &s->engine,         50.0f, 500.0f,  NULL, NULL);
+    demo_panel_add_float(p, "brake (N)",      &s->brake,          20.0f, 600.0f,  NULL, NULL);
+    demo_panel_add_float(p, "spring k",       &s->spring_k,       200.0f, 2500.0f, vehicle_apply, s);
+    demo_panel_add_float(p, "spring damping", &s->spring_damp,    5.0f,  200.0f,  vehicle_apply, s);
+    demo_panel_add_float(p, "tyre friction",  &s->wheel_friction, 0.2f,  2.5f,    vehicle_apply, s);
+}
 
 static int wheels_grounded(const vehicle_demo_t *s)
 {
@@ -66,17 +93,17 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
         float steer = 0.0f, engine = 0.0f, brake = 0.0f;
         if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
         if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_UP])    engine = (float)ENGINE_FWD;
+        if (keys[SDL_SCANCODE_UP])    engine = s->engine;
         if (keys[SDL_SCANCODE_DOWN]) {
             /* like a pedal: brake while rolling forward, reverse once stopped */
             float rot[9];
             quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
             const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
             float fwd = (float)(sp->k[0] * rot[6] + sp->k[1] * rot[7] + sp->k[2] * rot[8]);
-            if (fwd > 0.8f) brake = (float)BRAKE_FORCE;
-            else engine = (float)ENGINE_REV;
+            if (fwd > 0.8f) brake = s->brake;
+            else engine = -0.5f * s->engine;
         }
-        if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
+        if (keys[SDL_SCANCODE_B])     brake = s->brake;
         apply_input(s, steer, engine, brake);
         /* follow camera: track the chassis */
         float target[3];
@@ -90,7 +117,7 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
         s->grounded_settled = wheels_grounded(s);
         demo_object_center(s->chassis, s->start_pos);
     }
-    if (frame >= 60 && frame < 240) engine = (float)ENGINE_FWD;
+    if (frame >= 60 && frame < 240) engine = s->engine;
     if (frame == 180) {
         float p[3];
         demo_object_center(s->chassis, p);
@@ -100,7 +127,7 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
     }
     if (frame >= 180 && frame < 240) steer = (float)STEER_ANGLE;
     if (frame == 240) { s->heading1 = heading_deg(s); s->brake_v0 = demo_object_speed(s->chassis); }
-    if (frame >= 240) brake = (float)BRAKE_FORCE;
+    if (frame >= 240) brake = s->brake;
     if (frame == 330) s->brake_v1 = demo_object_speed(s->chassis);
     apply_input(s, steer, engine, brake);
 }
@@ -262,18 +289,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "ivp_car_init_4wheel failed\n");
         return 1;
     }
-    /* Tune suspension for the 20 kg chassis (the 4-wheel defaults are
-     * 50000 N/m and 3000 N*s/m).  The compression damping must be tuned as
-     * well: with 3000 N*s/m a 6 m/s landing made each shock push with
-     * 18000 N for one 1/66 s PSI and the car was launched 100 m high. */
-    for (int i = 0; i < s->car.n_wheels; i++) {
-        s->car.wheels[i].spring_constant      = 800.0f;
-        s->car.wheels[i].spring_damp_relax    = 60.0f;
-        s->car.wheels[i].spring_damp_compress = 60.0f;
-        s->car.wheels[i].friction_of_wheel    = 1.2f;
-    }
+    s->engine = 200.0f;
+    s->brake = 200.0f;
+    s->spring_k = 800.0f;
+    s->spring_damp = 60.0f;
+    s->wheel_friction = 1.2f;
+    vehicle_apply(s);
 
     app.controls = "Up/Down: drive, brake, reverse   Left/Right: steer   B: handbrake";
+    app.viewer_init = vehicle_viewer_init;
     app.update   = vehicle_update;
     app.draw     = vehicle_draw;
     app.stats    = vehicle_stats;
