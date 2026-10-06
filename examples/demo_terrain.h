@@ -13,6 +13,7 @@
 #define IVP_EXAMPLE_DEMO_TERRAIN_H
 
 #include <ivp/builder/ivp_build_grid.h>
+#include <ivp/collision/ivp_ray_solver.h>
 #include <ivp/geometry/ivp_compact_grid.h>
 #include <ivp/geometry/ivp_surman_grid.h>
 
@@ -58,6 +59,24 @@ static inline float demo_terrain_height_at(const demo_terrain_t *t, float x, flo
     if (h[r * t->n + c + 1] > m) m = h[r * t->n + c + 1];
     if (h[(r + 1) * t->n + c + 1] > m) m = h[(r + 1) * t->n + c + 1];
     return m;
+}
+
+/* Exact surface height: the engine's ray solver, a ray straight down onto the
+ * terrain object. Returns false when the ray misses (outside the field). */
+static inline bool demo_terrain_surface_y(const demo_terrain_t *t, float x, float z, float *y_out)
+{
+    ivp_ray_solver_template_t tmpl;
+    tmpl.ray_start_point = ivp_vec3r((ivp_real_t)x, (ivp_real_t)(-(t->h_max + 10.0f)), (ivp_real_t)z);
+    tmpl.ray_normized_direction = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0));   /* down is +Y */
+    tmpl.ray_length = (ivp_real_t)(t->h_max - t->h_min + 20.0f);
+    tmpl.ray_flags = IVP_RAY_SOLVER_ALL;
+    ivp_ray_solver_min_t rs;
+    ivp_ray_solver_min_init(&rs, &tmpl);
+    ivp_ray_solver_check_object(&rs.base, t->obj);
+    const ivp_ray_hit_t *h = ivp_ray_solver_min_get_ray_hit(&rs);
+    if (!h) return false;
+    *y_out = -(t->h_max + 10.0f) + (float)h->hit_distance;
+    return true;
 }
 
 /* Build the collision object. `heights` (n * n floats) is copied. */
