@@ -83,7 +83,7 @@ Larger scenes:
 | `compound` | rigid bodies made of several objects with `ivp_object_attach_object`; B breaks them apart |
 
 Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, suspension,
-tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `buoyancy` (water density,
+tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `airboat` (full throttle, rudder range, pontoon spring), `buoyancy` (water density,
 current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
 strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
 (pull strength), `concave` (draw the convex parts) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.

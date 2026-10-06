@@ -30,15 +30,17 @@
 #define LAKE_R     26.0f
 #define START_X    (-8.0f)
 
-#define STEER_MAX  0.3f
 #define FLOAT_HEIGHT 0.25f        /* the afloat hull centre is this far above the water */
-#define MAX_THROTTLE 0.6f         /* the reference scenario drives with 0.15 .. 0.6 */
 
 typedef struct airboat_demo {
     demo_terrain_t       terrain;
     ivp_object_t        *hull;
     ivp_airboat_state_t  boat;
     float                throttle, steer;     /* -1 .. 1 */
+    /* tunables, also on the F5 panel */
+    float                max_throttle;        /* full throttle; the reference scenario drives with 0.15 .. 0.6 */
+    float                pontoon_k, pontoon_damp;
+    float                steer_range;         /* rudder angle at full lock, in the controller's units */
     float                prop_angle;
     /* ray caster results of the last PSI */
     int                  n_ground, n_water;
@@ -119,16 +121,32 @@ static void airboat_rays(void *ctx, int n_rays, const ivp_ray_solver_template_t 
     }
 }
 
+/* Panel callback: the pontoon springs of the controller. */
+static void airboat_apply(void *ctx)
+{
+    airboat_demo_t *s = (airboat_demo_t *)ctx;
+    for (int i = 0; i < s->boat.n_wheels; i++) {
+        ivp_airboat_change_spring_constant(&s->boat, i, s->pontoon_k);
+        ivp_airboat_change_spring_dampening(&s->boat, i, s->pontoon_damp);
+        ivp_airboat_change_spring_dampening_compression(&s->boat, i, s->pontoon_damp);
+    }
+}
+
 static void airboat_viewer_init(demo_app_t *app, demo_viewer_t *v)
 {
     airboat_demo_t *s = (airboat_demo_t *)app->user;
     demo_terrain_make_mesh(&s->terrain, v->renderer);
+    demo_panel_t *p = &v->panel;
+    demo_panel_add_float(p, "full throttle",  &s->max_throttle, 0.1f,  1.0f,    NULL, NULL);
+    demo_panel_add_float(p, "rudder range",   &s->steer_range,  0.05f, 0.6f,    NULL, NULL);
+    demo_panel_add_float(p, "pontoon k",      &s->pontoon_k,    2000.0f, 30000.0f, airboat_apply, s);
+    demo_panel_add_float(p, "pontoon damping", &s->pontoon_damp, 100.0f, 3000.0f, airboat_apply, s);
 }
 
 static void apply_input(airboat_demo_t *s, demo_app_t *app)
 {
     ivp_airboat_update_throttle(&s->boat, s->throttle);
-    ivp_airboat_do_steering(&s->boat, s->steer * STEER_MAX);
+    ivp_airboat_do_steering(&s->boat, s->steer * s->steer_range);
     /* update_throttle does not wake the body, and a sleeping core runs no controller */
     if (s->throttle != 0.0f || s->steer != 0.0f)
         ivp_environment_ensure_core_in_simulation(app->world.env, s->hull);
@@ -149,7 +167,7 @@ static void airboat_update(demo_app_t *app, demo_viewer_t *v, int frame)
 
     if (v) {
         const bool *keys = SDL_GetKeyboardState(NULL);
-        s->throttle = (keys[SDL_SCANCODE_UP] ? MAX_THROTTLE : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 0.5f * MAX_THROTTLE : 0.0f);
+        s->throttle = (keys[SDL_SCANCODE_UP] ? s->max_throttle : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 0.5f * s->max_throttle : 0.0f);
         s->steer = (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f);   /* + turns right */
         for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
     } else {
@@ -254,7 +272,7 @@ static void draw_boat(demo_viewer_t *v, const airboat_demo_t *s)
     }
     /* rudders behind the fan, turned by the steering (about the hull Y axis) */
     {
-        const float ang = -s->steer * 0.6f;       /* trailing edge to the side of the turn */
+        const float ang = -s->steer * (s->steer_range / 0.3f) * 0.6f;       /* trailing edge to the side of the turn */
         float ca = cosf(ang), sa = sinf(ang), bx[3], by[3], bz[3], r2[9], p[3];
         body_vec(rot, 1, 0, 0, bx); body_vec(rot, 0, 1, 0, by); body_vec(rot, 0, 0, 1, bz);
         for (int k = 0; k < 3; k++) {
@@ -419,6 +437,11 @@ int main(int argc, char **argv)
         return 1;
     }
     ivp_airboat_set_raycast(&s->boat, airboat_rays, s);
+    s->max_throttle = 0.6f;
+    s->steer_range = 0.3f;
+    s->pontoon_k = 10000.0f;
+    s->pontoon_damp = 800.0f;
+    airboat_apply(s);
 
     app.controls    = "Up/Down: throttle forward / reverse   Left/Right: steer";
     app.viewer_init = airboat_viewer_init;
