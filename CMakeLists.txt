@@ -489,6 +489,7 @@ if (IVP_BUILD_RENDER)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     )
     target_link_libraries(ivp_render PUBLIC SDL3::SDL3)
+    target_link_libraries(ivp_render PRIVATE ivp)
     if (NOT MSVC)
         target_link_libraries(ivp_render PRIVATE m)
     endif ()
