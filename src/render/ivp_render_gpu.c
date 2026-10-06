@@ -407,8 +407,9 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
     vis.num_vertex_attributes      = (Uint32)total_attrs;
 
     SDL_GPUDepthStencilState dss = {0};
-    dss.compare_op         = SDL_GPU_COMPAREOP_LESS;
-    dss.enable_depth_test  = desc->depth_test;
+    dss.compare_op         = desc->depth_always ? SDL_GPU_COMPAREOP_ALWAYS
+                                                : SDL_GPU_COMPAREOP_LESS;
+    dss.enable_depth_test  = desc->depth_test || desc->depth_always;
     dss.enable_depth_write = desc->depth_write;
 
     SDL_GPUColorTargetDescription ct = {0};
@@ -426,7 +427,8 @@ SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
     gp.depth_stencil_state = dss;
     gp.target_info.color_target_descriptions = &ct;
     gp.target_info.num_color_targets         = 1;
-    gp.target_info.has_depth_stencil_target  = desc->depth_test || desc->depth_write;
+    gp.target_info.has_depth_stencil_target  = desc->depth_test || desc->depth_write ||
+                                               desc->depth_always;
     gp.target_info.depth_stencil_format      = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     gp.rasterizer_state.fill_mode            = SDL_GPU_FILLMODE_FILL;
     gp.rasterizer_state.cull_mode            = cull;

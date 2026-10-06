@@ -118,6 +118,8 @@ struct ivp_renderer {
     ivp_gpu_stream_t         stream_3d;   /* 3D wireframe lines */
     ivp_gpu_stream_t         stream_2d;   /* 2D HUD overlay     */
     ivp_gpu_stream_t         stream_tri;  /* 3D solid triangles  */
+    ivp_gpu_stream_t         stream_overlay; /* 3D lines, no depth test, drawn last */
+    bool                     overlay_mode;   /* wire draws go to stream_overlay */
 
     /* Instanced solid rendering */
     SDL_GPUGraphicsPipeline *inst_pipeline;

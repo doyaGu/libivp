@@ -21,7 +21,8 @@ static void push_line(ivp_renderer_t *r,
                       const float a[3], const float b[3],
                       const float col[3])
 {
-    draw_vertex_t *v = (draw_vertex_t *)ivp_gpu_stream_push(&r->stream_3d, 2);
+    draw_vertex_t *v = (draw_vertex_t *)ivp_gpu_stream_push(
+        r->overlay_mode ? &r->stream_overlay : &r->stream_3d, 2);
     if (!v) return;
     memcpy(v[0].pos, a,   3 * sizeof(float));
     memcpy(v[0].col, col, 3 * sizeof(float));
@@ -492,4 +493,8 @@ void ivp_render_draw_contact(ivp_renderer_t *r,
     tip[1] = pos[1] + normal[1] * normal_length;
     tip[2] = pos[2] + normal[2] * normal_length;
     ivp_render_draw_arrow(r, pos, tip, color, normal_length * 0.15f);
+}
+void ivp_render_set_overlay(ivp_renderer_t *r, bool on)
+{
+    r->overlay_mode = on;
 }

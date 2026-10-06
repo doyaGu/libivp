@@ -208,6 +208,10 @@ void ivp_render_draw_contact(ivp_renderer_t *r,
                              float normal_length,
                              const float color[3]);
 
+/* While on, wire primitives are drawn on top of everything else (no depth
+ * test), for debug overlays.  Reset to off at the start of every frame. */
+void ivp_render_set_overlay(ivp_renderer_t *r, bool on);
+
 /* ── 3D Solid drawing primitives (instanced, lit) ──────────────────────── */
 
 void ivp_render_draw_solid_sphere(ivp_renderer_t *r,

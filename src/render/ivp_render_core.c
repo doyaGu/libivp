@@ -219,6 +219,28 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
     res = ivp_proto_shapes_init(&r->protos, &r->gpu);
     if (res != IVP_OK) goto fail_inst;
 
+    /* Overlay lines: same layout as the 3D stream, no depth test */
+    {
+        ivp_gpu_attrib_desc_t attrs[2] = {
+            { 0, 3, (int)offsetof(draw_vertex_t, pos) },
+            { 1, 3, (int)offsetof(draw_vertex_t, col) },
+        };
+        ivp_gpu_stream_desc_t desc = {0};
+        desc.capacity     = cfg.max_draw_vertices / 4;
+        desc.stride       = (int)sizeof(draw_vertex_t);
+        desc.attribs      = attrs;
+        desc.attrib_count = 2;
+        desc.depth_always = true;   /* on top of everything, but in the same pass */
+        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+        res = ivp_gpu_stream_create(&r->stream_overlay, &r->gpu, &desc,
+                                    r->shaders.vs_3d, r->shaders.vs_3d_len,
+                                    r->shaders.fs, r->shaders.fs_len);
+        if (res != IVP_OK) {
+            ivp_proto_shapes_destroy(&r->protos, &r->gpu);
+            goto fail_inst;
+        }
+    }
+
     /* MSAA targets */
     {
         int pw, ph;
@@ -286,6 +308,7 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
 
     ivp_gpu_msaa_destroy(&r->msaa, &r->gpu);
     ivp_capture_destroy(r);
+    ivp_gpu_stream_destroy(&r->stream_overlay, &r->gpu);
     ivp_solid_destroy_meshes(r);
     ivp_proto_shapes_destroy(&r->protos, &r->gpu);
     if (r->inst_pipeline && r->gpu.device) {
@@ -385,6 +408,8 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     ivp_gpu_stream_reset(&r->stream_3d);
     ivp_gpu_stream_reset(&r->stream_2d);
     ivp_gpu_stream_reset(&r->stream_tri);
+    ivp_gpu_stream_reset(&r->stream_overlay);
+    r->overlay_mode = false;
     ivp_solid_begin_frame(r);
     r->culled_count = 0;
     return true;
@@ -398,6 +423,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_upload(&r->stream_3d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
+    ivp_gpu_stream_upload(&r->stream_overlay, &r->gpu, r->cmd);
     ivp_solid_upload(r);
 
     /* ── Render pass setup (MSAA or direct) ───────────────────────────── */
@@ -484,6 +510,9 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
         ivp_solid_draw(r, pass);
     }
 
+    /* ── Overlay lines: after the solids, no depth test ──────────────── */
+    ivp_gpu_stream_draw(&r->stream_overlay, pass, r->cmd, r->vp_mat, 64);
+
     /* ── 2D HUD overlay (ortho matrix, 64 bytes) ─────────────────────── */
     {
         float ortho[16];
@@ -512,6 +541,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     ivp_gpu_stream_advance(&r->stream_3d, NULL);
     ivp_gpu_stream_advance(&r->stream_2d, NULL);
     ivp_gpu_stream_advance(&r->stream_tri, NULL);
+    ivp_gpu_stream_advance(&r->stream_overlay, NULL);
     ivp_solid_advance(r);
 
     r->cmd = NULL;

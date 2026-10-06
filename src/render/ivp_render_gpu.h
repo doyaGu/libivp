@@ -93,6 +93,7 @@ typedef struct ivp_gpu_stream_desc {
     int                         attrib_count;
     bool                        depth_test;
     bool                        depth_write;
+    bool                        depth_always;     /* keep the depth target, never reject (overlays) */
     SDL_GPUPrimitiveType        primitive_type;   /* explicitly set by caller */
     SDL_GPUCullMode             cull_mode;        /* 0 = NONE (default) */
     int                         num_uniform_bufs; /* 0 = auto (1 for MSL) */
