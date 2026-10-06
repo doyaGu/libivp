@@ -75,45 +75,50 @@ static inline void ivp_render_mat4_ortho(float out[16],
 
 static inline bool ivp_render_mat4_invert(float out[16], const float m[16])
 {
-    float s0 = m[0]*m[5]  - m[4]*m[1];
-    float s1 = m[0]*m[9]  - m[8]*m[1];
-    float s2 = m[0]*m[13] - m[12]*m[1];
-    float s3 = m[4]*m[9]  - m[8]*m[5];
-    float s4 = m[4]*m[13] - m[12]*m[5];
-    float s5 = m[8]*m[13] - m[12]*m[9];
+    /* Laplace expansion over 2x2 sub-determinants.  Reading a column-major
+     * array as row-major gives the transpose, and (A^T)^-1 = (A^-1)^T, so
+     * the same code inverts either layout. */
+#define IVP_A(r, c) m[(r) * 4 + (c)]
+    float s0 = IVP_A(0,0)*IVP_A(1,1) - IVP_A(1,0)*IVP_A(0,1);
+    float s1 = IVP_A(0,0)*IVP_A(1,2) - IVP_A(1,0)*IVP_A(0,2);
+    float s2 = IVP_A(0,0)*IVP_A(1,3) - IVP_A(1,0)*IVP_A(0,3);
+    float s3 = IVP_A(0,1)*IVP_A(1,2) - IVP_A(1,1)*IVP_A(0,2);
+    float s4 = IVP_A(0,1)*IVP_A(1,3) - IVP_A(1,1)*IVP_A(0,3);
+    float s5 = IVP_A(0,2)*IVP_A(1,3) - IVP_A(1,2)*IVP_A(0,3);
 
-    float c5 = m[10]*m[15] - m[14]*m[11];
-    float c4 = m[6]*m[15]  - m[14]*m[7];
-    float c3 = m[6]*m[11]  - m[10]*m[7];
-    float c2 = m[2]*m[15]  - m[14]*m[3];
-    float c1 = m[2]*m[11]  - m[10]*m[3];
-    float c0 = m[2]*m[7]   - m[6]*m[3];
+    float c5 = IVP_A(2,2)*IVP_A(3,3) - IVP_A(3,2)*IVP_A(2,3);
+    float c4 = IVP_A(2,1)*IVP_A(3,3) - IVP_A(3,1)*IVP_A(2,3);
+    float c3 = IVP_A(2,1)*IVP_A(3,2) - IVP_A(3,1)*IVP_A(2,2);
+    float c2 = IVP_A(2,0)*IVP_A(3,3) - IVP_A(3,0)*IVP_A(2,3);
+    float c1 = IVP_A(2,0)*IVP_A(3,2) - IVP_A(3,0)*IVP_A(2,2);
+    float c0 = IVP_A(2,0)*IVP_A(3,1) - IVP_A(3,0)*IVP_A(2,1);
 
     float det = s0*c5 - s1*c4 + s2*c3 + s3*c2 - s4*c1 + s5*c0;
     if (det > -1e-12f && det < 1e-12f) return false;
+    float d = 1.0f / det;
 
-    float inv_det = 1.0f / det;
+    float t[16];
+    t[0]  = ( IVP_A(1,1)*c5 - IVP_A(1,2)*c4 + IVP_A(1,3)*c3) * d;
+    t[1]  = (-IVP_A(0,1)*c5 + IVP_A(0,2)*c4 - IVP_A(0,3)*c3) * d;
+    t[2]  = ( IVP_A(3,1)*s5 - IVP_A(3,2)*s4 + IVP_A(3,3)*s3) * d;
+    t[3]  = (-IVP_A(2,1)*s5 + IVP_A(2,2)*s4 - IVP_A(2,3)*s3) * d;
 
-    out[0]  = ( m[5]*c5  - m[9]*c4  + m[13]*c3) * inv_det;
-    out[1]  = (-m[1]*c5  + m[9]*c2  - m[13]*c1) * inv_det;
-    out[2]  = ( m[1]*c4  - m[5]*c2  + m[13]*c0) * inv_det;
-    out[3]  = (-m[1]*c3  + m[5]*c1  - m[9]*c0)  * inv_det;
+    t[4]  = (-IVP_A(1,0)*c5 + IVP_A(1,2)*c2 - IVP_A(1,3)*c1) * d;
+    t[5]  = ( IVP_A(0,0)*c5 - IVP_A(0,2)*c2 + IVP_A(0,3)*c1) * d;
+    t[6]  = (-IVP_A(3,0)*s5 + IVP_A(3,2)*s2 - IVP_A(3,3)*s1) * d;
+    t[7]  = ( IVP_A(2,0)*s5 - IVP_A(2,2)*s2 + IVP_A(2,3)*s1) * d;
 
-    out[4]  = (-m[4]*c5  + m[8]*c4  - m[12]*c3) * inv_det;
-    out[5]  = ( m[0]*c5  - m[8]*c2  + m[12]*c1) * inv_det;
-    out[6]  = (-m[0]*c4  + m[4]*c2  - m[12]*c0) * inv_det;
-    out[7]  = ( m[0]*c3  - m[4]*c1  + m[8]*c0)  * inv_det;
+    t[8]  = ( IVP_A(1,0)*c4 - IVP_A(1,1)*c2 + IVP_A(1,3)*c0) * d;
+    t[9]  = (-IVP_A(0,0)*c4 + IVP_A(0,1)*c2 - IVP_A(0,3)*c0) * d;
+    t[10] = ( IVP_A(3,0)*s4 - IVP_A(3,1)*s2 + IVP_A(3,3)*s0) * d;
+    t[11] = (-IVP_A(2,0)*s4 + IVP_A(2,1)*s2 - IVP_A(2,3)*s0) * d;
 
-    out[8]  = ( m[4]*s5  - m[8]*s4  + m[12]*s3) * inv_det;
-    out[9]  = (-m[0]*s5  + m[8]*s2  - m[12]*s1) * inv_det;
-    out[10] = ( m[0]*s4  - m[4]*s2  + m[12]*s0) * inv_det;
-    out[11] = (-m[0]*s3  + m[4]*s1  - m[8]*s0)  * inv_det;
-
-    out[12] = (-m[7]*s5  + m[11]*s4 - m[15]*s3) * inv_det;
-    out[13] = ( m[3]*s5  - m[11]*s2 + m[15]*s1) * inv_det;
-    out[14] = (-m[3]*s4  + m[7]*s2  - m[15]*s0) * inv_det;
-    out[15] = ( m[3]*s3  - m[7]*s1  + m[11]*s0) * inv_det;
-
+    t[12] = (-IVP_A(1,0)*c3 + IVP_A(1,1)*c1 - IVP_A(1,2)*c0) * d;
+    t[13] = ( IVP_A(0,0)*c3 - IVP_A(0,1)*c1 + IVP_A(0,2)*c0) * d;
+    t[14] = (-IVP_A(3,0)*s3 + IVP_A(3,1)*s1 - IVP_A(3,2)*s0) * d;
+    t[15] = ( IVP_A(2,0)*s3 - IVP_A(2,1)*s1 + IVP_A(2,2)*s0) * d;
+#undef IVP_A
+    memcpy(out, t, sizeof(t));
     return true;
 }
 
