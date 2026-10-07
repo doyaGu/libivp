@@ -78,7 +78,7 @@ static const card_t cards[] = {
     { "3ds_import",       1, "Loads a .3ds mesh as a physics body." },
     { "terrain",          1, "A heightfield as a compact grid; bodies roll into the valleys." },
     { "concave",          1, "Triangle meshes cut into convex parts; balls stay in the bowl." },
-    { "workshop",         1, "Point soup, polygon, ledge soup (top-down and bottom-up) and BSP builders." },
+    { "workshop",         1, "Point soup, polygon, ledge soup (top-down, bottom-up), BSP and half-space builders." },
     /* larger scenes */
     { "vehicle",          2, "The four-wheel raycast car on a ground with ramps." },
     { "offroad",          2, "The raycast car over 120 m of hills." },

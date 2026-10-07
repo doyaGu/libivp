@@ -872,5 +872,14 @@ if (IVP_BUILD_TESTS)
                     TIMEOUT 300
             )
         endif ()
+        # examples/COVERAGE.md lists which headers the examples use; it is generated.
+        set(IVP_COVERAGE_SCRIPT ${IVP_REPO_ROOT}/tools/example_coverage.py)
+        if (EXISTS ${IVP_COVERAGE_SCRIPT})
+            add_test(
+                    NAME test_example_coverage_table
+                    COMMAND ${Python3_EXECUTABLE} ${IVP_COVERAGE_SCRIPT} --check
+            )
+            set_tests_properties(test_example_coverage_table PROPERTIES LABELS "smoke" TIMEOUT 60)
+        endif ()
     endif ()
 endif ()

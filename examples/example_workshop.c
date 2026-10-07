@@ -16,6 +16,8 @@
  *              (ivp_ledge_soup_compile_bottomup)
  *   wedge      a Quake-style BSP tree of five planes turned into a convex solid
  *              (ivp_q12bsp_build_surface)
+ *   bevel      a block cut by ten half-spaces: six faces and four chamfers
+ *              (ivp_build_halfspacesoup_surface)
  *
  * Demonstrates: the builders above, ivp_calc_mass_center_and_rot_inertia,
  *               demo_create_polygon.
@@ -24,6 +26,7 @@
 
 #include <ivp/builder/ivp_build_bvh_bottomup.h>
 #include <ivp/builder/ivp_build_ledge.h>
+#include <ivp/builder/ivp_build_halfspacesoup.h>
 #include <ivp/builder/ivp_build_ledge_soup.h>
 #include <ivp/builder/ivp_build_pointsoup.h>
 #include <ivp/builder/ivp_build_polygon.h>
@@ -228,6 +231,17 @@ static ivp_compact_surface_t *wedge_surface(workshop_demo_t *s, ivp_q12bsp_t *bs
     return ivp_q12bsp_build_surface(NULL, bsp, 0, &cfg);
 }
 
+/* a block with its four vertical edges chamfered, from ten half-spaces (inward normals) */
+static ivp_compact_surface_t *bevel_surface(void)
+{
+    const float r = 0.70710678f, c = 1.05f * r;
+    const ivp_halfspace_t hs[10] = {
+        { { -1, 0, 0 }, -0.7f }, { { 1, 0, 0 }, -0.7f }, { { 0, -1, 0 }, -0.5f }, { { 0, 1, 0 }, -0.5f },
+        { { 0, 0, -1 }, -0.7f }, { { 0, 0, 1 }, -0.7f },
+        { { -r, 0, -r }, -c }, { { r, 0, -r }, -c }, { { -r, 0, r }, -c }, { { r, 0, r }, -c } };
+    return ivp_build_halfspacesoup_surface(NULL, hs, 10, 0.01f);
+}
+
 /* ── bodies ──────────────────────────────────────────────────────────────── */
 
 static ivp_object_t *add_body(workshop_demo_t *s, demo_world_t *w, const char *station, const char *what, const float col[3],
@@ -318,9 +332,10 @@ int main(int argc, char **argv)
     app.cfg.tag         = "workshop";
     app.cfg.friction    = 0.7;
     app.cfg.elasticity  = 0.2;
-    app.cfg.orbit_dist  = 30.0f;
+    app.cfg.orbit_dist  = 33.0f;
     app.cfg.orbit_yaw   = 200.0f;
     app.cfg.orbit_pitch = -38.0f;
+    app.cfg.target[0]   = 1.5f;
     app.cfg.target[1]   = -1.0f;
     app.cfg.grid_extent = -1.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
@@ -330,10 +345,10 @@ int main(int argc, char **argv)
     app.user = s;
     demo_world_t *w = &app.world;
     s->env = w->env;
-    s->ground = demo_create_box(w, NULL, 20.0, 0.5, 5.0, 0.0, NULL, 0.0, 0.5, 0.0);
+    s->ground = demo_create_box(w, NULL, 22.0, 0.5, 5.0, 0.0, NULL, 1.0, 0.5, 0.0);
 
     const float c_rock[3] = { 0.62f, 0.58f, 0.50f }, c_hex[3] = { 0.40f, 0.78f, 0.95f }, c_pyr[3] = { 0.95f, 0.65f, 0.30f },
-                c_a[3] = { 0.55f, 0.90f, 0.50f }, c_b[3] = { 0.95f, 0.45f, 0.35f }, c_wedge[3] = { 0.80f, 0.55f, 0.90f };
+                c_a[3] = { 0.55f, 0.90f, 0.50f }, c_b[3] = { 0.95f, 0.45f, 0.35f }, c_wedge[3] = { 0.80f, 0.55f, 0.90f }, c_bevel[3] = { 0.95f, 0.85f, 0.45f };
 
     /* rock */
     add_body(s, w, "rock", "point soup hull", c_rock, rock_surface(), 3.0, -14.0, -3.0, 0.0, NULL, NULL);
@@ -366,6 +381,9 @@ int main(int argc, char **argv)
     /* wedge */
     ivp_q12bsp_t bsp;
     add_body(s, w, "wedge", "BSP of five planes", c_wedge, wedge_surface(s, &bsp), 2.0, 12.0, -3.0, 0.0, NULL, NULL);
+
+    /* bevel */
+    add_body(s, w, "bevel", "ten half-spaces", c_bevel, bevel_surface(), 2.0, 17.0, -3.0, 0.0, NULL, NULL);
 
     app.controls = "";
     app.draw     = workshop_draw;
