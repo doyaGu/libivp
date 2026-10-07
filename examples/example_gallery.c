@@ -84,6 +84,7 @@ static const card_t cards[] = {
     { "boat",             2, "A motor boat in a pool, pushing floating crates." },
     { "airboat",          2, "Valve's airboat from a lake up a beach." },
     { "jetski",           2, "The fake jetski skimming a travelling wave, with a booster." },
+    { "wheelcar",         2, "A car on four real ball wheels: the car system and its constraint solver." },
     { "platform",         2, "An elevator, a slider and a turntable carrying crates." },
     { "compound",         2, "Rigid bodies of several objects; break them apart." },
 };
