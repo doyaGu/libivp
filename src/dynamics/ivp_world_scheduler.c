@@ -2,21 +2,18 @@
 #include <ivp/dynamics/ivp_world_scheduler.h>
 
 #include "dynamics/ivp_environment_parallel.h"
+#include "dynamics/ivp_world_scheduler_internal.h"
 
-#include <fenv.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 
 #if defined(_WIN32)
-#include <process.h>
 #include <windows.h>
-typedef HANDLE ivp_worker_thread_t;
 typedef CRITICAL_SECTION ivp_worker_mutex_t;
 typedef CONDITION_VARIABLE ivp_worker_cond_t;
 #else
 #include <pthread.h>
-typedef pthread_t ivp_worker_thread_t;
 typedef pthread_mutex_t ivp_worker_mutex_t;
 typedef pthread_cond_t ivp_worker_cond_t;
 #endif
@@ -28,6 +25,7 @@ typedef enum ivp_world_job_kind {
 
 struct ivp_world_scheduler {
     ivp_allocator_t allocator;
+    const ivp_worker_runtime_t *runtime;
     ivp_worker_thread_t *threads;
     int worker_count;
 
@@ -125,7 +123,8 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
         const fenv_t floating_point_environment =
             s->floating_point_environment;
         sync_unlock(s);
-        bool setup_ok = fesetenv(&floating_point_environment) == 0;
+        bool setup_ok = s->runtime->floating_point_apply(
+            s->runtime->context, &floating_point_environment);
         sync_lock(s);
         /* No world may advance until every scheduler worker has adopted the
          * floating-point environment for this generation. */
@@ -165,36 +164,32 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
     sync_unlock(s);
 }
 
-#if defined(_WIN32)
-static unsigned __stdcall scheduler_worker_main(void *opaque)
+static void scheduler_worker_main(void *opaque)
 {
     scheduler_worker_loop((ivp_world_scheduler_t *)opaque);
-    return 0;
 }
-#else
-static void *scheduler_worker_main(void *opaque)
-{
-    scheduler_worker_loop((ivp_world_scheduler_t *)opaque);
-    return NULL;
-}
-#endif
 
 static void scheduler_join_threads(ivp_world_scheduler_t *s, int count)
 {
     for (int i = 0; i < count; i++) {
-#if defined(_WIN32)
-        (void)WaitForSingleObject(s->threads[i], INFINITE);
-        (void)CloseHandle(s->threads[i]);
-#else
-        (void)pthread_join(s->threads[i], NULL);
-#endif
+        s->runtime->thread_join(s->runtime->context, &s->threads[i]);
     }
 }
 
 ivp_world_scheduler_t *ivp_world_scheduler_create(
     int worker_count, const ivp_allocator_t *allocator)
 {
-    if (worker_count <= 0) return NULL;
+    return ivp_world_scheduler_create_with_runtime(
+        worker_count, allocator, ivp_worker_runtime_default());
+}
+
+ivp_world_scheduler_t *ivp_world_scheduler_create_with_runtime(
+    int worker_count, const ivp_allocator_t *allocator,
+    const ivp_worker_runtime_t *runtime)
+{
+    if (worker_count <= 0 || !ivp_worker_runtime_is_valid(runtime)) {
+        return NULL;
+    }
     if ((size_t)worker_count > SIZE_MAX / sizeof(ivp_worker_thread_t)) {
         return NULL;
     }
@@ -205,6 +200,7 @@ ivp_world_scheduler_t *ivp_world_scheduler_create(
     if (!s) return NULL;
     memset(s, 0, sizeof(*s));
     s->allocator = *allocator;
+    s->runtime = runtime;
     s->worker_count = worker_count;
     if (worker_count > 1) {
         s->threads = (ivp_worker_thread_t *)ivp_alloc(
@@ -230,15 +226,11 @@ ivp_world_scheduler_t *ivp_world_scheduler_create(
 
     int created = 0;
     for (; created < worker_count; created++) {
-#if defined(_WIN32)
-        uintptr_t thread = _beginthreadex(NULL, 0, scheduler_worker_main,
-                                         s, 0, NULL);
-        s->threads[created] = (HANDLE)thread;
-        if (!s->threads[created]) break;
-#else
-        if (pthread_create(&s->threads[created], NULL,
-                           scheduler_worker_main, s) != 0) break;
-#endif
+        if (!s->runtime->thread_start(
+                s->runtime->context, &s->threads[created],
+                scheduler_worker_main, s)) {
+            break;
+        }
     }
     if (created != worker_count) {
         sync_lock(s);
@@ -361,7 +353,8 @@ static ivp_result_t scheduler_dispatch(
         return result;
     }
     if (s->worker_count > 1 &&
-        fegetenv(&s->floating_point_environment) != 0) {
+        !s->runtime->floating_point_capture(
+            s->runtime->context, &s->floating_point_environment)) {
         sync_unlock(s);
         return IVP_ERR_INVALID_STATE;
     }
