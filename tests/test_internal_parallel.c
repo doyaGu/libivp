@@ -78,9 +78,9 @@ IVP_TEST(task_pool_runs_concurrently)
     atomic_init(&probe.max_active, 0);
     atomic_init(&probe.release, false);
     if (pool) {
-        ivp_task_pool_parallel_for(pool, INTERNAL_PARALLEL_WORKERS,
-                                   pool_overlap_task, &probe);
-        ok = ok &&
+        bool dispatched = ivp_task_pool_parallel_for(
+            pool, INTERNAL_PARALLEL_WORKERS, pool_overlap_task, &probe);
+        ok = ok && dispatched &&
              ivp_task_pool_worker_count(pool) == INTERNAL_PARALLEL_WORKERS &&
              atomic_load_explicit(&probe.entered, memory_order_acquire) ==
                  INTERNAL_PARALLEL_WORKERS &&
@@ -111,9 +111,10 @@ IVP_TEST(task_pool_claims_every_task_exactly_once)
     }
     bool ok = pool != NULL;
     if (pool) {
-        ivp_task_pool_parallel_for(pool, TASK_EXACT_COUNT, task_exact_once,
-                                   &probe);
-        ivp_task_pool_parallel_for(pool, 17u, task_exact_once, &probe);
+        ok = ivp_task_pool_parallel_for(
+                 pool, TASK_EXACT_COUNT, task_exact_once, &probe) &&
+             ivp_task_pool_parallel_for(
+                 pool, 17u, task_exact_once, &probe);
         for (int i = 0; i < TASK_EXACT_COUNT; i++) {
             int expected = i < 17 ? 2 : 1;
             if (atomic_load_explicit(&probe.hits[i],
@@ -189,9 +190,10 @@ IVP_TEST(task_pool_propagates_dispatch_fenv)
             ok = false;
             break;
         }
-        ivp_task_pool_parallel_for(pool, INTERNAL_PARALLEL_WORKERS,
-                                   pool_rounding_task, &probe);
-        if (atomic_load_explicit(&probe.callbacks, memory_order_relaxed) !=
+        bool dispatched = ivp_task_pool_parallel_for(
+            pool, INTERNAL_PARALLEL_WORKERS, pool_rounding_task, &probe);
+        if (!dispatched ||
+            atomic_load_explicit(&probe.callbacks, memory_order_relaxed) !=
                 INTERNAL_PARALLEL_WORKERS ||
             atomic_load_explicit(&probe.max_active, memory_order_relaxed) < 2) {
             ok = false;
