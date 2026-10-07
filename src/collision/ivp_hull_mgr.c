@@ -1,6 +1,7 @@
 /* ivp_hull_mgr.c — port of IVP_Hull_Manager (ivp_hull_manager*.?xx) */
 #include <ivp/collision/ivp_hull_mgr.h>
 #include <ivp/base/ivp_assert.h>
+#include "collision/ivp_recheck_diagnostics.h"
 #include "dynamics/ivp_env_internal.h"
 
 ivp_result_t ivp_hull_mgr_init(ivp_hull_mgr_t *hm, const ivp_allocator_t *alloc)
@@ -34,6 +35,9 @@ void ivp_hull_mgr_destroy(ivp_hull_mgr_t *hm)
 float ivp_hull_mgr_insert_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
                                   ivp_time_t t_now, double delta_valid_hull_time)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_mutable()->hull_synapse_inserts++;
+#endif
     float dt = (float)ivp_time_diff(t_now, hm->last_vpsi_time);
     float val = hm->hull_value_last_vpsi + hm->gradient * dt;
     syn->minlist_index = ivp_minlist_add(&hm->sorted_synapses, syn, (float)((double)val + delta_valid_hull_time));
@@ -43,6 +47,9 @@ float ivp_hull_mgr_insert_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
 float ivp_hull_mgr_insert_lazy_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
                                        ivp_time_t t_now, double delta_valid_hull_time)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_mutable()->hull_lazy_synapse_inserts++;
+#endif
     (void)t_now;
     float val = hm->hull_value_next_psi;
     syn->minlist_index = ivp_minlist_add(&hm->sorted_synapses, syn, (float)((double)val + delta_valid_hull_time));
@@ -51,12 +58,18 @@ float ivp_hull_mgr_insert_lazy_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *
 
 void ivp_hull_mgr_remove_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_mutable()->hull_synapse_removes++;
+#endif
     ivp_minlist_remove(&hm->sorted_synapses, (ivp_minlist_index_t)syn->minlist_index);
 }
 
 void ivp_hull_mgr_update_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
                                  ivp_time_t t_now, double delta_valid_hull_time)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_mutable()->hull_synapse_updates++;
+#endif
     ivp_minlist_remove(&hm->sorted_synapses, (ivp_minlist_index_t)syn->minlist_index);
     float dt = (float)ivp_time_diff(t_now, hm->last_vpsi_time);
     float val = hm->hull_value_last_vpsi + hm->gradient * dt;
@@ -66,6 +79,9 @@ void ivp_hull_mgr_update_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
 void ivp_hull_mgr_update_lazy_synapse(ivp_hull_mgr_t *hm, ivp_listener_hull_t *syn,
                                       ivp_time_t t_now, double delta_valid_hull_time)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_mutable()->hull_lazy_synapse_updates++;
+#endif
     (void)t_now;
     ivp_minlist_remove(&hm->sorted_synapses, (ivp_minlist_index_t)syn->minlist_index);
     float val = hm->hull_value_next_psi;
@@ -90,11 +106,33 @@ void ivp_hull_mgr_check_hull_synapses(ivp_hull_mgr_t *hm, struct ivp_environment
 {
     float syn_val;
     int maxcnt = ivp_env_get_max_collision_checks_per_psi(env);
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    ivp_recheck_diagnostics_t *counts = ivp_recheck_diagnostics_mutable();
+    uint64_t callbacks = 0;
+    counts->hull_manager_checks++;
+#endif
     while ((syn_val = ivp_minlist_find_min_value(&hm->sorted_synapses) - hm->hull_value_next_psi) < 0.0f) {
         ivp_listener_hull_t *syn = (ivp_listener_hull_t *)ivp_minlist_find_min_elem(&hm->sorted_synapses);
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        counts->hull_callbacks++;
+        callbacks++;
+        switch (syn->vt->type) {
+        case IVP_HULL_ELEM_POLYGON: counts->hull_polygon_callbacks++; break;
+        case IVP_HULL_ELEM_ANCHOR: counts->hull_anchor_callbacks++; break;
+        case IVP_HULL_ELEM_OO_WATCHER: counts->hull_oo_watcher_callbacks++; break;
+        case IVP_HULL_ELEM_OO_CONNECTOR: counts->hull_oo_connector_callbacks++; break;
+        }
+#endif
         syn->vt->hull_limit_exceeded_event(syn, hm, syn_val);
         if (maxcnt-- < 0) break;
     }
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    if (callbacks > counts->max_hull_callbacks_per_check)
+        counts->max_hull_callbacks_per_check = callbacks;
+    int bucket = callbacks == 0 ? 0 : callbacks == 1 ? 1 : callbacks <= 3 ? 2
+                 : callbacks <= 7 ? 3 : callbacks <= 15 ? 4 : callbacks <= 31 ? 5 : 6;
+    counts->hull_callback_buckets[bucket]++;
+#endif
 }
 
 static void ivp_hull_mgr_reset_times(ivp_hull_mgr_t *hm)

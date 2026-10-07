@@ -56,6 +56,27 @@ class ProfileTests(unittest.TestCase):
         del counts["finger_hits"]
         profiler.validate_operation_counts(counts, "older-report")
 
+    def test_hull_counts_are_validated(self):
+        counts = {
+            "manager_checks": 10, "callbacks": 8, "max_callbacks_per_check": 3,
+            "polygon_callbacks": 5, "anchor_callbacks": 1,
+            "oo_watcher_callbacks": 1, "oo_connector_callbacks": 1,
+            "synapse_inserts": 2, "lazy_synapse_inserts": 1,
+            "synapse_updates": 7, "lazy_synapse_updates": 0,
+            "synapse_removes": 3, "halfspace_extensions": 3,
+            "exact_promotions": 1, "phantom_promotions": 0,
+            "recursive_events": 1, "oo_events": 1,
+            "callback_bucket_upper_bounds": [0, 1, 3, 7, 15, 31, None],
+            "callback_buckets": [3, 2, 2, 1, 1, 1, 0],
+        }
+        profiler.validate_hull_counts(counts, "test")
+        for field, value in (("callbacks", 7), ("max_callbacks_per_check", 9),
+                             ("halfspace_extensions", 6), ("oo_events", 2),
+                             ("callback_buckets", [3, 2, 2, 1, 1, 0, 0])):
+            with self.subTest(field=field):
+                with self.assertRaises(benchmark.BenchmarkError):
+                    profiler.validate_hull_counts(dict(counts, **{field: value}), "test")
+
     def test_sample_recursion_scope_and_exclusive_accounting(self):
         text = """Call graph:
     100 Thread_1 DispatchQueue_1: com.apple.main-thread (serial)

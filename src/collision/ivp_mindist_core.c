@@ -1293,6 +1293,9 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
 static void mindist_hull_limit_exceeded_event(ivp_mindist_t *md, float hull_intrusion_value)
 {
     if (md->mindist_status == IVP_MD_HULL_RECURSIVE) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        recheck_diagnostics.hull_recursive_events++;
+#endif
         mindist_recursive_rec_hull_limit_exceeded_event(md);
         return;
     }
@@ -1336,6 +1339,9 @@ static void mindist_hull_limit_exceeded_event(ivp_mindist_t *md, float hull_intr
                         (double)angular_movement, md->sum_angular_hull_time);
         }
         if (estimated_distance > speed * (D)ivp_env_get_delta_psi_time(obj0->owner) * look_ahead_factor) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+            recheck_diagnostics.hull_halfspace_extensions++;
+#endif
             IVP_IF(ivp_check_debug_mindist(md)) {   /* ivp_mindist.cxx:1295 */
                 D qdistance = lvp_quad_length(&diff);
                 ivp_message("%32s estimated_distance into hull dist: %f error %f speed %f\n", "hull_limit_exceeded_event",
@@ -1361,8 +1367,17 @@ static void mindist_hull_limit_exceeded_event(ivp_mindist_t *md, float hull_intr
      * ported, dead code in every reference build. */
     ivp_mindist_mgr_t *mgr = ivp_env_get_mindist_mgr(obj0->owner);
     ivp_mindist_mgr_remove_hull_mindist(mgr, md);
-    if (md->mindist_function != IVP_MF_PHANTOM) ivp_mindist_mgr_insert_and_recalc_exact_mindist(mgr, md);
-    else ivp_mindist_mgr_insert_and_recalc_phantom_mindist(mgr, md);
+    if (md->mindist_function != IVP_MF_PHANTOM) {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        recheck_diagnostics.hull_exact_promotions++;
+#endif
+        ivp_mindist_mgr_insert_and_recalc_exact_mindist(mgr, md);
+    } else {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        recheck_diagnostics.hull_phantom_promotions++;
+#endif
+        ivp_mindist_mgr_insert_and_recalc_phantom_mindist(mgr, md);
+    }
 }
 
 /* ── simulate_time_event ────────────────────────────────────────────────── */
@@ -1622,6 +1637,9 @@ static const ivp_collision_delegator_vt_t oo_delegator_vt = {
 
 static void oo_hull_limit_exceeded(ivp_oo_watcher_t *w)
 {
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    recheck_diagnostics.hull_oo_events++;
+#endif
     ivp_object_t *obj0 = w->synapses[0].object;
     ivp_object_t *obj1 = w->synapses[1].object;
     double dist0, dist1;

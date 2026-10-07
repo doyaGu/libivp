@@ -1147,6 +1147,38 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
             (unsigned long long)b->index_probes, (unsigned long long)b->max_index_probes,
             (unsigned long long)b->duplicate_fallbacks, (unsigned long long)b->unsafe_fallbacks,
             (unsigned long long)b->oom_fallbacks);
+    fprintf(out, ",\"hull_operations\":{\"manager_checks\":%llu,\"callbacks\":%llu,"
+            "\"max_callbacks_per_check\":%llu,\"polygon_callbacks\":%llu,"
+            "\"anchor_callbacks\":%llu,\"oo_watcher_callbacks\":%llu,"
+            "\"oo_connector_callbacks\":%llu,\"synapse_inserts\":%llu,"
+            "\"lazy_synapse_inserts\":%llu,\"synapse_updates\":%llu,"
+            "\"lazy_synapse_updates\":%llu,\"synapse_removes\":%llu,"
+            "\"halfspace_extensions\":%llu,\"exact_promotions\":%llu,"
+            "\"phantom_promotions\":%llu,\"recursive_events\":%llu,"
+            "\"oo_events\":%llu",
+            (unsigned long long)b->hull_manager_checks,
+            (unsigned long long)b->hull_callbacks,
+            (unsigned long long)b->max_hull_callbacks_per_check,
+            (unsigned long long)b->hull_polygon_callbacks,
+            (unsigned long long)b->hull_anchor_callbacks,
+            (unsigned long long)b->hull_oo_watcher_callbacks,
+            (unsigned long long)b->hull_oo_connector_callbacks,
+            (unsigned long long)b->hull_synapse_inserts,
+            (unsigned long long)b->hull_lazy_synapse_inserts,
+            (unsigned long long)b->hull_synapse_updates,
+            (unsigned long long)b->hull_lazy_synapse_updates,
+            (unsigned long long)b->hull_synapse_removes,
+            (unsigned long long)b->hull_halfspace_extensions,
+            (unsigned long long)b->hull_exact_promotions,
+            (unsigned long long)b->hull_phantom_promotions,
+            (unsigned long long)b->hull_recursive_events,
+            (unsigned long long)b->hull_oo_events);
+    fputs(",\"callback_bucket_upper_bounds\":[0,1,3,7,15,31,null],"
+          "\"callback_buckets\":[", out);
+    for (int i = 0; i < 7; ++i)
+        fprintf(out, "%s%llu", i ? "," : "",
+                (unsigned long long)b->hull_callback_buckets[i]);
+    fputs("]}", out);
 #endif
 }
 

@@ -197,6 +197,34 @@ def validate_broadphase_counts(counts: dict | None, case: str) -> None:
         raise benchmark.BenchmarkError(f"{case}: inconsistent broadphase operation counts")
 
 
+def validate_hull_counts(counts: dict | None, case: str) -> None:
+    fields = ("manager_checks", "callbacks", "max_callbacks_per_check",
+              "polygon_callbacks", "anchor_callbacks", "oo_watcher_callbacks",
+              "oo_connector_callbacks", "synapse_inserts", "lazy_synapse_inserts",
+              "synapse_updates", "lazy_synapse_updates", "synapse_removes",
+              "halfspace_extensions", "exact_promotions", "phantom_promotions",
+              "recursive_events", "oo_events", "callback_bucket_upper_bounds",
+              "callback_buckets")
+    scalar_fields = fields[:-2]
+    if (not isinstance(counts, dict)
+            or any(type(counts.get(f)) is not int or counts[f] < 0 for f in scalar_fields)
+            or counts.get("callback_bucket_upper_bounds") != [0, 1, 3, 7, 15, 31, None]
+            or not isinstance(counts.get("callback_buckets"), list)
+            or len(counts["callback_buckets"]) != 7
+            or any(type(value) is not int or value < 0 for value in counts["callback_buckets"])):
+        raise benchmark.BenchmarkError(f"{case}: missing/invalid hull operation counts")
+    typed = (counts["polygon_callbacks"] + counts["anchor_callbacks"]
+             + counts["oo_watcher_callbacks"] + counts["oo_connector_callbacks"])
+    if (typed != counts["callbacks"]
+            or counts["max_callbacks_per_check"] > counts["callbacks"]
+            or counts["halfspace_extensions"] + counts["exact_promotions"]
+               + counts["phantom_promotions"] + counts["recursive_events"]
+               > counts["polygon_callbacks"]
+            or counts["oo_events"] > counts["oo_watcher_callbacks"]
+            or sum(counts["callback_buckets"]) != counts["manager_checks"]):
+        raise benchmark.BenchmarkError(f"{case}: inconsistent hull operation counts")
+
+
 def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
     raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
     command = [str(runner), "--profile", args.profile, "--case", case,
@@ -258,6 +286,10 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
             broadphase = counted["broadphase_operations"]
             validate_broadphase_counts(broadphase, case)
             report["broadphase_operations"] = broadphase
+        if "hull_operations" in counted:
+            hull = counted["hull_operations"]
+            validate_hull_counts(hull, case)
+            report["hull_operations"] = hull
     return report
 
 
@@ -304,6 +336,20 @@ def print_report(result: dict, top: int) -> None:
                       f"max probes={c['max_index_probes']}")
                 print(f"    fallback rechecks: duplicate={c['duplicate_fallbacks']}, "
                       f"unsafe={c['unsafe_fallbacks']}, OOM={c['oom_fallbacks']}")
+        if "hull_operations" in case:
+            c = case["hull_operations"]
+            print(f"  hull queues (separate intrusive run): checks={c['manager_checks']}, "
+                  f"callbacks={c['callbacks']}, max/check={c['max_callbacks_per_check']}")
+            print(f"    callbacks/check buckets={c['callback_buckets']} "
+                  f"for upper bounds={c['callback_bucket_upper_bounds']}")
+            print(f"    callback types: polygon={c['polygon_callbacks']}, anchor={c['anchor_callbacks']}, "
+                  f"watcher={c['oo_watcher_callbacks']}, connector={c['oo_connector_callbacks']}")
+            print(f"    polygon paths: halfspace={c['halfspace_extensions']}, "
+                  f"exact={c['exact_promotions']}, phantom={c['phantom_promotions']}, "
+                  f"recursive={c['recursive_events']}")
+            print(f"    queue calls: insert={c['synapse_inserts']}, lazy insert={c['lazy_synapse_inserts']}, "
+                  f"update={c['synapse_updates']}, lazy update={c['lazy_synapse_updates']}, "
+                  f"remove={c['synapse_removes']}")
 
 
 def main(argv=None) -> int:
