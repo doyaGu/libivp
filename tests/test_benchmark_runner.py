@@ -100,6 +100,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 serial = json.loads(subprocess.check_output(
                     common + ["--workers", "1"], text=True).splitlines()[-1])
                 self.assertEqual(serial["parallel_workers"], 1)
+                self.assertEqual(serial["parallel"], {
+                    "island_dispatches": 0,
+                    "island_tasks": 0,
+                    "broadphase_dispatches": 0,
+                    "broadphase_tasks": 0,
+                    "solver_dispatches": 0,
+                    "solver_tasks": 0,
+                    "max_workers_used": 0,
+                })
                 for workers in (2, 4):
                     parallel = json.loads(subprocess.check_output(
                         common + ["--workers", str(workers)],
@@ -109,6 +118,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
                                      parallel["state_hash"])
                     self.assertEqual(serial["trajectory_hash"],
                                      parallel["trajectory_hash"])
+                    self.assertGreater(parallel["parallel"]["island_dispatches"], 0)
+                    self.assertGreater(parallel["parallel"]["island_tasks"], 0)
+                    self.assertEqual(parallel["parallel"]["max_workers_used"],
+                                     workers)
 
 
 if __name__ == "__main__":

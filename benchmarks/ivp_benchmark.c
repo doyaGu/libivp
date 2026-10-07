@@ -80,6 +80,7 @@ typedef struct bench_measurement {
     int range_intra_exceeded;
     int range_world_exceeded;
     int impacts;
+    ivp_parallel_stats_t parallel;
     int valid;
     bench_verification_t verification;
     int64_t step_ns[MAX_STEPS];
@@ -407,6 +408,7 @@ static int object_finite(const ivp_object_t *obj)
 
 static void collect_phases(ivp_environment_t *env, bench_measurement_t *m)
 {
+    ivp_environment_get_parallel_stats(env, &m->parallel);
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     m->minlist = ivp_minlist_diagnostics_get();
     m->broadphase = ivp_recheck_diagnostics_get();
@@ -1285,7 +1287,12 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 "\"state_hash\":\"%016llx\",\"gate_ok\":%s,"
                 "\"statistics\":{\"mindists_generated\":%d,\"mindists_deleted\":%d,"
                 "\"range_intra_exceeded\":%d,\"range_world_exceeded\":%d,"
-                "\"impacts\":%d},\"phases_ns\":{",
+                "\"impacts\":%d},"
+                "\"parallel\":{\"island_dispatches\":%llu,"
+                "\"island_tasks\":%llu,\"broadphase_dispatches\":%llu,"
+                "\"broadphase_tasks\":%llu,\"solver_dispatches\":%llu,"
+                "\"solver_tasks\":%llu,\"max_workers_used\":%d},"
+                "\"phases_ns\":{",
                 BENCH_SCHEMA, cfg->name, cfg->scale, benchmark_worker_count,
                 median, p95, minimum, maximum,
                 (long long)stats.alloc_count, (long long)stats.bytes_allocated,
@@ -1294,7 +1301,14 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 gate_ok ? "true" : "false",
                 diagnostic.mindists_generated, diagnostic.mindists_deleted,
                 diagnostic.range_intra_exceeded, diagnostic.range_world_exceeded,
-                diagnostic.impacts);
+                diagnostic.impacts,
+                (unsigned long long)diagnostic.parallel.island_dispatches,
+                (unsigned long long)diagnostic.parallel.island_tasks,
+                (unsigned long long)diagnostic.parallel.broadphase_dispatches,
+                (unsigned long long)diagnostic.parallel.broadphase_tasks,
+                (unsigned long long)diagnostic.parallel.solver_dispatches,
+                (unsigned long long)diagnostic.parallel.solver_tasks,
+                diagnostic.parallel.max_workers_used);
         for (int i = 0; i < PHASE_COUNT; ++i) {
             if (i) fputc(',', out);
             fprintf(out, "\"%s\":%lld", phase_name(i),
