@@ -529,8 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.scale:
         native_command += ["--scale", str(args.scale)]
     native_filters = [case for case in (args.cases or []) if case in {
-        "active_bodies", "contact_pile", "constraint_chain", "fast_impacts",
-        "constraint_islands", "object_churn", "sleeping_world", "convex_build",
+        "active_bodies", "contact_pile", "dense_contacts", "constraint_chain",
+        "fast_impacts", "constraint_islands", "mixed_constraint_islands",
+        "object_churn", "sleeping_world", "convex_build",
     }]
     if args.scale and not native_filters:
         parser.error("--scale requires a native --case")

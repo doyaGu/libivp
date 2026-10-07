@@ -11,6 +11,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/geometry/ivp_surman.h>
+#include <ivp/solver/ivp_solver_constants.h>
 
 #include <errno.h>
 #include <math.h>
@@ -45,8 +46,10 @@
 typedef enum bench_kind {
     BENCH_ACTIVE,
     BENCH_CONTACT,
+    BENCH_DENSE_CONTACTS,
     BENCH_CONSTRAINT,
     BENCH_ISLAND_CONSTRAINTS,
+    BENCH_MIXED_ISLAND_CONSTRAINTS,
     BENCH_IMPACTS,
     BENCH_CHURN,
     BENCH_SLEEPING,
@@ -250,6 +253,48 @@ static BENCH_NOINLINE void bench_simulate(ivp_environment_t *env, int steps,
         m->window_ns[window] += ns;
         m->window_steps[window]++;
         m->window_impacts[window] += sm ? sm->impact_counter - previous_impacts : 0;
+    }
+}
+
+typedef void (*bench_before_step_fn)(void *context);
+
+static BENCH_NOINLINE void bench_simulate_driven(
+    ivp_environment_t *env, int steps, const bench_config_t *cfg,
+    bench_measurement_t *m, int instrumented,
+    bench_before_step_fn before_step, void *context)
+{
+    if (instrumented == 3) {
+        verify_begin(&m->verification, env);
+        for (int i = 0; i < steps; ++i) {
+            before_step(context);
+            ivp_environment_simulate_one_psi(env);
+            verify_step(&m->verification);
+        }
+        m->verification.running = 0;
+        return;
+    }
+    if (!instrumented) {
+        for (int i = 0; i < steps; ++i) {
+            before_step(context);
+            ivp_environment_simulate_one_psi(env);
+        }
+        return;
+    }
+    ivp_statistic_manager_t *sm = ivp_environment_get_statistic_manager(env);
+    for (int i = 0; i < steps; ++i) {
+        int previous_impacts = sm ? sm->impact_counter : 0;
+        before_step(context);
+        int64_t start = now_ns();
+        ivp_environment_simulate_one_psi(env);
+        int64_t ns = now_ns() - start;
+        int index = m->step_count++;
+        if (index < MAX_STEPS) m->step_ns[index] = ns;
+        int window = index * WINDOW_COUNT / cfg->steps;
+        if (window >= WINDOW_COUNT) window = WINDOW_COUNT - 1;
+        m->window_ns[window] += ns;
+        m->window_steps[window]++;
+        m->window_impacts[window] +=
+            sm ? sm->impact_counter - previous_impacts : 0;
     }
 }
 
@@ -483,6 +528,105 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
     return 1;
 }
 
+typedef struct dense_contact_driver {
+    ivp_object_t **balls;
+    ivp_vec3r_t *inward_speeds;
+    int count;
+} dense_contact_driver_t;
+
+static void drive_dense_contacts(void *opaque)
+{
+    dense_contact_driver_t *driver = (dense_contact_driver_t *)opaque;
+    for (int i = 0; i < driver->count; i++) {
+        driver->balls[i]->physical_core->speed = driver->inward_speeds[i];
+    }
+}
+
+static int run_dense_contacts(const bench_config_t *cfg,
+                              const ivp_allocator_t *allocator,
+                              bench_measurement_t *m, int instrumented)
+{
+    if (cfg->scale > IVP_MAX_FRICTION_MATRIX) return 0;
+    int64_t total_start = now_ns();
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0,
+                                      instrumented);
+    if (!env) return 0;
+    ivp_object_t **balls = (ivp_object_t **)ivp_alloc(
+        allocator, (size_t)cfg->scale * sizeof(*balls));
+    ivp_vec3r_t *inward_speeds = (ivp_vec3r_t *)ivp_alloc(
+        allocator, (size_t)cfg->scale * sizeof(*inward_speeds));
+    if (!balls || !inward_speeds) goto fail;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(5.0);
+    object_template.mass = IVP_REAL(1000.0);
+    object_template.material.friction = IVP_REAL(0.8);
+    object_template.material.elasticity = IVP_REAL(0.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+    ivp_object_t *center = ivp_environment_create_object(
+        env, &object_template, NULL);
+    if (!center) goto fail;
+
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.material.friction = IVP_REAL(0.8);
+    object_template.material.elasticity = IVP_REAL(0.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+    const double golden_angle = 2.39996322972865332;
+    for (int i = 0; i < cfg->scale; i++) {
+        double y = 1.0 - 2.0 * ((double)i + 0.5) / (double)cfg->scale;
+        double radial = sqrt(1.0 - y * y);
+        double angle = golden_angle * (double)i;
+        double x = cos(angle) * radial;
+        double z = sin(angle) * radial;
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(5.30 * x),
+                      (ivp_real_t)(5.30 * y),
+                      (ivp_real_t)(5.30 * z));
+        ivp_vec3r_set(&inward_speeds[i],
+                      (ivp_real_t)(-2.0 * x),
+                      (ivp_real_t)(-2.0 * y),
+                      (ivp_real_t)(-2.0 * z));
+        balls[i] = ivp_environment_create_object(env, &object_template, NULL);
+        if (!balls[i]) goto fail;
+    }
+    dense_contact_driver_t driver = {balls, inward_speeds, cfg->scale};
+    drive_dense_contacts(&driver);
+    begin_operation(env);
+    int64_t start = now_ns();
+    bench_simulate_driven(env, cfg->steps, cfg, m, instrumented,
+                          drive_dense_contacts, &driver);
+    m->operation_ns = now_ns() - start;
+    m->operations = m->psis = cfg->steps;
+    m->simulated_seconds = cfg->steps * cfg->dt;
+    m->valid = object_finite(center) && object_finite(balls[cfg->scale - 1]);
+    m->state_hash = hash_environment(env);
+    collect_phases(env, m);
+    bench_destroy(env);
+    ivp_free(allocator, inward_speeds,
+             (size_t)cfg->scale * sizeof(*inward_speeds));
+    ivp_free(allocator, balls, (size_t)cfg->scale * sizeof(*balls));
+    m->total_ns = now_ns() - total_start;
+    return 1;
+
+fail:
+    if (inward_speeds) {
+        ivp_free(allocator, inward_speeds,
+                 (size_t)cfg->scale * sizeof(*inward_speeds));
+    }
+    if (balls) {
+        ivp_free(allocator, balls, (size_t)cfg->scale * sizeof(*balls));
+    }
+    ivp_environment_destroy(env);
+    return 0;
+}
+
 static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allocator,
                           bench_measurement_t *m, int instrumented)
 {
@@ -560,6 +704,10 @@ static int run_island_constraints(const bench_config_t *cfg,
             (ivp_real_t)(float)(0.25f + (float)(i & 7) * 0.01f);
         ivp_constraint_init_ball_socket_ws(
             &constraints[i], NULL, &anchor, objects[i]);
+        if (cfg->kind == BENCH_MIXED_ISLAND_CONSTRAINTS && i == 0) {
+            constraints[i].force_exceed_action = IVP_CFE_BREAK;
+            constraints[i].break_force_threshold = IVP_REAL(1.0e10);
+        }
         if (!ivp_controller_handle_is_valid(
                 ivp_environment_announce_dependent_controller(
                     env, IVP_CP_CONSTRAINTS, ivp_controller_constraint,
@@ -756,8 +904,11 @@ static BENCH_NOINLINE int run_once(const bench_config_t *cfg, const ivp_allocato
     switch (cfg->kind) {
         case BENCH_ACTIVE: return run_active(cfg, allocator, m, instrumented);
         case BENCH_CONTACT: return run_contact(cfg, allocator, m, instrumented);
+        case BENCH_DENSE_CONTACTS:
+            return run_dense_contacts(cfg, allocator, m, instrumented);
         case BENCH_CONSTRAINT: return run_constraint(cfg, allocator, m, instrumented);
         case BENCH_ISLAND_CONSTRAINTS:
+        case BENCH_MIXED_ISLAND_CONSTRAINTS:
             return run_island_constraints(cfg, allocator, m, instrumented);
         case BENCH_IMPACTS: return run_impacts(cfg, allocator, m, instrumented);
         case BENCH_CHURN: return run_churn(cfg, allocator, m, instrumented);
@@ -1081,8 +1232,11 @@ static const bench_config_t standard_configs[] = {
 static const bench_config_t large_configs[] = {
     {"active_bodies", BENCH_ACTIVE, 4096, 240, 1.0 / 180.0},
     {"contact_pile", BENCH_CONTACT, 1024, 360, 1.0 / 180.0},
+    {"dense_contacts", BENCH_DENSE_CONTACTS, 128, 60, 1.0 / 180.0},
     {"constraint_chain", BENCH_CONSTRAINT, 1024, 360, 1.0 / 180.0},
     {"constraint_islands", BENCH_ISLAND_CONSTRAINTS, 4096, 32, 1.0 / 180.0},
+    {"mixed_constraint_islands", BENCH_MIXED_ISLAND_CONSTRAINTS, 4096, 32,
+     1.0 / 180.0},
     {"fast_impacts", BENCH_IMPACTS, 512, 180, 1.0 / 180.0},
     {"object_churn", BENCH_CHURN, 1024, 16, 1.0 / 180.0},
     {"sleeping_world", BENCH_SLEEPING, 16384, 600, 1.0 / 60.0},
