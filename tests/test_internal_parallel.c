@@ -24,6 +24,7 @@ static void internal_parallel_yield(void) { (void)sched_yield(); }
 #endif
 
 #define INTERNAL_PARALLEL_WORKERS 4
+#define TASK_EXACT_COUNT 1031
 #define BALLISTIC_OBJECT_COUNT 2048
 #define BROADPHASE_ELEMENT_COUNT 8192
 #define SOLVER_CONTACT_COUNT 128
@@ -83,6 +84,43 @@ IVP_TEST(task_pool_runs_concurrently)
              atomic_load_explicit(&probe.entered, memory_order_acquire) ==
                  INTERNAL_PARALLEL_WORKERS &&
              atomic_load_explicit(&probe.max_active, memory_order_acquire) >= 2;
+    }
+    ivp_task_pool_destroy(pool);
+    IVP_ASSERT_TRUE(ok);
+}
+
+typedef struct task_exact_probe {
+    atomic_int hits[TASK_EXACT_COUNT];
+} task_exact_probe_t;
+
+static void task_exact_once(void *opaque, size_t task_index)
+{
+    task_exact_probe_t *probe = (task_exact_probe_t *)opaque;
+    atomic_fetch_add_explicit(&probe->hits[task_index], 1,
+                              memory_order_relaxed);
+}
+
+IVP_TEST(task_pool_claims_every_task_exactly_once)
+{
+    ivp_task_pool_t *pool =
+        ivp_task_pool_create(INTERNAL_PARALLEL_WORKERS, NULL);
+    task_exact_probe_t probe;
+    for (int i = 0; i < TASK_EXACT_COUNT; i++) {
+        atomic_init(&probe.hits[i], 0);
+    }
+    bool ok = pool != NULL;
+    if (pool) {
+        ivp_task_pool_parallel_for(pool, TASK_EXACT_COUNT, task_exact_once,
+                                   &probe);
+        ivp_task_pool_parallel_for(pool, 17u, task_exact_once, &probe);
+        for (int i = 0; i < TASK_EXACT_COUNT; i++) {
+            int expected = i < 17 ? 2 : 1;
+            if (atomic_load_explicit(&probe.hits[i],
+                                     memory_order_relaxed) != expected) {
+                ok = false;
+                break;
+            }
+        }
     }
     ivp_task_pool_destroy(pool);
     IVP_ASSERT_TRUE(ok);
@@ -825,6 +863,7 @@ IVP_TEST(solver_matrix_is_bit_exact)
 int main(void)
 {
     IVP_REGISTER(task_pool_runs_concurrently);
+    IVP_REGISTER(task_pool_claims_every_task_exactly_once);
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
     IVP_REGISTER(independent_constraint_islands_are_bit_exact);

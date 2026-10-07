@@ -89,8 +89,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
             [RUNNER, "--profile", "large", "--list"], text=True).splitlines()
         self.assertIn("constraint_islands", listed)
         self.assertIn("mixed_constraint_islands", listed)
+        self.assertIn("heterogeneous_constraint_islands", listed)
         for case, scale in (("constraint_islands", "256"),
-                            ("mixed_constraint_islands", "512")):
+                            ("mixed_constraint_islands", "512"),
+                            ("heterogeneous_constraint_islands", "2048")):
             with self.subTest(case=case):
                 common = [RUNNER, "--profile", "large", "--case", case,
                           "--scale", scale, "--samples", "1",
