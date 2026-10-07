@@ -5,8 +5,10 @@
  * material on the way. All of it is rigid body physics; there is no jump.
  *
  *   wood    the ball you start with: the gap and the beam are for it
- *   stone   heavy and slow, the only one that can push the crates aside
- *   paper   a feather: quick, hardly any weight, for the run to the flag
+ *   stone   heavy, slow to start and slow to stop, the only one that can push the crates aside
+ *   paper   a feather: starts and stops at once, for the run to the flag
+ *
+ * The balls have the numbers of the game itself (see kinds[] below).
  *
  * Roll over a coloured pad to change. A red flag is a checkpoint you have not reached, a green
  * one you have: if you fall off the course you start again from the last green one,
@@ -22,17 +24,16 @@
  * Headless, an autopilot rolls the whole course. It presses the arrow keys like a player: on or off, a
  * little late, easing off before a gap and waiting for the moving platform. The self-check requires it to
  * reach the flag without falling, and a ball knocked off at a checkpoint to come back to it.
- * IVP_BALLANCE_HUMAN=<n> adds a player's slips (n picks them): all of 1..24 finish without a fall.
+ * IVP_BALLANCE_HUMAN=<n> adds a player's slips (n picks them); nearly every n finishes.
  *
  * Demonstrates: static boxes as a level (ramps by quaternion), a golem driven
  *               platform, dynamic crates, one ball per material that is swapped
- *               by beaming (ivp_object_beam_to_new_position), a ray as the ground sensor, a chase camera.
+ *               by beaming (ivp_object_beam_to_new_position), a chase camera.
  */
 #include "demo_app.h"
 #include "demo_drive.h"
 
 #include <ivp/controllers/ivp_controller_golem.h>
-#include <ivp/collision/ivp_ray_solver.h>
 
 #define N_KINDS    3
 #define MAX_PIECES 40
@@ -51,18 +52,22 @@ enum { WOOD, STONE, PAPER };
 typedef struct kind {
     const char *name;
     double      radius, mass, mu, elasticity;
-    float       accel;          /* m/s^2 on the ground */
-    float       vmax;           /* m/s */
-    float       brake;          /* m/s^2 when no key is held */
-    double      damp;           /* the engine's speed damping */
+    double      damp;           /* the engine's speed damping per second */
+    float       top;            /* m/s the ball ends up at with a key held: push / damping */
     float       col[3], spot[3];
 } kind_t;
 
-/* A keyboard has no half throttle, so the balls are slow and stop by themselves when the keys are let go. */
+/* The numbers of the game itself (the balls in GamePhysBallData of the Unity remake of Ballance, which
+ * runs the original IVP): mass 1.9 / 10 / 0.2, friction 0.8 / 0.5 / 0.5, elasticity 0.2 / 0.1 / 0.4, linear
+ * damping 0.9 / 0.3 / 1.3. The push was 0.43 / 0.92 / 0.065 in the game's force units; the push per mass,
+ * and so the top speed push/damping, is 1 : 1.24 : 1 there. The game's balls are 4 units across; here
+ * they are 0.9 m, so the top speed of the wood ball is set to 4.5 m/s, 5 diameters a second, and the
+ * others follow from the ratios. Wood lets go of a speed in about a second, stone takes three, paper
+ * three quarters. A constant push and the damping is all there is: no brake, no speed limit. */
 static const kind_t kinds[N_KINDS] = {
-    { "wood",  0.45, 1.0, 0.8, 0.15, 9.0f, 6.5f, 5.0f, 0.15, { 0.80f, 0.58f, 0.34f }, { 0.55f, 0.36f, 0.18f } },
-    { "stone", 0.50, 4.0, 0.9, 0.05, 6.0f, 5.0f, 4.0f, 0.10, { 0.62f, 0.63f, 0.66f }, { 0.38f, 0.39f, 0.42f } },
-    { "paper", 0.40, 0.3, 0.6, 0.20, 11.0f, 7.5f, 7.0f, 0.40, { 0.95f, 0.95f, 0.90f }, { 0.70f, 0.78f, 0.90f } },
+    { "wood",  0.45, 1.9, 0.8, 0.2, 0.9, 4.5f, { 0.80f, 0.58f, 0.34f }, { 0.55f, 0.36f, 0.18f } },
+    { "stone", 0.50, 10.0, 0.5, 0.1, 0.3, 5.6f, { 0.62f, 0.63f, 0.66f }, { 0.38f, 0.39f, 0.42f } },
+    { "paper", 0.40, 0.2, 0.5, 0.4, 1.3, 4.5f, { 0.95f, 0.95f, 0.90f }, { 0.70f, 0.78f, 0.90f } },
 };
 
 typedef struct piece {
@@ -90,7 +95,6 @@ typedef struct ballance_demo {
     double                   mover_z0, mover_y;
     ivp_object_t            *park;
     ivp_object_t            *ball[N_KINDS];
-    bool                     grounded;              /* a ray down from the ball hits the course */
     int                      active;
     pad_t                    pad[N_PADS];
     spot_t                   check[N_CHECK];
@@ -116,7 +120,7 @@ typedef struct ballance_demo {
     bool                     fall_test_started, fall_test_done;     /* headless: knock the ball off at a checkpoint */
     float                    fall_test_dist;
     int                      fall_test_kind, fall_test_checkpoint;
-    float                    speed_scale, grip_scale;   /* F5: the top speed and the push of every ball */
+    float                    push_scale, damp_scale;    /* F5: the push and the damping of every ball */
     float                    mover_err;
     int                      mover_problems;
     char                     message[80];
@@ -160,20 +164,20 @@ static void build_course(ballance_demo_t *s, demo_world_t *w)
     const float wood[3] = { 0.72f, 0.55f, 0.34f }, dark[3] = { 0.55f, 0.40f, 0.25f }, stone[3] = { 0.55f, 0.57f, 0.62f },
                 beam[3] = { 0.62f, 0.45f, 0.28f };
     plat(s, w, 0.0, 0.0, 8.0, 4.0, 0.0, wood);                  /* start */
-    plat(s, w, 0.0, 8.0, 22.0, 1.7, 0.0, dark);                 /* plank */
-    ramp(s, w, 0.0, 22.0, 0.0, 32.0, -3.0, 1.7, wood);          /* up */
+    plat(s, w, 0.0, 8.0, 22.0, 1.4, 0.0, dark);                 /* plank */
+    ramp(s, w, 0.0, 22.0, 0.0, 32.0, -3.0, 1.4, wood);          /* up */
     plat(s, w, 0.0, 32.0, 40.0, 4.0, -3.0, wood);               /* platform A: checkpoint */
     plat(s, w, 0.0, 46.0, 56.0, 4.0, -3.0, wood);               /* platform B, beyond the gap: checkpoint */
-    plat(s, w, 0.0, 56.0, 70.0, 0.9, -3.0, beam);               /* the beam */
+    plat(s, w, 0.0, 56.0, 70.0, 0.75, -3.0, beam);               /* the beam */
     plat(s, w, 0.0, 70.0, 80.0, 3.0, -3.0, stone);              /* platform C: checkpoint, stone pad, the crates */
-    ramp(s, w, 0.0, 80.0, -3.0, 90.0, 0.0, 1.7, wood);          /* down */
+    ramp(s, w, 0.0, 80.0, -3.0, 90.0, 0.0, 1.4, wood);          /* down */
     plat(s, w, 0.0, 90.0, 98.0, 4.0, 0.0, wood);                /* platform D: paper pad, checkpoint */
-    plat(s, w, 11.0, 92.5, 95.5, 7.0, 0.0, dark);               /* the plank to the goal */
+    plat(s, w, 11.0, 92.6, 95.4, 7.0, 0.0, dark);               /* the plank to the goal */
     plat(s, w, 22.0, 90.0, 98.0, 4.0, 0.0, stone);              /* the goal */
     /* low rails along the two planks keep a ball that swerves on them */
     const float rail[3] = { 0.45f, 0.33f, 0.20f };
-    add_piece(s, w, 0.1, 0.3, 7.0, -1.8, -0.3, 15.0, NULL, rail);
-    add_piece(s, w, 0.1, 0.3, 7.0, 1.8, -0.3, 15.0, NULL, rail);
+    add_piece(s, w, 0.1, 0.3, 7.0, -1.5, -0.3, 15.0, NULL, rail);
+    add_piece(s, w, 0.1, 0.3, 7.0, 1.5, -0.3, 15.0, NULL, rail);
     add_piece(s, w, 7.0, 0.3, 0.1, 11.0, -0.3, 92.4, NULL, rail);
     add_piece(s, w, 7.0, 0.3, 0.1, 11.0, -0.3, 95.6, NULL, rail);
     /* a post and a flag on the goal */
@@ -234,26 +238,6 @@ static void drive_mover(ballance_demo_t *s)
 }
 
 /* ── the balls ───────────────────────────────────────────────────────────── */
-
-/* Is there ground under the ball? A ray from its centre, a little longer than the radius, against every solid
- * of the course (the friction events say the same, but they lag behind a ball that is put somewhere). */
-static bool ground_under(const ballance_demo_t *s)
-{
-    float c[3];
-    demo_object_center(s->ball[s->active], c);
-    ivp_ray_solver_template_t t;
-    t.ray_start_point = ivp_vec3r((ivp_real_t)c[0], (ivp_real_t)c[1], (ivp_real_t)c[2]);
-    t.ray_normized_direction = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(1.0), IVP_REAL(0.0));
-    t.ray_length = (ivp_real_t)(kinds[s->active].radius + 0.15);
-    t.ray_flags = IVP_RAY_SOLVER_ALL;
-    ivp_ray_solver_min_t rs;
-    ivp_ray_solver_min_init(&rs, &t);
-    for (int i = 0; i < s->n_pieces; i++) ivp_ray_solver_check_object(&rs.base, s->piece[i].obj);
-    for (int i = 0; i < N_CRATES; i++) ivp_ray_solver_check_object(&rs.base, s->crate[i]);
-    ivp_ray_solver_check_object(&rs.base, s->mover);
-    const ivp_ray_hit_t *h = ivp_ray_solver_min_get_ray_hit(&rs);
-    return h && h->hit_object && h->hit_distance >= IVP_REAL(0.0) && (double)h->hit_distance <= (double)t.ray_length;
-}
 
 static void park_ball(ballance_demo_t *s, int k)
 {
@@ -332,38 +316,15 @@ static float platform_speed_under(const ballance_demo_t *s)
     return 0.0f;
 }
 
-/* Accelerate the ball along the world direction (dx, dz); its length 0..1 is the stick. */
+/* Push the ball along the world direction (dx, dz); its length 0..1 is the stick. This is all the control
+ * there is, as in the game: a constant push, and the damping decides how fast the ball ends up. */
 static void roll(ballance_demo_t *s, float dx, float dz, float dt)
 {
     const float mag = sqrtf(dx * dx + dz * dz);
     if (mag < 1e-4f) return;
     const kind_t *k = &kinds[s->active];
-    const float ux = dx / (mag > 1.0f ? mag : 1.0f), uz = dz / (mag > 1.0f ? mag : 1.0f), m = fminf(mag, 1.0f);
-    const ivp_vec3r_t *v = &s->ball[s->active]->physical_core->speed;
-    const float vz_ref = platform_speed_under(s);
-    const float along = (float)v->k[0] * ux / m + ((float)v->k[2] - vz_ref) * uz / m;
-    const float cap = k->vmax * s->speed_scale * m;
-    if (along >= cap) {
-        /* faster than asked for: ease off */
-        const float d = fminf(along - cap, k->brake * dt);
-        if (d > 0.0f && s->grounded)
-            demo_async_add_speed_ws(s->env, s->ball[s->active], (double)(-d * ux / m), 0.0, (double)(-d * uz / m));
-        return;
-    }
-    float a = k->accel * s->grip_scale * m * dt * (s->grounded ? 1.0f : 0.25f);
-    if (along + a > cap) a = cap - along;
-    demo_async_add_speed_ws(s->env, s->ball[s->active], (double)(a * ux / m), 0.0, (double)(a * uz / m));
-}
-
-/* No key held: the ball slows down by itself, like a ball on wood, so that it can be stopped on a beam. */
-static void brake(ballance_demo_t *s, float dt)
-{
-    if (!s->grounded) return;
-    const ivp_vec3r_t *v = &s->ball[s->active]->physical_core->speed;
-    const float vx = (float)v->k[0], vz = (float)v->k[2] - platform_speed_under(s), sp = sqrtf(vx * vx + vz * vz);
-    if (sp < 0.05f) return;
-    const float d = fminf(sp, kinds[s->active].brake * s->grip_scale * dt);
-    demo_async_add_speed_ws(s->env, s->ball[s->active], (double)(-vx / sp * d), 0.0, (double)(-vz / sp * d));
+    const float m = fminf(mag, 1.0f), a = (float)(k->top * k->damp) * s->push_scale * m * dt;
+    demo_async_add_speed_ws(s->env, s->ball[s->active], (double)(a * dx / mag), 0.0, (double)(a * dz / mag));
 }
 
 /* The arrow keys in the world: forward is where the camera looks f, and with up = -Y the right of it is
@@ -517,7 +478,7 @@ static void human_keys(ballance_demo_t *s, const float want[2], const float f[2]
     /* the velocity the player wants and the difference to what the ball does; the keys are bang-bang on it */
     float wx = 0.0f, wz = 0.0f;
     if (mag > 1e-3f) {
-        const float sp = (mag > 1.0f ? 1.0f : mag) * k->vmax * s->speed_scale;
+        const float sp = (mag > 1.0f ? 1.0f : mag) * k->top * s->push_scale;
         wx = want[0] / mag * sp;
         wz = want[1] / mag * sp;
     }
@@ -574,7 +535,7 @@ static void ballance_update(demo_app_t *app, demo_viewer_t *v, int frame)
 
     float c[3];
     ball_pos(s, c);
-    s->grounded = ground_under(s);
+    for (int k = 0; k < N_KINDS; k++) s->ball[k]->physical_core->speed_damp_factor = (ivp_real_t)(kinds[k].damp * s->damp_scale);
     if (!s->done) s->time += (double)dt;
     s->transform_cooldown -= (double)dt;
     const float sp = demo_object_speed(s->ball[s->active]);
@@ -606,8 +567,7 @@ static void ballance_update(demo_app_t *app, demo_viewer_t *v, int frame)
             keys_to_world(f, s->drive.throttle, s->drive.steer, dir);
         }
         if (v && demo_key_just_pressed(v, SDL_SCANCODE_BACKSPACE)) respawn(s);
-        if (dir[0] * dir[0] + dir[1] * dir[1] > 1e-6f) roll(s, dir[0], dir[1], dt);
-        else brake(s, dt);
+        roll(s, dir[0], dir[1], dt);
     }
 
     /* pads */
@@ -693,8 +653,8 @@ static void ballance_viewer_init(demo_app_t *app, demo_viewer_t *v)
     s->drive.throttle_time = 0.12f;
     s->drive.steer_time = 0.12f;
     s->drive.center_time = 0.10f;
-    demo_panel_add_float(&v->panel, "ball speed", &s->speed_scale, 0.5f, 1.6f, NULL, NULL);
-    demo_panel_add_float(&v->panel, "ball grip", &s->grip_scale, 0.5f, 2.0f, NULL, NULL);
+    demo_panel_add_float(&v->panel, "push", &s->push_scale, 0.5f, 2.0f, NULL, NULL);
+    demo_panel_add_float(&v->panel, "damping", &s->damp_scale, 0.5f, 2.0f, NULL, NULL);
     demo_panel_add_float(&v->panel, "camera dist", &v->cam.orbit_distance, 5.0f, 20.0f, NULL, NULL);
     demo_drive_panel(&v->panel, &s->drive);
 }
@@ -791,7 +751,7 @@ static bool ballance_check(demo_app_t *app)
     const char *tag = app->cfg.tag;
     bool ok = true;
     ok &= demo_check(tag, s->done, "the autopilot reached the flag (stage %d of %d)", s->bot_stage, N_ROUTE);
-    ok &= demo_check(tag, s->done && s->done_time < 80.0, "in %.1f s", s->done_time);
+    ok &= demo_check(tag, s->done && s->done_time < 100.0, "in %.1f s", s->done_time);
     ok &= demo_check(tag, s->falls == 1, "without falling except for the one we forced (%d falls)", s->falls);
     ok &= demo_check(tag, s->fall_test_done && s->fall_test_checkpoint == 3 && s->fall_test_dist < 0.5f &&
                               s->fall_test_kind == s->cp_kind[3],
@@ -836,7 +796,7 @@ int main(int argc, char **argv)
     app.cfg.target[1]   = -0.5f;
     app.cfg.target[2]   = 2.5f;
     app.cfg.grid_extent = -1.0f;
-    app.cfg.headless_frames = 3600;
+    app.cfg.headless_frames = 5400;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     ballance_demo_t *s = (ballance_demo_t *)calloc(1, sizeof(*s));
@@ -874,8 +834,8 @@ int main(int argc, char **argv)
     restart_game(s);
     respawn(s);
     s->rng = 1u;
-    s->speed_scale = 1.0f;
-    s->grip_scale = 1.0f;
+    s->push_scale = 1.0f;
+    s->damp_scale = 1.0f;
     s->autopilot = getenv("IVP_BALLANCE_AUTOPILOT") != NULL;
     if (getenv("IVP_BALLANCE_HUMAN")) {
         s->human_seed = (unsigned)atoi(getenv("IVP_BALLANCE_HUMAN")) * 2654435761u + 12345u;
