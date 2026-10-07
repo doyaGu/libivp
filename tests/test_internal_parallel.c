@@ -5,6 +5,8 @@
 
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/containers/ivp_pvec.h>
+#include <ivp/controllers/ivp_constraint.h>
+#include <ivp/controllers/ivp_constraint_local.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
 
@@ -25,6 +27,7 @@ static void internal_parallel_yield(void) { (void)sched_yield(); }
 #define BALLISTIC_OBJECT_COUNT 2048
 #define BROADPHASE_ELEMENT_COUNT 8192
 #define SOLVER_CONTACT_COUNT 128
+#define INDEPENDENT_CONSTRAINT_COUNT 512
 
 typedef struct pool_overlap_probe {
     atomic_int entered;
@@ -416,7 +419,17 @@ IVP_TEST(core_preparation_is_bit_exact)
 
     ivp_parallel_stats_t stats;
     ivp_environment_get_parallel_stats(parallel.environment, &stats);
-    bool stats_ok = stats.broadphase_dispatches >= 120u &&
+    bool island_stats_ok;
+#ifdef IVP_DEBUG_BUILD
+    island_stats_ok = stats.island_dispatches == 0u &&
+                      stats.island_tasks == 0u;
+#else
+    island_stats_ok = stats.island_dispatches >= 120u &&
+                      stats.island_tasks >=
+                          (uint64_t)(120 * BALLISTIC_OBJECT_COUNT);
+#endif
+    bool stats_ok = island_stats_ok &&
+                    stats.broadphase_dispatches >= 120u &&
                     stats.broadphase_tasks >=
                         (uint64_t)(120 * BALLISTIC_OBJECT_COUNT) &&
                     stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
@@ -435,8 +448,12 @@ IVP_TEST(core_preparation_is_bit_exact)
         }
         fprintf(stderr,
                 "core prep: initialized=%d mismatch_step=%d object=%d "
-                "dispatches=%llu tasks=%llu max_workers=%d stats_ok=%d\n",
+                "island_dispatches=%llu island_tasks=%llu "
+                "broadphase_dispatches=%llu broadphase_tasks=%llu "
+                "max_workers=%d stats_ok=%d\n",
                 initialized, mismatch_step, object_index,
+                (unsigned long long)stats.island_dispatches,
+                (unsigned long long)stats.island_tasks,
                 (unsigned long long)stats.broadphase_dispatches,
                 (unsigned long long)stats.broadphase_tasks,
                 stats.max_workers_used, stats_ok);
@@ -459,11 +476,219 @@ IVP_TEST(core_preparation_is_bit_exact)
                     (double)a->current_speed, (double)b->current_speed,
                     (double)a->abs_omega, (double)b->abs_omega,
                     exact_core_state_difference(a, b));
+            fprintf(stderr, "  calm_time=(%a,%a)/(%a,%a) movement=%u/%u\n",
+                    a->time_of_calm_reference[0],
+                    a->time_of_calm_reference[1],
+                    b->time_of_calm_reference[0],
+                    b->time_of_calm_reference[1],
+                    (unsigned)a->movement_state,
+                    (unsigned)b->movement_state);
         }
     }
 
     ivp_environment_destroy(parallel.environment);
     ivp_environment_destroy(serial.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
+typedef struct independent_constraint_scene {
+    ivp_environment_t *environment;
+    ivp_object_t **objects;
+    ivp_constraint_state_t *constraints;
+    ivp_constraint_local_state_t *local_constraints;
+} independent_constraint_scene_t;
+
+static bool independent_constraint_scene_init(
+    independent_constraint_scene_t *scene, int worker_count)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = create_zero_gravity_environment(
+        worker_count, ivp_collision_filter_allow_all());
+    scene->objects = (ivp_object_t **)calloc(
+        INDEPENDENT_CONSTRAINT_COUNT, sizeof(*scene->objects));
+    scene->constraints = (ivp_constraint_state_t *)calloc(
+        INDEPENDENT_CONSTRAINT_COUNT, sizeof(*scene->constraints));
+    scene->local_constraints = (ivp_constraint_local_state_t *)calloc(
+        INDEPENDENT_CONSTRAINT_COUNT, sizeof(*scene->local_constraints));
+    if (!scene->environment || !scene->objects || !scene->constraints ||
+        !scene->local_constraints) {
+        return false;
+    }
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    object_template.enable_collision_detection = false;
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+    for (int i = 0; i < INDEPENDENT_CONSTRAINT_COUNT; i++) {
+        ivp_vec3r_t anchor = ivp_vec3r(
+            (ivp_real_t)(i % 32) * IVP_REAL(2.0),
+            (ivp_real_t)(i / 32) * IVP_REAL(2.0), IVP_REAL(0.0));
+        object_template.position = anchor;
+        scene->objects[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->objects[i]) return false;
+        ivp_controller_handle_t handle;
+        if ((i & 1) == 0) {
+            ivp_constraint_init_ball_socket_ws(
+                &scene->constraints[i], NULL, &anchor, scene->objects[i]);
+            handle = ivp_environment_announce_dependent_controller(
+                scene->environment, IVP_CP_CONSTRAINTS,
+                ivp_controller_constraint, &scene->constraints[i],
+                ivp_constraint_discovery);
+        } else {
+            ivp_vec3r_t object_anchor = ivp_vec3r(
+                IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+            ivp_constraint_local_init(
+                &scene->local_constraints[i], NULL, &anchor,
+                scene->objects[i], &object_anchor);
+            for (int axis = 0; axis < 3; axis++) {
+                ivp_constraint_local_free_rotation(
+                    &scene->local_constraints[i], axis);
+            }
+            handle = ivp_environment_announce_dependent_controller(
+                scene->environment, IVP_CP_CONSTRAINTS,
+                ivp_controller_constraint_local,
+                &scene->local_constraints[i],
+                ivp_constraint_local_discovery);
+        }
+        if (!ivp_controller_handle_is_valid(handle)) return false;
+    }
+    return true;
+}
+
+static void independent_constraint_scene_drive(
+    independent_constraint_scene_t *scene)
+{
+    for (int i = 0; i < INDEPENDENT_CONSTRAINT_COUNT; i++) {
+        ivp_vec3r_set(&scene->objects[i]->physical_core->speed,
+                      IVP_REAL(0.25), IVP_REAL(-0.125), IVP_REAL(0.0625));
+    }
+}
+
+static bool independent_constraint_scenes_equal(
+    const independent_constraint_scene_t *a,
+    const independent_constraint_scene_t *b)
+{
+    if (ivp_environment_get_time(a->environment) !=
+        ivp_environment_get_time(b->environment)) {
+        return false;
+    }
+    for (int i = 0; i < INDEPENDENT_CONSTRAINT_COUNT; i++) {
+        if (!exact_core_state_equal(a->objects[i]->physical_core,
+                                    b->objects[i]->physical_core)) {
+            return false;
+        }
+        if ((i & 1) == 0) {
+            if (!scalar_bits_equal(
+                    &a->constraints[i].accumulated_impulse,
+                    &b->constraints[i].accumulated_impulse,
+                    sizeof(a->constraints[i].accumulated_impulse)) ||
+                a->constraints[i].active != b->constraints[i].active ||
+                a->constraints[i].is_broken != b->constraints[i].is_broken) {
+                return false;
+            }
+            for (int axis = 0; axis < 6; axis++) {
+                if (!scalar_bits_equal(
+                        &a->constraints[i].core.last_impulse[axis],
+                        &b->constraints[i].core.last_impulse[axis],
+                        sizeof(a->constraints[i].core.last_impulse[axis]))) {
+                    return false;
+                }
+            }
+        } else {
+            if (!scalar_bits_equal(
+                    a->local_constraints[i].accumulated_impulse,
+                    b->local_constraints[i].accumulated_impulse,
+                    sizeof(a->local_constraints[i].accumulated_impulse)) ||
+                a->local_constraints[i].active !=
+                    b->local_constraints[i].active ||
+                a->local_constraints[i].broken !=
+                    b->local_constraints[i].broken) {
+                return false;
+            }
+            for (int axis = 0; axis < 6; axis++) {
+                if (!scalar_bits_equal(
+                        &a->local_constraints[i].core.last_impulse[axis],
+                        &b->local_constraints[i].core.last_impulse[axis],
+                        sizeof(a->local_constraints[i]
+                                   .core.last_impulse[axis]))) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static void independent_constraint_scene_destroy(
+    independent_constraint_scene_t *scene)
+{
+    ivp_environment_destroy(scene->environment);
+    free(scene->local_constraints);
+    free(scene->constraints);
+    free(scene->objects);
+}
+
+IVP_TEST(independent_constraint_islands_are_bit_exact)
+{
+    independent_constraint_scene_t serial;
+    independent_constraint_scene_t parallel;
+    memset(&serial, 0, sizeof(serial));
+    memset(&parallel, 0, sizeof(parallel));
+    bool ok = independent_constraint_scene_init(&serial, 1) &&
+              independent_constraint_scene_init(
+                  &parallel, INTERNAL_PARALLEL_WORKERS);
+    int mismatch_step = -1;
+    for (int step = 0; ok && step < 60; step++) {
+        independent_constraint_scene_drive(&serial);
+        independent_constraint_scene_drive(&parallel);
+        ivp_environment_simulate_one_psi(serial.environment);
+        ivp_environment_simulate_one_psi(parallel.environment);
+        if (!independent_constraint_scenes_equal(&serial, &parallel)) {
+            mismatch_step = step;
+            ok = false;
+        }
+    }
+    ivp_parallel_stats_t stats;
+    ivp_environment_get_parallel_stats(parallel.environment, &stats);
+    uint64_t island_dispatches = stats.island_dispatches;
+#ifdef IVP_DEBUG_BUILD
+    ok = ok && stats.island_dispatches == 0u && stats.island_tasks == 0u;
+#else
+    ok = ok && stats.island_dispatches > 0u &&
+         stats.island_tasks >= INDEPENDENT_CONSTRAINT_COUNT;
+#endif
+    if (ok) {
+        serial.constraints[0].force_exceed_action = IVP_CFE_BREAK;
+        serial.constraints[0].break_force_threshold = IVP_REAL(1.0e10);
+        parallel.constraints[0].force_exceed_action = IVP_CFE_BREAK;
+        parallel.constraints[0].break_force_threshold = IVP_REAL(1.0e10);
+        independent_constraint_scene_drive(&serial);
+        independent_constraint_scene_drive(&parallel);
+        ivp_environment_simulate_one_psi(serial.environment);
+        ivp_environment_simulate_one_psi(parallel.environment);
+        if (!independent_constraint_scenes_equal(&serial, &parallel)) {
+            mismatch_step = 60;
+            ok = false;
+        }
+        ivp_environment_get_parallel_stats(parallel.environment, &stats);
+        ok = ok && stats.island_dispatches == island_dispatches;
+    }
+    if (!ok) {
+        fprintf(stderr,
+                "independent constraints: mismatch_step=%d "
+                "dispatches=%llu tasks=%llu max_workers=%d\n",
+                mismatch_step,
+                (unsigned long long)stats.island_dispatches,
+                (unsigned long long)stats.island_tasks,
+                stats.max_workers_used);
+    }
+    independent_constraint_scene_destroy(&parallel);
+    independent_constraint_scene_destroy(&serial);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -596,6 +821,7 @@ int main(void)
     IVP_REGISTER(task_pool_runs_concurrently);
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
+    IVP_REGISTER(independent_constraint_islands_are_bit_exact);
     IVP_REGISTER(solver_matrix_is_bit_exact);
     IVP_RUN_ALL();
 }
