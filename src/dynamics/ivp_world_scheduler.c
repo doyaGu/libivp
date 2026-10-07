@@ -50,6 +50,17 @@ struct ivp_world_scheduler {
     size_t seen_capacity;
 };
 
+static void scheduler_run_environment(ivp_world_job_kind_t kind,
+                                      ivp_environment_t *environment,
+                                      ivp_real_t elapsed_time)
+{
+    if (kind == IVP_WORLD_JOB_ONE_PSI) {
+        ivp_environment_simulate_one_psi_owned(environment);
+    } else {
+        ivp_environment_simulate_dtime_owned(environment, elapsed_time);
+    }
+}
+
 #if defined(_WIN32)
 static bool sync_init(ivp_world_scheduler_t *s)
 {
@@ -115,11 +126,7 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
             ivp_real_t elapsed_time = s->elapsed_time;
             sync_unlock(s);
 
-            if (kind == IVP_WORLD_JOB_ONE_PSI) {
-                ivp_environment_simulate_one_psi_owned(env);
-            } else {
-                ivp_environment_simulate_dtime_owned(env, elapsed_time);
-            }
+            scheduler_run_environment(kind, env, elapsed_time);
 
             sync_lock(s);
         }
@@ -174,19 +181,27 @@ ivp_world_scheduler_t *ivp_world_scheduler_create(
     memset(s, 0, sizeof(*s));
     s->allocator = *allocator;
     s->worker_count = worker_count;
-    s->threads = (ivp_worker_thread_t *)ivp_alloc(
-        &s->allocator, (size_t)worker_count * sizeof(*s->threads));
-    if (!s->threads) {
-        ivp_free(&s->allocator, s, sizeof(*s));
-        return NULL;
+    if (worker_count > 1) {
+        s->threads = (ivp_worker_thread_t *)ivp_alloc(
+            &s->allocator, (size_t)worker_count * sizeof(*s->threads));
+        if (!s->threads) {
+            ivp_free(&s->allocator, s, sizeof(*s));
+            return NULL;
+        }
     }
     if (!sync_init(s)) {
-        ivp_free(&s->allocator, s->threads,
-                 (size_t)worker_count * sizeof(*s->threads));
+        if (s->threads) {
+            ivp_free(&s->allocator, s->threads,
+                     (size_t)worker_count * sizeof(*s->threads));
+        }
         ivp_free(&s->allocator, s, sizeof(*s));
         return NULL;
     }
     s->sync_initialized = true;
+
+    /* One is the complete serial fallback: retain validation and ownership
+     * checks, but create no OS thread and execute dispatches on the caller. */
+    if (worker_count == 1) return s;
 
     int created = 0;
     for (; created < worker_count; created++) {
@@ -222,14 +237,18 @@ void ivp_world_scheduler_destroy(ivp_world_scheduler_t *s)
     s->stopping = true;
     sync_broadcast(&s->work_ready);
     sync_unlock(s);
-    scheduler_join_threads(s, s->worker_count);
+    if (s->worker_count > 1) {
+        scheduler_join_threads(s, s->worker_count);
+    }
     if (s->sync_initialized) sync_destroy(s);
     if (s->seen_environments) {
         ivp_free(&s->allocator, s->seen_environments,
                  s->seen_capacity * sizeof(*s->seen_environments));
     }
-    ivp_free(&s->allocator, s->threads,
-             (size_t)s->worker_count * sizeof(*s->threads));
+    if (s->threads) {
+        ivp_free(&s->allocator, s->threads,
+                 (size_t)s->worker_count * sizeof(*s->threads));
+    }
     ivp_free(&s->allocator, s, sizeof(*s));
 }
 
@@ -336,9 +355,21 @@ static ivp_result_t scheduler_dispatch(
     s->job_kind = kind;
     s->elapsed_time = elapsed_time;
     s->running = true;
-    s->generation++;
-    sync_broadcast(&s->work_ready);
-    while (s->running) sync_wait(&s->work_done, s);
+    if (s->worker_count == 1) {
+        /* Release the scheduler lock around application callbacks.  A nested
+         * or concurrent dispatch can then observe running and fail instead
+         * of deadlocking, just as it does while worker threads are active. */
+        sync_unlock(s);
+        for (size_t i = 0; i < environment_count; i++) {
+            scheduler_run_environment(kind, environments[i], elapsed_time);
+        }
+        sync_lock(s);
+        s->running = false;
+    } else {
+        s->generation++;
+        sync_broadcast(&s->work_ready);
+        while (s->running) sync_wait(&s->work_done, s);
+    }
 
     s->environments = NULL;
     s->environment_count = 0;

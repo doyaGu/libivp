@@ -13,10 +13,13 @@ extern "C" {
 
 typedef struct ivp_world_scheduler ivp_world_scheduler_t;
 
-/* Create worker_count persistent OS threads.  worker_count must be positive.
- * allocator may be NULL for ivp_default_allocator(); its context must outlive
- * the scheduler.  Returns NULL on invalid input, allocation failure, or thread
- * creation failure. */
+/* Create a scheduler with the requested execution width.  A worker_count of
+ * one is the complete serial fallback: it creates no OS thread and advances
+ * worlds in array order on the dispatching thread.  Values greater than one
+ * create that many persistent OS worker threads.  worker_count must be
+ * positive.  allocator may be NULL for ivp_default_allocator(); its context
+ * must outlive the scheduler.  Returns NULL on invalid input, allocation
+ * failure, or thread creation failure. */
 ivp_world_scheduler_t *ivp_world_scheduler_create(
     int worker_count, const ivp_allocator_t *allocator);
 
@@ -28,19 +31,24 @@ void ivp_world_scheduler_destroy(ivp_world_scheduler_t *scheduler);
  * simulation time.  Calls block until all environments finish.  The input
  * array is borrowed only for the duration of the call.
  *
- * Different array entries execute in parallel.  An environment may also use
- * its configured intra-world worker pool; budget both layers to avoid
- * oversubscription.  NULL or duplicate environments are rejected.
+ * Different array entries execute in parallel when worker_count is greater
+ * than one.  A one-worker scheduler visits them serially in array order on
+ * the calling thread.  An environment may also use its configured intra-world
+ * worker pool; set its parallel_worker_count to one for a fully serial call.
+ * Budget both layers to avoid oversubscription.  NULL or duplicate
+ * environments are rejected.
  * A world already being simulated elsewhere yields IVP_ERR_INVALID_STATE.
  * A zero environment_count is a successful no-op.  simulate_dtime rejects
  * negative and non-finite elapsed time.
- * Controller/listener callbacks execute on worker threads.  Shared callback
- * state and custom allocator/manager implementations therefore need their
- * own synchronization.  Mutable manager instances, including active-value
- * managers, must not be shared between dispatched worlds.  Immutable compact
- * geometry may be shared.  A world has no stable worker affinity across
- * dispatches; callbacks must not use thread-local storage as world storage.
- * The caller must not otherwise access an environment until this call returns.
+ * With more than one worker, controller/listener callbacks execute on worker
+ * threads.  Shared callback state and custom allocator/manager implementations
+ * therefore need their own synchronization.  With one worker, callbacks run
+ * on the dispatching thread.  Mutable manager instances, including
+ * active-value managers, must not be shared between concurrently dispatched
+ * worlds.  Immutable compact geometry may be shared.  A parallel world has no
+ * stable worker affinity across dispatches; callbacks must not use thread-local
+ * storage as world storage.  The caller must not otherwise access an
+ * environment until this call returns.
  *
  * IVP_HOME_BUILD and IVP_BENCHMARK_DIAGNOSTICS retain legacy process-wide
  * instrumentation and therefore serialize simulation; a multi-world dispatch
