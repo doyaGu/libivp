@@ -4,6 +4,7 @@
 #include <ivp/base/ivp_assert.h>
 
 #include <fenv.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -22,7 +23,6 @@ typedef pthread_cond_t ivp_task_cond_t;
 
 typedef struct ivp_task_worker {
     struct ivp_task_pool *pool;
-    int worker_index;
 } ivp_task_worker_t;
 
 struct ivp_task_pool {
@@ -44,6 +44,8 @@ struct ivp_task_pool {
     ivp_task_pool_fn function;
     void *context;
     size_t task_count;
+    atomic_size_t next_task;
+    size_t task_grain;
     fenv_t floating_point_environment;
     bool floating_point_environment_valid;
 };
@@ -103,27 +105,41 @@ static void task_broadcast(ivp_task_cond_t *condition)
 }
 #endif
 
-static void task_run_range(ivp_task_pool_t *pool, int worker_index,
-                           ivp_task_pool_fn function, void *context,
-                           size_t task_count, bool restore_fenv,
-                           const fenv_t *floating_point_environment)
+static bool task_claim_range(ivp_task_pool_t *pool, size_t task_count,
+                             size_t task_grain, size_t *first_out,
+                             size_t *end_out)
 {
-    const size_t lane_index = (size_t)worker_index;
-    const size_t lane_count = (size_t)pool->worker_count;
-    const size_t tasks_per_lane = task_count / lane_count;
-    const size_t lanes_with_extra_task = task_count % lane_count;
-    const size_t first = lane_index * tasks_per_lane +
-                         (lane_index < lanes_with_extra_task
-                              ? lane_index
-                              : lanes_with_extra_task);
-    const size_t count = tasks_per_lane +
-                         (lane_index < lanes_with_extra_task ? 1u : 0u);
-    const size_t end = first + count;
+    size_t first = atomic_load_explicit(&pool->next_task,
+                                        memory_order_relaxed);
+    while (first < task_count) {
+        size_t remaining = task_count - first;
+        size_t count = remaining < task_grain ? remaining : task_grain;
+        size_t end = first + count;
+        if (atomic_compare_exchange_weak_explicit(
+                &pool->next_task, &first, end, memory_order_relaxed,
+                memory_order_relaxed)) {
+            *first_out = first;
+            *end_out = end;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void task_run_claimed(ivp_task_pool_t *pool,
+                             ivp_task_pool_fn function, void *context,
+                             size_t task_count, size_t task_grain,
+                             bool restore_fenv,
+                             const fenv_t *floating_point_environment)
+{
     if (restore_fenv && floating_point_environment) {
         (void)fesetenv(floating_point_environment);
     }
-    for (size_t index = first; index < end; index++) {
-        function(context, index);
+    size_t first, end;
+    while (task_claim_range(pool, task_count, task_grain, &first, &end)) {
+        for (size_t index = first; index < end; index++) {
+            function(context, index);
+        }
     }
 }
 
@@ -142,13 +158,13 @@ static void task_worker_loop(ivp_task_worker_t *worker)
         ivp_task_pool_fn function = pool->function;
         void *context = pool->context;
         const size_t task_count = pool->task_count;
+        const size_t task_grain = pool->task_grain;
         const bool restore_fenv = pool->floating_point_environment_valid;
         const fenv_t floating_point_environment = pool->floating_point_environment;
         task_unlock(pool);
 
-        task_run_range(pool, worker->worker_index, function, context,
-                       task_count, restore_fenv,
-                       &floating_point_environment);
+        task_run_claimed(pool, function, context, task_count, task_grain,
+                         restore_fenv, &floating_point_environment);
 
         task_lock(pool);
         pool->workers_done++;
@@ -198,6 +214,7 @@ ivp_task_pool_t *ivp_task_pool_create(int worker_count,
         (ivp_task_pool_t *)ivp_alloc(allocator, sizeof(*pool));
     if (!pool) return NULL;
     memset(pool, 0, sizeof(*pool));
+    atomic_init(&pool->next_task, 0u);
     pool->allocator = *allocator;
     pool->worker_count = worker_count;
     pool->background_thread_count = worker_count - 1;
@@ -222,7 +239,6 @@ ivp_task_pool_t *ivp_task_pool_create(int worker_count,
     int created = 0;
     for (; created < pool->background_thread_count; created++) {
         pool->workers[created].pool = pool;
-        pool->workers[created].worker_index = created;
 #if defined(_WIN32)
         uintptr_t thread = _beginthreadex(NULL, 0, task_worker_main,
                                          &pool->workers[created], 0, NULL);
@@ -284,20 +300,27 @@ void ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->function = function;
     pool->context = context;
     pool->task_count = task_count;
+    size_t lane_count = (size_t)pool->worker_count;
+    size_t target_chunks = lane_count <= SIZE_MAX / 8u
+                               ? lane_count * 8u
+                               : SIZE_MAX;
+    pool->task_grain = task_count / target_chunks;
+    if (pool->task_grain == 0u) pool->task_grain = 1u;
+    atomic_store_explicit(&pool->next_task, 0u, memory_order_relaxed);
     pool->workers_done = 0;
     pool->floating_point_environment_valid =
         fegetenv(&pool->floating_point_environment) == 0;
     pool->running = true;
     pool->generation++;
     task_broadcast(&pool->work_ready);
-    const int caller_lane = pool->background_thread_count;
     ivp_task_pool_fn caller_function = pool->function;
     void *caller_context = pool->context;
     const size_t caller_task_count = pool->task_count;
+    const size_t caller_task_grain = pool->task_grain;
     task_unlock(pool);
 
-    task_run_range(pool, caller_lane, caller_function, caller_context,
-                   caller_task_count, false, NULL);
+    task_run_claimed(pool, caller_function, caller_context,
+                     caller_task_count, caller_task_grain, false, NULL);
 
     task_lock(pool);
     while (pool->workers_done != pool->background_thread_count) {
