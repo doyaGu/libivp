@@ -222,6 +222,10 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "peak_bytes": max(int(record["peak_bytes"]) for record in diagnostics),
                 "residual_bytes": max(int(record["residual_bytes"]) for record in diagnostics),
             })
+            worker_counts = {int(record.get("parallel_workers", 1)) for record in diagnostics}
+            if len(worker_counts) != 1:
+                raise BenchmarkError(f"native worker count changed across runs: {name}/{scale}")
+            item["parallel_workers"] = next(iter(worker_counts))
             if any("verification_contract" in r for r in diagnostics):
                 for field in ("verification_contract", "verification_steps", "trajectory_hash", "contact_height"):
                     observed = {r.get(field) for r in diagnostics}
@@ -301,6 +305,9 @@ def baseline_comparison(current: dict[str, Any], baseline_path: Path) -> dict[st
         previous = old.get(key)
         if not previous:
             continue
+        if int(item.get("parallel_workers", 1)) != int(previous.get("parallel_workers", 1)):
+            raise BenchmarkError(
+                f"baseline worker count differs: {item['name']}/{item['scale']}")
         if item.get("timing_contract", "native-v1") != previous.get("timing_contract", "native-v1"):
             raise BenchmarkError(f"baseline timing contract differs: {item['name']}/{item['scale']}; regenerate baseline")
         ratio = item["median_ns"] / previous["median_ns"] if previous["median_ns"] else None
@@ -337,6 +344,9 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path, *, require_ta
     for field in ("machine", "compiler", "build_type", "ivp_real_double"):
         if current_meta.get(field) != baseline_meta.get(field):
             raise BenchmarkError(f"checked baseline metadata differs: {field}")
+    if int(current_meta.get("parallel_workers", 1)) != int(
+            baseline_meta.get("parallel_workers", 1)):
+        raise BenchmarkError("checked baseline metadata differs: parallel_workers")
     if current_meta.get("libivp", {}).get("dirty") or baseline_meta.get("libivp", {}).get("dirty"):
         raise BenchmarkError("checked baselines require clean libivp worktrees")
 
@@ -404,6 +414,7 @@ def print_report(result: dict[str, Any]) -> None:
         if item["kind"] != "native" or item["implementation"] != "libivp":
             continue
         print(f"  {item['name']:<18} n={item['scale']:<5} "
+              f"workers={item.get('parallel_workers', 1):<2} "
               f"median={item['median_ns'] / 1000:9.3f} us/op "
               f"batch-p95={item['p95_ns'] / 1000:9.3f} us/op "
               f"cv={item['coefficient_of_variation'] * 100:5.1f}%")
@@ -462,9 +473,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--native-only", action="store_true")
     parser.add_argument("--scale", type=int)
+    parser.add_argument("--workers", type=int, default=1,
+                        help="total execution width for each libivp world")
     args = parser.parse_args(argv)
     if args.runs <= 0:
         parser.error("--runs must be positive")
+    if args.workers <= 0:
+        parser.error("--workers must be positive")
     if args.profile == "large" and args.compare_reference:
         parser.error("large is a native-only profile; use standard for reference comparison")
     if args.scale is not None and (args.scale <= 0 or not args.cases or len(args.cases) != 1):
@@ -507,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     native_command = [
         str(native_runner), "--profile", args.profile, "--format", "jsonl",
         "--samples", str(samples), "--min-sample-ms", str(minimum_ms),
+        "--workers", str(args.workers),
     ]
     if args.check or args.check_baseline:
         native_command.append("--check")
@@ -514,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         native_command += ["--scale", str(args.scale)]
     native_filters = [case for case in (args.cases or []) if case in {
         "active_bodies", "contact_pile", "constraint_chain", "fast_impacts",
-        "object_churn", "sleeping_world", "convex_build",
+        "constraint_islands", "object_churn", "sleeping_world", "convex_build",
     }]
     if args.scale and not native_filters:
         parser.error("--scale requires a native --case")
@@ -575,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         "libivp": git_info(root),
         "build_type": compiler.get("cmake_build_type", "unknown"),
         "ivp_real_double": compiler.get("ivp_real_double") == "ON",
+        "parallel_workers": args.workers,
     }
     if args.compare_reference:
         metadata["reference"] = git_info(reference_root)

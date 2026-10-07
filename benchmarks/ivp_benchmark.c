@@ -46,6 +46,7 @@ typedef enum bench_kind {
     BENCH_ACTIVE,
     BENCH_CONTACT,
     BENCH_CONSTRAINT,
+    BENCH_ISLAND_CONSTRAINTS,
     BENCH_IMPACTS,
     BENCH_CHURN,
     BENCH_SLEEPING,
@@ -102,9 +103,11 @@ typedef struct options {
     int verify;
     int contact_height;
     int noop_counter;
+    int workers;
 } options_t;
 
 static int noop_counter_requested;
+static int benchmark_worker_count = 1;
 #ifdef BENCH_WORK_DIAGNOSTICS
 #include "bench_work.h"
 #include <ivp/collision/ivp_hull_mgr.h>
@@ -320,7 +323,7 @@ static void usage(const char *exe)
             "Usage: %s [--profile quick|standard|large] [--case NAME] [--samples N]\n"
             "          [--min-sample-ms MS] [--format text|jsonl] [--output PATH]\n"
             "          [--scale N] [--hotspot-ms MS] [--verify] [--check] [--list]\n"
-            "          [--contact-height N] [--noop-counter]\n", exe);
+            "          [--contact-height N] [--workers N] [--noop-counter]\n", exe);
 }
 
 static void benchmark_message(const char *text, void *userdata)
@@ -385,6 +388,7 @@ static ivp_environment_t *make_env(const ivp_allocator_t *allocator, double dt,
     ivp_environment_config_init(&cfg);
     cfg.allocator = (ivp_allocator_t *)allocator;
     cfg.delta_psi_time = (ivp_real_t)dt;
+    cfg.parallel_worker_count = benchmark_worker_count;
     if (!gravity) ivp_vec3r_set_zero(&cfg.gravity);
     if (group_filter) cfg.collision_filter = ivp_collision_filter_group();
     cfg.disable_performance_counter = instrumented != 1;
@@ -519,6 +523,79 @@ static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allo
     ivp_free(allocator, objects, (size_t)cfg->scale * sizeof(*objects));
     m->total_ns = now_ns() - total_start;
     return 1;
+}
+
+static int run_island_constraints(const bench_config_t *cfg,
+                                  const ivp_allocator_t *allocator,
+                                  bench_measurement_t *m, int instrumented)
+{
+    int64_t total_start = now_ns();
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0,
+                                      instrumented);
+    if (!env) return 0;
+    ivp_object_t **objects = (ivp_object_t **)ivp_alloc(
+        allocator, (size_t)cfg->scale * sizeof(*objects));
+    ivp_constraint_state_t *constraints =
+        (ivp_constraint_state_t *)ivp_alloc(
+            allocator, (size_t)cfg->scale * sizeof(*constraints));
+    if (!objects || !constraints) goto fail;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    object_template.enable_collision_detection = false;
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+    for (int i = 0; i < cfg->scale; i++) {
+        ivp_vec3r_t anchor = ivp_vec3r(
+            (ivp_real_t)(i % 64) * IVP_REAL(2.0),
+            (ivp_real_t)(i / 64) * IVP_REAL(2.0), IVP_REAL(0.0));
+        object_template.position = anchor;
+        objects[i] = ivp_environment_create_object(
+            env, &object_template, NULL);
+        if (!objects[i]) goto fail;
+        objects[i]->physical_core->speed.k[0] =
+            (ivp_real_t)(float)(0.25f + (float)(i & 7) * 0.01f);
+        ivp_constraint_init_ball_socket_ws(
+            &constraints[i], NULL, &anchor, objects[i]);
+        if (!ivp_controller_handle_is_valid(
+                ivp_environment_announce_dependent_controller(
+                    env, IVP_CP_CONSTRAINTS, ivp_controller_constraint,
+                    &constraints[i], ivp_constraint_discovery))) {
+            goto fail;
+        }
+    }
+    m->verification.constraints = constraints;
+    m->verification.constraint_count = cfg->scale;
+    begin_operation(env);
+    int64_t start = now_ns();
+    bench_simulate(env, cfg->steps, cfg, m, instrumented);
+    m->operation_ns = now_ns() - start;
+    m->operations = m->psis = cfg->steps;
+    m->simulated_seconds = cfg->steps * cfg->dt;
+    m->valid = object_finite(objects[cfg->scale - 1]);
+    m->state_hash = hash_environment(env);
+    collect_phases(env, m);
+    bench_destroy(env);
+    ivp_free(allocator, constraints,
+             (size_t)cfg->scale * sizeof(*constraints));
+    ivp_free(allocator, objects, (size_t)cfg->scale * sizeof(*objects));
+    m->total_ns = now_ns() - total_start;
+    return m->valid;
+
+fail:
+    ivp_environment_destroy(env);
+    if (constraints) {
+        ivp_free(allocator, constraints,
+                 (size_t)cfg->scale * sizeof(*constraints));
+    }
+    if (objects) {
+        ivp_free(allocator, objects,
+                 (size_t)cfg->scale * sizeof(*objects));
+    }
+    return 0;
 }
 
 static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocator,
@@ -680,6 +757,8 @@ static BENCH_NOINLINE int run_once(const bench_config_t *cfg, const ivp_allocato
         case BENCH_ACTIVE: return run_active(cfg, allocator, m, instrumented);
         case BENCH_CONTACT: return run_contact(cfg, allocator, m, instrumented);
         case BENCH_CONSTRAINT: return run_constraint(cfg, allocator, m, instrumented);
+        case BENCH_ISLAND_CONSTRAINTS:
+            return run_island_constraints(cfg, allocator, m, instrumented);
         case BENCH_IMPACTS: return run_impacts(cfg, allocator, m, instrumented);
         case BENCH_CHURN: return run_churn(cfg, allocator, m, instrumented);
         case BENCH_SLEEPING: return run_sleeping(cfg, allocator, m, instrumented);
@@ -811,9 +890,11 @@ static int profile_config(const bench_config_t *cfg, const options_t *opt, FILE 
     } while (now_ns() - start < opt->hotspot_ms * 1.0e6);
     fprintf(out, "{\"schema\":\"%s\",\"kind\":\"native-profile\","
             "\"implementation\":\"libivp\",\"case\":\"%s\",\"scale\":%d,"
+            "\"parallel_workers\":%d,"
             "\"worlds\":%d,\"steps_per_world\":%d,\"operation_ns\":%lld,"
             "\"total_ns\":%lld,\"state_hash\":\"%016llx\"}\n",
-            BENCH_SCHEMA, cfg->name, cfg->scale, worlds, cfg->steps,
+            BENCH_SCHEMA, cfg->name, cfg->scale, benchmark_worker_count,
+            worlds, cfg->steps,
             (long long)operation_ns, (long long)(now_ns() - start),
             (unsigned long long)hash);
     return 1;
@@ -849,10 +930,12 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
             fprintf(out,
                     "{\"schema\":\"%s\",\"kind\":\"native\",\"implementation\":\"libivp\","
                     "\"case\":\"%s\",\"scale\":%d,\"sample\":%d,\"iterations\":%d,"
+                    "\"parallel_workers\":%d,"
                     "\"operations\":%lld,\"psis\":%lld,\"simulated_seconds\":%.17g,"
                     "\"operation_ns\":%lld,\"total_ns\":%lld,\"validation_ns\":%lld,"
                     "\"timing_contract\":\"%s\",\"p95_scope\":\"batch-average\"}\n",
                     BENCH_SCHEMA, cfg->name, cfg->scale, sample, iterations,
+                    benchmark_worker_count,
                     (long long)aggregate.operations, (long long)aggregate.psis,
                     aggregate.simulated_seconds, (long long)aggregate.operation_ns,
                     (long long)aggregate.total_ns, (long long)aggregate.validation_ns,
@@ -921,6 +1004,7 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
         fprintf(out,
                 "{\"schema\":\"%s\",\"kind\":\"native-summary\","
                 "\"implementation\":\"libivp\",\"case\":\"%s\",\"scale\":%d,"
+                "\"parallel_workers\":%d,"
                 "\"median_ns_per_op\":%.3f,\"p95_ns_per_op\":%.3f,"
                 "\"min_ns_per_op\":%.3f,\"max_ns_per_op\":%.3f,"
                 "\"alloc_count\":%lld,\"bytes_allocated\":%lld,"
@@ -929,7 +1013,8 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 "\"statistics\":{\"mindists_generated\":%d,\"mindists_deleted\":%d,"
                 "\"range_intra_exceeded\":%d,\"range_world_exceeded\":%d,"
                 "\"impacts\":%d},\"phases_ns\":{",
-                BENCH_SCHEMA, cfg->name, cfg->scale, median, p95, minimum, maximum,
+                BENCH_SCHEMA, cfg->name, cfg->scale, benchmark_worker_count,
+                median, p95, minimum, maximum,
                 (long long)stats.alloc_count, (long long)stats.bytes_allocated,
                 (long long)stats.peak_bytes, (long long)stats.current_bytes,
                 (unsigned long long)expected_hash,
@@ -951,8 +1036,9 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
         fprintf(out, "}\n");
     } else {
         double throughput = median > 0.0 ? 1.0e9 / median : 0.0;
-        fprintf(out, "%-18s n=%-5d median=%9.3f us/op p95=%9.3f us/op throughput=%10.1f/s peak=%8.1f KiB%s\n",
-                cfg->name, cfg->scale, median / 1000.0, p95 / 1000.0, throughput,
+        fprintf(out, "%-18s n=%-5d workers=%-2d median=%9.3f us/op p95=%9.3f us/op throughput=%10.1f/s peak=%8.1f KiB%s\n",
+                cfg->name, cfg->scale, benchmark_worker_count,
+                median / 1000.0, p95 / 1000.0, throughput,
                 (double)stats.peak_bytes / 1024.0, gate_ok ? "" : "  FAIL");
     }
     return gate_ok;
@@ -996,6 +1082,7 @@ static const bench_config_t large_configs[] = {
     {"active_bodies", BENCH_ACTIVE, 4096, 240, 1.0 / 180.0},
     {"contact_pile", BENCH_CONTACT, 1024, 360, 1.0 / 180.0},
     {"constraint_chain", BENCH_CONSTRAINT, 1024, 360, 1.0 / 180.0},
+    {"constraint_islands", BENCH_ISLAND_CONSTRAINTS, 4096, 32, 1.0 / 180.0},
     {"fast_impacts", BENCH_IMPACTS, 512, 180, 1.0 / 180.0},
     {"object_churn", BENCH_CHURN, 1024, 16, 1.0 / 180.0},
     {"sleeping_world", BENCH_SLEEPING, 16384, 600, 1.0 / 60.0},
@@ -1004,7 +1091,11 @@ static const bench_config_t large_configs[] = {
 
 int main(int argc, char **argv)
 {
-    options_t opt = {"quick", NULL, "text", NULL, 0, 0.0, 0, 0, 0, 0.0, 0, 0, 0};
+    options_t opt = {
+        .profile = "quick",
+        .format = "text",
+        .workers = 1,
+    };
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(argv[0]); return 0; }
         if (!strcmp(argv[i], "--profile") && i + 1 < argc) { opt.profile = argv[++i]; continue; }
@@ -1018,6 +1109,8 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--check")) { opt.check = 1; continue; }
         if (!strcmp(argv[i], "--verify")) { opt.verify = 1; continue; }
         if (!strcmp(argv[i], "--noop-counter")) { opt.noop_counter = 1; continue; }
+        if (!strcmp(argv[i], "--workers") && i + 1 < argc &&
+            parse_positive_int(argv[++i], &opt.workers)) continue;
         if (!strcmp(argv[i], "--contact-height") && i + 1 < argc && parse_positive_int(argv[++i], &opt.contact_height)) continue;
         if (!strcmp(argv[i], "--list")) { opt.list = 1; continue; }
         usage(argv[0]); return 2;
@@ -1029,6 +1122,7 @@ int main(int argc, char **argv)
     if (!strcmp(opt.format, "jsonl") || opt.hotspot_ms || opt.verify)
         ivp_set_message_output(benchmark_message, NULL);
     noop_counter_requested = opt.noop_counter;
+    benchmark_worker_count = opt.workers;
     if (opt.contact_height && (!opt.case_filter || strcmp(opt.case_filter, "contact_pile"))) {
         fprintf(stderr, "--contact-height requires --case contact_pile\n"); return 2;
     }
@@ -1043,18 +1137,6 @@ int main(int argc, char **argv)
     if (opt.hotspot_ms && opt.check) {
         fprintf(stderr, "--hotspot-ms cannot be used with --check\n"); return 2;
     }
-    if (opt.list) {
-        for (size_t i = 0; i < sizeof(quick_configs) / sizeof(quick_configs[0]); ++i)
-            puts(quick_configs[i].name);
-        return 0;
-    }
-    if (!opt.samples) opt.samples = !strcmp(opt.profile, "standard") ? 7 : 5;
-    if (opt.samples > MAX_SAMPLES) { fprintf(stderr, "--samples must be <= %d\n", MAX_SAMPLES); return 2; }
-    if (opt.min_sample_ms == 0.0) {
-        if (!strcmp(opt.profile, "quick")) opt.min_sample_ms = 200.0;
-        else if (!strcmp(opt.profile, "standard")) opt.min_sample_ms = 250.0;
-        else opt.min_sample_ms = 500.0;
-    }
     const bench_config_t *configs;
     size_t count;
     if (!strcmp(opt.profile, "quick")) {
@@ -1066,6 +1148,23 @@ int main(int argc, char **argv)
     } else {
         configs = large_configs;
         count = sizeof(large_configs) / sizeof(large_configs[0]);
+    }
+    if (opt.list) {
+        const char *previous = NULL;
+        for (size_t i = 0; i < count; ++i) {
+            if (!previous || strcmp(previous, configs[i].name)) {
+                puts(configs[i].name);
+                previous = configs[i].name;
+            }
+        }
+        return 0;
+    }
+    if (!opt.samples) opt.samples = !strcmp(opt.profile, "standard") ? 7 : 5;
+    if (opt.samples > MAX_SAMPLES) { fprintf(stderr, "--samples must be <= %d\n", MAX_SAMPLES); return 2; }
+    if (opt.min_sample_ms == 0.0) {
+        if (!strcmp(opt.profile, "quick")) opt.min_sample_ms = 200.0;
+        else if (!strcmp(opt.profile, "standard")) opt.min_sample_ms = 250.0;
+        else opt.min_sample_ms = 500.0;
     }
     FILE *out = stdout;
     if (opt.output_path) {
@@ -1094,9 +1193,11 @@ int main(int argc, char **argv)
                 fprintf(out, "{\"schema\":\"%s\",\"kind\":\"native-verification\","
                         "\"verification_contract\":\"%s\",\"implementation\":\"libivp\","
                         "\"case\":\"%s\",\"scale\":%d,\"steps_per_world\":%d,\"dt\":%.17g,"
+                        "\"parallel_workers\":%d,"
                         "\"state_hash\":\"%016llx\",\"trajectory_hash\":\"%016llx\",\"contact_height\":%d}\n",
                         BENCH_SCHEMA, BENCH_TRACE_CONTRACT, cfg.name, cfg.scale, cfg.steps,
-                        cfg.dt, (unsigned long long)verification.state_hash,
+                        cfg.dt, benchmark_worker_count,
+                        (unsigned long long)verification.state_hash,
                         (unsigned long long)verification.verification.trajectory, cfg.contact_height);
             }
         } else if (opt.hotspot_ms) {

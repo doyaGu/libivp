@@ -116,6 +116,17 @@ class BenchmarkToolTests(unittest.TestCase):
             with self.assertRaisesRegex(benchmark.BenchmarkError, "timing contract differs"):
                 benchmark.baseline_comparison(new, path)
 
+    def test_baseline_rejects_changed_parallel_worker_count(self):
+        item = {"kind": "native", "implementation": "libivp", "name": "active_bodies",
+                "scale": 4096, "median_ns": 10, "parallel_workers": 1}
+        old = {"schema": benchmark.SCHEMA, "summary": [item]}
+        new = {"summary": [dict(item, parallel_workers=4)]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.json"
+            path.write_text(json.dumps(old), encoding="utf-8")
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "worker count differs"):
+                benchmark.baseline_comparison(new, path)
+
     def test_summarize_and_compare(self):
         records = [
             {"kind": "scenario", "implementation": "libivp", "scenario": "x",
