@@ -103,6 +103,7 @@ typedef struct demo_config {
     int         max_substeps; /* windowed sub-steps per frame (0: 24)  */
     float       grid_extent;  /* ground grid (0: 30 m, < 0: no grid)   */
     float       grid_spacing; /* (0: 1 m)                              */
+    int         headless_frames; /* frames of --headless without a number (0: 600) */
 } demo_config_t;
 
 /* ive::app_config_defaults */
@@ -1727,11 +1728,23 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
     return 0;
 }
 
+/* True when --headless / IVP_EXAMPLE_HEADLESS names the number of frames. */
+static inline bool demo_headless_frames_given(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-H") == 0)
+            return i + 1 < argc && argv[i + 1][0] >= '1' && argv[i + 1][0] <= '9';
+    const char *e = getenv("IVP_EXAMPLE_HEADLESS");
+    return e && e[0] >= '1' && e[0] <= '9';
+}
+
 /* Save the reset snapshot and run the example (window or headless). */
 static inline int demo_run(demo_app_t *app, int argc, char **argv)
 {
     demo_world_save_state(&app->world);
     int frames = demo_headless_frames(argc, argv);
+    if (frames > 0 && app->cfg.headless_frames > 0 && !demo_headless_frames_given(argc, argv))
+        frames = app->cfg.headless_frames;
     if (frames > 0) return demo_run_headless(app, frames);
     int shot_frames;
     const char *shot = demo_screenshot_arg(argc, argv, &shot_frames);
