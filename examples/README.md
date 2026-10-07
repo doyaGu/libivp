@@ -25,7 +25,7 @@ built but has not been run.
 
 ## Driving
 
-`vehicle`, `offroad`, `boat`, `airboat`, `jetski` and `wheelcar` share one input model (`demo_drive.h`). The
+`vehicle`, `offroad`, `boat`, `airboat`, `jetski`, `wheelcar` and `ballance` share one input model (`demo_drive.h`). The
 throttle and the steering follow the keys through a smoothing: holding a key winds the steering on, letting go
 centres it faster than it was wound on, and a tap is a small correction. The F5 panel has the three times
 (throttle, steering, centring). The steering lock shrinks with the speed, and the follow camera looks ahead of the
@@ -110,6 +110,7 @@ Larger scenes:
 | `airboat` | Valve's raycast airboat (`ivp_airboat_init`): a game-side ray caster against a heightfield and a water plane, driven from a lake up a beach |
 | `jetski` | the fake jetski (a four-wheel raycast hull) skimming a travelling wave: the ray callback intersects the swell, the controller springs, drives, steers and boosts the hull |
 | `wheelcar` | a car on four real ball wheels: the car system keeps the wheels on their hard points with the car constraint solver, drives the rear pair, steers with an Ackermann angle and has a handbrake |
+| `ballance` | a mini Ballance: roll a wood, paper or stone ball along planks, ramps, a moving platform, a narrow beam and a wall of crates; pads change the material, checkpoints and three lives; headless, an autopilot rolls the whole course (P starts it in a window) |
 | `platform` | an elevator, a slider and a turntable driven by golem controllers, carrying crates |
 | `compound` | rigid bodies made of several objects with `ivp_object_attach_object`; B breaks them apart |
 

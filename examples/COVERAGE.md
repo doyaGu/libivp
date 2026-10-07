@@ -60,13 +60,13 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | `ivp_constraint_fixed_keyed.h` | 5/12 | `constraints` |
 | `ivp_constraint_local.h` | 15/27 | `actuators`, `constraints`, `factory` |
 | `ivp_constraint_types.h` | 7/35 | `hinge`, `maxforce` |
-| `ivp_controller.h` | 5/18 | `actuators`, `black_hole`, `boat`, `bridge`, `constraints`, `factory`, `friction`, `hinge`, `hover`, `maxforce`, `onthefly`, `platform`, `rope`, `snowflake`, `zones` |
+| `ivp_controller.h` | 5/18 | `actuators`, `ballance`, `black_hole`, `boat`, `bridge`, `constraints`, `factory`, `friction`, `hinge`, `hover`, `maxforce`, `onthefly`, `platform`, `rope`, `snowflake`, `zones` |
 | `ivp_controller_airboat.h` | 11/40 | `airboat` |
 | `ivp_controller_buoyancy.h` | 9/17 | `boat`, `buoyancy`, `waves`, `zones` |
 | `ivp_controller_factory.h` | 21/33 | `factory` |
 | `ivp_controller_fake_jetski.h` | 15/41 | `jetski` |
 | `ivp_controller_floating.h` | 8/11 | `hover` |
-| `ivp_controller_golem.h` | 6/16 | `platform` |
+| `ivp_controller_golem.h` | 6/16 | `ballance`, `platform` |
 | `ivp_controller_motion.h` | 8/18 | `factory`, `motion_controller` |
 | `ivp_controller_phantom.h` | 3/16 | `phantom` |
 | `ivp_controller_raycast_car.h` | 9/36 | `offroad`, `vehicle` |
@@ -85,10 +85,10 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | `ivp_cache_object.h` | 0/3 | - (cached object transforms) |
 | `ivp_cluster.h` | 4/12 | `zones` |
 | `ivp_core.h` | 3/49 | `black_hole`, `boat`, `buoyancy`, `collision_filter`, `forcefield`, `onthefly`, `psi_listener`, `waves`, `zones` |
-| `ivp_environment.h` | 22/87 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `constraints`, `contacts`, `cubes`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `rope`, `sensors`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
-| `ivp_handle.h` | 2/12 | `black_hole`, `boat`, `factory`, `friction`, `hover`, `platform`, `zones` |
+| `ivp_environment.h` | 22/87 | `3ds_import`, `active_value`, `actuators`, `airboat`, `ballance`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `constraints`, `contacts`, `cubes`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `rope`, `sensors`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
+| `ivp_handle.h` | 2/12 | `ballance`, `black_hole`, `boat`, `factory`, `friction`, `hover`, `platform`, `zones` |
 | `ivp_merge_core.h` | 0/3 | `compound` (behind ivp_object_attach_object) |
-| `ivp_object.h` | 11/47 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `concave`, `constraints`, `contacts`, `cubes`, `cut`, `domino`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `raycasting`, `ring`, `rope`, `sensors`, `shapes`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
+| `ivp_object.h` | 11/47 | `3ds_import`, `active_value`, `actuators`, `airboat`, `ballance`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `concave`, `constraints`, `contacts`, `cubes`, `cut`, `domino`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `raycasting`, `ring`, `rope`, `sensors`, `shapes`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
 | `ivp_object_attach.h` | 3/4 | `compound` |
 | `ivp_phantom.h` | 7/16 | `zones` |
 | `ivp_sim_unit.h` | 0/2 | - (simulation units, merged by the controllers' discovery) |
@@ -100,7 +100,7 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | header | used/names | examples |
 |---|---|---|
 | `ivp_event.h` | 3/16 | `black_hole`, `boat`, `jetski`, `maxforce`, `motion_controller`, `zones` |
-| `ivp_listener_collision.h` | 13/27 | `callback`, `contacts` |
+| `ivp_listener_collision.h` | 13/27 | `ballance`, `callback`, `contacts` |
 | `ivp_listener_object.h` | 5/7 | `callback`, `contacts` |
 | `ivp_listener_psi.h` | 3/6 | `psi_listener` |
 
