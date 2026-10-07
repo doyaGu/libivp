@@ -5,6 +5,7 @@
 #include <ivp/dynamics/ivp_object.h>
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
+#include "dynamics/ivp_env_parallel_tasks.h"
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #ifdef IVP_HOME_BUILD
@@ -15,6 +16,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+
+typedef struct ivp_ov_query_work {
+    const ivp_ov_node_t *node;
+    int first;  /* logical offset in the node's reverse element order */
+    int count;
+} ivp_ov_query_work_t;
 
 
 /* ── IVP_U_FVector<IVP_Collision> ───────────────────────────────────────── */
@@ -354,6 +361,19 @@ void ivp_ov_tree_destroy(ivp_ov_tree_t *t)
         ivp_free(t->allocator, t->hash, t->hash_size * sizeof(*t->hash));
         t->hash = NULL;
     }
+    if (t->parallel_query_work) {
+        ivp_free(t->allocator, t->parallel_query_work,
+                 t->parallel_query_work_capacity *
+                     sizeof(ivp_ov_query_work_t));
+        t->parallel_query_work = NULL;
+    }
+    if (t->parallel_query_offsets) {
+        ivp_free(t->allocator, t->parallel_query_offsets,
+                 t->parallel_query_offsets_capacity * sizeof(size_t));
+        t->parallel_query_offsets = NULL;
+    }
+    t->parallel_query_work_capacity = 0;
+    t->parallel_query_offsets_capacity = 0;
     t->hash_size = 0;
     t->node_count = 0;
 }
@@ -658,6 +678,265 @@ static bool collect_collision_partners(ivp_ov_tree_t *t, const ivp_ov_element_t 
     return true;
 }
 
+/* ── deterministic parallel overlap query ──────────────────────────────── */
+
+#define IVP_OV_QUERY_GRAIN 256
+#define IVP_OV_QUERY_MIN_ELEMENTS 8192u
+
+typedef enum ivp_ov_parallel_result {
+    IVP_OV_PARALLEL_NOT_USED,
+    IVP_OV_PARALLEL_OK,
+    IVP_OV_PARALLEL_ERROR
+} ivp_ov_parallel_result_t;
+
+static bool ov_query_reserve_work(ivp_ov_tree_t *t, size_t needed)
+{
+    if (needed <= t->parallel_query_work_capacity) return true;
+    size_t capacity = t->parallel_query_work_capacity
+                          ? t->parallel_query_work_capacity
+                          : 16u;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2u;
+    }
+    if (capacity > SIZE_MAX / sizeof(ivp_ov_query_work_t)) return false;
+    void *work = ivp_realloc(
+        t->allocator, t->parallel_query_work,
+        t->parallel_query_work_capacity * sizeof(ivp_ov_query_work_t),
+        capacity * sizeof(ivp_ov_query_work_t));
+    if (!work) return false;
+    t->parallel_query_work = work;
+    t->parallel_query_work_capacity = capacity;
+    return true;
+}
+
+static bool ov_query_reserve_offsets(ivp_ov_tree_t *t, size_t needed)
+{
+    if (needed <= t->parallel_query_offsets_capacity) return true;
+    size_t capacity = t->parallel_query_offsets_capacity
+                          ? t->parallel_query_offsets_capacity
+                          : 17u;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2u;
+    }
+    if (capacity > SIZE_MAX / sizeof(size_t)) return false;
+    size_t *offsets = (size_t *)ivp_realloc(
+        t->allocator, t->parallel_query_offsets,
+        t->parallel_query_offsets_capacity * sizeof(size_t),
+        capacity * sizeof(size_t));
+    if (!offsets) return false;
+    t->parallel_query_offsets = offsets;
+    t->parallel_query_offsets_capacity = capacity;
+    return true;
+}
+
+static bool ov_query_plan_node(ivp_ov_tree_t *t, const ivp_ov_node_t *node,
+                               size_t *work_count, size_t *element_count)
+{
+    const int elements = ivp_pvec_len(&node->elements);
+    if ((size_t)elements > SIZE_MAX - *element_count) return false;
+    *element_count += (size_t)elements;
+    for (int first = 0; first < elements;) {
+        int count = elements - first;
+        if (count > IVP_OV_QUERY_GRAIN) count = IVP_OV_QUERY_GRAIN;
+        if (*work_count == SIZE_MAX ||
+            !ov_query_reserve_work(t, *work_count + 1u)) {
+            return false;
+        }
+        ivp_ov_query_work_t *work =
+            (ivp_ov_query_work_t *)t->parallel_query_work;
+        work[*work_count].node = node;
+        work[*work_count].first = first;
+        work[*work_count].count = count;
+        (*work_count)++;
+        first += count;
+    }
+    return true;
+}
+
+static bool ov_query_plan_subbox(ivp_ov_tree_t *t, const ivp_ov_node_t *node,
+                                 size_t *work_count, size_t *element_count)
+{
+    if (!ov_query_plan_node(t, node, work_count, element_count)) return false;
+    for (int i = ivp_pvec_len(&node->children) - 1; i >= 0; i--) {
+        if (!ov_query_plan_subbox(
+                t, (const ivp_ov_node_t *)ivp_pvec_at(&node->children, i),
+                work_count, element_count)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ov_query_plan_collision(ivp_ov_tree_t *t,
+                                    const ivp_ov_node_t *master_node,
+                                    const ivp_ov_node_t *new_node,
+                                    size_t *work_count,
+                                    size_t *element_count)
+{
+    if (!ov_query_plan_node(t, master_node, work_count, element_count)) {
+        return false;
+    }
+    if ((master_node->data.sizelevel - 1) > new_node->data.sizelevel) {
+        int rasterlevel_diff =
+            (master_node->data.rasterlevel - 1) - new_node->data.rasterlevel;
+        for (int i = 0; i < ivp_pvec_len(&master_node->children); i++) {
+            const ivp_ov_node_t *child =
+                (const ivp_ov_node_t *)ivp_pvec_at(&master_node->children, i);
+            if (child == new_node) {
+                if (!ov_query_plan_subbox(t, child, work_count,
+                                          element_count)) {
+                    return false;
+                }
+            } else if (box_overlaps_with_box(child, new_node,
+                                             rasterlevel_diff)) {
+                if (!ov_query_plan_collision(t, child, new_node, work_count,
+                                             element_count)) {
+                    return false;
+                }
+            }
+        }
+    } else {
+        int rasterlevel_diff =
+            new_node->data.rasterlevel - (master_node->data.rasterlevel - 1);
+        for (int i = 0; i < ivp_pvec_len(&master_node->children); i++) {
+            const ivp_ov_node_t *child =
+                (const ivp_ov_node_t *)ivp_pvec_at(&master_node->children, i);
+            if (child == new_node) {
+                if (!ov_query_plan_subbox(t, child, work_count,
+                                          element_count)) {
+                    return false;
+                }
+            } else if (box_overlaps_with_box(new_node, child,
+                                             rasterlevel_diff)) {
+                if (!ov_query_plan_collision(t, child, new_node, work_count,
+                                             element_count)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+typedef struct ivp_ov_query_context {
+    const ivp_ov_element_t *element;
+    const ivp_ov_query_work_t *work;
+    size_t *offsets;
+    void **output;
+} ivp_ov_query_context_t;
+
+static bool ov_query_elements_overlap(const ivp_ov_element_t *a,
+                                      const ivp_ov_element_t *b)
+{
+    double qdist = ov_qdist_f(&a->center, &b->center);
+    double minimal_dist = (double)(a->radius + b->radius);
+    return qdist <= minimal_dist * minimal_dist;
+}
+
+static void ov_query_count_task(void *opaque, size_t task_index)
+{
+    ivp_ov_query_context_t *context = (ivp_ov_query_context_t *)opaque;
+    const ivp_ov_query_work_t *work = &context->work[task_index];
+    const int element_count = ivp_pvec_len(&work->node->elements);
+    size_t matches = 0;
+    for (int offset = 0; offset < work->count; offset++) {
+        int index = element_count - 1 - (work->first + offset);
+        const ivp_ov_element_t *candidate =
+            (const ivp_ov_element_t *)ivp_pvec_at(&work->node->elements,
+                                                  index);
+        if (ov_query_elements_overlap(candidate, context->element)) matches++;
+    }
+    context->offsets[task_index + 1u] = matches;
+}
+
+static void ov_query_fill_task(void *opaque, size_t task_index)
+{
+    ivp_ov_query_context_t *context = (ivp_ov_query_context_t *)opaque;
+    const ivp_ov_query_work_t *work = &context->work[task_index];
+    const int element_count = ivp_pvec_len(&work->node->elements);
+    size_t output_index = context->offsets[task_index];
+    for (int offset = 0; offset < work->count; offset++) {
+        int index = element_count - 1 - (work->first + offset);
+        ivp_ov_element_t *candidate =
+            (ivp_ov_element_t *)ivp_pvec_at(&work->node->elements, index);
+        if (ov_query_elements_overlap(candidate, context->element)) {
+            context->output[output_index++] = candidate;
+        }
+    }
+    IVP_ASSERT(output_index == context->offsets[task_index + 1u]);
+}
+
+static ivp_ov_parallel_result_t collect_collision_partners_parallel(
+    ivp_ov_tree_t *t, const ivp_ov_element_t *element,
+    const ivp_ov_node_t *new_node, ivp_pvec_t *colliding_balls)
+{
+    /* The OV-tree API is also used directly by geometry/tests with bare
+     * elements that have no owning object or environment. */
+    if (!element->real_object || !element->real_object->owner) {
+        return IVP_OV_PARALLEL_NOT_USED;
+    }
+    ivp_environment_t *env = element->real_object->owner;
+    const int worker_count = ivp_env_parallel_worker_count(env);
+    if (worker_count <= 1) return IVP_OV_PARALLEL_NOT_USED;
+
+    size_t work_count = 0;
+    size_t element_count = 0;
+    if (!ov_query_plan_collision(t, t->root, new_node, &work_count,
+                                 &element_count) ||
+        work_count < (size_t)worker_count ||
+        element_count < IVP_OV_QUERY_MIN_ELEMENTS ||
+        !ov_query_reserve_offsets(t, work_count + 1u)) {
+        return IVP_OV_PARALLEL_NOT_USED;
+    }
+
+    size_t *offsets = t->parallel_query_offsets;
+    offsets[0] = 0;
+    ivp_ov_query_context_t context;
+    context.element = element;
+    context.work = (const ivp_ov_query_work_t *)t->parallel_query_work;
+    context.offsets = offsets;
+    context.output = NULL;
+    if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_BROADPHASE,
+                              work_count, (size_t)worker_count,
+                              ov_query_count_task, &context)) {
+        return IVP_OV_PARALLEL_NOT_USED;
+    }
+    for (size_t i = 0; i < work_count; i++) {
+        if (offsets[i + 1u] > SIZE_MAX - offsets[i]) {
+            return IVP_OV_PARALLEL_ERROR;
+        }
+        offsets[i + 1u] += offsets[i];
+    }
+    const size_t matches = offsets[work_count];
+    const int old_count = ivp_pvec_len(colliding_balls);
+    if (matches == 0u) return IVP_OV_PARALLEL_OK;
+    if (matches > (size_t)(INT_MAX - old_count)) {
+        return IVP_OV_PARALLEL_ERROR;
+    }
+    const int new_count = old_count + (int)matches;
+    if (!ivp_pvec_reserve(colliding_balls, new_count)) {
+        return IVP_OV_PARALLEL_ERROR;
+    }
+    context.output = colliding_balls->elems + old_count;
+    if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_BROADPHASE,
+                              work_count, (size_t)worker_count,
+                              ov_query_fill_task, &context)) {
+        for (size_t i = 0; i < work_count; i++) {
+            ov_query_fill_task(&context, i);
+        }
+    }
+    colliding_balls->n = new_count;
+    return IVP_OV_PARALLEL_OK;
+}
+
 ivp_result_t ivp_ov_tree_insert_ov_element_ex(
     ivp_ov_tree_t *t, ivp_ov_element_t *element,
     double min_radius, double max_radius,
@@ -736,7 +1015,15 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
     t->collision_partners = colliding_balls;
     if (t->collision_partners) {
         const int old_partner_count = ivp_pvec_len(t->collision_partners);
-        if (!collect_collision_partners(t, element, t->root, new_node)) {
+        ivp_ov_parallel_result_t parallel_result =
+            collect_collision_partners_parallel(t, element, new_node,
+                                                t->collision_partners);
+        bool collected = parallel_result == IVP_OV_PARALLEL_OK;
+        if (parallel_result == IVP_OV_PARALLEL_NOT_USED) {
+            collected = collect_collision_partners(t, element, t->root,
+                                                   new_node);
+        }
+        if (!collected) {
             t->collision_partners->n = old_partner_count;
             ivp_ov_tree_remove_ov_element(t, element);
             return IVP_ERR_OUT_OF_MEMORY;
