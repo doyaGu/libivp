@@ -38,7 +38,7 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | `ivp_narrowphase.h` | 0/17 | - (the narrow phase behind the mindists) |
 | `ivp_radar.h` | 3/4 | `sensors` |
 | `ivp_range_manager.h` | 2/11 | `sensors` |
-| `ivp_ray_solver.h` | 11/44 | `airboat`, `hover`, `jetski`, `offroad`, `raycasting`, `terrain` |
+| `ivp_ray_solver.h` | 11/44 | `airboat`, `ballance`, `hover`, `jetski`, `offroad`, `raycasting`, `terrain` |
 | `ivp_sphere_solver.h` | 2/7 | `sensors` |
 
 ## controllers
@@ -100,7 +100,7 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | header | used/names | examples |
 |---|---|---|
 | `ivp_event.h` | 3/16 | `black_hole`, `boat`, `jetski`, `maxforce`, `motion_controller`, `zones` |
-| `ivp_listener_collision.h` | 13/27 | `ballance`, `callback`, `contacts` |
+| `ivp_listener_collision.h` | 13/27 | `callback`, `contacts` |
 | `ivp_listener_object.h` | 5/7 | `callback`, `contacts` |
 | `ivp_listener_psi.h` | 3/6 | `psi_listener` |
 
