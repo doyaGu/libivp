@@ -50,6 +50,7 @@ typedef enum bench_kind {
     BENCH_CONSTRAINT,
     BENCH_ISLAND_CONSTRAINTS,
     BENCH_MIXED_ISLAND_CONSTRAINTS,
+    BENCH_HETEROGENEOUS_ISLANDS,
     BENCH_IMPACTS,
     BENCH_CHURN,
     BENCH_SLEEPING,
@@ -746,6 +747,124 @@ fail:
     return 0;
 }
 
+static int run_heterogeneous_constraint_islands(
+    const bench_config_t *cfg, const ivp_allocator_t *allocator,
+    bench_measurement_t *m, int instrumented)
+{
+    int64_t total_start = now_ns();
+    ivp_environment_t *env = make_env(allocator, cfg->dt, 0, 0,
+                                      instrumented);
+    if (!env) return 0;
+    ivp_object_t **objects = (ivp_object_t **)ivp_alloc(
+        allocator, (size_t)cfg->scale * sizeof(*objects));
+    ivp_constraint_state_t *constraints =
+        (ivp_constraint_state_t *)ivp_alloc(
+            allocator, (size_t)cfg->scale * sizeof(*constraints));
+    if (!objects || !constraints) goto fail;
+
+    int island_count = cfg->scale / 8;
+    if (island_count < 256) island_count = cfg->scale / 2;
+    if (island_count < 1) island_count = 1;
+    int heavy_count = island_count / 4;
+    if (heavy_count < 1) heavy_count = 1;
+    int light_count = island_count - heavy_count;
+    int light_objects = light_count * 2;
+    int heavy_objects = cfg->scale - light_objects;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.2);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    object_template.enable_collision_detection = false;
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+
+    int object_index = 0;
+    for (int island = 0; island < island_count; island++) {
+        int island_size;
+        if (island < light_count) {
+            island_size = 2;
+        } else {
+            /* Heavy islands are created last, so the manager's prepend order
+             * clusters them at the beginning of the parallel task list. */
+            int heavy_index = island - light_count;
+            island_size = heavy_objects / heavy_count;
+            if (heavy_index < heavy_objects % heavy_count) island_size++;
+        }
+        ivp_object_t *previous = NULL;
+        ivp_vec3r_t previous_position = ivp_vec3r(
+            IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        for (int local = 0; local < island_size; local++) {
+            ivp_vec3r_set(
+                &object_template.position,
+                (ivp_real_t)(island % 64) * IVP_REAL(24.0) +
+                    (ivp_real_t)local * IVP_REAL(0.5),
+                (ivp_real_t)(island / 64) * IVP_REAL(4.0),
+                IVP_REAL(0.0));
+            objects[object_index] = ivp_environment_create_object(
+                env, &object_template, NULL);
+            if (!objects[object_index]) goto fail;
+            objects[object_index]->physical_core->speed.k[0] =
+                (ivp_real_t)(float)(
+                    0.2f + (float)(object_index & 7) * 0.01f);
+            ivp_vec3r_t anchor = object_template.position;
+            if (previous) {
+                anchor.k[0] = (anchor.k[0] + previous_position.k[0]) *
+                              IVP_REAL(0.5);
+                anchor.k[1] = (anchor.k[1] + previous_position.k[1]) *
+                              IVP_REAL(0.5);
+                anchor.k[2] = (anchor.k[2] + previous_position.k[2]) *
+                              IVP_REAL(0.5);
+            }
+            ivp_constraint_init_ball_socket_ws(
+                &constraints[object_index], previous, &anchor,
+                objects[object_index]);
+            if (!ivp_controller_handle_is_valid(
+                    ivp_environment_announce_dependent_controller(
+                        env, IVP_CP_CONSTRAINTS, ivp_controller_constraint,
+                        &constraints[object_index],
+                        ivp_constraint_discovery))) {
+                goto fail;
+            }
+            previous = objects[object_index];
+            previous_position = object_template.position;
+            object_index++;
+        }
+    }
+    if (object_index != cfg->scale) goto fail;
+
+    m->verification.constraints = constraints;
+    m->verification.constraint_count = cfg->scale;
+    begin_operation(env);
+    int64_t start = now_ns();
+    bench_simulate(env, cfg->steps, cfg, m, instrumented);
+    m->operation_ns = now_ns() - start;
+    m->operations = m->psis = cfg->steps;
+    m->simulated_seconds = cfg->steps * cfg->dt;
+    m->valid = object_finite(objects[cfg->scale - 1]);
+    m->state_hash = hash_environment(env);
+    collect_phases(env, m);
+    bench_destroy(env);
+    ivp_free(allocator, constraints,
+             (size_t)cfg->scale * sizeof(*constraints));
+    ivp_free(allocator, objects, (size_t)cfg->scale * sizeof(*objects));
+    m->total_ns = now_ns() - total_start;
+    return m->valid;
+
+fail:
+    ivp_environment_destroy(env);
+    if (constraints) {
+        ivp_free(allocator, constraints,
+                 (size_t)cfg->scale * sizeof(*constraints));
+    }
+    if (objects) {
+        ivp_free(allocator, objects,
+                 (size_t)cfg->scale * sizeof(*objects));
+    }
+    return 0;
+}
+
 static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocator,
                        bench_measurement_t *m, int instrumented)
 {
@@ -910,6 +1029,9 @@ static BENCH_NOINLINE int run_once(const bench_config_t *cfg, const ivp_allocato
         case BENCH_ISLAND_CONSTRAINTS:
         case BENCH_MIXED_ISLAND_CONSTRAINTS:
             return run_island_constraints(cfg, allocator, m, instrumented);
+        case BENCH_HETEROGENEOUS_ISLANDS:
+            return run_heterogeneous_constraint_islands(
+                cfg, allocator, m, instrumented);
         case BENCH_IMPACTS: return run_impacts(cfg, allocator, m, instrumented);
         case BENCH_CHURN: return run_churn(cfg, allocator, m, instrumented);
         case BENCH_SLEEPING: return run_sleeping(cfg, allocator, m, instrumented);
@@ -1237,6 +1359,8 @@ static const bench_config_t large_configs[] = {
     {"constraint_islands", BENCH_ISLAND_CONSTRAINTS, 4096, 32, 1.0 / 180.0},
     {"mixed_constraint_islands", BENCH_MIXED_ISLAND_CONSTRAINTS, 4096, 32,
      1.0 / 180.0},
+    {"heterogeneous_constraint_islands", BENCH_HETEROGENEOUS_ISLANDS, 4096,
+     32, 1.0 / 180.0},
     {"fast_impacts", BENCH_IMPACTS, 512, 180, 1.0 / 180.0},
     {"object_churn", BENCH_CHURN, 1024, 16, 1.0 / 180.0},
     {"sleeping_world", BENCH_SLEEPING, 16384, 600, 1.0 / 60.0},
