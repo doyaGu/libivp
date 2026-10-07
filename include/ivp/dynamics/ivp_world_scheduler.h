@@ -28,8 +28,9 @@ void ivp_world_scheduler_destroy(ivp_world_scheduler_t *scheduler);
  * simulation time.  Calls block until all environments finish.  The input
  * array is borrowed only for the duration of the call.
  *
- * Each environment is internally single-threaded, while different array
- * entries execute in parallel.  NULL or duplicate environments are rejected.
+ * Different array entries execute in parallel.  An environment may also use
+ * its configured intra-world worker pool; budget both layers to avoid
+ * oversubscription.  NULL or duplicate environments are rejected.
  * A world already being simulated elsewhere yields IVP_ERR_INVALID_STATE.
  * A zero environment_count is a successful no-op.  simulate_dtime rejects
  * negative and non-finite elapsed time.
