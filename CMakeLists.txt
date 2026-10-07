@@ -99,6 +99,7 @@ set(IVP_BASE_SOURCES
         src/base/ivp_arena.c
         src/base/ivp_u_memory.c
         src/base/ivp_message.c
+        src/base/ivp_worker_runtime.c
         src/base/ivp_task_pool.c
 )
 
@@ -589,6 +590,8 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_qhull_reentrant tests/test_qhull_reentrant.c)
     target_link_libraries(test_qhull_reentrant PRIVATE Threads::Threads)
     ivp_add_test(test_parallel_worlds tests/test_parallel_worlds.c)
+    target_include_directories(test_parallel_worlds PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_internal_parallel tests/test_internal_parallel.c)
     target_include_directories(test_internal_parallel PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)

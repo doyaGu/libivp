@@ -3,20 +3,16 @@
 
 #include <ivp/base/ivp_assert.h>
 
-#include <fenv.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
 #if defined(_WIN32)
-#include <process.h>
 #include <windows.h>
-typedef HANDLE ivp_task_thread_t;
 typedef CRITICAL_SECTION ivp_task_mutex_t;
 typedef CONDITION_VARIABLE ivp_task_cond_t;
 #else
 #include <pthread.h>
-typedef pthread_t ivp_task_thread_t;
 typedef pthread_mutex_t ivp_task_mutex_t;
 typedef pthread_cond_t ivp_task_cond_t;
 #endif
@@ -27,7 +23,8 @@ typedef struct ivp_task_worker {
 
 struct ivp_task_pool {
     ivp_allocator_t allocator;
-    ivp_task_thread_t *threads;
+    const ivp_worker_runtime_t *runtime;
+    ivp_worker_thread_t *threads;
     ivp_task_worker_t *workers;
     int worker_count;
     int background_thread_count;
@@ -159,7 +156,8 @@ static void task_worker_loop(ivp_task_worker_t *worker)
             pool->floating_point_environment;
         task_unlock(pool);
 
-        bool setup_ok = fesetenv(&floating_point_environment) == 0;
+        bool setup_ok = pool->runtime->floating_point_apply(
+            pool->runtime->context, &floating_point_environment);
         task_lock(pool);
         if (!setup_ok) pool->setup_failed = true;
         pool->setup_ready_count++;
@@ -188,37 +186,34 @@ static void task_worker_loop(ivp_task_worker_t *worker)
     task_unlock(pool);
 }
 
-#if defined(_WIN32)
-static unsigned __stdcall task_worker_main(void *opaque)
+static void task_worker_main(void *opaque)
 {
     task_worker_loop((ivp_task_worker_t *)opaque);
-    return 0;
 }
-#else
-static void *task_worker_main(void *opaque)
-{
-    task_worker_loop((ivp_task_worker_t *)opaque);
-    return NULL;
-}
-#endif
 
 static void task_join_threads(ivp_task_pool_t *pool, int count)
 {
     for (int i = 0; i < count; i++) {
-#if defined(_WIN32)
-        (void)WaitForSingleObject(pool->threads[i], INFINITE);
-        (void)CloseHandle(pool->threads[i]);
-#else
-        (void)pthread_join(pool->threads[i], NULL);
-#endif
+        pool->runtime->thread_join(pool->runtime->context,
+                                   &pool->threads[i]);
     }
 }
 
 ivp_task_pool_t *ivp_task_pool_create(int worker_count,
                                       const ivp_allocator_t *allocator)
 {
-    if (worker_count <= 0) return NULL;
-    if ((size_t)worker_count > SIZE_MAX / sizeof(ivp_task_thread_t) ||
+    return ivp_task_pool_create_with_runtime(
+        worker_count, allocator, ivp_worker_runtime_default());
+}
+
+ivp_task_pool_t *ivp_task_pool_create_with_runtime(
+    int worker_count, const ivp_allocator_t *allocator,
+    const ivp_worker_runtime_t *runtime)
+{
+    if (worker_count <= 0 || !ivp_worker_runtime_is_valid(runtime)) {
+        return NULL;
+    }
+    if ((size_t)worker_count > SIZE_MAX / sizeof(ivp_worker_thread_t) ||
         (size_t)worker_count > SIZE_MAX / sizeof(ivp_task_worker_t)) {
         return NULL;
     }
@@ -229,9 +224,10 @@ ivp_task_pool_t *ivp_task_pool_create(int worker_count,
     memset(pool, 0, sizeof(*pool));
     atomic_init(&pool->next_task, 0u);
     pool->allocator = *allocator;
+    pool->runtime = runtime;
     pool->worker_count = worker_count;
     pool->background_thread_count = worker_count - 1;
-    pool->threads = (ivp_task_thread_t *)ivp_alloc(
+    pool->threads = (ivp_worker_thread_t *)ivp_alloc(
         &pool->allocator, (size_t)worker_count * sizeof(*pool->threads));
     pool->workers = (ivp_task_worker_t *)ivp_alloc(
         &pool->allocator, (size_t)worker_count * sizeof(*pool->workers));
@@ -252,17 +248,11 @@ ivp_task_pool_t *ivp_task_pool_create(int worker_count,
     int created = 0;
     for (; created < pool->background_thread_count; created++) {
         pool->workers[created].pool = pool;
-#if defined(_WIN32)
-        uintptr_t thread = _beginthreadex(NULL, 0, task_worker_main,
-                                         &pool->workers[created], 0, NULL);
-        pool->threads[created] = (HANDLE)thread;
-        if (!pool->threads[created]) break;
-#else
-        if (pthread_create(&pool->threads[created], NULL, task_worker_main,
-                           &pool->workers[created]) != 0) {
+        if (!pool->runtime->thread_start(
+                pool->runtime->context, &pool->threads[created],
+                task_worker_main, &pool->workers[created])) {
             break;
         }
-#endif
     }
     if (created != pool->background_thread_count) {
         task_lock(pool);
@@ -310,7 +300,8 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     if (!pool || task_count == 0 || !function) return false;
     task_lock(pool);
     IVP_ASSERT(!pool->running && !pool->stopping);
-    if (fegetenv(&pool->floating_point_environment) != 0) {
+    if (!pool->runtime->floating_point_capture(
+            pool->runtime->context, &pool->floating_point_environment)) {
         task_unlock(pool);
         return false;
     }
