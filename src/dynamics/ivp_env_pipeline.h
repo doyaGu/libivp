@@ -74,6 +74,7 @@ typedef struct ivp_env_pipeline {
      * pipeline; the per-environment simulation guard prevents overlap. */
     ivp_pvec_t               touched_cores;          /* ivp_core_t* */
     ivp_pvec_t               active_hulls;           /* ivp_hull_mgr_t* */
+    ivp_pvec_t               parallel_sim_units;     /* ivp_sim_unit_t* scratch */
 
     /* IVP_Standard_Gravity_Controller */
     ivp_sim_ctrl_t           gravity_ctrl;

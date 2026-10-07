@@ -10,6 +10,8 @@
 #include <ivp/dynamics/ivp_sim_unit.h>
 #include "dynamics/ivp_sim_internal.h"
 #include "dynamics/ivp_env_hot.h"
+#include "dynamics/ivp_env_parallel_tasks.h"
+#include "dynamics/ivp_env_pipeline.h"
 #include "solver/ivp_friction_internal.h"
 
 static inline ivp_core_t *su_core_at(const ivp_sim_unit_t *su, int i) {
@@ -588,7 +590,8 @@ static void su_clear_movement_check_values(ivp_sim_unit_t *su)
     }
 }
 
-static bool su_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *env)
+static bool su_calc_movement_state_only(ivp_sim_unit_t *su,
+                                        struct ivp_environment *env)
 {
     int whole_sys = IVP_MT_CALM;
     ivp_time_t current_time = ivp_env_get_current_time(env);
@@ -597,17 +600,27 @@ static bool su_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *e
         core->movement_state = ivp_core_calc_movement_state(core, current_time);
         whole_sys = whole_sys & (int)core->movement_state;
     }
-    if (whole_sys == IVP_MT_CALM) {
-        for (int n = ivp_pvec_len(&su->sim_unit_cores) - 1; n >= 0; n--) {
-            ivp_core_freeze_simulation_core(su_core_at(su, n));
-        }
-        ivp_sim_units_manager_t *m = ivp_env_get_sim_units_manager(env);
-        ivp_sim_units_mgr_rem_sim_unit(m, su);
-        su->sim_unit_movement_type = IVP_MT_NOT_SIM;
-        ivp_sim_units_mgr_add_sim_unit(m, su);
-        return true;
+    return whole_sys == IVP_MT_CALM;
+}
+
+static void su_freeze_sim_unit(ivp_sim_unit_t *su,
+                               struct ivp_environment *env)
+{
+    for (int n = ivp_pvec_len(&su->sim_unit_cores) - 1; n >= 0; n--) {
+        ivp_core_freeze_simulation_core(su_core_at(su, n));
     }
-    return false;
+    ivp_sim_units_manager_t *m = ivp_env_get_sim_units_manager(env);
+    ivp_sim_units_mgr_rem_sim_unit(m, su);
+    su->sim_unit_movement_type = IVP_MT_NOT_SIM;
+    ivp_sim_units_mgr_add_sim_unit(m, su);
+}
+
+static bool su_calc_movement_state(ivp_sim_unit_t *su,
+                                   struct ivp_environment *env)
+{
+    if (!su_calc_movement_state_only(su, env)) return false;
+    su_freeze_sim_unit(su, env);
+    return true;
 }
 
 bool ivp_sim_unit_sim_unit_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *env)
@@ -652,17 +665,12 @@ static int su_fast_moving_flag(ivp_core_t *my_core)
     return fast_moving_core;
 }
 
-static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su, ivp_sim_es_t *es, ivp_pvec_t *touched_cores)
+static bool su_prepare_single_sim_unit_psi(ivp_sim_unit_t *su,
+                                           ivp_sim_es_t *es,
+                                           bool movement_check_preassigned)
 {
-#ifdef IVP_DEBUG_BUILD
-    IVP_IF(1)
-    {
-        ivp_sim_unit_sim_unit_debug_consistency(su);
-    }
-#endif
     struct ivp_environment *env = es->environment;
     es->sim_unit = su;
-    ivp_env_sim_mem_begin(env);
     int controller_num = ivp_pvec_len(&su->controller_cores);
     ivp_time_t current_time = ivp_env_get_current_time(env);
     int fast_moving_flag = 0;
@@ -680,16 +688,16 @@ static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su, ivp_sim_es_t *es
         my_core->impacts_since_last_PSI = 0;
         fast_moving_flag |= su_fast_moving_flag(my_core);
     }
-    bool check_movement_state;
     if (fast_moving_flag < 0) {
         su->sim_unit_has_fast_objects = true;
-        check_movement_state = ivp_env_must_perform_movement_check(env);
     } else {
         su->sim_unit_just_slowed_down = su->sim_unit_has_fast_objects;
         if (su->sim_unit_just_slowed_down) su_clear_movement_check_values(su);
         su->sim_unit_has_fast_objects = false;
-        check_movement_state = ivp_env_must_perform_movement_check(env);
     }
+    bool check_movement_state = movement_check_preassigned
+                                    ? su->parallel_movement_check
+                                    : ivp_env_must_perform_movement_check(env);
     for (int j = controller_num - 1; j >= 0; j--) {
         if (j >= ivp_pvec_len(&su->controller_cores)) continue;
         int debug_contr_prio;
@@ -709,6 +717,14 @@ static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su, ivp_sim_es_t *es
             }
         }
     }
+    return check_movement_state;
+}
+
+static void su_finish_single_sim_unit_psi(ivp_sim_unit_t *su,
+                                          struct ivp_environment *env,
+                                          ivp_pvec_t *touched_cores,
+                                          bool check_movement_state)
+{
     for (int c = ivp_pvec_len(&su->sim_unit_cores) - 1; c >= 0; c--) {
         ivp_core_t *core = su_core_at(su, c);
         ivp_pvec_add(touched_cores, core);   /* calc_next_PSI_matrix */
@@ -724,7 +740,141 @@ static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su, ivp_sim_es_t *es
             ivp_object_recalc_invalid_mindists_of_object(ivp_core_object_at(my_core, c));
         }
     }
+}
+
+static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su,
+                                            ivp_sim_es_t *es,
+                                            ivp_pvec_t *touched_cores)
+{
+#ifdef IVP_DEBUG_BUILD
+    IVP_IF(1)
+    {
+        ivp_sim_unit_sim_unit_debug_consistency(su);
+    }
+#endif
+    struct ivp_environment *env = es->environment;
+    ivp_env_sim_mem_begin(env);
+    bool check_movement_state =
+        su_prepare_single_sim_unit_psi(su, es, false);
+    su_finish_single_sim_unit_psi(su, env, touched_cores,
+                                  check_movement_state);
     ivp_env_sim_mem_end(env);
+}
+
+typedef struct su_parallel_context {
+    ivp_pvec_t *sim_units;
+    ivp_pvec_t *touched_cores;
+    ivp_sim_es_t event_sim;
+} su_parallel_context_t;
+
+static void su_parallel_simulate_task(void *opaque, size_t task_index)
+{
+    su_parallel_context_t *context = (su_parallel_context_t *)opaque;
+    ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(
+        context->sim_units, (int)task_index);
+    ivp_sim_es_t event_sim = context->event_sim;
+    bool check_movement_state =
+        su_prepare_single_sim_unit_psi(su, &event_sim, true);
+    int output = su->parallel_touched_offset;
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        context->touched_cores->elems[output++] = su_core_at(su, i);
+    }
+    su->parallel_should_freeze =
+        check_movement_state &&
+        su_calc_movement_state_only(su, event_sim.environment);
+}
+
+/* These islands run no application callback, allocate no environment scratch,
+ * and have no pending invalid-mindist work in the per-island finish. */
+static bool su_is_parallel_island(const ivp_sim_unit_t *su)
+{
+    for (int i = ivp_pvec_len(&su->controller_cores) - 1; i >= 0; i--) {
+        if (!ivp_env_sim_ctrl_is_parallel_safe(
+                su_cl_at(su, i)->l_controller)) return false;
+    }
+    for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
+        const ivp_core_t *core = su_core_at(su, i);
+        for (int j = ivp_core_n_objects(core) - 1; j >= 0; j--) {
+            if (ivp_core_object_at(core, j)->invalid_synapses) return false;
+        }
+    }
+    return true;
+}
+
+static bool su_try_parallel_islands(ivp_sim_units_manager_t *sman,
+                                    ivp_sim_es_t *es,
+                                    ivp_pvec_t *touched_cores)
+{
+    struct ivp_environment *env = sman->l_environment;
+    if (ivp_env_parallel_worker_count(env) < 2) return false;
+
+    ivp_pvec_t *units = &env->pl->parallel_sim_units;
+    ivp_pvec_remove_all(units);
+    for (ivp_sim_unit_t *su = sman->sim_units_slot0; su;
+         su = su->next_sim_unit) {
+        if (!su_is_parallel_island(su) ||
+            ivp_pvec_add(units, su) < 0) {
+            ivp_pvec_remove_all(units);
+            return false;
+        }
+    }
+
+    const int unit_count = ivp_pvec_len(units);
+    /* The reference manager keeps a three-node lookahead and reaches its
+     * labels in reverse order.  Preserve that observable movement-check and
+     * touched-core order: forward through N-3, then N-1, N-2, N-3. */
+    if (unit_count >= 2) {
+        int tail_first = unit_count > 3 ? unit_count - 3 : 0;
+        int tail_last = unit_count - 1;
+        while (tail_first < tail_last) {
+            ivp_pvec_swap(units, tail_first, tail_last);
+            tail_first++;
+            tail_last--;
+        }
+    }
+    const size_t minimum_tasks = 256u;
+    if ((size_t)unit_count < minimum_tasks) return false;
+
+    int touched_count = ivp_pvec_len(touched_cores);
+    for (int i = 0; i < unit_count; i++) {
+        ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
+        int core_count = ivp_pvec_len(&su->sim_unit_cores);
+        if (core_count > INT_MAX - touched_count) return false;
+        su->parallel_touched_offset = touched_count;
+        touched_count += core_count;
+    }
+    if (!ivp_pvec_reserve(touched_cores, touched_count)) return false;
+
+    /* Safe controllers do not consume the environment RNG, so movement
+     * checks can be assigned now in the exact reference island order. */
+    short saved_next_movement_check = env->pl->next_movement_check;
+    int saved_rand_seed = env->pl->rand_seed;
+    for (int i = 0; i < unit_count; i++) {
+        ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
+        su->parallel_movement_check = ivp_env_must_perform_movement_check(env);
+        su->parallel_should_freeze = false;
+    }
+
+    su_parallel_context_t context;
+    context.sim_units = units;
+    context.touched_cores = touched_cores;
+    context.event_sim = *es;
+    if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_ISLAND,
+                              (size_t)unit_count, minimum_tasks,
+                              su_parallel_simulate_task, &context)) {
+        env->pl->next_movement_check = saved_next_movement_check;
+        env->pl->rand_seed = saved_rand_seed;
+        return false;
+    }
+    touched_cores->n = touched_count;
+
+    /* Freezing mutates manager lists, so only this small commit remains on
+     * the PSI thread and follows the original island order. */
+    for (int i = 0; i < unit_count; i++) {
+        ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
+        if (su->parallel_should_freeze) su_freeze_sim_unit(su, env);
+    }
+    return true;
 }
 
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp_pvec_t *touched_cores)
@@ -732,6 +882,9 @@ void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp
     ivp_sim_es_t es;
     ivp_sim_es_init(&es, sman->l_environment);
     ivp_sim_unit_t *s_u, *n0_su, *n1_su, *n2_su;
+    if (su_try_parallel_islands(sman, &es, touched_cores)) {
+        goto sim_units_0;
+    }
     s_u = sman->sim_units_slot0;
     if (!s_u) goto sim_units_0;
     n0_su = s_u->next_sim_unit;

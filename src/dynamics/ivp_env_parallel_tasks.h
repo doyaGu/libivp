@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 typedef enum ivp_parallel_work_kind {
+    IVP_PARALLEL_WORK_ISLAND,
     IVP_PARALLEL_WORK_BROADPHASE,
     IVP_PARALLEL_WORK_SOLVER
 } ivp_parallel_work_kind_t;

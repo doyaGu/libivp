@@ -48,11 +48,12 @@ typedef struct ivp_environment_config {
     int                 initial_controller_capacity;
     int                 initial_event_listener_capacity;
     int                 sim_unit_count;
-    /* Total execution width used inside one world for broadphase preparation,
-     * broadphase candidate tests, and independent solver matrix columns.
-     * One keeps the reference serial path.  The simulation thread owns one
-     * lane; the other lanes are persistent background threads.  No lane
-     * invokes user controllers, listeners, filters, or allocators. */
+    /* Total execution width used inside one world for safe independent
+     * simulation islands, broadphase work, and independent solver matrix
+     * columns.  One keeps the reference serial path.  The simulation thread
+     * owns one lane; the other lanes are persistent background threads.  No
+     * background lane invokes user controllers, listeners, filters, or
+     * allocators. */
     int                 parallel_worker_count;
     ivp_anomaly_config_t    anomaly_config;
     ivp_collision_filter_t  collision_filter;
@@ -79,6 +80,8 @@ typedef struct ivp_environment_config {
 } ivp_environment_config_t;
 
 typedef struct ivp_parallel_stats {
+    uint64_t island_dispatches;
+    uint64_t island_tasks;
     uint64_t broadphase_dispatches;
     uint64_t broadphase_tasks;
     uint64_t solver_dispatches;

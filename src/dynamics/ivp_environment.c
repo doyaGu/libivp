@@ -86,7 +86,10 @@ bool ivp_env_parallel_for(ivp_environment_t *env,
     ivp_task_pool_parallel_for(env->pl->task_pool, task_count, function,
                                context);
     ivp_parallel_stats_t *stats = &env->pl->parallel_stats;
-    if (kind == IVP_PARALLEL_WORK_BROADPHASE) {
+    if (kind == IVP_PARALLEL_WORK_ISLAND) {
+        stats->island_dispatches++;
+        stats->island_tasks += (uint64_t)task_count;
+    } else if (kind == IVP_PARALLEL_WORK_BROADPHASE) {
         stats->broadphase_dispatches++;
         stats->broadphase_tasks += (uint64_t)task_count;
     } else {
@@ -1135,6 +1138,45 @@ static void slot_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t *
 }
 
 static const ivp_sim_ctrl_vt_t slot_vt = { slot_prio, slot_do_simulation, slot_assoc, slot_core_deleted, NULL };
+
+bool ivp_env_sim_ctrl_is_parallel_safe(ivp_sim_ctrl_t *c)
+{
+#ifdef IVP_DEBUG_BUILD
+    /* Constraint debug drawing appends to an environment-wide vector. */
+    (void)c;
+    return false;
+#else
+    if (!c) return false;
+    if (c->vt == &gravity_vt) return true;
+    if (c->vt != &slot_vt) return false;
+
+    slot_ctrl_t *sc = (slot_ctrl_t *)c;
+    ivp_controller_slot_t *slot = sc->slot;
+    if (!slot || !slot->enabled || !slot->event_fn) return true;
+    if (slot->event_fn == ivp_controller_constraint) {
+        const ivp_constraint_state_t *state =
+            (const ivp_constraint_state_t *)slot->ctx;
+        if (!state) return false;
+        for (int i = 0; i < 6; i++) {
+            if (state->core.maxforce_type[i] == IVP_CFE_BREAK) return false;
+        }
+        return state->force_exceed_action != IVP_CFE_BREAK;
+    }
+    if (slot->event_fn == ivp_controller_constraint_local) {
+        const ivp_constraint_local_state_t *state =
+            (const ivp_constraint_local_state_t *)slot->ctx;
+        if (!state) return false;
+        for (int i = 0; i < 6; i++) {
+            if (state->axes[i].exceed_mode == IVP_CFE_BREAK ||
+                state->core.maxforce_type[i] == IVP_CFE_BREAK) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+#endif
+}
 
 static slot_ctrl_t *slot_ctrl_of(ivp_controller_slot_t *slot) { return slot ? (slot_ctrl_t *)slot->sim_ctrl : NULL; }
 
@@ -2219,6 +2261,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_pvec_init_with_allocator(&pl->core_revive_list, env->allocator);
     ivp_pvec_init_with_allocator(&pl->touched_cores, env->allocator);
     ivp_pvec_init_with_allocator(&pl->active_hulls, env->allocator);
+    ivp_pvec_init_with_allocator(&pl->parallel_sim_units, env->allocator);
     ivp_pvec_init_with_allocator(&pl->deferred_deletions, env->allocator);
     ivp_pvec_init_with_allocator(&pl->all_core_ctrls, env->allocator);
     ivp_pvec_init_with_allocator(&pl->slot_ctrls, env->allocator);
@@ -2478,6 +2521,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
         ivp_pvec_clear(&pl->core_revive_list);
         ivp_pvec_clear(&pl->touched_cores);
         ivp_pvec_clear(&pl->active_hulls);
+        ivp_pvec_clear(&pl->parallel_sim_units);
         ivp_pvec_clear(&pl->deferred_deletions);
         ivp_pvec_clear(&pl->all_core_ctrls);
         ivp_pvec_clear(&pl->slot_ctrls);

@@ -76,6 +76,10 @@ struct ivp_sim_ctrl {
 
 static inline int ivp_sim_ctrl_priority(ivp_sim_ctrl_t *c) { return c->vt->get_priority(c); }
 
+/* True only for built-in controllers whose island-local writes and lack of
+ * shared callbacks make a worker-thread dispatch safe. */
+bool ivp_env_sim_ctrl_is_parallel_safe(ivp_sim_ctrl_t *c);
+
 /* ── IVP_Simulation_Unit ────────────────────────────────────────────────── */
 
 typedef struct ivp_su_ctrl_list {
@@ -88,6 +92,9 @@ typedef struct ivp_sim_unit {
     bool     union_find_needed_for_sim_unit;
     bool     sim_unit_has_fast_objects;
     bool     sim_unit_just_slowed_down;
+    bool     parallel_movement_check;
+    bool     parallel_should_freeze;
+    int      parallel_touched_offset;
     struct ivp_sim_unit *prev_sim_unit;
     struct ivp_sim_unit *next_sim_unit;
     const ivp_allocator_t *allocator;
