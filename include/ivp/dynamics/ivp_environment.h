@@ -307,7 +307,7 @@ ivp_object_handle_t ivp_environment_get_object_handle(const ivp_object_t *obj);
 /* IVP_Environment::simulate_dtime: simulate_until(current_time + elapsed_time)
  * (PSIs and time events up to that time; AT queries interpolate).
  * Simulation calls for distinct environments may run concurrently.  The same
- * environment is not reentrant; overlapping simulation calls are rejected. */
+ * environment is not reentrant; use ivp_world_scheduler for batch dispatch. */
 void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_time);
 
 /* Run exactly one PSI step. Exposed for fine-grained control and testing. */

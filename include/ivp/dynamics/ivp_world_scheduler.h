@@ -1,0 +1,64 @@
+/* ivp_world_scheduler.h -- persistent worker pool for independent worlds. */
+#ifndef IVP_WORLD_SCHEDULER_H
+#define IVP_WORLD_SCHEDULER_H
+
+#include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_result.h>
+#include <ivp/dynamics/ivp_environment.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct ivp_world_scheduler ivp_world_scheduler_t;
+
+/* Create worker_count persistent OS threads.  worker_count must be positive.
+ * allocator may be NULL for ivp_default_allocator(); its context must outlive
+ * the scheduler.  Returns NULL on invalid input, allocation failure, or thread
+ * creation failure. */
+ivp_world_scheduler_t *ivp_world_scheduler_create(
+    int worker_count, const ivp_allocator_t *allocator);
+
+/* Stop and join every worker.  Do not call this concurrently with a dispatch
+ * call or from a simulation callback running on this scheduler. */
+void ivp_world_scheduler_destroy(ivp_world_scheduler_t *scheduler);
+
+/* Advance each distinct environment exactly one PSI, or by the same elapsed
+ * simulation time.  Calls block until all environments finish.  The input
+ * array is borrowed only for the duration of the call.
+ *
+ * Each environment is internally single-threaded, while different array
+ * entries execute in parallel.  NULL or duplicate environments are rejected.
+ * A world already being simulated elsewhere yields IVP_ERR_INVALID_STATE.
+ * A zero environment_count is a successful no-op.  simulate_dtime rejects
+ * negative and non-finite elapsed time.
+ * Controller/listener callbacks execute on worker threads.  Shared callback
+ * state and custom allocator/manager implementations therefore need their
+ * own synchronization.  Mutable manager instances, including active-value
+ * managers, must not be shared between dispatched worlds.  Immutable compact
+ * geometry may be shared.  A world has no stable worker affinity across
+ * dispatches; callbacks must not use thread-local storage as world storage.
+ * The caller must not otherwise access an environment until this call returns.
+ *
+ * IVP_HOME_BUILD and IVP_BENCHMARK_DIAGNOSTICS retain legacy process-wide
+ * instrumentation and therefore serialize simulation; a multi-world dispatch
+ * in either opt-in build mode returns IVP_ERR_INVALID_STATE.
+ *
+ * A scheduler accepts one dispatch at a time. */
+ivp_result_t ivp_world_scheduler_simulate_one_psi(
+    ivp_world_scheduler_t *scheduler,
+    ivp_environment_t *const *environments,
+    size_t environment_count);
+
+ivp_result_t ivp_world_scheduler_simulate_dtime(
+    ivp_world_scheduler_t *scheduler,
+    ivp_environment_t *const *environments,
+    size_t environment_count,
+    ivp_real_t elapsed_time);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* IVP_WORLD_SCHEDULER_H */

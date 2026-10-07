@@ -22,7 +22,7 @@ option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_B
 option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
-# The Qhull reentrancy stress test uses native worker threads.
+# The core library exposes a persistent worker pool for independent worlds.
 find_package(Threads REQUIRED)
 
 function(ivp_apply_strict_fp TARGET_NAME)
@@ -173,6 +173,7 @@ set(IVP_DYNAMICS_SOURCES
         src/dynamics/ivp_anomaly_manager.c
         src/dynamics/ivp_universe_manager.c
         src/dynamics/ivp_cluster.c
+        src/dynamics/ivp_world_scheduler.c
 )
 
 set(IVP_CONTROLLER_SOURCES
@@ -396,6 +397,7 @@ else ()
 endif ()
 
 target_link_libraries(ivp PRIVATE ivp_qhull)
+target_link_libraries(ivp PUBLIC Threads::Threads)
 
 # Link math library on non-Windows
 if (NOT MSVC)
@@ -572,6 +574,11 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_builders tests/test_builders.c)
     ivp_add_test(test_qhull_reentrant tests/test_qhull_reentrant.c)
     target_link_libraries(test_qhull_reentrant PRIVATE Threads::Threads)
+    ivp_add_test(test_parallel_worlds tests/test_parallel_worlds.c)
+    if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
+        target_compile_definitions(test_parallel_worlds PRIVATE
+                IVP_BENCHMARK_DIAGNOSTICS)
+    endif ()
     ivp_add_test(test_convex_layout tests/test_convex_layout.c)
     ivp_add_test(test_anomaly tests/test_anomaly.c)
     ivp_add_test(test_object_lifecycle tests/test_object_lifecycle.c)
@@ -695,7 +702,7 @@ if (IVP_BUILD_TESTS)
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry test_collision
             test_dynamics test_solver test_utility
-            test_controllers test_builders test_qhull_reentrant
+            test_controllers test_builders test_qhull_reentrant test_parallel_worlds
             test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
