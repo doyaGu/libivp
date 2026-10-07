@@ -10,6 +10,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
 
+#include <fenv.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -122,6 +123,84 @@ IVP_TEST(task_pool_claims_every_task_exactly_once)
             }
         }
     }
+    ivp_task_pool_destroy(pool);
+    IVP_ASSERT_TRUE(ok);
+}
+
+typedef struct pool_rounding_probe {
+    atomic_int expected_mode;
+    atomic_int callbacks;
+    atomic_int mismatches;
+    atomic_int active;
+    atomic_int max_active;
+    atomic_bool release;
+} pool_rounding_probe_t;
+
+static void pool_rounding_task(void *opaque, size_t task_index)
+{
+    (void)task_index;
+    pool_rounding_probe_t *probe = (pool_rounding_probe_t *)opaque;
+    int expected = atomic_load_explicit(&probe->expected_mode,
+                                        memory_order_relaxed);
+    if (fegetround() != expected) {
+        atomic_fetch_add_explicit(&probe->mismatches, 1,
+                                  memory_order_relaxed);
+    }
+    int active = atomic_fetch_add_explicit(&probe->active, 1,
+                                           memory_order_acq_rel) + 1;
+    update_atomic_max(&probe->max_active, active);
+    int callbacks = atomic_fetch_add_explicit(&probe->callbacks, 1,
+                                              memory_order_acq_rel) + 1;
+    if (callbacks == INTERNAL_PARALLEL_WORKERS) {
+        atomic_store_explicit(&probe->release, true, memory_order_release);
+    }
+    for (int spin = 0; spin < 1000000; spin++) {
+        if (atomic_load_explicit(&probe->release, memory_order_acquire)) break;
+        internal_parallel_yield();
+    }
+    atomic_fetch_sub_explicit(&probe->active, 1, memory_order_acq_rel);
+}
+
+IVP_TEST(task_pool_propagates_dispatch_fenv)
+{
+    fenv_t saved_environment;
+    bool environment_saved = fegetenv(&saved_environment) == 0;
+    ivp_task_pool_t *pool =
+        ivp_task_pool_create(INTERNAL_PARALLEL_WORKERS, NULL);
+    bool ok = environment_saved && pool != NULL;
+    pool_rounding_probe_t probe;
+    atomic_init(&probe.expected_mode, FE_TONEAREST);
+    atomic_init(&probe.callbacks, 0);
+    atomic_init(&probe.mismatches, 0);
+    atomic_init(&probe.active, 0);
+    atomic_init(&probe.max_active, 0);
+    atomic_init(&probe.release, false);
+
+    const int modes[] = { FE_DOWNWARD, FE_UPWARD };
+    for (size_t mode = 0; ok && mode < sizeof(modes) / sizeof(modes[0]);
+         mode++) {
+        atomic_store_explicit(&probe.expected_mode, modes[mode],
+                              memory_order_relaxed);
+        atomic_store_explicit(&probe.callbacks, 0, memory_order_relaxed);
+        atomic_store_explicit(&probe.active, 0, memory_order_relaxed);
+        atomic_store_explicit(&probe.max_active, 0, memory_order_relaxed);
+        atomic_store_explicit(&probe.release, false, memory_order_relaxed);
+        if (fesetround(modes[mode]) != 0) {
+            ok = false;
+            break;
+        }
+        ivp_task_pool_parallel_for(pool, INTERNAL_PARALLEL_WORKERS,
+                                   pool_rounding_task, &probe);
+        if (atomic_load_explicit(&probe.callbacks, memory_order_relaxed) !=
+                INTERNAL_PARALLEL_WORKERS ||
+            atomic_load_explicit(&probe.max_active, memory_order_relaxed) < 2) {
+            ok = false;
+        }
+    }
+    if (atomic_load_explicit(&probe.mismatches, memory_order_relaxed) != 0) {
+        ok = false;
+    }
+    if (environment_saved && fesetenv(&saved_environment) != 0) ok = false;
     ivp_task_pool_destroy(pool);
     IVP_ASSERT_TRUE(ok);
 }
@@ -864,6 +943,7 @@ int main(void)
 {
     IVP_REGISTER(task_pool_runs_concurrently);
     IVP_REGISTER(task_pool_claims_every_task_exactly_once);
+    IVP_REGISTER(task_pool_propagates_dispatch_fenv);
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
     IVP_REGISTER(independent_constraint_islands_are_bit_exact);

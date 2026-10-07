@@ -5,6 +5,7 @@
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/utility/ivp_active_value.h>
 
+#include <fenv.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -48,6 +49,30 @@ typedef struct overlap_probe {
     atomic_int contention_attempts;
     atomic_int contention_result;
 } overlap_probe_t;
+
+typedef struct rounding_probe {
+    atomic_int expected_mode;
+    atomic_int callbacks;
+    atomic_int mismatches;
+} rounding_probe_t;
+
+static void rounding_hook(void *ctx, ivp_environment_t *env,
+                          ivp_psi_phase_t phase, ivp_time_t time,
+                          ivp_real_t dt)
+{
+    (void)env;
+    (void)time;
+    (void)dt;
+    if (phase != IVP_PSI_PHASE_PRE_PSI) return;
+    rounding_probe_t *probe = (rounding_probe_t *)ctx;
+    int expected = atomic_load_explicit(&probe->expected_mode,
+                                        memory_order_relaxed);
+    if (fegetround() != expected) {
+        atomic_fetch_add_explicit(&probe->mismatches, 1,
+                                  memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&probe->callbacks, 1, memory_order_relaxed);
+}
 
 typedef struct serial_fallback_probe {
     test_thread_id_t caller_thread;
@@ -321,6 +346,59 @@ cleanup:
     IVP_ASSERT_TRUE(ok);
 }
 
+IVP_TEST(scheduler_propagates_dispatch_fenv)
+{
+    test_world_t worlds[PARALLEL_WORLD_COUNT] = {0};
+    ivp_environment_t *environments[PARALLEL_WORLD_COUNT] = {0};
+    ivp_world_scheduler_t *scheduler = NULL;
+    fenv_t saved_environment;
+    bool environment_saved = fegetenv(&saved_environment) == 0;
+    bool ok = environment_saved;
+    int world_count = PARALLEL_WORLD_COUNT;
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+    world_count = 1;
+#endif
+    rounding_probe_t probe;
+    atomic_init(&probe.expected_mode, FE_TONEAREST);
+    atomic_init(&probe.callbacks, 0);
+    atomic_init(&probe.mismatches, 0);
+
+    for (int i = 0; ok && i < world_count; i++) {
+        if (!test_world_init(&worlds[i], i)) {
+            ok = false;
+            break;
+        }
+        environments[i] = worlds[i].env;
+        ivp_environment_set_phase_hook(worlds[i].env, rounding_hook, &probe);
+    }
+    scheduler = ivp_world_scheduler_create(PARALLEL_WORKER_COUNT, NULL);
+    if (!scheduler) ok = false;
+
+    const int modes[] = { FE_DOWNWARD, FE_UPWARD };
+    for (size_t mode = 0; ok && mode < sizeof(modes) / sizeof(modes[0]);
+         mode++) {
+        atomic_store_explicit(&probe.expected_mode, modes[mode],
+                              memory_order_relaxed);
+        if (fesetround(modes[mode]) != 0 ||
+            ivp_world_scheduler_simulate_one_psi(
+                scheduler, environments, (size_t)world_count) != IVP_OK) {
+            ok = false;
+        }
+    }
+    if (atomic_load_explicit(&probe.callbacks, memory_order_relaxed) !=
+            world_count * 2 ||
+        atomic_load_explicit(&probe.mismatches, memory_order_relaxed) != 0) {
+        ok = false;
+    }
+
+    if (environment_saved && fesetenv(&saved_environment) != 0) ok = false;
+    ivp_world_scheduler_destroy(scheduler);
+    for (int i = 0; i < PARALLEL_WORLD_COUNT; i++) {
+        test_world_destroy(&worlds[i]);
+    }
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(scheduler_parallel_contract)
 {
     test_world_t parallel[PARALLEL_WORLD_COUNT] = {0};
@@ -458,6 +536,7 @@ cleanup:
 int main(void)
 {
     IVP_REGISTER(scheduler_one_worker_is_fully_serial);
+    IVP_REGISTER(scheduler_propagates_dispatch_fenv);
     IVP_REGISTER(scheduler_parallel_contract);
     IVP_RUN_ALL();
 }
