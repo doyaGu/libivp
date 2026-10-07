@@ -95,6 +95,7 @@ Larger scenes:
 | `vehicle`, `offroad` | the four-wheel raycast car on a flat ground with ramps, and over 120 m of hills |
 | `boat` | a hull floating through the buoyancy controller, driven by an own controller |
 | `airboat` | Valve's raycast airboat (`ivp_airboat_init`): a game-side ray caster against a heightfield and a water plane, driven from a lake up a beach |
+| `jetski` | the fake jetski (a four-wheel raycast hull) skimming a travelling wave: the ray callback intersects the swell, the controller springs, drives, steers and boosts the hull |
 | `platform` | an elevator, a slider and a turntable driven by golem controllers, carrying crates |
 | `compound` | rigid bodies made of several objects with `ivp_object_attach_object`; B breaks them apart |
 
@@ -102,7 +103,7 @@ Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, susp
 tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `airboat` (full throttle, rudder range, pontoon spring), `buoyancy` (water density,
 current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
 strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
-(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants), `waves` (wave, water, set membership), `hover` (hover height, speed, repulsive limit), `sensors` (radar range, probe, look-ahead, tolerance) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
+(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants), `waves` (wave, water, set membership), `hover` (hover height, speed, repulsive limit), `sensors` (radar range, probe, look-ahead, tolerance), `jetski` (wave, springs, torque) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
 
 ## Writing an example
 

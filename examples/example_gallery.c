@@ -83,6 +83,7 @@ static const card_t cards[] = {
     { "offroad",          2, "The raycast car over 120 m of hills." },
     { "boat",             2, "A motor boat in a pool, pushing floating crates." },
     { "airboat",          2, "Valve's airboat from a lake up a beach." },
+    { "jetski",           2, "The fake jetski skimming a travelling wave, with a booster." },
     { "platform",         2, "An elevator, a slider and a turntable carrying crates." },
     { "compound",         2, "Rigid bodies of several objects; break them apart." },
 };
