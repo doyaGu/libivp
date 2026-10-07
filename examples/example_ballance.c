@@ -755,16 +755,16 @@ static void ballance_draw(demo_app_t *app, demo_viewer_t *v)
         demo_solid_box(v, flag_pos, flag_half, NULL, col);
     }
 
-    /* the ball; three darker spots show how it turns */
+    /* the ball; six darker patches show how it turns: spheres sunk into it, so that they only just show */
     const kind_t *k = &kinds[s->active];
     float pos[3], rot[9];
     demo_object_pose(s->ball[s->active], pos, rot);
     demo_solid_sphere(v, pos, (float)k->radius, k->col);
     for (int a = 0; a < 3; a++) {
-        const float d = (float)k->radius * 0.86f, sp[3] = { pos[0] + rot[a * 3] * d, pos[1] + rot[a * 3 + 1] * d, pos[2] + rot[a * 3 + 2] * d };
-        demo_solid_sphere(v, sp, (float)k->radius * 0.28f, k->spot);
+        const float d = (float)k->radius * 0.55f, sp[3] = { pos[0] + rot[a * 3] * d, pos[1] + rot[a * 3 + 1] * d, pos[2] + rot[a * 3 + 2] * d };
+        demo_solid_sphere(v, sp, (float)k->radius * 0.50f, k->spot);
         const float sq[3] = { pos[0] - rot[a * 3] * d, pos[1] - rot[a * 3 + 1] * d, pos[2] - rot[a * 3 + 2] * d };
-        demo_solid_sphere(v, sq, (float)k->radius * 0.28f, k->spot);
+        demo_solid_sphere(v, sq, (float)k->radius * 0.50f, k->spot);
     }
 
     char lives[16] = "";
