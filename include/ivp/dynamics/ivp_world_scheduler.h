@@ -36,8 +36,9 @@ void ivp_world_scheduler_destroy(ivp_world_scheduler_t *scheduler);
  * the calling thread.  An environment may also use its configured intra-world
  * worker pool; set its parallel_worker_count to one for a fully serial call.
  * Budget both layers to avoid oversubscription.  NULL or duplicate
- * environments are rejected.
- * A world already being simulated elsewhere yields IVP_ERR_INVALID_STATE.
+ * environments are rejected.  Validation and ownership are all-or-nothing:
+ * if any world is invalid or already being simulated elsewhere, no world in
+ * the batch advances and the call yields the corresponding error.
  * A zero environment_count is a successful no-op.  simulate_dtime rejects
  * negative and non-finite elapsed time.
  * With more than one worker, controller/listener callbacks execute on worker

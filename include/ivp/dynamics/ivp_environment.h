@@ -50,13 +50,13 @@ typedef struct ivp_environment_config {
     int                 sim_unit_count;
     /* Total execution width used inside one world for safe independent
      * simulation islands, broadphase work, and independent solver matrix
-     * columns.  One keeps the reference serial path.  The simulation thread
-     * owns one lane; the other lanes are persistent background threads.  No
-     * background lane invokes user controllers, listeners, filters, or
-     * allocators.  Before a parallel dispatch, every background lane adopts
-     * the simulation thread's floating-point environment.  Within one
-     * platform and build configuration, worker count must not change the
-     * resulting world state. */
+     * columns.  Values less than two normalize to one and keep the reference
+     * serial path.  The simulation thread owns one lane; the other lanes are
+     * persistent background threads.  No background lane invokes user
+     * controllers, listeners, filters, or allocators.  Before a parallel
+     * dispatch, every background lane adopts the simulation thread's
+     * floating-point environment.  Within one platform and build
+     * configuration, worker count must not change the resulting world state. */
     int                 parallel_worker_count;
     ivp_anomaly_config_t    anomaly_config;
     ivp_collision_filter_t  collision_filter;
