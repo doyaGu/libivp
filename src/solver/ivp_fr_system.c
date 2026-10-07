@@ -33,9 +33,12 @@
 #include "controllers/ivp_car_wheel_physics.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
+#include "dynamics/ivp_env_parallel_tasks.h"
 
 /* sizeof(IVP_Contact_Point *) of the 64-bit reference (arena allocation size) */
 #define IVP_FR_REF_POINTER_SIZE 8u
+#define IVP_FR_PARALLEL_MIN_INTERACTIONS 16384u
+#define IVP_FR_PARALLEL_MAX_WORKERS 4
 
 #define FS_FROM(ptr, member) ((ivp_fr_system_t *)(void *)((char *)(ptr) - offsetof(ivp_fr_system_t, member)))
 
@@ -1771,7 +1774,47 @@ static void frs_calc_distance_matrix_column(fr_solver_t *s, int current_contact_
     }
 }
 
-static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs, int *active_is_at_pos)
+static void frs_calc_solver_desired(fr_solver_t *s, int i)
+{
+    ivp_gmmz_t *m = &s->dist_change_mat;
+    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+    double dist_velocity = ivp_impact_lt_get_closing_speed(info);
+    double distance_off =
+        (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
+                 info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
+    m->desired_vector[i] =
+        ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
+}
+
+static void frs_calc_solver_column_effect(fr_solver_t *s, int i)
+{
+    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+    if (info->contact_core[0]) {
+        ivp_vec3f_t rotation_vec, translation_vec;
+        frs_test_push_core_i(info, 0, &rotation_vec, &translation_vec, -1.0f);
+        frs_calc_distance_matrix_column(
+            s, i, info->contact_core[0], info->friction.friction_infos[0],
+            &rotation_vec, &translation_vec);
+    }
+    if (info->contact_core[1]) {
+        ivp_vec3f_t rotation_vec, translation_vec;
+        frs_test_push_core_i(info, 1, &rotation_vec, &translation_vec, +1.0f);
+        frs_calc_distance_matrix_column(
+            s, i, info->contact_core[1], info->friction.friction_infos[1],
+            &rotation_vec, &translation_vec);
+    }
+}
+
+static void frs_calc_solver_column_task(void *opaque, size_t task_index)
+{
+    fr_solver_t *s = (fr_solver_t *)opaque;
+    int i = (int)task_index;
+    frs_calc_solver_desired(s, i);
+    frs_calc_solver_column_effect(s, i);
+}
+
+static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
+                               int *active_is_at_pos)
 {
     ivp_gmmz_t *m = &s->dist_change_mat;
     IVP_IF((fr_dm(s->l_environment)->debug_friction) || 0) /* ivp_friction_gaps.cxx:1017 */
@@ -1783,29 +1826,61 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs, int *active_
         int mat_width = (m->aligned_row_len * m->columns);
         for (int d = mat_width - 1; d >= 0; d--) m->matrix_values[d] = 0.0;
     }
+    const int contact_count = ivp_pvec_len(&s->contact_info_vector);
+    size_t minimum_tasks = 8u;
+    int worker_count = ivp_env_parallel_worker_count(s->l_environment);
+    if (worker_count > 0 && minimum_tasks < (size_t)worker_count) {
+        minimum_tasks = (size_t)worker_count;
+    }
+    size_t matrix_interactions = 0;
+    /* A friction matrix has at most 150 columns.  On current desktop CPUs,
+     * smaller matrices do not amortize a pool barrier, and using more than
+     * four lanes only adds wakeup cost at that fixed maximum size. */
+    if (worker_count > 1 && worker_count <= IVP_FR_PARALLEL_MAX_WORKERS &&
+        (size_t)contact_count >= minimum_tasks) {
+        for (int i = 0; i < contact_count; i++) {
+            ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+            for (int core_index = 0; core_index < 2; core_index++) {
+                if (!info->contact_core[core_index]) continue;
+                int springs = ivp_pvec_len(
+                    &info->friction.friction_infos[core_index]
+                         ->friction_springs);
+                if ((size_t)springs > SIZE_MAX - matrix_interactions) {
+                    matrix_interactions = SIZE_MAX;
+                    break;
+                }
+                matrix_interactions += (size_t)springs;
+            }
+            if (matrix_interactions == SIZE_MAX) break;
+        }
+    }
+    bool dispatched =
+        matrix_interactions >= IVP_FR_PARALLEL_MIN_INTERACTIONS &&
+        ivp_env_parallel_for(s->l_environment, IVP_PARALLEL_WORK_SOLVER,
+                             (size_t)contact_count, minimum_tasks,
+                             frs_calc_solver_column_task, s);
     int active_dists_so_far = 0;
-    for (int i = 0; i < ivp_pvec_len(&s->contact_info_vector); i++) {
-        ivp_impact_solver_lt_t *info = frs_info_at(s, i);
-        double dist_velocity = ivp_impact_lt_get_closing_speed(info);
-        double distance_off = (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
-                                       info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
-        m->desired_vector[i] = ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
-        if (info->friction.has_negative_pull_since != 0) {
-            *active_is_at_pos = i;
-            active_is_at_pos++;
-            active_dists_so_far++;
+    if (dispatched) {
+        for (int i = 0; i < contact_count; i++) {
+            ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+            if (info->friction.has_negative_pull_since != 0) {
+                *active_is_at_pos = i;
+                active_is_at_pos++;
+                active_dists_so_far++;
+            }
         }
-        if (info->contact_core[0]) {
-            ivp_vec3f_t rotation_vec, translation_vec;
-            frs_test_push_core_i(info, 0, &rotation_vec, &translation_vec, -1.0f);
-            frs_calc_distance_matrix_column(s, i, info->contact_core[0], info->friction.friction_infos[0],
-                                            &rotation_vec, &translation_vec);
-        }
-        if (info->contact_core[1]) {
-            ivp_vec3f_t rotation_vec, translation_vec;
-            frs_test_push_core_i(info, 1, &rotation_vec, &translation_vec, +1.0f);
-            frs_calc_distance_matrix_column(s, i, info->contact_core[1], info->friction.friction_infos[1],
-                                            &rotation_vec, &translation_vec);
+    } else {
+        /* Preserve the reference loop order on the default serial path:
+         * desired value, active-set append, then matrix-column effects. */
+        for (int i = 0; i < contact_count; i++) {
+            ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+            frs_calc_solver_desired(s, i);
+            if (info->friction.has_negative_pull_since != 0) {
+                *active_is_at_pos = i;
+                active_is_at_pos++;
+                active_dists_so_far++;
+            }
+            frs_calc_solver_column_effect(s, i);
         }
     }
     /* ivp_friction_gaps.cxx:1077: index check, CORE in every build */
