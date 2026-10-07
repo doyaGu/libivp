@@ -161,8 +161,14 @@ static void wheelcar_draw(demo_app_t *app, demo_viewer_t *v)
     demo_draw_object(v, s->ramp, c_ramp);
     for (int i = 0; i < 3; i++) demo_draw_object(v, s->cone[i], c_cone);
     demo_draw_object(v, s->body, c_body);
+    ivp_car_system_wheel_skid_info_t skid_now[4] = { 0 };
+    if (s->car_ok) ivp_car_system_get_skid_info(&s->car, skid_now);
     for (int i = 0; i < 4; i++) {
-        demo_draw_object(v, s->wheel[i], c_wheel);
+        /* a wheel that skids glows red */
+        const float k = fminf(1.0f, skid_now[i].last_skid_value);
+        const float wheel_col[3] = { c_wheel[0] + (0.95f - c_wheel[0]) * k, c_wheel[1] + (0.25f - c_wheel[1]) * k,
+                                     c_wheel[2] + (0.15f - c_wheel[2]) * k };
+        demo_draw_object(v, s->wheel[i], wheel_col);
         float a[3], b[3];
         demo_object_center(s->body, a);
         demo_object_center(s->wheel[i], b);

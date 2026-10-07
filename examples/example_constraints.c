@@ -251,6 +251,15 @@ static void constraints_draw(demo_app_t *app, demo_viewer_t *v)
         demo_cross(v, tp, 0.3f, c_lim);
     }
 
+    /* the load on the weld against its limit: a bar beside the weight that grows and goes red towards the break */
+    {
+        float wc2[3];
+        demo_object_center(s->weight, wc2);
+        const float load = fminf(1.2f, (float)s->weld.accumulated_impulse[1] / (float)WELD_BREAK);
+        const float a[3] = { wc2[0] + 1.0f, wc2[1] + 0.5f, wc2[2] }, b[3] = { wc2[0] + 1.0f, wc2[1] + 0.5f - 1.6f * load, wc2[2] };
+        const float col[3] = { 0.3f + 0.7f * load, 0.9f - 0.7f * load, 0.3f };
+        if (!ivp_constraint_local_is_broken(&s->weld)) demo_thick_line(v, a, b, col, 0.12f);
+    }
     float wc[3];
     demo_object_center(s->weight, wc);
     demo_hud(v, DEMO_COL_INFO, "slider  x range %+.2f .. %+.2f m (stops at +-%.1f)", (double)s->slide_min,

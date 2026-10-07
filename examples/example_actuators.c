@@ -211,6 +211,25 @@ static void actuators_reset(demo_app_t *app)
 
 /* ── drawing ─────────────────────────────────────────────────────────────── */
 
+/* A ring round the axle with an arrowhead: the direction of the torque, bright when the bar turns at the limit. */
+static void draw_torque_ring(demo_viewer_t *v, const turntable_t *t)
+{
+    const double tq = (double)t->torque_act.torque;
+    if (fabs(tq) < 1e-6) return;
+    const float w = fabsf(spin_of(t)), lim = (float)t->torque_act.max_rotation_speed;
+    const float k = lim > 0.0f ? fminf(1.0f, w / lim) : 0.0f;
+    const float col[3] = { 0.4f + 0.6f * k, 0.8f, 0.4f };
+    const float r = 1.7f, sgn = tq > 0.0 ? 1.0f : -1.0f;
+    float prev[3] = { (float)t->x + r, -3.0f, 0.0f };
+    for (int i = 1; i <= 24; i++) {
+        const float a = sgn * 4.7f * (float)i / 24.0f;
+        const float p[3] = { (float)t->x + r * cosf(a), -3.0f, r * sinf(a) };
+        if (i == 24) demo_arrow(v, prev, p, col, 0.35f);
+        else demo_thick_line(v, prev, p, col, 0.06f);
+        memcpy(prev, p, sizeof(prev));
+    }
+}
+
 static void actuators_draw(demo_app_t *app, demo_viewer_t *v)
 {
     actuators_demo_t *s = (actuators_demo_t *)app->user;
@@ -222,13 +241,26 @@ static void actuators_draw(demo_app_t *app, demo_viewer_t *v)
         demo_draw_object(v, s->turn[i].bar, c_bar);
         const float a[3] = { (float)s->turn[i].x, -3.0f, 0.0f }, b[3] = { (float)s->turn[i].x, 0.0f, 0.0f };
         demo_line(v, a, b, DEMO_COL_STATIC);               /* the axle */
+        draw_torque_ring(v, &s->turn[i]);
     }
     for (int i = 0; i < N_RIGS; i++) {
         rig_t *r = &s->rig[i];
         demo_draw_object(v, r->chassis, r->stabilised ? c_chassis2 : c_chassis);
         for (int k = 0; k < 2; k++) {
             demo_draw_object(v, r->wheel[k], c_wheel);
-            demo_draw_link(v, r->chassis, r->wheel[k], DEMO_COL_SPRING);
+            /* the strut: blue when it is longer than its rest length, green at rest, red when squeezed */
+            float cb[3], cw[3];
+            demo_object_center(r->chassis, cb);
+            demo_object_center(r->wheel[k], cw);
+            cb[0] += k ? (float)RIG_HALF : (float)-RIG_HALF;
+            const float len = cw[1] - cb[1], squeeze = (float)(SUSP_REST - len) / 0.3f;
+            const float t = fminf(1.0f, fabsf(squeeze));
+            const float col[3] = { squeeze > 0.0f ? 0.3f + 0.7f * t : 0.3f, 0.9f - 0.5f * t, squeeze < 0.0f ? 0.3f + 0.7f * t : 0.3f };
+            demo_thick_line(v, cb, cw, col, 0.08f);
+            /* the force on the chassis */
+            const float f = (float)r->susp[k].current_body_force / 4000.0f;
+            const float tip[3] = { cb[0], cb[1] + f, cb[2] };
+            if (fabsf(f) > 0.05f) demo_arrow(v, cb, tip, DEMO_COL_VELOCITY, 0.15f);
         }
     }
     for (int i = 0; i < N_TURN; i++)
@@ -280,7 +312,7 @@ int main(int argc, char **argv)
     app.cfg.tag         = "actuators";
     app.cfg.friction    = 0.6;
     app.cfg.elasticity  = 0.1;
-    app.cfg.orbit_dist  = 18.0f;
+    app.cfg.orbit_dist  = 16.0f;
     app.cfg.orbit_yaw   = 180.0f;
     app.cfg.orbit_pitch = -14.0f;
     app.cfg.target[0]   = 0.0f;

@@ -260,7 +260,11 @@ static void jetski_draw(demo_app_t *app, demo_viewer_t *v)
             float a[3];
             demo_core_point_ws(s->body, &p, a);
             const float b[3] = { a[0], a[1] + w->raycast_dist, a[2] };
-            demo_line(v, a, b, DEMO_COL_SPRING);
+            /* the ray is green when the spring is relaxed and red as it is squeezed */
+            const float full = w->spring_len + w->wheel_radius, k = fminf(1.0f, fmaxf(0.0f, (full - w->raycast_dist) / 0.4f));
+            const float col[3] = { 0.3f + 0.7f * k, 0.9f - 0.6f * k, 0.3f };
+            demo_thick_line(v, a, b, col, 0.04f);
+            demo_sphere(v, b, 0.06f + 0.1f * k, col);
         }
     demo_hud(v, DEMO_COL_INFO, "speed %.1f m/s  heading %.0f deg  tilt %.0f deg  booster %s", (double)demo_object_speed(s->body),
              (double)heading_deg(s), (double)tilt_of(s),

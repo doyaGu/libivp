@@ -157,7 +157,12 @@ static void hover_draw(demo_app_t *app, demo_viewer_t *v)
             float a[3];
             demo_core_point_ws(s->pad[i], &s->fl[i][c].position_os, a);          /* the box frame is the core frame */
             const float b[3] = { a[0], -terrain_height(a[0], a[2]), a[2] };
-            demo_line(v, a, b, descs[i].col);
+            /* the ray is green on target, red when the corner is too close to the ground, yellow when too far */
+            const float want = i == 0 ? s->height1 : descs[i].target, err = (b[1] - a[1]) - want;
+            const float k = fminf(1.0f, fabsf(err) / 0.5f);
+            const float ray_col[3] = { 0.3f + 0.7f * k, err < 0.0f ? 0.9f - 0.7f * k : 0.9f, 0.3f - 0.1f * k };
+            demo_thick_line(v, a, b, ray_col, 0.03f);
+            demo_sphere(v, b, 0.08f + 0.12f * k, ray_col);
         }
     }
     for (int i = 0; i < N_PADS; i++) {
@@ -204,7 +209,7 @@ int main(int argc, char **argv)
     app.cfg.tag         = "hover";
     app.cfg.friction    = 0.4;
     app.cfg.elasticity  = 0.1;
-    app.cfg.orbit_dist  = 28.0f;
+    app.cfg.orbit_dist  = 22.0f;
     app.cfg.orbit_yaw   = 150.0f;
     app.cfg.orbit_pitch = -28.0f;
     app.cfg.target[0]   = -4.0f;
