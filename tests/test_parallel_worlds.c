@@ -11,9 +11,22 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+typedef DWORD test_thread_id_t;
+static test_thread_id_t test_thread_current(void) { return GetCurrentThreadId(); }
+static bool test_thread_equal(test_thread_id_t a, test_thread_id_t b)
+{
+    return a == b;
+}
 static void test_thread_yield(void) { Sleep(0); }
 #else
+#include <pthread.h>
 #include <sched.h>
+typedef pthread_t test_thread_id_t;
+static test_thread_id_t test_thread_current(void) { return pthread_self(); }
+static bool test_thread_equal(test_thread_id_t a, test_thread_id_t b)
+{
+    return pthread_equal(a, b) != 0;
+}
 static void test_thread_yield(void) { (void)sched_yield(); }
 #endif
 
@@ -35,6 +48,55 @@ typedef struct overlap_probe {
     atomic_int contention_attempts;
     atomic_int contention_result;
 } overlap_probe_t;
+
+typedef struct serial_fallback_probe {
+    test_thread_id_t caller_thread;
+    ivp_world_scheduler_t *scheduler;
+    atomic_int callbacks;
+    atomic_int next_world;
+    atomic_int contention_attempts;
+    atomic_int contention_result;
+    atomic_bool caller_thread_only;
+    atomic_bool array_order;
+} serial_fallback_probe_t;
+
+typedef struct serial_fallback_hook_context {
+    serial_fallback_probe_t *probe;
+    int world_index;
+} serial_fallback_hook_context_t;
+
+static void serial_fallback_hook(void *ctx, ivp_environment_t *env,
+                                 ivp_psi_phase_t phase, ivp_time_t time,
+                                 ivp_real_t dt)
+{
+    (void)env;
+    (void)time;
+    (void)dt;
+    if (phase != IVP_PSI_PHASE_PRE_PSI) return;
+    serial_fallback_hook_context_t *hook =
+        (serial_fallback_hook_context_t *)ctx;
+    serial_fallback_probe_t *probe = hook->probe;
+    if (probe->scheduler &&
+        atomic_fetch_add_explicit(&probe->contention_attempts, 1,
+                                  memory_order_relaxed) == 0) {
+        ivp_environment_t *same_world[] = { env };
+        ivp_result_t result = ivp_world_scheduler_simulate_one_psi(
+            probe->scheduler, same_world, 1);
+        atomic_store_explicit(&probe->contention_result, (int)result,
+                              memory_order_relaxed);
+    }
+    if (!test_thread_equal(test_thread_current(), probe->caller_thread)) {
+        atomic_store_explicit(&probe->caller_thread_only, false,
+                              memory_order_relaxed);
+    }
+    int next = atomic_fetch_add_explicit(&probe->next_world, 1,
+                                         memory_order_relaxed);
+    if (next != hook->world_index) {
+        atomic_store_explicit(&probe->array_order, false,
+                              memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&probe->callbacks, 1, memory_order_relaxed);
+}
 
 static void overlap_hook(void *ctx, ivp_environment_t *env,
                          ivp_psi_phase_t phase, ivp_time_t time,
@@ -176,6 +238,89 @@ static bool world_state_equal(const test_world_t *a, const test_world_t *b)
     return true;
 }
 
+IVP_TEST(scheduler_one_worker_is_fully_serial)
+{
+    test_world_t scheduled[PARALLEL_WORLD_COUNT] = {0};
+    test_world_t direct[PARALLEL_WORLD_COUNT] = {0};
+    ivp_environment_t *environments[PARALLEL_WORLD_COUNT] = {0};
+    serial_fallback_hook_context_t hooks[PARALLEL_WORLD_COUNT];
+    ivp_world_scheduler_t *scheduler = NULL;
+    serial_fallback_probe_t probe;
+    probe.caller_thread = test_thread_current();
+    probe.scheduler = NULL;
+    atomic_init(&probe.callbacks, 0);
+    atomic_init(&probe.next_world, 0);
+    atomic_init(&probe.contention_attempts, 0);
+    atomic_init(&probe.contention_result, -1);
+    atomic_init(&probe.caller_thread_only, true);
+    atomic_init(&probe.array_order, true);
+    bool ok = true;
+    int world_count = PARALLEL_WORLD_COUNT;
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+    world_count = 1;
+#endif
+
+    for (int i = 0; i < world_count; i++) {
+        if (!test_world_init(&scheduled[i], i) ||
+            !test_world_init(&direct[i], i)) {
+            ok = false;
+            goto cleanup;
+        }
+        environments[i] = scheduled[i].env;
+        hooks[i].probe = &probe;
+        hooks[i].world_index = i;
+        ivp_environment_set_phase_hook(scheduled[i].env,
+                                       serial_fallback_hook, &hooks[i]);
+        if (ivp_environment_get_parallel_worker_count(scheduled[i].env) != 1) {
+            ok = false;
+            goto cleanup;
+        }
+    }
+
+    scheduler = ivp_world_scheduler_create(1, NULL);
+    probe.scheduler = scheduler;
+    if (!scheduler || ivp_world_scheduler_simulate_one_psi(
+                          scheduler, environments,
+                          (size_t)world_count) != IVP_OK) {
+        ok = false;
+        goto cleanup;
+    }
+
+    for (int i = 0; i < world_count; i++) {
+        ivp_environment_set_phase_hook(scheduled[i].env, NULL, NULL);
+        ivp_environment_simulate_one_psi(direct[i].env);
+        ivp_parallel_stats_t stats;
+        ivp_environment_get_parallel_stats(scheduled[i].env, &stats);
+        if (!world_state_equal(&scheduled[i], &direct[i]) ||
+            stats.island_dispatches != 0u || stats.island_tasks != 0u ||
+            stats.broadphase_dispatches != 0u ||
+            stats.broadphase_tasks != 0u ||
+            stats.solver_dispatches != 0u || stats.solver_tasks != 0u ||
+            stats.max_workers_used != 0) {
+            ok = false;
+        }
+    }
+    if (atomic_load_explicit(&probe.callbacks, memory_order_relaxed) !=
+            world_count ||
+        atomic_load_explicit(&probe.next_world, memory_order_relaxed) !=
+            world_count ||
+        atomic_load_explicit(&probe.contention_result,
+                             memory_order_relaxed) != IVP_ERR_INVALID_STATE ||
+        !atomic_load_explicit(&probe.caller_thread_only,
+                              memory_order_relaxed) ||
+        !atomic_load_explicit(&probe.array_order, memory_order_relaxed)) {
+        ok = false;
+    }
+
+cleanup:
+    ivp_world_scheduler_destroy(scheduler);
+    for (int i = 0; i < PARALLEL_WORLD_COUNT; i++) {
+        test_world_destroy(&scheduled[i]);
+        test_world_destroy(&direct[i]);
+    }
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(scheduler_parallel_contract)
 {
     test_world_t parallel[PARALLEL_WORLD_COUNT] = {0};
@@ -312,6 +457,7 @@ cleanup:
 
 int main(void)
 {
+    IVP_REGISTER(scheduler_one_worker_is_fully_serial);
     IVP_REGISTER(scheduler_parallel_contract);
     IVP_RUN_ALL();
 }
