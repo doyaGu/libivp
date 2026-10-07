@@ -21,6 +21,7 @@
  *               ivp_jetski_activate_booster, ivp_jetski_change_spring_*.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 #include "demo_water.h"
 
 #include <ivp/controllers/ivp_controller_fake_jetski.h>
@@ -50,6 +51,7 @@ typedef struct jetski_demo {
     float              dist_max, tilt_max;
     double             z0;
     bool               boosted;
+    demo_drive_t drive;
 } jetski_demo_t;
 
 /* ── the sea ─────────────────────────────────────────────────────────────── */
@@ -131,6 +133,7 @@ static void jetski_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "wave height", &s->amp, 0.0f, 1.0f, NULL, s);
     demo_panel_add_float(p, "spring k", &s->spring_k, 4000.0f, 40000.0f, apply_springs, s);
     demo_panel_add_float(p, "throttle torque", &s->torque, 100.0f, 1200.0f, apply_torque, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 static float heading_deg(const jetski_demo_t *s)
@@ -153,14 +156,18 @@ static void jetski_update(demo_app_t *app, demo_viewer_t *v, int frame)
 
     drive(s);
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        s->throttle = (keys[SDL_SCANCODE_UP] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 0.5f : 0.0f);
-        s->steer = (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f);
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        s->throttle = s->drive.throttle > 0.0f ? s->drive.throttle : 0.5f * s->drive.throttle;
+        s->steer = s->drive.steer;
         if (demo_key_just_pressed(v, SDL_SCANCODE_B)) ivp_jetski_activate_booster(&s->ski, 8.0f, 0.5f, 1.0f);
-        for (int k = 0; k < 3; k++) {
+        {
             float c[3];
             demo_object_center(s->body, c);
-            v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
+            const ivp_vec3r_t *sp = &s->body->physical_core->speed;
+            const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
+            demo_drive_follow(v, &s->drive, c, vel);
         }
     } else {
         /* the script of the scenario: handbrake off and throttle, steer, booster, steer back */
@@ -319,6 +326,7 @@ int main(int argc, char **argv)
 
     jetski_demo_t *s = (jetski_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
     s->env = w->env;

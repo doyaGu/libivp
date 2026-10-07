@@ -18,6 +18,7 @@
  *               the car constraint solver behind it.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 
 #include <ivp/controllers/ivp_car_system.h>
 #include <ivp/controllers/ivp_constraint_car.h>
@@ -44,6 +45,7 @@ typedef struct wheelcar_demo {
     double                    z0;
     float                     speed_before_brake;
     bool                      braked;
+    demo_drive_t drive;
 } wheelcar_demo_t;
 
 static float hard_point_error(const wheelcar_demo_t *s)
@@ -74,7 +76,7 @@ static void drive(wheelcar_demo_t *s)
     ivp_car_system_set_wheel_torque(&s->car, IVP_WHEEL_REAR_LEFT, t);
     ivp_car_system_set_wheel_torque(&s->car, IVP_WHEEL_REAR_RIGHT, t);
     ivp_car_system_update_body_countertorque(&s->car);
-    ivp_car_system_set_steering(&s->car, (ivp_real_t)(s->steer * s->lock));
+    ivp_car_system_set_steering(&s->car, (ivp_real_t)(s->steer * s->lock * demo_drive_lock(demo_object_speed(s->body), 12.0f)));
     ivp_car_system_fix_wheel(&s->car, IVP_WHEEL_REAR_LEFT, s->brake);
     ivp_car_system_fix_wheel(&s->car, IVP_WHEEL_REAR_RIGHT, s->brake);
 }
@@ -103,6 +105,7 @@ static void wheelcar_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "steering lock", &s->lock, 0.1f, 0.6f, apply_drive, s);
     demo_panel_add_float(p, "spring k", &s->spring_k, 10000.0f, 80000.0f, apply_suspension, s);
     demo_panel_add_float(p, "stabilizer", &s->stabilizer, 0.0f, 4000.0f, apply_suspension, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 static void wheelcar_update(demo_app_t *app, demo_viewer_t *v, int frame)
@@ -110,14 +113,18 @@ static void wheelcar_update(demo_app_t *app, demo_viewer_t *v, int frame)
     wheelcar_demo_t *s = (wheelcar_demo_t *)app->user;
     if (!s->car_ok) return;
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        s->throttle = (keys[SDL_SCANCODE_UP] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 0.5f : 0.0f);
-        s->steer = (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f);
-        s->brake = keys[SDL_SCANCODE_B];
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        s->throttle = s->drive.throttle > 0.0f ? s->drive.throttle : 0.5f * s->drive.throttle;
+        s->steer = s->drive.steer;
+        s->brake = in.brake;
         drive(s);
         float c[3];
         demo_object_center(s->body, c);
-        for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
+        const ivp_vec3r_t *sp = &s->body->physical_core->speed;
+        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
+        demo_drive_follow(v, &s->drive, c, vel);
     } else {
         /* settle, drive, steer, release the throttle and brake */
         if (frame == 90) {
@@ -132,7 +139,7 @@ static void wheelcar_update(demo_app_t *app, demo_viewer_t *v, int frame)
         if (frame == 330) {
             s->steer = 0.0f;
             s->throttle = 0.0f;
-            s->speed_before_brake = (float)ivp_car_system_get_body_speed(&s->car);
+            s->speed_before_brake = demo_object_speed(s->body);
             s->brake = true;
             s->braked = true;
             drive(s);
@@ -210,9 +217,9 @@ static bool wheelcar_check(demo_app_t *app)
     ok &= demo_check(tag, s->max_tilt < 30.0f, "it stays upright (tilt up to %.0f deg)", (double)s->max_tilt);
     ok &= demo_check(tag, fabsf(heading_deg(s) - s->heading0) > 8.0f, "steering turned it (%.0f deg to %.0f deg)", (double)s->heading0,
                      (double)heading_deg(s));
-    ok &= demo_check(tag, s->braked && (float)ivp_car_system_get_body_speed(&s->car) < s->speed_before_brake,
+    ok &= demo_check(tag, s->braked && demo_object_speed(s->body) < s->speed_before_brake,
                      "the handbrake slows it (%.1f to %.1f m/s)", (double)s->speed_before_brake,
-                     (double)ivp_car_system_get_body_speed(&s->car));
+                     (double)demo_object_speed(s->body));
     return ok;
 }
 
@@ -238,6 +245,7 @@ int main(int argc, char **argv)
 
     wheelcar_demo_t *s = (wheelcar_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
     s->env = w->env;
@@ -251,7 +259,7 @@ int main(int argc, char **argv)
     s->ramp = NULL;
     s->ramp = demo_create_box(w, NULL, 3.0, 0.2, 4.0, 0.0, &(const ivp_quatr_t){ IVP_REAL(0.10), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.995) }, 8.0,
                               -0.1, 6.0);
-    for (int i = 0; i < 3; i++) s->cone[i] = demo_create_box(w, NULL, 0.3, 0.4, 0.3, 5.0, NULL, -5.0 + 5.0 * i, -0.4, 4.0 + 6.0 * i);
+    for (int i = 0; i < 3; i++) s->cone[i] = demo_create_box(w, NULL, 0.3, 0.4, 0.3, 5.0, NULL, (i & 1) ? 6.0 : -6.0, -0.4, 4.0 + 6.0 * i);
 
     /* the body and the wheels share a collision group, so they do not collide with each other */
     ivp_object_template_t bt;

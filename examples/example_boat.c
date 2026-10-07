@@ -15,6 +15,7 @@
  *               translucent solids, a follow camera.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/controllers/ivp_controller_buoyancy.h>
@@ -47,6 +48,7 @@ typedef struct boat_demo {
     float                yaw_accel;           /* rad/s^2 at full rudder */
     float                keel;                /* 1/s: sideways slip damping */
     float                linear_drag, angular_drag;   /* water drag of the buoyancy controller */
+    demo_drive_t drive;
 } boat_demo_t;
 
 static void boat_apply(void *ctx)
@@ -65,6 +67,7 @@ static void boat_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "keel",         &s->keel,         0.0f, 10.0f, NULL, NULL);
     demo_panel_add_float(p, "linear drag",  &s->linear_drag,  0.0f, 8.0f, boat_apply, s);
     demo_panel_add_float(p, "angular drag", &s->angular_drag, 0.0f, 8.0f, boat_apply, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 /* Heading of the hull's forward (+X) axis in the water plane, degrees. */
@@ -108,9 +111,11 @@ static void boat_update(demo_app_t *app, demo_viewer_t *v, int frame)
     if (tilt > s->max_tilt) s->max_tilt = tilt;
 
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        s->throttle = (keys[SDL_SCANCODE_UP] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 1.0f : 0.0f);
-        s->steer = (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f);
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        s->throttle = s->drive.throttle;
+        s->steer = -s->drive.steer;               /* + is a turn to the left here */
     } else {
         /* scripted: rest 6 s (the boat freezes), full motor 1.5 s, then
          * half motor and rudder 2 s */
@@ -265,6 +270,7 @@ int main(int argc, char **argv)
 
     boat_demo_t *s = (boat_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
 

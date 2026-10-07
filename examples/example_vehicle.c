@@ -9,6 +9,7 @@
  *               engine, brake, wheel contact visualization, ramps.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 
 #include <ivp/controllers/ivp_controller_raycast_car.h>
 #include "demo_car.h"
@@ -32,6 +33,7 @@ typedef struct vehicle_demo {
     float           engine;              /* N, balanced for the 20 kg chassis; reverse is half */
     float           brake;               /* N, 200 is about 1 g deceleration */
     float           spring_k, spring_damp, wheel_friction;
+    demo_drive_t drive;
 } vehicle_demo_t;
 
 /* The 4-wheel defaults are 50000 N/m and 3000 N*s/m; tuned for the 20 kg
@@ -58,6 +60,7 @@ static void vehicle_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "spring k",       &s->spring_k,       200.0f, 2500.0f, vehicle_apply, s);
     demo_panel_add_float(p, "spring damping", &s->spring_damp,    5.0f,  200.0f,  vehicle_apply, s);
     demo_panel_add_float(p, "tyre friction",  &s->wheel_friction, 0.2f,  2.5f,    vehicle_apply, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 static int wheels_grounded(const vehicle_demo_t *s)
@@ -89,26 +92,27 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
     float tilt = demo_object_tilt_deg(s->chassis);
     if (tilt > s->max_tilt) s->max_tilt = tilt;
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        float steer = 0.0f, engine = 0.0f, brake = 0.0f;
-        if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_UP])    engine = s->engine;
-        if (keys[SDL_SCANCODE_DOWN]) {
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        float rot[9];
+        quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
+        const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
+        const float fwd = (float)(sp->k[0] * rot[6] + sp->k[1] * rot[7] + sp->k[2] * rot[8]);
+        /* + steer is a turn to the left here; the lock shrinks with the speed */
+        const float steer = -s->drive.steer * (float)STEER_ANGLE * demo_drive_lock(fwd, 14.0f);
+        float engine = s->drive.throttle > 0.0f ? s->engine * s->drive.throttle : 0.0f, brake = 0.0f;
+        if (in.throttle < 0.0f) {
             /* like a pedal: brake while rolling forward, reverse once stopped */
-            float rot[9];
-            quat_to_col_rot(&s->chassis->physical_core->q_world_f_core_last_psi, rot);
-            const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
-            float fwd = (float)(sp->k[0] * rot[6] + sp->k[1] * rot[7] + sp->k[2] * rot[8]);
-            if (fwd > 0.8f) brake = s->brake;
-            else engine = -0.5f * s->engine;
+            if (fwd > 0.8f) brake = s->brake * -in.throttle;
+            else engine = 0.5f * s->engine * s->drive.throttle;
         }
-        if (keys[SDL_SCANCODE_B])     brake = s->brake;
+        if (in.brake) brake = s->brake;
         apply_input(s, steer, engine, brake);
-        /* follow camera: track the chassis */
         float target[3];
         demo_object_center(s->chassis, target);
-        for (int k = 0; k < 3; k++) v->cam.target[k] += (target[k] - v->cam.target[k]) * 0.05f;
+        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
+        demo_drive_follow(v, &s->drive, target, vel);
         return;
     }
     /* scripted: settle 1 s, throttle 2 s, throttle + steer left 1.5 s, brake */
@@ -227,6 +231,7 @@ int main(int argc, char **argv)
 
     vehicle_demo_t *s = (vehicle_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
 

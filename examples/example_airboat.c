@@ -18,6 +18,7 @@
  *               ivp_airboat_update_throttle / do_steering, a heightfield.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 #include "demo_terrain.h"
 
 #include <ivp/controllers/ivp_controller_airboat.h>
@@ -51,6 +52,7 @@ typedef struct airboat_demo {
     float                max_tilt;
     float                heading0, heading1;
     float                draft_error;         /* largest distance of the hull from its resting height while afloat */
+    demo_drive_t drive;
 } airboat_demo_t;
 
 static float smoothstep(float t)
@@ -141,6 +143,7 @@ static void airboat_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "rudder range",   &s->steer_range,  0.05f, 0.6f,    NULL, NULL);
     demo_panel_add_float(p, "pontoon k",      &s->pontoon_k,    2000.0f, 30000.0f, airboat_apply, s);
     demo_panel_add_float(p, "pontoon damping", &s->pontoon_damp, 100.0f, 3000.0f, airboat_apply, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 static void apply_input(airboat_demo_t *s, demo_app_t *app)
@@ -166,10 +169,14 @@ static void airboat_update(demo_app_t *app, demo_viewer_t *v, int frame)
     }
 
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        s->throttle = (keys[SDL_SCANCODE_UP] ? s->max_throttle : 0.0f) - (keys[SDL_SCANCODE_DOWN] ? 0.5f * s->max_throttle : 0.0f);
-        s->steer = (keys[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f);   /* + turns right */
-        for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        s->throttle = s->drive.throttle * (s->drive.throttle > 0.0f ? s->max_throttle : 0.5f * s->max_throttle);
+        s->steer = s->drive.steer;                /* + turns right */
+        const float vel[3] = { (float)s->hull->physical_core->speed.k[0], (float)s->hull->physical_core->speed.k[1],
+                               (float)s->hull->physical_core->speed.k[2] };
+        demo_drive_follow(v, &s->drive, c, vel);
     } else {
         /* scripted: float 1 s, drive, steer left for 2 s, keep going */
         s->throttle = frame < 60 ? 0.0f : 0.35f;
@@ -377,6 +384,7 @@ int main(int argc, char **argv)
 
     airboat_demo_t *s = (airboat_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
 

@@ -10,6 +10,7 @@
  *               the compact grid terrain, a follow camera.
  */
 #include "demo_app.h"
+#include "demo_drive.h"
 #include "demo_terrain.h"
 
 #include <ivp/controllers/ivp_controller_raycast_car.h>
@@ -40,6 +41,7 @@ typedef struct offroad_demo {
     float            spring_k, spring_damp; /* wheel suspension */
     float            wheel_friction;
     float            stabilizer;            /* anti-roll bar constant */
+    demo_drive_t drive;
 } offroad_demo_t;
 
 /* Gentle rolling hills; the start area around the origin is nearly flat. */
@@ -117,6 +119,7 @@ static void offroad_viewer_init(demo_app_t *app, demo_viewer_t *v)
     demo_panel_add_float(p, "spring damping",    &s->spring_damp,    5.0f,  200.0f,  offroad_apply, s);
     demo_panel_add_float(p, "tyre friction",     &s->wheel_friction, 0.2f,  2.5f,    offroad_apply, s);
     demo_panel_add_float(p, "anti-roll bar",     &s->stabilizer,     0.0f,  20000.0f, offroad_apply, s);
+    demo_drive_panel(p, &s->drive);
 }
 
 static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
@@ -133,20 +136,23 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
     }
 
     if (v) {
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        float steer = 0.0f, engine = 0.0f, brake = 0.0f;
-        if (keys[SDL_SCANCODE_LEFT])  steer += (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_RIGHT]) steer -= (float)STEER_ANGLE;
-        if (keys[SDL_SCANCODE_UP])    engine = s->engine;
-        if (keys[SDL_SCANCODE_DOWN]) {
+        demo_drive_input_t in;
+        demo_drive_read(&s->drive, &in);
+        demo_drive_step(&s->drive, &in, v->frame_dt);
+        const float fwd = demo_forward_speed(s);
+        /* + steer is a turn to the left here; limit_steer in apply_input also shrinks the lock with the speed */
+        const float steer = -s->drive.steer * (float)STEER_ANGLE;
+        float engine = s->drive.throttle > 0.0f ? s->engine * s->drive.throttle : 0.0f, brake = 0.0f;
+        if (in.throttle < 0.0f) {
             /* like a pedal: brake while rolling forward, reverse once stopped */
-            float fwd = demo_forward_speed(s);
-            if (fwd > 0.8f) brake = (float)BRAKE_FORCE;
-            else engine = -0.5f * s->engine;
+            if (fwd > 0.8f) brake = (float)BRAKE_FORCE * -in.throttle;
+            else engine = 0.5f * s->engine * s->drive.throttle;
         }
-        if (keys[SDL_SCANCODE_B])     brake = (float)BRAKE_FORCE;
+        if (in.brake) brake = (float)BRAKE_FORCE;
         apply_input(s, steer, engine, brake);
-        for (int k = 0; k < 3; k++) v->cam.target[k] += (c[k] - v->cam.target[k]) * 0.05f;
+        const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
+        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
+        demo_drive_follow(v, &s->drive, c, vel);
         return;
     }
     /* scripted: settle 1.5 s, then 6 s of throttle with the steering flung from
@@ -244,6 +250,7 @@ int main(int argc, char **argv)
 
     offroad_demo_t *s = (offroad_demo_t *)calloc(1, sizeof(*s));
     if (!s) return 1;
+    demo_drive_defaults(&s->drive);
     app.user = s;
     demo_world_t *w = &app.world;
     s->lowest_clearance = 1e9f;

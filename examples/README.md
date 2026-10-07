@@ -23,6 +23,15 @@ Building needs `glslangValidator` (the shaders) and fetches SDL3 unless it is
 installed. The renderer prefers Metal shaders on macOS; the SPIR-V path is
 built but has not been run.
 
+## Driving
+
+`vehicle`, `offroad`, `boat`, `airboat`, `jetski` and `wheelcar` share one input model (`demo_drive.h`). The
+throttle and the steering follow the keys through a smoothing: holding a key winds the steering on, letting go
+centres it faster than it was wound on, and a tap is a small correction. The F5 panel has the three times
+(throttle, steering, centring). The steering lock shrinks with the speed, and the follow camera looks ahead of the
+vehicle and pulls back a little when it is fast. A gamepad works without any setup: left stick x steers, the
+right trigger is the throttle, the left trigger brakes or reverses, A is the handbrake.
+
 ## In the window
 
 | Keys | |
@@ -142,4 +151,4 @@ with a callback that pushes the value to the engine.
 
 The framework headers: `demo_app.h` (world, viewer, drawing), `demo_debug.h`
 (picking, impact ring), `demo_panel.h` (the panel widgets, testable without a
-window), `demo_terrain.h` (heightfield terrain), `demo_water.h` (a translucent moving water surface).
+window), `demo_terrain.h` (heightfield terrain), `demo_water.h` (a translucent moving water surface), `demo_drive.h` (the feel of the driving examples).
