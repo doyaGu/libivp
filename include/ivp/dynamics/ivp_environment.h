@@ -33,6 +33,7 @@ struct ivp_environment;
 #define IVP_CONTROLLERS_INIT_CAPACITY  16
 #define IVP_EVENT_LISTENERS_INIT_CAPACITY 8
 #define IVP_SIM_UNIT_COUNT_DEFAULT      1
+#define IVP_PARALLEL_WORKER_COUNT_DEFAULT 1
 
 typedef struct ivp_environment_config {
     ivp_vec3r_t         gravity;           /* default: (0, 9.83, 0) Y-down     */
@@ -47,6 +48,12 @@ typedef struct ivp_environment_config {
     int                 initial_controller_capacity;
     int                 initial_event_listener_capacity;
     int                 sim_unit_count;
+    /* Total execution width used inside one world for broadphase preparation,
+     * broadphase candidate tests, and independent solver matrix columns.
+     * One keeps the reference serial path.  The simulation thread owns one
+     * lane; the other lanes are persistent background threads.  No lane
+     * invokes user controllers, listeners, filters, or allocators. */
+    int                 parallel_worker_count;
     ivp_anomaly_config_t    anomaly_config;
     ivp_collision_filter_t  collision_filter;
     bool                    ccd_enabled;          /* unused (the reference pipeline is continuous) */
@@ -71,8 +78,22 @@ typedef struct ivp_environment_config {
     bool                            disable_performance_counter;
 } ivp_environment_config_t;
 
+typedef struct ivp_parallel_stats {
+    uint64_t broadphase_dispatches;
+    uint64_t broadphase_tasks;
+    uint64_t solver_dispatches;
+    uint64_t solver_tasks;
+    int      max_workers_used;
+} ivp_parallel_stats_t;
+
 /* Fill with sensible defaults */
 void ivp_environment_config_init(ivp_environment_config_t *cfg);
+
+/* Intra-world worker configuration and cumulative kernel dispatch counters.
+ * The configured count includes the simulation thread. */
+int ivp_environment_get_parallel_worker_count(const struct ivp_environment *env);
+void ivp_environment_get_parallel_stats(const struct ivp_environment *env,
+                                        ivp_parallel_stats_t *stats_out);
 
 /* ── PSI phases and hooks ──────────────────────────────────────────────── */
 
@@ -307,7 +328,8 @@ ivp_object_handle_t ivp_environment_get_object_handle(const ivp_object_t *obj);
 /* IVP_Environment::simulate_dtime: simulate_until(current_time + elapsed_time)
  * (PSIs and time events up to that time; AT queries interpolate).
  * Simulation calls for distinct environments may run concurrently.  The same
- * environment is not reentrant; use ivp_world_scheduler for batch dispatch. */
+ * environment has one external owner at a time even when its configured
+ * internal worker pool is active; use ivp_world_scheduler for batch dispatch. */
 void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_time);
 
 /* Run exactly one PSI step. Exposed for fine-grained control and testing. */

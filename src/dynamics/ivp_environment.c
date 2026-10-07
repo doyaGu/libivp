@@ -51,6 +51,8 @@
 #include "dynamics/ivp_environment_events.h"
 #include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_environment_parallel.h"
+#include "dynamics/ivp_env_parallel_tasks.h"
+#include "base/ivp_task_pool.h"
 #include "controllers/ivp_controller_system.h"
 #include "events/ivp_event_system.h"
 #include "solver/ivp_friction_internal.h"
@@ -64,6 +66,53 @@
 static ivp_event_system_t *env_event_system(const ivp_environment_t *env) { return (ivp_event_system_t *)env->event_system; }
 static ivp_controller_system_t *env_controller_system(const ivp_environment_t *env) { return (ivp_controller_system_t *)env->controller_system; }
 static ivp_object_system_t *env_object_system(const ivp_environment_t *env) { return (ivp_object_system_t *)env->object_system; }
+
+int ivp_env_parallel_worker_count(const ivp_environment_t *env)
+{
+    return (env && env->pl) ? env->pl->parallel_worker_count : 1;
+}
+
+bool ivp_env_parallel_for(ivp_environment_t *env,
+                          ivp_parallel_work_kind_t kind,
+                          size_t task_count,
+                          size_t min_tasks,
+                          ivp_env_parallel_task_fn function,
+                          void *context)
+{
+    if (!env || !env->pl || !env->pl->task_pool || !function ||
+        task_count < min_tasks) {
+        return false;
+    }
+    ivp_task_pool_parallel_for(env->pl->task_pool, task_count, function,
+                               context);
+    ivp_parallel_stats_t *stats = &env->pl->parallel_stats;
+    if (kind == IVP_PARALLEL_WORK_BROADPHASE) {
+        stats->broadphase_dispatches++;
+        stats->broadphase_tasks += (uint64_t)task_count;
+    } else {
+        stats->solver_dispatches++;
+        stats->solver_tasks += (uint64_t)task_count;
+    }
+    int workers_used = env->pl->parallel_worker_count;
+    if ((size_t)workers_used > task_count) workers_used = (int)task_count;
+    if (workers_used > stats->max_workers_used) {
+        stats->max_workers_used = workers_used;
+    }
+    return true;
+}
+
+int ivp_environment_get_parallel_worker_count(const ivp_environment_t *env)
+{
+    return ivp_env_parallel_worker_count(env);
+}
+
+void ivp_environment_get_parallel_stats(const ivp_environment_t *env,
+                                        ivp_parallel_stats_t *stats_out)
+{
+    if (!stats_out) return;
+    memset(stats_out, 0, sizeof(*stats_out));
+    if (env && env->pl) *stats_out = env->pl->parallel_stats;
+}
 
 static void env_emit_phase(ivp_environment_t *env, ivp_psi_phase_t phase, ivp_real_t dt)
 {
@@ -1789,6 +1838,7 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     cfg->initial_controller_capacity = IVP_CONTROLLERS_INIT_CAPACITY;
     cfg->initial_event_listener_capacity = IVP_EVENT_LISTENERS_INIT_CAPACITY;
     cfg->sim_unit_count = IVP_SIM_UNIT_COUNT_DEFAULT;
+    cfg->parallel_worker_count = IVP_PARALLEL_WORKER_COUNT_DEFAULT;
     ivp_anomaly_config_init(&cfg->anomaly_config);
     cfg->collision_filter = ivp_collision_filter_allow_all();
     cfg->ccd_enabled = false;
@@ -2134,6 +2184,17 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_env_pipeline_t *pl = env->pl;
     ivp_mindist_settings_init(&pl->mindist_settings);
     atomic_init(&pl->simulation_running, false);
+    pl->parallel_worker_count = cfg.parallel_worker_count > 1
+                                    ? cfg.parallel_worker_count
+                                    : 1;
+    if (pl->parallel_worker_count > 1) {
+        pl->task_pool = ivp_task_pool_create(pl->parallel_worker_count,
+                                             env->allocator);
+        if (!pl->task_pool) {
+            ivp_environment_destroy(env);
+            return NULL;
+        }
+    }
     if (cfg.range_manager) {
         pl->range_manager = cfg.range_manager;
     } else {
@@ -2399,6 +2460,8 @@ void ivp_environment_destroy(ivp_environment_t *env)
             ivp_performance_counter_environment_is_going_to_be_deleted(pc, env);
         }
         ivp_cache_obj_mgr_destroy(&pl->cache_mgr);
+        ivp_task_pool_destroy(pl->task_pool);
+        pl->task_pool = NULL;
         sim_mem_destroy(&pl->sim_unit_mem);
         ivp_env_delete_draw_vector_debug(env);
         /* remaining (empty) sim units */

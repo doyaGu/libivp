@@ -59,9 +59,15 @@ typedef struct ivp_env_pipeline {
     int                      friction_debug_counter;
     int                      global_friction_debug_counter;
 
-    /* Protects the single-threaded interior of one environment.  Different
-     * environments may hold this guard at the same time. */
+    /* Protects the single-owner simulation pipeline of one environment.
+     * Its private workers run only while that owner waits at a kernel barrier.
+     * Different environments may hold this guard at the same time. */
     atomic_bool              simulation_running;
+
+    /* Optional persistent pool for deterministic intra-world kernels. */
+    struct ivp_task_pool    *task_pool;
+    int                      parallel_worker_count;
+    ivp_parallel_stats_t     parallel_stats;
 
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */
     /* High-water scratch vectors reused by this environment's ordered PSI

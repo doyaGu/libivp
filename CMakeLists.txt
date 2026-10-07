@@ -22,7 +22,7 @@ option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_B
 option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
-# The core library exposes a persistent worker pool for independent worlds.
+# The core library uses OS threads for inter- and intra-world execution.
 find_package(Threads REQUIRED)
 
 function(ivp_apply_strict_fp TARGET_NAME)
@@ -86,6 +86,7 @@ set(IVP_BASE_SOURCES
         src/base/ivp_arena.c
         src/base/ivp_u_memory.c
         src/base/ivp_message.c
+        src/base/ivp_task_pool.c
 )
 
 set(IVP_MATH_SOURCES
