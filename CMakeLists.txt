@@ -17,6 +17,7 @@ option(IVP_ENABLE_PARITY_TESTS "Enable C17 vs golden-reference parity tests" OFF
 option(IVP_ENABLE_SCENARIO_TESTS "Enable scenario regression tests (test_scenario_*)" OFF)
 option(IVP_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(IVP_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(IVP_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(IVP_BUILD_TESTS "Build unit tests" ON)
 option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_BUILD_TESTS})
 option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
@@ -57,6 +58,18 @@ if (IVP_ENABLE_UBSAN)
         add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
         add_link_options(-fsanitize=undefined)
     endif ()
+endif ()
+
+if (IVP_ENABLE_TSAN)
+    if (MSVC)
+        message(FATAL_ERROR "IVP_ENABLE_TSAN is not supported by MSVC")
+    endif ()
+    if (IVP_ENABLE_ASAN)
+        message(FATAL_ERROR
+                "IVP_ENABLE_TSAN and IVP_ENABLE_ASAN cannot be enabled together")
+    endif ()
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
 endif ()
 
 # ── Compile definitions from options ──────────────────────────────────────────

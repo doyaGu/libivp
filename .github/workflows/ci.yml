@@ -11,16 +11,46 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --config Release --parallel
       - name: Unit tests
-        run: ctest --test-dir build -L unit --output-on-failure --parallel 4
+        run: ctest --test-dir build -C Release -L unit --output-on-failure --parallel 4
+
+  # Continuously enforce configurations that previously ran only as local
+  # release checks. ThreadSanitizer stays scoped to the parallel contract
+  # tests because the full legacy suite is unnecessarily expensive under it.
+  verification:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debug-float
+            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_REAL_DOUBLE=OFF
+            test_args: -L unit --parallel 4
+          - name: asan-ubsan
+            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_ASAN=ON -DIVP_ENABLE_UBSAN=ON
+            test_args: -L unit --parallel 2
+          - name: tsan-parallel
+            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
+            test_args: -R "test_(parallel_worlds|internal_parallel|qhull_reentrant)$" --parallel 1
+    name: verification (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -S . ${{ matrix.cmake_args }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Tests
+        run: ctest --test-dir build ${{ matrix.test_args }} --output-on-failure
 
   # Examples: build with SDL3 and run every one headless (no window, no GPU).
   examples:
