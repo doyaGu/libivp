@@ -1,9 +1,14 @@
 # tools/parity — 与原版 IVP 的逐位对照
 
-libivp 与原版引擎（默认 `../ivp`）在 `tools/scenarios.txt` 的全部场景中逐位一致：
+libivp 与原版引擎（默认 `../ivp`）在 `tools/scenarios.txt` 的 48 个场景中
+有 45 个逐位一致：
 
 - **Release 构建：**对照以 `-ffp-contract=off` 构建的原版。
 - **Debug 构建：**对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
+
+`convex_hulls`、`hull_pile`、`galton` 是已记录的 Qhull 版本 gap：libivp
+使用可重入的 Qhull 2020.2，参考使用 qhull 2.6。检查脚本仍会对这些差异返回
+非零，以免新增回归被静默掩盖；详情见 `docs/PARITY_GAP_INVENTORY.md`。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
