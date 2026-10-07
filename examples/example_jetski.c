@@ -21,11 +21,12 @@
  *               ivp_jetski_activate_booster, ivp_jetski_change_spring_*.
  */
 #include "demo_app.h"
+#include "demo_water.h"
 
 #include <ivp/controllers/ivp_controller_fake_jetski.h>
 
 #define SEA_X       40.0
-#define SEA_Z       40.0
+#define SEA_Z       50.0
 #define FLOOR_Y     6.0
 #define WAVE_LEN    10.0
 #define BODY_HX     0.5
@@ -202,8 +203,22 @@ static void jetski_reset(demo_app_t *app)
 
 /* ── drawing ─────────────────────────────────────────────────────────────── */
 
+static float sea_height(void *ctx, float x, float z)
+{
+    const jetski_demo_t *s = (const jetski_demo_t *)ctx;
+    (void)z;
+    return (float)sea_y(s, (double)x, (double)ivp_environment_get_time(s->env));
+}
+
 static void draw_sea(demo_viewer_t *v, const jetski_demo_t *s, const float centre[3])
 {
+    if (v->solid) {
+        const float deep[3] = { 0.08f, 0.30f, 0.70f }, crest[3] = { 0.60f, 0.85f, 1.0f };
+        const float x0 = fmaxf(centre[0] - 24.0f, (float)-SEA_X), x1 = fminf(centre[0] + 24.0f, (float)SEA_X);
+        const float z0 = fmaxf(centre[2] - 24.0f, (float)-SEA_Z), z1 = fminf(centre[2] + 24.0f, (float)SEA_Z);
+        demo_draw_water_plates(v, x0, x1, z0, z1, 1.5f, sea_height, (void *)s, deep, crest, 0.58f);
+        return;
+    }
     const double t = (double)ivp_environment_get_time(s->env);
     const float c1[3] = { 0.30f, 0.55f, 0.90f };
     const double x0 = floor((double)centre[0] / 2.0) * 2.0, z0 = floor((double)centre[2] / 2.0) * 2.0;
@@ -230,7 +245,7 @@ static void draw_sea(demo_viewer_t *v, const jetski_demo_t *s, const float centr
 static void jetski_draw(demo_app_t *app, demo_viewer_t *v)
 {
     jetski_demo_t *s = (jetski_demo_t *)app->user;
-    const float c_floor[3] = { 0.30f, 0.34f, 0.40f }, c_wall[3] = { 0.40f, 0.43f, 0.48f }, c_ski[3] = { 0.95f, 0.65f, 0.20f };
+    const float c_floor[3] = { 0.62f, 0.55f, 0.38f }, c_wall[3] = { 0.40f, 0.43f, 0.48f }, c_ski[3] = { 0.95f, 0.65f, 0.20f };
     demo_draw_object(v, s->floor, c_floor);
     for (int i = 0; i < 4; i++) demo_draw_object(v, s->wall[i], c_wall);
     demo_draw_object(v, s->body, c_ski);
@@ -294,7 +309,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_dist  = 14.0f;
     app.cfg.orbit_yaw   = 160.0f;
     app.cfg.orbit_pitch = -22.0f;
-    app.cfg.target[2]   = -26.0f;
+    app.cfg.target[2]   = -28.0f;
     app.cfg.grid_extent = -1.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
@@ -313,7 +328,7 @@ int main(int argc, char **argv)
     s->wall[2] = demo_create_box(w, NULL, SEA_X + 4.0, 6.0, 1.0, 0.0, NULL, 0.0, 0.0, SEA_Z + 3.0);
     s->wall[3] = demo_create_box(w, NULL, SEA_X + 4.0, 6.0, 1.0, 0.0, NULL, 0.0, 0.0, -SEA_Z - 3.0);
 
-    s->z0 = -30.0;
+    s->z0 = -28.0;
     ivp_object_template_t bt;
     const ivp_material_t m = demo_material(0.5, 0.1);
     demo_template_dynamic(&bt, &m, BODY_MASS);

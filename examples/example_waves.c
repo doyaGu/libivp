@@ -18,6 +18,7 @@
  *               ivp_buoyancy_attacher_create, ivp_set_active_add / remove.
  */
 #include "demo_app.h"
+#include "demo_water.h"
 
 #include <ivp/containers/ivp_set.h>
 #include <ivp/controllers/ivp_controller_buoyancy.h>
@@ -197,8 +198,21 @@ static void waves_reset(demo_app_t *app)
 
 /* ── drawing ─────────────────────────────────────────────────────────────── */
 
+static float water_height(void *ctx, float x, float z)
+{
+    const waves_demo_t *s = (const waves_demo_t *)ctx;
+    (void)z;
+    return (float)wave_y(&s->wave, (double)x, (double)ivp_environment_get_time(s->env));
+}
+
 static void draw_water(demo_viewer_t *v, const waves_demo_t *s)
 {
+    if (v->solid) {
+        const float deep[3] = { 0.10f, 0.35f, 0.75f }, crest[3] = { 0.60f, 0.85f, 1.0f };
+        demo_draw_water_plates(v, (float)-POOL_X, (float)POOL_X, (float)-POOL_Z, (float)POOL_Z, 0.5f, water_height, (void *)s, deep,
+                               crest, 0.42f);
+        return;
+    }
     const double t = (double)ivp_environment_get_time(s->env);
     const float c1[3] = { 0.30f, 0.55f, 0.90f }, c2[3] = { 0.25f, 0.45f, 0.80f };
     for (int zi = -2; zi <= 2; zi++) {

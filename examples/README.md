@@ -142,4 +142,4 @@ with a callback that pushes the value to the engine.
 
 The framework headers: `demo_app.h` (world, viewer, drawing), `demo_debug.h`
 (picking, impact ring), `demo_panel.h` (the panel widgets, testable without a
-window), `demo_terrain.h` (heightfield terrain).
+window), `demo_terrain.h` (heightfield terrain), `demo_water.h` (a translucent moving water surface).

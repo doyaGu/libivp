@@ -197,14 +197,22 @@ static void zones_draw(demo_app_t *app, demo_viewer_t *v)
         demo_box(v, pos, half, NULL, zn->col);
         for (int i = 0; i < N_PER; i++) demo_draw_object(v, zn->body[i], c_body[i]);
     }
-    /* the water surface of the pool */
+    /* the water of the pool: a translucent block from the surface (y = -2) to the floor of the tank */
     const zone_t *p = &s->zone[Z_POOL];
-    const float w0[3] = { (float)(p->x - p->half), -2.0f, -2.0f }, w1[3] = { (float)(p->x + p->half), -2.0f, -2.0f },
-                w2[3] = { (float)(p->x + p->half), -2.0f, 2.0f }, w3[3] = { (float)(p->x - p->half), -2.0f, 2.0f };
-    demo_line(v, w0, w1, DEMO_COL_WATER);
-    demo_line(v, w1, w2, DEMO_COL_WATER);
-    demo_line(v, w2, w3, DEMO_COL_WATER);
-    demo_line(v, w3, w0, DEMO_COL_WATER);
+    if (v->solid) {
+        const float water[3] = { 0.15f, 0.45f, 0.85f }, centre[3] = { (float)p->x, -1.15f, 0.0f },
+                    half[3] = { (float)p->half, 0.85f, (float)p->half };
+        demo_set_alpha(v, 0.38f);
+        demo_solid_box(v, centre, half, NULL, water);
+        demo_set_alpha(v, 1.0f);
+    } else {
+        const float w0[3] = { (float)(p->x - p->half), -2.0f, -2.0f }, w1[3] = { (float)(p->x + p->half), -2.0f, -2.0f },
+                    w2[3] = { (float)(p->x + p->half), -2.0f, 2.0f }, w3[3] = { (float)(p->x - p->half), -2.0f, 2.0f };
+        demo_line(v, w0, w1, DEMO_COL_WATER);
+        demo_line(v, w1, w2, DEMO_COL_WATER);
+        demo_line(v, w2, w3, DEMO_COL_WATER);
+        demo_line(v, w3, w0, DEMO_COL_WATER);
+    }
 
     for (int z = 0; z < N_ZONES; z++) {
         const zone_t *zn = &s->zone[z];
