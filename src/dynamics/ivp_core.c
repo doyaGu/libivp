@@ -19,6 +19,7 @@
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_sim_internal.h"
 #include "dynamics/ivp_env_hot.h"
+#include "dynamics/ivp_env_parallel_tasks.h"
 #include "solver/ivp_friction_internal.h"
 #include "controllers/ivp_car_wheel_physics.h"
 
@@ -1154,7 +1155,8 @@ static bool cnps_has_identity_rotation(const ivp_core_t *core)
            core->q_world_f_core_next_psi.w == IVP_REAL(1.0);
 }
 
-void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, ivp_pvec_t *active_hull_managers_out)
+static void cnps_emit_calc_next_debug(ivp_core_t *core,
+                                      const ivp_sim_es_t *event_sim)
 {
     struct ivp_environment *env = ivp_core_env(core);
     IVP_IF(1)
@@ -1166,6 +1168,12 @@ void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, iv
                     ivp_env_get_current_time(env));
         }
     }
+}
+
+static void cnps_calc_next_psi_matrix_body(ivp_core_t *core,
+                                           ivp_sim_es_t *event_sim)
+{
+    struct ivp_environment *env = ivp_core_env(core);
     if (!(core->car_wheel && core->max_surface_deviation == IVP_REAL(0.0))) {
         ivp_vec3f_t sp = ivp_core_speed_f(core);
         ivp_core_clip_velocity(core, &sp, &core->rot_speed);
@@ -1212,11 +1220,30 @@ void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core, ivp_sim_es_t *event_sim, iv
         if (!h_manager) continue;
         ivp_hull_mgr_increase_hull_by_x(h_manager, ivp_env_get_current_time(env), (float)event_sim->delta_time,
                                         (float)new_speed, core->current_speed);
-        if (ivp_hull_mgr_are_events_in_hull(h_manager)) {
-            /* the reference adds unconditionally (IVP_Core_Merged passes NULL and never has events) */
-            if (active_hull_managers_out) ivp_pvec_add(active_hull_managers_out, h_manager);
+    }
+}
+
+static void cnps_collect_active_hulls(ivp_core_t *core,
+                                      ivp_pvec_t *active_hull_managers_out)
+{
+    if (!active_hull_managers_out) return;
+    for (int c = ivp_core_n_objects(core) - 1; c >= 0; c--) {
+        ivp_hull_mgr_t *h_manager = ivp_core_object_at(core, c)->hull_manager;
+        if (h_manager && ivp_hull_mgr_are_events_in_hull(h_manager)) {
+            /* The reference adds unconditionally. IVP_Core_Merged passes
+             * NULL and never has hull events. */
+            (void)ivp_pvec_add(active_hull_managers_out, h_manager);
         }
     }
+}
+
+void ivp_cnps_calc_next_psi_matrix(ivp_core_t *core,
+                                   ivp_sim_es_t *event_sim,
+                                   ivp_pvec_t *active_hull_managers_out)
+{
+    cnps_emit_calc_next_debug(core, event_sim);
+    cnps_calc_next_psi_matrix_body(core, event_sim);
+    cnps_collect_active_hulls(core, active_hull_managers_out);
 }
 
 void ivp_cnps_set_transformation(ivp_core_t *core, const ivp_quatr_t *rotation, const ivp_vec3r_t *position,
@@ -1278,11 +1305,93 @@ void ivp_cnps_set_transformation(ivp_core_t *core, const ivp_quatr_t *rotation, 
     core->max_surface_rot_speed = 0.0f;
 }
 
-void ivp_cnps_commit_all_calc_next_psi_matrix(struct ivp_environment *env, ivp_pvec_t *cores, ivp_pvec_t *active_hulls_out)
+typedef struct cnps_parallel_context {
+    ivp_pvec_t *cores;
+    int core_count;
+    ivp_sim_es_t event_sim;
+} cnps_parallel_context_t;
+
+static void cnps_parallel_calc_task(void *opaque, size_t task_index)
+{
+    cnps_parallel_context_t *context = (cnps_parallel_context_t *)opaque;
+    int core_index = context->core_count - 1 - (int)task_index;
+    ivp_core_t *core = (ivp_core_t *)ivp_pvec_at(context->cores, core_index);
+    cnps_calc_next_psi_matrix_body(core, &context->event_sim);
+}
+
+/* clip_velocity updates environment-wide anomaly counters on its exceptional
+ * path.  Preserve their exact serial behavior by declining parallel work for
+ * the whole batch whenever any core would take that path. */
+static bool cnps_core_is_parallel_safe(const ivp_core_t *core)
+{
+    if (core->car_wheel && core->max_surface_deviation == IVP_REAL(0.0)) {
+        return true;
+    }
+    struct ivp_environment *env = ivp_core_env(core);
+    ivp_vec3f_t speed = ivp_core_speed_f(core);
+    double max_speed = (double)ivp_env_anomaly_get_max_velocity(env);
+    if ((double)lvf_quad_length(&speed) > max_speed * max_speed) return false;
+    if (!core->spin_clipping_enabled &&
+        ((!core->car_wheel) ||
+         (core->max_surface_deviation != IVP_REAL(0.0)))) {
+        double max_rotation =
+            (double)(ivp_env_anomaly_get_max_angular_velocity_per_psi(env) *
+                     ivp_env_get_inv_delta_psi_time(env));
+        if ((double)lvf_quad_length(&core->rot_speed) >
+            max_rotation * max_rotation) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ivp_cnps_commit_all_calc_next_psi_matrix(
+    struct ivp_environment *env, ivp_pvec_t *cores,
+    ivp_pvec_t *active_hulls_out)
 {
     ivp_sim_es_t es;
     ivp_sim_es_init_dt(&es, env, (double)ivp_env_get_delta_psi_time(env));
-    for (int i = ivp_pvec_len(cores) - 1; i >= 0; i--) {
+    const int core_count = ivp_pvec_len(cores);
+    /* A pool wakeup is more expensive than a few hundred simple core
+     * predictions.  Keep smaller worlds on the reference loop. */
+    size_t minimum_tasks = 2048u;
+    int worker_count = ivp_env_parallel_worker_count(env);
+    if (worker_count > 0 && minimum_tasks < (size_t)worker_count) {
+        minimum_tasks = (size_t)worker_count;
+    }
+    bool parallel_safe =
+        worker_count > 1 &&
+        (size_t)core_count >= minimum_tasks;
+    if (parallel_safe) {
+        for (int i = core_count - 1; i >= 0; i--) {
+            if (!cnps_core_is_parallel_safe(
+                    (const ivp_core_t *)ivp_pvec_at(cores, i))) {
+                parallel_safe = false;
+                break;
+            }
+        }
+    }
+    cnps_parallel_context_t context;
+    context.cores = cores;
+    context.core_count = core_count;
+    context.event_sim = es;
+    if (parallel_safe &&
+        ivp_env_parallel_for(env, IVP_PARALLEL_WORK_BROADPHASE,
+                             (size_t)core_count, minimum_tasks,
+                             cnps_parallel_calc_task, &context)) {
+        /* Parallel workers only perform disjoint core/hull writes.  Restore
+         * the reference-visible debug and append order on the PSI thread. */
+        for (int i = core_count - 1; i >= 0; i--) {
+            cnps_emit_calc_next_debug(
+                (ivp_core_t *)ivp_pvec_at(cores, i), &es);
+        }
+        for (int i = core_count - 1; i >= 0; i--) {
+            cnps_collect_active_hulls(
+                (ivp_core_t *)ivp_pvec_at(cores, i), active_hulls_out);
+        }
+        return;
+    }
+    for (int i = core_count - 1; i >= 0; i--) {
         ivp_cnps_calc_next_psi_matrix((ivp_core_t *)ivp_pvec_at(cores, i), &es, active_hulls_out);
     }
 }
