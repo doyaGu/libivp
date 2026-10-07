@@ -50,11 +50,21 @@ void ivp_world_scheduler_destroy(ivp_world_scheduler_t *scheduler);
  * storage as world storage.  The caller must not otherwise access an
  * environment until this call returns.
  *
+ * Before a parallel batch starts, every worker adopts the dispatching thread's
+ * floating-point environment.  No world advances unless all workers complete
+ * that setup.  Given identical initial world state and inputs, scheduling and
+ * worker assignment do not change that world's result: it must match direct
+ * serial stepping bit for bit.  Application side effects shared across worlds
+ * are outside this guarantee.  Callbacks must preserve the floating-point
+ * environment they receive.
+ *
  * IVP_HOME_BUILD and IVP_BENCHMARK_DIAGNOSTICS retain legacy process-wide
  * instrumentation and therefore serialize simulation; a multi-world dispatch
  * in either opt-in build mode returns IVP_ERR_INVALID_STATE.
  *
- * A scheduler accepts one dispatch at a time. */
+ * A scheduler accepts one dispatch at a time.  IVP_ERR_INVALID_STATE also
+ * reports failure to capture or install the dispatching thread's
+ * floating-point environment. */
 ivp_result_t ivp_world_scheduler_simulate_one_psi(
     ivp_world_scheduler_t *scheduler,
     ivp_environment_t *const *environments,

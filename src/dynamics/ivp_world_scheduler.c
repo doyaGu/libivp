@@ -3,6 +3,7 @@
 
 #include "dynamics/ivp_environment_parallel.h"
 
+#include <fenv.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -41,7 +42,10 @@ struct ivp_world_scheduler {
     ivp_environment_t *const *environments;
     size_t environment_count;
     size_t next_environment;
+    int workers_ready;
     int workers_done;
+    bool worker_setup_failed;
+    fenv_t floating_point_environment;
     ivp_world_job_kind_t job_kind;
     ivp_real_t elapsed_time;
 
@@ -118,17 +122,36 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
         if (s->stopping) break;
         observed_generation = s->generation;
 
-        for (;;) {
-            if (s->next_environment >= s->environment_count) break;
-            size_t index = s->next_environment++;
-            ivp_environment_t *env = s->environments[index];
-            ivp_world_job_kind_t kind = s->job_kind;
-            ivp_real_t elapsed_time = s->elapsed_time;
-            sync_unlock(s);
+        const fenv_t floating_point_environment =
+            s->floating_point_environment;
+        sync_unlock(s);
+        bool setup_ok = fesetenv(&floating_point_environment) == 0;
+        sync_lock(s);
+        if (!setup_ok) s->worker_setup_failed = true;
+        s->workers_ready++;
+        if (s->workers_ready == s->worker_count) {
+            sync_broadcast(&s->work_done);
+        } else {
+            while (!s->stopping &&
+                   s->workers_ready != s->worker_count) {
+                sync_wait(&s->work_done, s);
+            }
+        }
+        if (s->stopping) break;
 
-            scheduler_run_environment(kind, env, elapsed_time);
+        if (!s->worker_setup_failed) {
+            for (;;) {
+                if (s->next_environment >= s->environment_count) break;
+                size_t index = s->next_environment++;
+                ivp_environment_t *env = s->environments[index];
+                ivp_world_job_kind_t kind = s->job_kind;
+                ivp_real_t elapsed_time = s->elapsed_time;
+                sync_unlock(s);
 
-            sync_lock(s);
+                scheduler_run_environment(kind, env, elapsed_time);
+
+                sync_lock(s);
+            }
         }
 
         s->workers_done++;
@@ -335,6 +358,11 @@ static ivp_result_t scheduler_dispatch(
         sync_unlock(s);
         return result;
     }
+    if (s->worker_count > 1 &&
+        fegetenv(&s->floating_point_environment) != 0) {
+        sync_unlock(s);
+        return IVP_ERR_INVALID_STATE;
+    }
 
     size_t acquired = 0;
     for (; acquired < environment_count; acquired++) {
@@ -351,7 +379,9 @@ static ivp_result_t scheduler_dispatch(
     s->environments = environments;
     s->environment_count = environment_count;
     s->next_environment = 0;
+    s->workers_ready = 0;
     s->workers_done = 0;
+    s->worker_setup_failed = false;
     s->job_kind = kind;
     s->elapsed_time = elapsed_time;
     s->running = true;
@@ -369,6 +399,7 @@ static ivp_result_t scheduler_dispatch(
         s->generation++;
         sync_broadcast(&s->work_ready);
         while (s->running) sync_wait(&s->work_done, s);
+        if (s->worker_setup_failed) result = IVP_ERR_INVALID_STATE;
     }
 
     s->environments = NULL;
@@ -377,7 +408,7 @@ static ivp_result_t scheduler_dispatch(
         ivp_environment_end_simulation(environments[i]);
     }
     sync_unlock(s);
-    return IVP_OK;
+    return result;
 }
 
 ivp_result_t ivp_world_scheduler_simulate_one_psi(
