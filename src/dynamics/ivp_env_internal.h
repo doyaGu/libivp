@@ -28,6 +28,8 @@ struct ivp_anomaly_limits;
 struct ivp_fr_system;
 struct ivp_impact_solver_lt;
 struct ivp_contact_situation_lt;
+struct ivp_mindist;
+struct ivp_mindist_settings;
 
 /* IVP_ENV_STATE */
 typedef enum ivp_env_state {
@@ -62,6 +64,15 @@ struct ivp_mindist_mgr          *ivp_env_get_mindist_mgr(struct ivp_environment 
 struct ivp_ov_tree              *ivp_env_get_ov_tree(struct ivp_environment *env);
 struct ivp_sim_units_mgr        *ivp_env_get_sim_units_mgr(struct ivp_environment *env);
 struct ivp_anomaly_limits       *ivp_env_get_anomaly_limits(struct ivp_environment *env);
+const struct ivp_mindist_settings *ivp_env_get_mindist_settings(const struct ivp_environment *env);
+struct ivp_mindist             *ivp_env_get_current_mindist(const struct ivp_environment *env);
+void                            ivp_env_set_current_mindist(struct ivp_environment *env,
+                                                           struct ivp_mindist *mindist);
+bool                            ivp_env_get_defer_delete_mindist(const struct ivp_environment *env);
+void                            ivp_env_set_defer_delete_mindist(struct ivp_environment *env,
+                                                                bool defer_delete);
+int                             ivp_env_next_friction_debug_counter(struct ivp_environment *env);
+int                             ivp_env_next_global_friction_debug_counter(struct ivp_environment *env);
 
 /* IVP_Range_Manager */
 void   ivp_env_get_coll_range_intra_objects(struct ivp_environment *env, const struct ivp_object *o0,

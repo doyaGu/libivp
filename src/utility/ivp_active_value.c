@@ -13,17 +13,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
 
 /* ── Global change meter (IVP_U_Active_Float::change_meter = -1) ─────── */
 
-static int g_change_meter = -1;
+static atomic_int g_change_meter = -1;
 
-static inline void change_meter_increment(void) {
-    g_change_meter = (int)((unsigned int)g_change_meter + 1u);
+static inline int change_meter_increment(void) {
+    int old = atomic_fetch_add_explicit(&g_change_meter, 1,
+                                        memory_order_relaxed);
+    return (int)((unsigned int)old + 1u);
 }
 
 int ivp_active_value_change_meter(void) {
-    return g_change_meter;
+    return atomic_load_explicit(&g_change_meter, memory_order_relaxed);
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
@@ -189,21 +192,22 @@ static void int_remove_derived_node(ivp_active_int_t *parent, void *node) {
 
 /* ── Propagation ────────────────────────────────────────────────────────── */
 
-static void float_node_changed(ivp_active_float_t *af);
-static void int_node_changed(ivp_active_int_t *ai);
+static void float_node_changed(ivp_active_float_t *af, int change_meter);
+static void int_node_changed(ivp_active_int_t *ai, int change_meter);
 
 /* IVP_U_Active_Float::update_derived: notify derived entries from the last
  * one to the first one. */
-static void float_update_derived(ivp_active_float_t *af, double old_value) {
+static void float_update_derived(ivp_active_float_t *af, double old_value,
+                                 int change_meter) {
     for (int i = af->derived_count - 1; i >= 0; i--) {
         if (i >= af->derived_count) continue; /* list shrank during a callback */
         ivp_active_derived_t e = af->derived[i];
         switch (e.kind) {
         case IVP_ACTIVE_DERIVED_FLOAT_NODE:
-            float_node_changed((ivp_active_float_t *)e.target);
+            float_node_changed((ivp_active_float_t *)e.target, change_meter);
             break;
         case IVP_ACTIVE_DERIVED_INT_NODE:
-            int_node_changed((ivp_active_int_t *)e.target);
+            int_node_changed((ivp_active_int_t *)e.target, change_meter);
             break;
         case IVP_ACTIVE_DERIVED_FLOAT_LISTENER:
             e.fn.f(e.target, af, old_value, af->value);
@@ -215,17 +219,18 @@ static void float_update_derived(ivp_active_float_t *af, double old_value) {
 }
 
 /* IVP_U_Active_Int::update_derived */
-static void int_update_derived(ivp_active_int_t *ai, int old_value) {
+static void int_update_derived(ivp_active_int_t *ai, int old_value,
+                               int change_meter) {
     for (int i = ai->derived_count - 1; i >= 0; i--) {
         if (i >= ai->derived_count) continue;
         ivp_active_derived_t e = ai->derived[i];
         switch (e.kind) {
         case IVP_ACTIVE_DERIVED_FLOAT_NODE:
             /* IVP_U_Active_Switch::active_int_changed → active_float_changed */
-            float_node_changed((ivp_active_float_t *)e.target);
+            float_node_changed((ivp_active_float_t *)e.target, change_meter);
             break;
         case IVP_ACTIVE_DERIVED_INT_NODE:
-            int_node_changed((ivp_active_int_t *)e.target);
+            int_node_changed((ivp_active_int_t *)e.target, change_meter);
             break;
         case IVP_ACTIVE_DERIVED_INT_LISTENER:
             e.fn.i(e.target, ai, old_value, ai->value);
@@ -281,24 +286,24 @@ static double float_compute(const ivp_active_float_t *af) {
 }
 
 /* active_float_changed() of a derived float node */
-static void float_node_changed(ivp_active_float_t *af) {
+static void float_node_changed(ivp_active_float_t *af, int change_meter) {
     if (af->type == IVP_ACTIVE_FLOAT_TERMINAL) return;
-    if (af->last_update == g_change_meter) return; /* already valid */
-    af->last_update = g_change_meter;
+    if (af->last_update == change_meter) return; /* already valid */
+    af->last_update = change_meter;
 
     double new_val = float_compute(af);
     if (new_val != af->value) {
         double old = af->value;
         af->value = new_val;
-        float_update_derived(af, old);
+        float_update_derived(af, old, change_meter);
     }
 }
 
 /* IVP_U_Active_Test_Range::active_float_changed */
-static void int_node_changed(ivp_active_int_t *ai) {
+static void int_node_changed(ivp_active_int_t *ai, int change_meter) {
     if (ai->type != IVP_ACTIVE_INT_TEST_RANGE) return;
-    if (ai->last_update == g_change_meter) return;
-    ai->last_update = g_change_meter;
+    if (ai->last_update == change_meter) return;
+    ai->last_update = change_meter;
 
     double cmp_val = ai->src_test->value;
     double low_val = ai->src_low->value;
@@ -307,25 +312,25 @@ static void int_node_changed(ivp_active_int_t *ai) {
     if (new_val != ai->value) {
         int old = ai->value;
         ai->value = new_val;
-        int_update_derived(ai, old);
+        int_update_derived(ai, old, change_meter);
     }
 }
 
 /* IVP_U_Active_Terminal_Double::update_float */
-static void terminal_float_update(ivp_active_float_t *af) {
+static void terminal_float_update(ivp_active_float_t *af, int change_meter) {
     if (af->value != af->old_value) {
         double old = af->old_value;
         af->old_value = af->value;
-        float_update_derived(af, old);
+        float_update_derived(af, old, change_meter);
     }
 }
 
 /* IVP_U_Active_Terminal_Int::update_int */
-static void terminal_int_update(ivp_active_int_t *ai) {
+static void terminal_int_update(ivp_active_int_t *ai, int change_meter) {
     if (ai->value != ai->old_value) {
         int old = ai->old_value;
         ai->old_value = ai->value;
-        int_update_derived(ai, old);
+        int_update_derived(ai, old, change_meter);
     }
 }
 
@@ -364,7 +369,8 @@ static ivp_active_float_t *binary_create(const ivp_allocator_t *alloc, const cha
     af->osc_factor = factor;
     float_depend_on_float(af, a); /* mod0->add_dependency(this) */
     float_depend_on_float(af, b); /* mod1->add_dependency(this) */
-    float_node_changed(af);       /* this->active_float_changed(this) */
+    float_node_changed(af, ivp_active_value_change_meter());
+    /* this->active_float_changed(this) */
     return af;
 }
 
@@ -403,7 +409,7 @@ ivp_active_float_t *ivp_active_float_limit_create(const ivp_allocator_t *alloc,
     af->clamp_min = low_val;
     af->clamp_max = high_val;
     float_depend_on_float(af, source);
-    float_node_changed(af);
+    float_node_changed(af, ivp_active_value_change_meter());
     return af;
 }
 
@@ -422,7 +428,7 @@ ivp_active_float_t *ivp_active_float_negate_create(const ivp_allocator_t *alloc,
     if (!af) return NULL;
     af->src_a = source;
     float_depend_on_float(af, source);
-    float_node_changed(af);
+    float_node_changed(af, ivp_active_value_change_meter());
     return af;
 }
 
@@ -440,7 +446,7 @@ ivp_active_float_t *ivp_active_float_switch_create(const ivp_allocator_t *alloc,
     int_add_derived(condition, node_entry(IVP_ACTIVE_DERIVED_FLOAT_NODE, af));
     float_depend_on_float(af, true_val);
     float_depend_on_float(af, false_val);
-    float_node_changed(af);
+    float_node_changed(af, ivp_active_value_change_meter());
     return af;
 }
 
@@ -463,7 +469,8 @@ ivp_active_float_t *ivp_active_float_sine_create(const ivp_allocator_t *alloc,
     af->osc_amplitude = amplitude;
     af->osc_null_level = null_level;
     af->osc_time_shift = time_shift;
-    float_node_changed(af); /* no derived existing yet */
+    float_node_changed(af, ivp_active_value_change_meter());
+    /* no derived existing yet */
     return af;
 }
 
@@ -489,7 +496,7 @@ ivp_active_float_t *ivp_active_float_pulse_create(const ivp_allocator_t *alloc,
     af->osc_time_shift = high_val;
     af->osc_pulse_m1 = m1;
     af->osc_pulse_m2 = m2;
-    float_node_changed(af);
+    float_node_changed(af, ivp_active_value_change_meter());
     return af;
 }
 
@@ -504,7 +511,7 @@ ivp_active_int_t *ivp_active_int_test_range_create(const ivp_allocator_t *alloc,
     float_add_derived(test, node_entry(IVP_ACTIVE_DERIVED_INT_NODE, ai));
     float_add_derived(low_val, node_entry(IVP_ACTIVE_DERIVED_INT_NODE, ai));
     float_add_derived(high_val, node_entry(IVP_ACTIVE_DERIVED_INT_NODE, ai));
-    int_node_changed(ai);
+    int_node_changed(ai, ivp_active_value_change_meter());
     return ai;
 }
 
@@ -513,22 +520,23 @@ ivp_active_int_t *ivp_active_int_test_range_create(const ivp_allocator_t *alloc,
 void ivp_active_float_set_delayed(ivp_active_float_t *af, double new_value, bool delayed) {
     if (af->type != IVP_ACTIVE_FLOAT_TERMINAL) return;
     af->value = new_value;
-    change_meter_increment();
+    int change_meter = change_meter_increment();
     if (delayed && af->manager) {
         ivp_active_value_manager_delay_float(af->manager, af);
     } else {
-        terminal_float_update(af);
+        terminal_float_update(af, change_meter);
     }
 }
 
 void ivp_active_int_set_delayed(ivp_active_int_t *ai, int new_value, bool delayed) {
     if (ai->type != IVP_ACTIVE_INT_TERMINAL) return;
     ai->value = new_value;
-    change_meter_increment(); /* IVP_U_Active_Float::change_meter++ */
+    int change_meter = change_meter_increment();
+    /* IVP_U_Active_Float::change_meter++ */
     if (delayed && ai->manager) {
         ivp_active_value_manager_delay_int(ai->manager, ai);
     } else {
-        terminal_int_update(ai);
+        terminal_int_update(ai, change_meter);
     }
 }
 
@@ -942,12 +950,14 @@ void ivp_active_value_manager_delay_int(ivp_active_value_manager_t *m,
 }
 
 void ivp_active_value_manager_update_delayed(ivp_active_value_manager_t *m) {
+    const int change_meter = ivp_active_value_change_meter();
     for (int i = 0; i < m->n_delayed_floats; i++) {
-        terminal_float_update(m->delayed_floats[i]); /* mod->update_float() */
+        terminal_float_update(m->delayed_floats[i], change_meter);
+        /* mod->update_float() */
     }
     m->n_delayed_floats = 0;
     for (int i = 0; i < m->n_delayed_ints; i++) {
-        terminal_int_update(m->delayed_ints[i]);
+        terminal_int_update(m->delayed_ints[i], change_meter);
     }
     m->n_delayed_ints = 0;
 }

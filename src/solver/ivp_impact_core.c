@@ -37,6 +37,14 @@ bool ivp_mindist_recursive_do_impact(ivp_mindist_t *md);   /* ivp_mindist_core.c
 /* env->debug_information / get_debug_manager() and get_statistic_manager() */
 static inline ivp_debug_manager_t *imp_dm(const ivp_core_t *c) { return ivp_env_get_debug_manager(ivp_core_env(c)); }
 static inline ivp_statistic_manager_t *imp_sm(const ivp_core_t *c) { return ivp_env_get_statistic_manager(ivp_core_env(c)); }
+static inline const ivp_mindist_settings_t *imp_settings_for_core(const ivp_core_t *c)
+{
+    return ivp_env_get_mindist_settings(ivp_core_env(c));
+}
+static inline const ivp_mindist_settings_t *imp_settings_for_cp(const ivp_contact_pt_t *cp)
+{
+    return ivp_env_get_mindist_settings(cp->synapse[0].l_obj->owner);
+}
 
 /* IVP_Impact_Solver::get_total_energy (with its IVP_IF(debug_impact) "total_energies" print) is not
  * ported: the reference never calls it (only from commented-out code). */
@@ -374,7 +382,8 @@ static void is_do_impact(impact_solver_t *s, ivp_core_t *pushed_cores[2], bool a
     used_conservation = (double)(1.0f - (1.0f / ((float)pushes_while_system * IVP_INV_HALF_CONSERVATION_STEPS + 1.0f)) *
                                             (1.0f - s->percent_energy_conservation));
     s->rescue_speed_impact_solver =
-        (float)(ivp_mindist_settings.min_vertical_speed_at_collision + rescue_speed_addon) * IVP_SAFETY_FACTOR_FOR_DELAY;
+        (float)(imp_settings_for_core(s->core[0])->min_vertical_speed_at_collision +
+                rescue_speed_addon) * IVP_SAFETY_FACTOR_FOR_DELAY;
     s->delaying_is_allowed = allow_delaying;
     pushed_cores[0] = s->core[0];
     pushed_cores[1] = s->core[1];
@@ -613,8 +622,10 @@ float ivp_contact_pt_get_rescue_speed_impact(ivp_contact_pt_t *cp, struct ivp_en
 {
     double resc_val = 0.0;
     double penetration_len = (double)ivp_cp_get_gap_length(cp);
-    if (penetration_len < (double)ivp_mindist_settings.min_coll_dists) {
-        resc_val = ((double)ivp_mindist_settings.min_coll_dists - penetration_len) * (double)ivp_env_get_inv_delta_psi_time(env);
+    const ivp_mindist_settings_t *settings = ivp_env_get_mindist_settings(env);
+    if (penetration_len < (double)settings->min_coll_dists) {
+        resc_val = ((double)settings->min_coll_dists - penetration_len) *
+                   (double)ivp_env_get_inv_delta_psi_time(env);
     } else {
         cp->tmp_contact_info->impact.rescue_speed_addon = 0.0f;
     }
@@ -631,7 +642,8 @@ void ivp_contact_pt_calc_coll_distance(ivp_contact_pt_t *cp)
 {
     ivp_impact_solver_lt_t *info = cp->tmp_contact_info;
     info->coll_time_is_valid = true;
-    if (ivp_cp_get_gap_length(cp) > ivp_mindist_settings.max_distance_for_impact_system) {
+    if (ivp_cp_get_gap_length(cp) >
+        imp_settings_for_cp(cp)->max_distance_for_impact_system) {
         info->impact.distance_reached_in_time = 1E20f;
         return;
     }
@@ -764,7 +776,9 @@ static bool isys_test_loop_all_pairs(impact_system_t *is)
 {
     ivp_contact_pt_t *worst_impact_dist = NULL;
     ivp_fr_core_pair_t *associated_pair = NULL;
-    double smallest_distance = (double)ivp_mindist_settings.minimum_friction_dist;
+    const ivp_mindist_settings_t *settings =
+        ivp_env_get_mindist_settings(is->l_environment);
+    double smallest_distance = (double)settings->minimum_friction_dist;
     double rescue_speed_addon = 0.0;
     IVP_IF(ivp_env_get_debug_manager(is->l_environment)->file_out_impacts) {
         fprintf(ivp_env_get_debug_manager(is->l_environment)->out_deb_file, "calc_new_coll_distances\n");
@@ -797,7 +811,7 @@ static bool isys_test_loop_all_pairs(impact_system_t *is)
     }
     if (!worst_impact_dist) return false;
     IVP_ASSERT((double)worst_impact_dist->tmp_contact_info->impact.distance_reached_in_time <
-               (double)ivp_mindist_settings.minimum_friction_dist);
+               (double)settings->minimum_friction_dist);
     for (int i = 1; i >= 0; i--) {
         ivp_core_t *core = worst_impact_dist->tmp_contact_info->contact_core[i];
         if (core && !isys_core_is_already_known(core)) {
@@ -881,7 +895,8 @@ static void isys_debug_check_all_dists_at_end(impact_system_t *is)
         ivp_contact_pt_recalc_friction_s_vals(my_dist);
         ivp_contact_pt_calc_coll_distance(my_dist);
         my_dist->tmp_contact_info->coll_time_is_valid = false;
-        if (my_dist->tmp_contact_info->impact.distance_reached_in_time < ivp_mindist_settings.minimum_friction_dist) {
+        if (my_dist->tmp_contact_info->impact.distance_reached_in_time <
+            ivp_env_get_mindist_settings(is->l_environment)->minimum_friction_dist) {
             ivp_core_t *core0 = my_dist->synapse[0].l_obj->physical_core;
             ivp_core_t *core1 = my_dist->synapse[1].l_obj->physical_core;
             int unmov0 = (int)core0->physical_unmoveable | (int)core0->temporarily_unmovable;
@@ -1272,11 +1287,11 @@ allocation_failed:
 
 static void mindist_base_do_impact(ivp_mindist_t *md)
 {
-    ivp_mindist_t *previous_mindist = ivp_g_current_mindist;
-    bool previous_defer_delete = ivp_g_defer_delete_mindist;
-    ivp_g_defer_delete_mindist = false;
-    ivp_g_current_mindist = md;
     struct ivp_environment *env = md->env;
+    ivp_mindist_t *previous_mindist = ivp_env_get_current_mindist(env);
+    bool previous_defer_delete = ivp_env_get_defer_delete_mindist(env);
+    ivp_env_set_defer_delete_mindist(env, false);
+    ivp_env_set_current_mindist(env, md);
     IVP_ASSERT(md->mindist_status == IVP_MD_EXACT);
     ivp_object_t *objects[2];
     for (int i = 0; i < 2; i++) {
@@ -1284,10 +1299,10 @@ static void mindist_base_do_impact(ivp_mindist_t *md)
         objects[i] = obj;
         ivp_object_revive_object_for_simulation(obj);
     }
-    if (ivp_g_defer_delete_mindist) {
+    if (ivp_env_get_defer_delete_mindist(env)) {
         IVP_ASSERT(0);
-        ivp_g_current_mindist = previous_mindist;
-        ivp_g_defer_delete_mindist = previous_defer_delete;
+        ivp_env_set_current_mindist(env, previous_mindist);
+        ivp_env_set_defer_delete_mindist(env, previous_defer_delete);
         ivp_collision_delete(&md->coll);
         return;
     }
@@ -1302,9 +1317,9 @@ static void mindist_base_do_impact(ivp_mindist_t *md)
     ivp_env_begin_deferred_deletion(env);
     ivp_impact_lt_do_impact_of_two_objects(md, objects[0], objects[1]);
     ivp_env_sim_mem_end(env);
-    bool delete_current = ivp_g_defer_delete_mindist;
-    ivp_g_current_mindist = previous_mindist;
-    ivp_g_defer_delete_mindist = previous_defer_delete;
+    bool delete_current = ivp_env_get_defer_delete_mindist(env);
+    ivp_env_set_current_mindist(env, previous_mindist);
+    ivp_env_set_defer_delete_mindist(env, previous_defer_delete);
     if (delete_current) ivp_collision_delete(&md->coll);
     ivp_env_end_deferred_deletion(env);
 }

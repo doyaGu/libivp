@@ -300,7 +300,7 @@ static bool object_is_ball(const ivp_object_t *obj, double *radius)
 /* distance from shape A to the object's convex parts (min over ledges) */
 static double distance_shape_object(const ph_shape_t *A, const ivp_object_t *obj)
 {
-    static ph_shape_t B; /* large; not re-entrant (single-threaded engine) */
+    ph_shape_t B;
     double r;
     if (object_is_ball(obj, &r)) {
         B.n = 0;
@@ -342,7 +342,7 @@ static void phantom_sphere_center(const ivp_phantom_state_t *state, double c[3])
 ivp_real_t ivp_phantom_distance_to_object(const ivp_phantom_state_t *state,
                                           const ivp_object_t *obj)
 {
-    static ph_shape_t A;
+    ph_shape_t A;
     switch (state->shape) {
     case IVP_PHANTOM_SPHERE: {
         double c[3];

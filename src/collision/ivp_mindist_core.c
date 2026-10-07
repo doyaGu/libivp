@@ -29,10 +29,6 @@
 #include "dynamics/ivp_env_hot.h"
 
 
-/* g_pCurrentMindist / g_fDeferDeleteMindist (ivp_mindist.cxx) */
-ivp_mindist_t *ivp_g_current_mindist = NULL;
-bool ivp_g_defer_delete_mindist = false;
-
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
 static ivp_recheck_diagnostics_t recheck_diagnostics;
 void ivp_recheck_diagnostics_reset(void)
@@ -59,11 +55,6 @@ D ivp_lcls_calc_qlen_PF_F_space(const ivp_compact_ledge_t *ledge, const ivp_comp
                                 const ivp_vec3r_t *object_pos);
 
 /* ── IVP_Mindist_Settings ───────────────────────────────────────────────── */
-
-ivp_mindist_settings_t ivp_mindist_settings = {
-    /* filled by ivp_mindist_settings_init on first environment creation */
-    0
-};
 
 void ivp_mindist_settings_set_collision_tolerance(ivp_mindist_settings_t *s, double t)
 {
@@ -93,14 +84,18 @@ void ivp_mindist_settings_init(ivp_mindist_settings_t *s)
     s->max_spawned_mindist_count = 1000;
 }
 
+ivp_real_t ivp_mindist_get_coll_dist(const ivp_mindist_t *md)
+{
+    const ivp_mindist_settings_t *settings = ivp_env_get_mindist_settings(md->env);
+    return (ivp_real_t)settings->coll_dists[md->coll_dist_selector];
+}
+
 /* ── object helpers ─────────────────────────────────────────────────────── */
 
-typedef struct IVP_ALIGN16 ball_dummy_ledge {
-    unsigned char bytes[sizeof(ivp_compact_ledge_t) + sizeof(ivp_compact_triangle_t)];
-} ball_dummy_ledge_t;
-static ball_dummy_ledge_t ivp_ball_dummy_ledge;   /* IVP_SurfaceManager_Ball::compact_ledge (zeroed) */
-
-static const ivp_compact_ledge_t *ball_ledge(void) { return (const ivp_compact_ledge_t *)&ivp_ball_dummy_ledge; }
+static const ivp_compact_ledge_t *ball_ledge(void)
+{
+    return ivp_surman_ball_dummy_ledge();
+}
 
 static inline bool obj_is_ball(const ivp_object_t *o) { return o->type == IVP_OBJECT_BALL; }
 
@@ -473,11 +468,11 @@ static void mindist_destroy(ivp_collision_t *c)
     }
     /* ~IVP_Mindist */
 #ifdef IVP_DEBUG_BUILD
-    if (ivp_g_current_mindist == md) {   /* ivp_mindist.cxx:130 */
+    if (ivp_env_get_current_mindist(md->env) == md) {   /* ivp_mindist.cxx:130 */
         (void)ivp_env_check_objects_for_collision_detection(md->env, md->synapse[0].l_obj, md->synapse[1].l_obj);
     }
 #endif
-    IVP_ASSERT(ivp_g_current_mindist != md);
+    IVP_ASSERT(ivp_env_get_current_mindist(md->env) != md);
     /* ivp_mindist.cxx:139 (every build) */
     ivp_env_get_statistic_manager(md->env)->sum_of_mindists--;
     ivp_env_get_statistic_manager(md->env)->mindists_deleted++;
@@ -884,7 +879,8 @@ void ivp_mindist_exact_mindist_went_invalid(ivp_mindist_t *md, struct ivp_mindis
 {
     if (md->is_recursive) {
         /* IVP_Mindist_Recursive::exact_mindist_went_invalid */
-        if (rec_get_spawned_mindist_count(&md->rec_delegator) > ivp_mindist_settings.max_spawned_mindist_count) {
+        if (rec_get_spawned_mindist_count(&md->rec_delegator) >
+            ivp_env_get_mindist_settings(md->env)->max_spawned_mindist_count) {
             ivp_mindist_mgr_remove_exact_mindist(mm, md);
             ivp_mindist_mgr_insert_invalid_mindist(mm, md);
             return;
@@ -1169,7 +1165,7 @@ void ivp_mindist_mgr_recalc_all_exact_wheel_mindist(ivp_mindist_mgr_t *mm)
         if (syn1->edge == md->last_visited_triangle) continue;
         if (ivp_md_synapse_get_status(syn1) == IVP_ST_TRIANGLE && ivp_md_synapse_get_status(syn0) == IVP_ST_BALL) {
             float md_len = md->len_numerator;
-            if (md_len < ivp_mindist_settings.max_distance_for_friction) {
+            if (md_len < ivp_env_get_mindist_settings(md->env)->max_distance_for_friction) {
                 if (ivp_ledge_is_terminal(ivp_md_synapse_get_ledge(syn1))) {
                     ivp_mindist_create_cp_in_advance_pretension(md, syn0->l_obj, md_len);
                     md->last_visited_triangle = syn1->edge;
@@ -1236,7 +1232,8 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
         mim.t_max = ivp_env_get_next_psi_time(env);
     }
     D len = (D)md->len_numerator;
-    if (mim.max_coll_speed < (D)ivp_mindist_settings.speed_after_keeper_dist) {
+    const ivp_mindist_settings_t *settings = ivp_env_get_mindist_settings(env);
+    if (mim.max_coll_speed < (D)settings->speed_after_keeper_dist) {
         if (mim.max_coll_speed < P_DOUBLE_EPS) return;
     }
     D d_time = (D)ivp_time_diff(mim.t_max, mim.t_now);
@@ -1268,9 +1265,9 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
             if (event_hint == IVP_EH_NOW) {
                 next_event = mim.t_now;
             } else {
-                D mdist = len - (D)ivp_mindist_settings.real_coll_dist;
+                D mdist = len - (D)settings->real_coll_dist;
                 D dt = (D)ivp_env_get_delta_psi_time(env);
-                D base = (D)ivp_mindist_settings.event_queue_min_delta_time_base;
+                D base = (D)settings->event_queue_min_delta_time_base;
                 ivp_time_t now = ivp_env_get_current_time(env);
                 if ((event_hint == IVP_EH_BIG_DELAY) || (mim.event_type_out & 0x0f)) {
                     /* IVP_Time + a + b == (IVP_Time + a) + b */
@@ -1391,7 +1388,8 @@ static void mindist_simulate_time_event(ivp_time_event_t *ev, struct ivp_environ
         if ((md->coll_type & 0x0f) == 0) {
             IVP_ASSERT(md->mindist_status == IVP_MD_EXACT);   /* ivp_mindist.cxx:1438 */
             float md_len = md->len_numerator;
-            float sec_dist = (float)(ivp_mindist_get_coll_dist(md) + (D)ivp_mindist_settings.mindist_change_force_dist);
+            float sec_dist = (float)(ivp_mindist_get_coll_dist(md) +
+                                     (D)ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist);
             if (md_len < sec_dist) {
                 ivp_mindist_do_impact(md);
             } else {
@@ -1435,7 +1433,8 @@ void ivp_mindist_recursive_recheck_childs(ivp_mindist_t *md, double dist_intra)
 {
     ivp_object_t *obj0 = md->synapse[0].l_obj;
     ivp_object_t *obj1 = md->synapse[1].l_obj;
-    if (rec_get_spawned_mindist_count(&md->rec_delegator) > ivp_mindist_settings.max_spawned_mindist_count) return;
+    if (rec_get_spawned_mindist_count(&md->rec_delegator) >
+        ivp_env_get_mindist_settings(md->env)->max_spawned_mindist_count) return;
     const ivp_compact_ledge_t *sl[2] = { NULL, NULL };
     const ivp_compact_ledge_t *rl[2] = { NULL, NULL };
     int rs = md->recursive_status;
@@ -1462,7 +1461,7 @@ static void mindist_recursive_rec_hull_limit_exceeded_event(ivp_mindist_t *md)
 {
     ivp_mindist_recalc_invalid_mindist(md);
     if (md->recalc_result == IVP_MDRR_OK) {
-        if (md->len_numerator > ivp_mindist_settings.friction_dist) {
+        if (md->len_numerator > ivp_env_get_mindist_settings(md->env)->friction_dist) {
             rec_invalid_mindist_went_exact(md);
             return;
         }
@@ -1483,7 +1482,8 @@ bool ivp_mindist_recursive_do_impact(ivp_mindist_t *md)
 {
     ivp_md_synapse_t *syn0 = &md->synapse[0];
     ivp_md_synapse_t *syn1 = &md->synapse[1];
-    if (rec_get_spawned_mindist_count(&md->rec_delegator) > ivp_mindist_settings.max_spawned_mindist_count) return false;
+    if (rec_get_spawned_mindist_count(&md->rec_delegator) >
+        ivp_env_get_mindist_settings(md->env)->max_spawned_mindist_count) return false;
     IVP_ASSERT(md->mindist_status == IVP_MD_EXACT);   /* ivp_mindist_recursive.cxx:34 */
     int s0 = (int)ivp_md_synapse_get_status(syn0), s1 = (int)ivp_md_synapse_get_status(syn1);
     switch (s0) {
@@ -1895,10 +1895,10 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
         if (x >= elem->collision_fvector.n) continue;
         ivp_collision_t *c = elem->collision_fvector.elems[x];
         /* reference HACKHACK (E3 2003): never delete the mindist that is calling us up the stack */
-        if ((void *)c != (void *)ivp_g_current_mindist) {
+        if ((void *)c != (void *)ivp_env_get_current_mindist(env)) {
             ivp_collision_delete(c);
         } else {
-            ivp_g_defer_delete_mindist = true;
+            ivp_env_set_defer_delete_mindist(env, true);
         }
     }
     /* create new ones */

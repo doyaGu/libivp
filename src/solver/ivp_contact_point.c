@@ -150,7 +150,7 @@ ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
     cp->cp_status = IVP_CPBS_NEEDS_RECHECK;
     cp->span_friction_s[0] = 0.0f;
     cp->span_friction_s[1] = 0.0f;
-    cp->last_gap_len = ivp_mindist_settings.friction_dist;
+    cp->last_gap_len = ivp_env_get_mindist_settings(md->env)->friction_dist;
     cp->has_negative_pull_since = 0;
     cp->slowly_turn_on_keeper = IVP_FR_SLOWLY_TURN_ON_KEEPER;
     cp->l_friction_system = NULL;
@@ -197,16 +197,13 @@ void ivp_contact_pt_reset_time(ivp_contact_pt_t *cp, double offset)
 static const ivp_material_t *ivp_simple_index_material(void)
 {
     /* IVP_Material_Manager::get_material_by_index: static IVP_Material_Simple(0.5f, 0.5f) */
-    static ivp_material_t simple;
-    static bool init = false;
-    if (!init) {
-        simple.friction = IVP_REAL(0.5);
-        simple.elasticity = IVP_REAL(0.5);
-        simple.adhesion = IVP_REAL(0.0);
-        simple.second_friction_x_enabled = false;
-        simple.second_friction_factor = IVP_REAL(0.0);
-        init = true;
-    }
+    static const ivp_material_t simple = {
+        .friction = IVP_REAL(0.5),
+        .elasticity = IVP_REAL(0.5),
+        .adhesion = IVP_REAL(0.0),
+        .second_friction_x_enabled = false,
+        .second_friction_factor = IVP_REAL(0.0),
+    };
     return &simple;
 }
 
@@ -440,7 +437,8 @@ static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t
         }
     } else {
         info->friction_is_broken = true;
-        cp->last_gap_len = ivp_mindist_settings.keeper_dist;
+        cp->last_gap_len = ivp_env_get_mindist_settings(
+            cp->synapse[0].l_obj->owner)->keeper_dist;
         info->contact_point_ws = Kp;
         lvf_set3(&info->surf_normal, 1.0f, 0.0f, 0.0f);
         lvf_set3(&info->span_friction_v[0], 0.0f, 1.0f, 0.0f);

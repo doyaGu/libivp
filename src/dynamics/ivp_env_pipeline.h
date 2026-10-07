@@ -11,6 +11,7 @@
 #include <ivp/collision/ivp_range_manager.h>
 #include <ivp/base/ivp_u_memory.h>
 #include <ivp/diagnostics/ivp_statistic_manager.h>
+#include <stdatomic.h>
 
 /* IVP_U_Memory transaction memory (sim_unit_mem): allocations live until the
  * matching end of transaction.  Memory is zero-initialised. */
@@ -50,8 +51,21 @@ typedef struct ivp_env_pipeline {
     ivp_env_state_t          state;
     int                      rand_seed;
 
+    /* Runtime state that the reference keeps in process-wide statics.  It is
+     * environment-owned here so independent worlds are reentrant. */
+    ivp_mindist_settings_t   mindist_settings;
+    ivp_mindist_t           *current_mindist;
+    bool                     defer_delete_mindist;
+    int                      friction_debug_counter;
+    int                      global_friction_debug_counter;
+
+    /* Protects the single-threaded interior of one environment.  Different
+     * environments may hold this guard at the same time. */
+    atomic_bool              simulation_running;
+
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */
-    /* High-water scratch vectors reused by the non-reentrant PSI pipeline. */
+    /* High-water scratch vectors reused by this environment's ordered PSI
+     * pipeline; the per-environment simulation guard prevents overlap. */
     ivp_pvec_t               touched_cores;          /* ivp_core_t* */
     ivp_pvec_t               active_hulls;           /* ivp_hull_mgr_t* */
 

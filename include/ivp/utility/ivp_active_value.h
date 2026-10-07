@@ -17,12 +17,14 @@
  *   Test_Range    IVP_U_Active_Test_Range (1 if low <= test <= high)
  *
  * Propagation semantics (exactly as the reference):
- *   - A global change meter (IVP_U_Active_Float::change_meter, initially
- *     -1) is incremented by every terminal set (float and int).
+ *   - A process-wide atomic change meter (IVP_U_Active_Float::change_meter,
+ *     initially -1) is incremented by every terminal set (float and int).
  *   - Every derived node remembers the change meter of its last update
  *     (initially 0) and ignores further notifications for the same
- *     meter value.  Within one terminal change each node is therefore
- *     recomputed at most once; in a diamond (A->B, A->C, B,C->D) D is
+ *     meter value.  A propagation snapshots that value so an unrelated
+ *     graph on another thread cannot split it into multiple generations.
+ *     Within one terminal change each node is therefore recomputed at most
+ *     once; in a diamond (A->B, A->C, B,C->D) D is
  *     computed when the FIRST of its parents notifies it and later parent
  *     notifications are ignored, so D may keep a value computed from a
  *     not-yet-updated parent (reference behaviour, reproduced).

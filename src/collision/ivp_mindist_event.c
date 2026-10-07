@@ -339,7 +339,7 @@ static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compac
         s3d_set_max_deviation(&pf, mim->max_coll_speed);
         float radius = md->sum_extra_radius;
         D sec_dist = ivp_mindist_get_coll_dist(md) + (D)radius;
-        D real_coll = (D)(ivp_mindist_settings.real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
+        D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
         D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
         if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->event_time_out, &cache_P,
                                             &cache_F, &now_len, &mim->event_time_out)) {
@@ -354,7 +354,8 @@ static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compac
         D real_dist = P_MIND(ivp_mindist_get_coll_dist(md), (D)md->len_numerator);
         real_dist += (D)(md->sum_extra_radius * 0.1f);
         /* IVP_FLOAT * IVP_FLOAT */
-        sec_dist = (D)(-ivp_mindist_settings.mindist_change_force_dist * c_F->clp_object->physical_core->inv_object_diameter);
+        sec_dist = (D)(-ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist *
+                       c_F->clp_object->physical_core->inv_object_diameter);
         sec_dist *= real_dist;
         sec_dist /= ivp_mindist_get_coll_dist(md);
     }
@@ -402,7 +403,7 @@ static void calc_next_event_BF(ivp_mindist_event_solver_t *mim, const ivp_compac
     s3d_set_max_deviation(&pf, mim->max_coll_speed);
     float radius = md->sum_extra_radius;
     D sec_dist = ivp_mindist_get_coll_dist(md) + (D)radius;
-    D real_coll = (D)(ivp_mindist_settings.real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
+    D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
     D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
     if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->t_max, &cache_P, &cache_F,
                                         &now_len, &mim->event_time_out)) {
@@ -444,7 +445,8 @@ static void calc_next_event_KK(ivp_mindist_event_solver_t *mim, const ivp_compac
             if (val > 0.0f) { side = 0; kk.scalar = -1.0f; }
             else { side = 1; kk.scalar = 1.0f; }
         }
-        if (s3d_find_first_t_for_value_coll(&kk, ivp_mindist_get_coll_dist(md), (D)ivp_mindist_settings.real_coll_dist,
+        if (s3d_find_first_t_for_value_coll(&kk, ivp_mindist_get_coll_dist(md),
+                                            (D)ivp_env_get_mindist_settings(md->env)->real_coll_dist,
                                             mim->t_now, mim->event_time_out, &cache_K, &cache_L, NULL,
                                             &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_KK_COLL;
@@ -478,7 +480,8 @@ static void calc_next_event_KK(ivp_mindist_event_solver_t *mim, const ivp_compac
         IVP_ASSERT(m_cache_tab[3 - i]->compact_ledge == ivp_edge_get_compact_ledge(F[i]));   /* ivp_mindist_event.cxx:592 */
         matrix_cache_t *cache_e = cache_tab[i];
         matrix_cache_t *cache_Fc = cache_tab[3 - i];
-        D sec_dist = (D)(-ivp_mindist_settings.mindist_change_force_dist * cache_e->core->inv_object_diameter);
+        D sec_dist = (D)(-ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist *
+                         cache_e->core->inv_object_diameter);
         if (s3d_find_first_t_for_value_max_dev(&kkpf, sec_dist, mim->t_now, mim->event_time_out, 0, cache_e, cache_Fc,
                                                NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_KK_PF;
@@ -511,7 +514,7 @@ static void calc_next_event_PP(ivp_mindist_event_solver_t *mim, const ivp_compac
         s3d_set_max_deviation(&s, mim->max_coll_speed);
         float radius = md->sum_extra_radius;
         if (s3d_find_first_t_for_value_coll(&s, ivp_mindist_get_coll_dist(md) + (D)radius,
-                                            (D)(ivp_mindist_settings.real_coll_dist + radius * 0.5f), mim->t_now,
+                                            (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + radius * 0.5f), mim->t_now,
                                             mim->t_max, &cache_P, &cache_P2, NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PP_COLL;
         }
@@ -582,7 +585,7 @@ static void calc_next_event_BP(ivp_mindist_event_solver_t *mim, struct ivp_objec
         s3d_set_max_deviation(&s, mim->max_coll_speed);
         float radius = md->sum_extra_radius;
         if (s3d_find_first_t_for_value_coll(&s, ivp_mindist_get_coll_dist(md) + (D)radius,
-                                            (D)(ivp_mindist_settings.real_coll_dist + radius * 0.5f), mim->t_now,
+                                            (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + radius * 0.5f), mim->t_now,
                                             mim->t_max, &cache_P, &cache_P2, NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PP_COLL;
         }
@@ -637,7 +640,7 @@ static void calc_next_event_BB(ivp_mindist_event_solver_t *mim, ivp_cache_obj_t 
     s3d_set_max_deviation(&s, mim->max_coll_speed);
     float radius = md->sum_extra_radius;
     if (s3d_find_first_t_for_value_coll(&s, ivp_mindist_get_coll_dist(md) + (D)radius,
-                                        (D)(ivp_mindist_settings.real_coll_dist + radius * 0.5f), mim->t_now,
+                                        (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + radius * 0.5f), mim->t_now,
                                         mim->t_max, &cache_A, &cache_B, NULL, &mim->event_time_out)) {
         mim->event_type_out = IVP_COLL_PP_COLL;
     }
@@ -675,7 +678,7 @@ static void pk_pf_sector(ivp_mindist_event_solver_t *mim, const ivp_vec3r_t *p_o
         lvp_cross(&pf.v[1], &v0, &fhesse_vec);
         (void)lvp_normize(&pf.v[1]);
         lvp_set_f(&pf.v[2], &f_object);
-        D sec_dist = -(D)ivp_mindist_settings.mindist_change_force_dist;
+        D sec_dist = -(D)ivp_env_get_mindist_settings(mim->mindist->env)->mindist_change_force_dist;
         if (s3d_find_first_t_for_value_max_dev(&pf, sec_dist, mim->t_now, mim->event_time_out, 0, cache_P, cache_K,
                                                NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PK_PF;
@@ -710,7 +713,7 @@ static void calc_next_event_PK(ivp_mindist_event_solver_t *mim, const ivp_compac
         lvm_vmult4_fp(&c_P->clp_cache_object->m_world_f_object, &s.f[0], &P_world);
         pk_lot_setup(&s, &P_world, c_K);
         if (s3d_find_first_t_for_value_coll(&s, ivp_mindist_get_coll_dist(md) + (D)radius,
-                                            (D)(ivp_mindist_settings.real_coll_dist + radius * 0.9f), mim->t_now,
+                                            (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + radius * 0.9f), mim->t_now,
                                             mim->t_max, &cache_P, &cache_K, NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PK_COLL;
         }
@@ -777,7 +780,7 @@ static void calc_next_event_BK(ivp_mindist_event_solver_t *mim, struct ivp_objec
         s.scalar = 0.5f * (ivp_mindist_get_coll_dist(md) + (D)radius);
         pk_lot_setup(&s, &c_B->m_world_f_object.pos, c_K);
         if (s3d_find_first_t_for_value_coll(&s, ivp_mindist_get_coll_dist(md) + (D)radius,
-                                            (D)(ivp_mindist_settings.real_coll_dist + radius * 0.9f), mim->t_now,
+                                            (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + radius * 0.9f), mim->t_now,
                                             mim->t_max, &cache_P, &cache_K, NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PK_COLL;
         }

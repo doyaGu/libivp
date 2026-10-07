@@ -305,7 +305,9 @@ ivp_object_handle_t ivp_environment_get_object_handle(const ivp_object_t *obj);
 /* ── Simulation ─────────────────────────────────────────────────────────── */
 
 /* IVP_Environment::simulate_dtime: simulate_until(current_time + elapsed_time)
- * (PSIs and time events up to that time; AT queries interpolate). */
+ * (PSIs and time events up to that time; AT queries interpolate).
+ * Simulation calls for distinct environments may run concurrently.  The same
+ * environment is not reentrant; overlapping simulation calls are rejected. */
 void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_time);
 
 /* Run exactly one PSI step. Exposed for fine-grained control and testing. */
@@ -425,7 +427,9 @@ void ivp_environment_simulate_until(ivp_environment_t *env, ivp_time_t until_tim
 void ivp_environment_simulate_variable_time_step(ivp_environment_t *env, ivp_real_t delta_time);
 void ivp_environment_reset_time(ivp_environment_t *env);
 
-/* Collision tolerance (IVP_Environment::set_global_collision_tolerance). */
+/* Collision tolerance.  The legacy reference method is named
+ * set_global_collision_tolerance, but libivp stores the setting per env so
+ * independent worlds can use it concurrently. */
 void ivp_environment_set_global_collision_tolerance(ivp_environment_t *env, ivp_real_t tolerance);
 
 static inline void ivp_environment_get_gravity(const ivp_environment_t *env, ivp_vec3r_t *g) {

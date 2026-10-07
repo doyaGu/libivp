@@ -9,8 +9,9 @@
  *   - adding: a new element only replaces an existing (bucket or tree)
  *     minimum if its value is strictly smaller;
  *   - after a removal the bucket / tree minima are recomputed preferring
- *     the smaller value, then the smaller insertion index (a process-wide
- *     counter, like the reference's static sort_counter).
+ *     the smaller value, then the smaller insertion index.  libivp stores
+ *     this counter per hash; comparisons never cross hashes, so this keeps
+ *     the reference order while making independent hashes reentrant.
  * The minimum among equal values therefore depends on the element pointer
  * values (bucket placement), just like in the reference.
  *
@@ -41,6 +42,7 @@ typedef struct ivp_min_hash {
     ivp_min_hash_elem_t  **min_per_array_pos;   /* == stadel + size */
     ivp_min_hash_elem_t  **elems;               /* bucket lists */
     int                    counter;             /* number of elements */
+    int                    sort_counter;        /* next insertion tie breaker */
     const ivp_allocator_t *alloc;
 } ivp_min_hash_t;
 

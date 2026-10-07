@@ -64,8 +64,9 @@ typedef struct ivp_mindist_settings {
     double event_queue_min_delta_time_base;
 } ivp_mindist_settings_t;
 
-/* The reference keeps one global instance (ivp_mindist_settings). */
-extern ivp_mindist_settings_t ivp_mindist_settings;
+/* The reference keeps one global instance.  libivp stores one copy in every
+ * environment so independent worlds can use different tolerances and can be
+ * simulated concurrently. */
 void ivp_mindist_settings_set_collision_tolerance(ivp_mindist_settings_t *s, double t);
 void ivp_mindist_settings_init(ivp_mindist_settings_t *s);
 
@@ -282,9 +283,7 @@ static inline ivp_md_synapse_t *ivp_mindist_get_synapse(ivp_mindist_t *md, int i
 static inline ivp_md_synapse_t *ivp_mindist_get_sorted_synapse(ivp_mindist_t *md, int i) {
     return &md->synapse[md->synapse_sort_flag ^ (unsigned)i];
 }
-static inline ivp_real_t ivp_mindist_get_coll_dist(const ivp_mindist_t *md) {
-    return (ivp_real_t)ivp_mindist_settings.coll_dists[md->coll_dist_selector];
-}
+ivp_real_t ivp_mindist_get_coll_dist(const ivp_mindist_t *md);
 static inline float ivp_mindist_get_length(const ivp_mindist_t *md) { return md->len_numerator; }
 
 ivp_mindist_t *ivp_mindist_create(struct ivp_environment *env, ivp_collision_delegator_t *del, bool recursive);
@@ -296,8 +295,6 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
                                              ivp_mindist_event_hint_t hint);
 void ivp_mindist_exact_mindist_went_invalid(ivp_mindist_t *md, struct ivp_mindist_mgr *mm);
 void ivp_mindist_do_impact(ivp_mindist_t *md);
-extern ivp_mindist_t *ivp_g_current_mindist;   /* g_pCurrentMindist */
-extern bool ivp_g_defer_delete_mindist;        /* g_fDeferDeleteMindist */
 void ivp_mindist_mindist_rescue_push(ivp_mindist_t *md);
 struct ivp_contact_pt *ivp_mindist_try_to_generate_managed_friction(ivp_mindist_t *md,
                                                                     struct ivp_fr_system **associated_fs,

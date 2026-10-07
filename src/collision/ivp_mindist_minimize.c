@@ -451,7 +451,8 @@ static bool mms_validate_termination_len(mms_t *m, D now_len)
         ivp_debug_printf("Termination Len Violation: Epsilon Problem?\n");
         return false;
     }
-    if (now_len < (D)(ivp_mindist_settings.real_coll_dist * ivp_mindist_settings.real_coll_dist)) {
+    const ivp_mindist_settings_t *settings = ivp_env_get_mindist_settings(m->mindist->env);
+    if (now_len < (D)(settings->real_coll_dist * settings->real_coll_dist)) {
         IVP_CORE();
         return false;
     }

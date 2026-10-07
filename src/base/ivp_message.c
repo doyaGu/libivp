@@ -4,20 +4,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 static ivp_message_output_fn_t s_output   = NULL;
 static void                   *s_userdata = NULL;
+static atomic_flag             s_output_lock = ATOMIC_FLAG_INIT;
+
+static void output_lock(void)
+{
+    while (atomic_flag_test_and_set_explicit(&s_output_lock,
+                                              memory_order_acquire)) {
+    }
+}
+
+static void output_unlock(void)
+{
+    atomic_flag_clear_explicit(&s_output_lock, memory_order_release);
+}
 
 void ivp_set_message_output(ivp_message_output_fn_t fn, void *userdata)
 {
+    output_lock();
     s_output   = fn;
     s_userdata = userdata;
+    output_unlock();
 }
 
 static void ivp_message_emit(const char *text)
 {
-    if (s_output) {
-        s_output(text, s_userdata);
+    ivp_message_output_fn_t output;
+    void *userdata;
+    output_lock();
+    output = s_output;
+    userdata = s_userdata;
+    output_unlock();
+    if (output) {
+        output(text, userdata);
     } else {
         fputs(text, stdout);
     }

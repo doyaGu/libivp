@@ -4,9 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* static int sort_counter = 1 in IVP_U_Min_Hash::add (shared by all hashes) */
-static int g_sort_counter = 1;
-
 static inline unsigned int min_hash_index(const ivp_min_hash_t *h, const void *key) {
     /* IVP_U_Min_Hash::hash_index (64-bit platform), on intp bit patterns */
     uint64_t k = (uint64_t)(uintptr_t)key;
@@ -42,6 +39,7 @@ ivp_result_t ivp_min_hash_init(ivp_min_hash_t *h, const ivp_allocator_t *alloc, 
     memset(h->stadel, 0, sizeof(void *) * (size_t)size * 2);
     h->min_per_array_pos = h->stadel + size;
     h->counter = 0;
+    h->sort_counter = 1;
     return IVP_OK;
 }
 
@@ -61,6 +59,7 @@ void ivp_min_hash_destroy(ivp_min_hash_t *h) {
     h->stadel = NULL;
     h->min_per_array_pos = NULL;
     h->counter = 0;
+    h->sort_counter = 1;
 }
 
 /* a new minimum element at a given hash index was set, so update stadel */
@@ -114,7 +113,7 @@ ivp_result_t ivp_min_hash_add(ivp_min_hash_t *h, void *elem, double val) {
     unsigned int i = min_hash_index(h, elem);
     ivp_min_hash_elem_t *el = (ivp_min_hash_elem_t *)ivp_alloc(h->alloc, sizeof(*el));
     if (!el) return IVP_ERR_OUT_OF_MEMORY;
-    el->cmp_index = g_sort_counter++;
+    el->cmp_index = h->sort_counter++;
     el->elem = elem;
     el->next = h->elems[i];
     h->elems[i] = el;

@@ -50,6 +50,7 @@
 #include "ivp_object_system.h"
 #include "dynamics/ivp_environment_events.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_environment_parallel.h"
 #include "controllers/ivp_controller_system.h"
 #include "events/ivp_event_system.h"
 #include "solver/ivp_friction_internal.h"
@@ -203,6 +204,34 @@ struct ivp_mindist_mgr *ivp_env_get_mindist_mgr(struct ivp_environment *env) { r
 struct ivp_ov_tree *ivp_env_get_ov_tree(struct ivp_environment *env) { return &env->pl->ov_tree; }
 ivp_sim_units_manager_t *ivp_env_get_sim_units_manager(struct ivp_environment *env) { return &env->pl->sim_units_manager; }
 ivp_sim_ctrl_t *ivp_env_get_standard_gravity_controller(struct ivp_environment *env) { return &env->pl->gravity_ctrl; }
+const ivp_mindist_settings_t *ivp_env_get_mindist_settings(const struct ivp_environment *env)
+{
+    return &env->pl->mindist_settings;
+}
+ivp_mindist_t *ivp_env_get_current_mindist(const struct ivp_environment *env)
+{
+    return env->pl->current_mindist;
+}
+void ivp_env_set_current_mindist(struct ivp_environment *env, ivp_mindist_t *mindist)
+{
+    env->pl->current_mindist = mindist;
+}
+bool ivp_env_get_defer_delete_mindist(const struct ivp_environment *env)
+{
+    return env->pl->defer_delete_mindist;
+}
+void ivp_env_set_defer_delete_mindist(struct ivp_environment *env, bool defer_delete)
+{
+    env->pl->defer_delete_mindist = defer_delete;
+}
+int ivp_env_next_friction_debug_counter(struct ivp_environment *env)
+{
+    return ++env->pl->friction_debug_counter;
+}
+int ivp_env_next_global_friction_debug_counter(struct ivp_environment *env)
+{
+    return ++env->pl->global_friction_debug_counter;
+}
 
 /* IVP_Environment::set_current_time */
 void ivp_environment_set_current_time_internal(struct ivp_environment *env, ivp_time_t t)
@@ -1804,8 +1833,9 @@ void ivp_environment_set_delta_psi_time(ivp_environment_t *env, ivp_real_t dt)
 
 void ivp_environment_set_global_collision_tolerance(ivp_environment_t *env, ivp_real_t tolerance)
 {
-    (void)env;
-    ivp_mindist_settings_set_collision_tolerance(&ivp_mindist_settings, (double)tolerance);
+    if (!env) return;
+    ivp_mindist_settings_set_collision_tolerance(&env->pl->mindist_settings,
+                                                  (double)tolerance);
 }
 
 /* ── PSI (IVP_Environment::simulate_psi + IVP_Time_Event_PSI) ─────────── */
@@ -1899,9 +1929,49 @@ static void env_set_statistics_simulation_time(ivp_environment_t *env, ivp_time_
     }
 }
 
-void ivp_environment_simulate_until(ivp_environment_t *env, ivp_time_t until_time)
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+/* These opt-in legacy modes intentionally keep process-wide mutable
+ * instrumentation state.  Serialize them instead of exposing a data race;
+ * ordinary builds retain independent per-environment ownership. */
+static atomic_bool s_legacy_global_simulation_running = false;
+#endif
+
+bool ivp_environment_try_begin_simulation(ivp_environment_t *env)
 {
-    if (!env) return;
+    if (!env) return false;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&env->pl->simulation_running,
+                                                 &expected, true,
+                                                 memory_order_acquire,
+                                                 memory_order_relaxed)) {
+        return false;
+    }
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+    expected = false;
+    if (!atomic_compare_exchange_strong_explicit(
+            &s_legacy_global_simulation_running, &expected, true,
+            memory_order_acquire, memory_order_relaxed)) {
+        atomic_store_explicit(&env->pl->simulation_running, false,
+                              memory_order_release);
+        return false;
+    }
+#endif
+    return true;
+}
+
+void ivp_environment_end_simulation(ivp_environment_t *env)
+{
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+    atomic_store_explicit(&s_legacy_global_simulation_running, false,
+                          memory_order_release);
+#endif
+    atomic_store_explicit(&env->pl->simulation_running, false,
+                          memory_order_release);
+}
+
+static void env_simulate_until_owned(ivp_environment_t *env,
+                                     ivp_time_t until_time)
+{
     double delta_time = until_time - env->current_time;
     if (delta_time < -(double)P_FLOAT_RES) {
         IVP_ASSERT(delta_time >= -(double)P_FLOAT_RES);
@@ -1916,9 +1986,19 @@ void ivp_environment_simulate_until(ivp_environment_t *env, ivp_time_t until_tim
     ivp_time_manager_event_loop(&env->pl->time_manager, env, until_time);
 }
 
-void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_time)
+void ivp_environment_simulate_until(ivp_environment_t *env, ivp_time_t until_time)
 {
     if (!env) return;
+    bool acquired = ivp_environment_try_begin_simulation(env);
+    IVP_ASSERT_NONFATAL(acquired);
+    if (!acquired) return;
+    env_simulate_until_owned(env, until_time);
+    ivp_environment_end_simulation(env);
+}
+
+void ivp_environment_simulate_dtime_owned(ivp_environment_t *env,
+                                          ivp_real_t elapsed_time)
+{
     double dtime = (double)elapsed_time;
     if (dtime < -(double)P_FLOAT_RES) {
         IVP_ASSERT(dtime >= -(double)P_FLOAT_RES);
@@ -1934,20 +2014,43 @@ void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_t
     ivp_time_manager_event_loop(&env->pl->time_manager, env, new_time);
 }
 
+void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_time)
+{
+    if (!env) return;
+    bool acquired = ivp_environment_try_begin_simulation(env);
+    IVP_ASSERT_NONFATAL(acquired);
+    if (!acquired) return;
+    ivp_environment_simulate_dtime_owned(env, elapsed_time);
+    ivp_environment_end_simulation(env);
+}
+
+void ivp_environment_simulate_one_psi_owned(ivp_environment_t *env)
+{
+    env_simulate_until_owned(env, env->current_time + env->pl->delta_psi_time);
+}
+
 void ivp_environment_simulate_one_psi(ivp_environment_t *env)
 {
     if (!env) return;
-    ivp_environment_simulate_until(env, env->current_time + env->pl->delta_psi_time);
+    bool acquired = ivp_environment_try_begin_simulation(env);
+    IVP_ASSERT_NONFATAL(acquired);
+    if (!acquired) return;
+    ivp_environment_simulate_one_psi_owned(env);
+    ivp_environment_end_simulation(env);
 }
 
 void ivp_environment_simulate_variable_time_step(ivp_environment_t *env, ivp_real_t delta_time)
 {
     if (!env) return;
+    bool acquired = ivp_environment_try_begin_simulation(env);
+    IVP_ASSERT_NONFATAL(acquired);
+    if (!acquired) return;
     float dt = (float)delta_time;
     if (dt < (float)IVP_MIN_DELTA_PSI_TIME) dt = (float)IVP_MIN_DELTA_PSI_TIME;
     if (dt > (float)IVP_MAX_DELTA_PSI_TIME) dt = (float)IVP_MAX_DELTA_PSI_TIME;
     env_set_statistics_simulation_time(env, env->current_time + (double)dt);
     ivp_time_manager_simulate_variable_time_step(&env->pl->time_manager, env, dt);
+    ivp_environment_end_simulation(env);
 }
 
 /* IVP_Environment::reset_time */
@@ -2028,15 +2131,9 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     env->collision_filter = cfg.collision_filter;
     env->ccd_enabled = cfg.ccd_enabled;
 
-    /* IVP_Mindist_Settings is a static object of the reference (constructed once) */
-    {
-        static bool mindist_settings_initialized = false;
-        if (!mindist_settings_initialized) {
-            ivp_mindist_settings_init(&ivp_mindist_settings);
-            mindist_settings_initialized = true;
-        }
-    }
     ivp_env_pipeline_t *pl = env->pl;
+    ivp_mindist_settings_init(&pl->mindist_settings);
+    atomic_init(&pl->simulation_running, false);
     if (cfg.range_manager) {
         pl->range_manager = cfg.range_manager;
     } else {

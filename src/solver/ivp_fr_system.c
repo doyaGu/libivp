@@ -67,12 +67,9 @@ static void fr_add_draw_vector(struct ivp_environment *env, const ivp_vec3r_t *s
 /* object name for the reference's printf("%s", get_name()) (NULL: "(null)") */
 static inline const char *fr_obj_name(const ivp_object_t *obj) { return obj->name ? obj->name : "(null)"; }
 
-/* IVP_Friction_System::friction_global_counter (static class member: the
- * reference increments it in every build but only debug builds print it, so
- * it is counted in debug builds only) and global_friction_counter
- * (ivp_friction_gaps.cxx, counted inside IVP_IF(debug_friction)) */
-static int fr_friction_global_counter = 0;
-static int fr_global_friction_counter = 0;
+/* The reference counters are static class members.  libivp keeps their
+ * single-world ordering but stores them on the environment so worlds do not
+ * race or influence one another's debug text. */
 
 /* ── IVP_Impact_Solver_Long_Term::get_closing_speed ─────────────────────── */
 
@@ -1779,8 +1776,8 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs, int *active_
     ivp_gmmz_t *m = &s->dist_change_mat;
     IVP_IF((fr_dm(s->l_environment)->debug_friction) || 0) /* ivp_friction_gaps.cxx:1017 */
     {
-        fr_global_friction_counter++;
-        ivp_debug_printf("\ndoing_friction_calc %d\n", fr_global_friction_counter);
+        int counter = ivp_env_next_global_friction_debug_counter(s->l_environment);
+        ivp_debug_printf("\ndoing_friction_calc %d\n", counter);
     }
     {
         int mat_width = (m->aligned_row_len * m->columns);
@@ -1790,7 +1787,8 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs, int *active_
     for (int i = 0; i < ivp_pvec_len(&s->contact_info_vector); i++) {
         ivp_impact_solver_lt_t *info = frs_info_at(s, i);
         double dist_velocity = ivp_impact_lt_get_closing_speed(info);
-        double distance_off = (double)(ivp_mindist_settings.friction_dist - info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
+        double distance_off = (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
+                                       info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
         m->desired_vector[i] = ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
         if (info->friction.has_negative_pull_since != 0) {
             *active_is_at_pos = i;
@@ -2172,14 +2170,16 @@ static void fs_reorder_mindists_for_complex(ivp_fr_system_t *fs)
     ivp_contact_pt_t *my_frdist = fs->first_friction_dist;
     while (my_frdist) {
         ivp_contact_pt_t *next_frdist = my_frdist->next_dist_in_friction;
-        if ((ivp_cp_get_gap_length(my_frdist) >= ivp_mindist_settings.max_distance_for_friction) ||
+        const ivp_mindist_settings_t *settings =
+            ivp_env_get_mindist_settings(fs->l_environment);
+        if ((ivp_cp_get_gap_length(my_frdist) >= settings->max_distance_for_friction) ||
             (my_frdist->tmp_contact_info->friction_is_broken)) {
             ivp_fr_system_delete_friction_distance(fs, my_frdist);
             my_frdist = next_frdist;
             continue;
         }
         if (ivp_cp_get_gap_length(my_frdist) >
-            ivp_mindist_settings.friction_dist + ivp_mindist_settings.distance_keepers_safety) {
+            settings->friction_dist + settings->distance_keepers_safety) {
             ivp_core_t *core0 = cp_fcore(my_frdist, 0);
             ivp_core_t *core1 = cp_fcore(my_frdist, 1);
             bool allow0 = core0->fast_piling_allowed;
@@ -2226,13 +2226,14 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
 {
     ivp_u_memory_t *my_mem = ivp_env_get_short_term_mem(fs->l_environment);
     ivp_u_memory_start_transaction(my_mem);
+    int friction_debug_counter = 0;
 #ifdef IVP_DEBUG_BUILD
-    fr_friction_global_counter++;   /* friction_global_counter++ (every build in the reference) */
+    friction_debug_counter = ivp_env_next_friction_debug_counter(fs->l_environment);
 #endif
     IVP_IF(fr_dm(fs->l_environment)->debug_friction) /* ivp_friction_gaps.cxx:1367 */
     {
-        ivp_debug_printf("doing_friction_nr %d\n", fr_friction_global_counter);
-        if (fr_friction_global_counter == 14) {
+        ivp_debug_printf("doing_friction_nr %d\n", friction_debug_counter);
+        if (friction_debug_counter == 14) {
             ivp_debug_printf("losgehts\n");
         }
         ivp_debug_printf("friction_system_simulating %d distances\n", (int)fs->friction_dist_number);
@@ -2317,8 +2318,10 @@ static void fs_static_do_single(ivp_fr_system_t *fs, ivp_sim_es_t *es)
 {
     ivp_contact_pt_t *cp = fs->first_friction_dist;
     if (!cp) return;
-    cp_static_friction_single(cp, es, ivp_mindist_settings.friction_dist, 1.0f);
-    if ((ivp_cp_get_gap_length(cp) >= ivp_mindist_settings.max_distance_for_friction) ||
+    const ivp_mindist_settings_t *settings =
+        ivp_env_get_mindist_settings(fs->l_environment);
+    cp_static_friction_single(cp, es, settings->friction_dist, 1.0f);
+    if ((ivp_cp_get_gap_length(cp) >= settings->max_distance_for_friction) ||
         cp->tmp_contact_info->friction_is_broken) {
         ivp_fr_system_delete_friction_distance(fs, cp);
     }
@@ -2407,7 +2410,8 @@ bool ivp_core_grow_friction_system(ivp_core_t *core)
             (void)ivp_mindist_recalc_mindist(my_mindist);
             if (my_mindist->recalc_result != IVP_MDRR_OK) continue;
             float mindist_distance = ivp_mindist_get_length(my_mindist);
-            if (mindist_distance < ivp_mindist_settings.max_distance_for_friction) {
+            if (mindist_distance <
+                ivp_env_get_mindist_settings(my_mindist->env)->max_distance_for_friction) {
                 struct ivp_fr_system *affected_friction_system;
                 bool having_new_dist;
                 struct ivp_environment *env = ivp_core_env(core);
