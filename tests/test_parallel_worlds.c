@@ -1,5 +1,9 @@
 /* test_parallel_worlds.c -- true parallel stepping of independent worlds. */
 #include "ivp_test.h"
+#include "ivp_test_fault_allocator.h"
+#include "ivp_test_worker_runtime.h"
+
+#include "dynamics/ivp_world_scheduler_internal.h"
 
 #include <ivp/dynamics/ivp_world_scheduler.h>
 #include <ivp/dynamics/ivp_object.h>
@@ -276,6 +280,137 @@ static bool parallel_stats_are_zero(const ivp_environment_t *environment)
            stats.broadphase_dispatches == 0u &&
            stats.broadphase_tasks == 0u && stats.solver_dispatches == 0u &&
            stats.solver_tasks == 0u && stats.max_workers_used == 0;
+}
+
+IVP_TEST(scheduler_cleans_partial_thread_start)
+{
+    ivp_test_fault_allocator_t allocator;
+    ivp_test_fault_allocator_init_tracked(&allocator, NULL);
+    ivp_test_worker_runtime_t runtime;
+    ivp_test_worker_runtime_init(&runtime, NULL);
+    atomic_store_explicit(&runtime.fail_thread_start_at, 3,
+                          memory_order_relaxed);
+
+    ivp_world_scheduler_t *scheduler =
+        ivp_world_scheduler_create_with_runtime(
+            PARALLEL_WORKER_COUNT, &allocator.allocator, &runtime.runtime);
+    bool ok = scheduler == NULL &&
+              atomic_load_explicit(&runtime.thread_start_calls,
+                                   memory_order_relaxed) == 3 &&
+              atomic_load_explicit(&runtime.thread_join_calls,
+                                   memory_order_relaxed) == 2 &&
+              allocator.live_bytes == 0u;
+    ivp_world_scheduler_destroy(scheduler);
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(scheduler_setup_failures_are_atomic)
+{
+    test_world_t scheduled[PARALLEL_WORLD_COUNT] = {0};
+    test_world_t direct[PARALLEL_WORLD_COUNT] = {0};
+    ivp_environment_t *environments[PARALLEL_WORLD_COUNT] = {0};
+    ivp_test_worker_runtime_t runtime;
+    ivp_test_worker_runtime_init(&runtime, NULL);
+    ivp_world_scheduler_t *scheduler = NULL;
+    bool ok = true;
+    int expected_joins = 0;
+    int world_count = PARALLEL_WORLD_COUNT;
+#if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
+    world_count = 1;
+#endif
+
+    for (int i = 0; i < world_count; i++) {
+        if (!test_world_init(&scheduled[i], i) ||
+            !test_world_init(&direct[i], i)) {
+            ok = false;
+            goto cleanup;
+        }
+        environments[i] = scheduled[i].env;
+    }
+    scheduler = ivp_world_scheduler_create_with_runtime(
+        PARALLEL_WORKER_COUNT, NULL, &runtime.runtime);
+    if (!scheduler) {
+        ok = false;
+        goto cleanup;
+    }
+
+    ivp_test_worker_runtime_fail_next_capture(&runtime);
+    if (ivp_world_scheduler_simulate_one_psi(
+            scheduler, environments, (size_t)world_count) !=
+        IVP_ERR_INVALID_STATE) {
+        ok = false;
+    }
+    for (int i = 0; i < world_count; i++) {
+        if (!world_state_equal(&scheduled[i], &direct[i])) ok = false;
+    }
+
+    ivp_test_worker_runtime_fail_next_apply(&runtime);
+    if (ivp_world_scheduler_simulate_one_psi(
+            scheduler, environments, (size_t)world_count) !=
+        IVP_ERR_INVALID_STATE) {
+        ok = false;
+    }
+    for (int i = 0; i < world_count; i++) {
+        if (!world_state_equal(&scheduled[i], &direct[i])) ok = false;
+    }
+
+    if (ivp_world_scheduler_simulate_one_psi(
+            scheduler, environments, (size_t)world_count) != IVP_OK) {
+        ok = false;
+    }
+    for (int i = 0; i < world_count; i++) {
+        ivp_environment_simulate_one_psi(direct[i].env);
+        if (!world_state_equal(&scheduled[i], &direct[i])) ok = false;
+    }
+
+cleanup:
+    expected_joins = scheduler ? PARALLEL_WORKER_COUNT : 0;
+    ivp_world_scheduler_destroy(scheduler);
+    if (atomic_load_explicit(&runtime.thread_join_calls,
+                             memory_order_relaxed) != expected_joins) {
+        ok = false;
+    }
+    for (int i = 0; i < PARALLEL_WORLD_COUNT; i++) {
+        test_world_destroy(&scheduled[i]);
+        test_world_destroy(&direct[i]);
+    }
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(scheduler_allocation_failure_is_atomic)
+{
+    test_world_t scheduled = {0};
+    test_world_t direct = {0};
+    ivp_environment_t *environments[1] = {0};
+    ivp_test_fault_allocator_t allocator;
+    ivp_test_fault_allocator_init_tracked(&allocator, NULL);
+    ivp_world_scheduler_t *scheduler = NULL;
+    bool ok = test_world_init(&scheduled, 0) &&
+              test_world_init(&direct, 0);
+    if (ok) {
+        environments[0] = scheduled.env;
+        scheduler = ivp_world_scheduler_create(1, &allocator.allocator);
+        ok = scheduler != NULL;
+    }
+    if (ok) {
+        ivp_test_fault_allocator_reset(&allocator, 1);
+        ok = ivp_world_scheduler_simulate_one_psi(
+                 scheduler, environments, 1) == IVP_ERR_OUT_OF_MEMORY &&
+             world_state_equal(&scheduled, &direct);
+    }
+    if (ok) {
+        ivp_test_fault_allocator_reset(&allocator, INT_MAX);
+        ok = ivp_world_scheduler_simulate_one_psi(
+                 scheduler, environments, 1) == IVP_OK;
+        ivp_environment_simulate_one_psi(direct.env);
+        ok = ok && world_state_equal(&scheduled, &direct);
+    }
+
+    ivp_world_scheduler_destroy(scheduler);
+    ok = ok && allocator.live_bytes == 0u;
+    test_world_destroy(&scheduled);
+    test_world_destroy(&direct);
+    IVP_ASSERT_TRUE(ok);
 }
 
 IVP_TEST(scheduler_one_worker_is_fully_serial)
@@ -576,6 +711,9 @@ cleanup:
 
 int main(void)
 {
+    IVP_REGISTER(scheduler_cleans_partial_thread_start);
+    IVP_REGISTER(scheduler_setup_failures_are_atomic);
+    IVP_REGISTER(scheduler_allocation_failure_is_atomic);
     IVP_REGISTER(scheduler_one_worker_is_fully_serial);
     IVP_REGISTER(scheduler_propagates_dispatch_fenv);
     IVP_REGISTER(scheduler_parallel_contract);

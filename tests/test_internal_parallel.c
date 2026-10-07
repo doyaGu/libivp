@@ -1,5 +1,7 @@
 /* test_internal_parallel.c -- deterministic parallel kernels inside one world. */
 #include "ivp_test.h"
+#include "ivp_test_fault_allocator.h"
+#include "ivp_test_worker_runtime.h"
 
 #include "base/ivp_task_pool.h"
 
@@ -87,6 +89,76 @@ IVP_TEST(task_pool_runs_concurrently)
              atomic_load_explicit(&probe.max_active, memory_order_acquire) >= 2;
     }
     ivp_task_pool_destroy(pool);
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(task_pool_cleans_partial_thread_start)
+{
+    ivp_test_fault_allocator_t allocator;
+    ivp_test_fault_allocator_init_tracked(&allocator, NULL);
+    ivp_test_worker_runtime_t runtime;
+    ivp_test_worker_runtime_init(&runtime, NULL);
+    atomic_store_explicit(&runtime.fail_thread_start_at, 2,
+                          memory_order_relaxed);
+
+    ivp_task_pool_t *pool = ivp_task_pool_create_with_runtime(
+        INTERNAL_PARALLEL_WORKERS, &allocator.allocator, &runtime.runtime);
+    bool ok = pool == NULL &&
+              atomic_load_explicit(&runtime.thread_start_calls,
+                                   memory_order_relaxed) == 2 &&
+              atomic_load_explicit(&runtime.thread_join_calls,
+                                   memory_order_relaxed) == 1 &&
+              allocator.live_bytes == 0u;
+    ivp_task_pool_destroy(pool);
+    IVP_ASSERT_TRUE(ok);
+}
+
+typedef struct task_call_probe {
+    atomic_int calls;
+} task_call_probe_t;
+
+static void task_count_call(void *opaque, size_t task_index)
+{
+    (void)task_index;
+    task_call_probe_t *probe = (task_call_probe_t *)opaque;
+    atomic_fetch_add_explicit(&probe->calls, 1, memory_order_relaxed);
+}
+
+IVP_TEST(task_pool_setup_failures_run_no_tasks)
+{
+    enum { TASK_COUNT = 37 };
+    ivp_test_worker_runtime_t runtime;
+    ivp_test_worker_runtime_init(&runtime, NULL);
+    ivp_task_pool_t *pool = ivp_task_pool_create_with_runtime(
+        INTERNAL_PARALLEL_WORKERS, NULL, &runtime.runtime);
+    task_call_probe_t probe;
+    atomic_init(&probe.calls, 0);
+    bool ok = pool != NULL;
+
+    if (ok) {
+        ivp_test_worker_runtime_fail_next_capture(&runtime);
+        ok = !ivp_task_pool_parallel_for(
+                 pool, TASK_COUNT, task_count_call, &probe) &&
+             atomic_load_explicit(&probe.calls, memory_order_relaxed) == 0;
+    }
+    if (ok) {
+        ivp_test_worker_runtime_fail_next_apply(&runtime);
+        ok = !ivp_task_pool_parallel_for(
+                 pool, TASK_COUNT, task_count_call, &probe) &&
+             atomic_load_explicit(&probe.calls, memory_order_relaxed) == 0;
+    }
+    if (ok) {
+        ok = ivp_task_pool_parallel_for(
+                 pool, TASK_COUNT, task_count_call, &probe) &&
+             atomic_load_explicit(&probe.calls, memory_order_relaxed) ==
+                 TASK_COUNT;
+    }
+
+    ivp_task_pool_destroy(pool);
+    ok = ok &&
+         atomic_load_explicit(&runtime.thread_join_calls,
+                              memory_order_relaxed) ==
+             INTERNAL_PARALLEL_WORKERS - 1;
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -973,6 +1045,8 @@ IVP_TEST(solver_matrix_is_bit_exact)
 int main(void)
 {
     IVP_REGISTER(task_pool_runs_concurrently);
+    IVP_REGISTER(task_pool_cleans_partial_thread_start);
+    IVP_REGISTER(task_pool_setup_failures_run_no_tasks);
     IVP_REGISTER(task_pool_claims_every_task_exactly_once);
     IVP_REGISTER(task_pool_propagates_dispatch_fenv);
     IVP_REGISTER(environment_serial_worker_values_normalize);
