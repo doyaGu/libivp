@@ -337,7 +337,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_pitch = -38.0f;
     app.cfg.target[0]   = 1.5f;
     app.cfg.target[1]   = -1.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 22.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     workshop_demo_t *s = (workshop_demo_t *)calloc(1, sizeof(*s));

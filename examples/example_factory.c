@@ -364,12 +364,12 @@ int main(int argc, char **argv)
     app.cfg.tag         = "factory";
     app.cfg.friction    = 0.5;
     app.cfg.elasticity  = 0.2;
-    app.cfg.orbit_dist  = 30.0f;
+    app.cfg.orbit_dist  = 25.0f;
     app.cfg.orbit_yaw   = 180.0f;
     app.cfg.orbit_pitch = -18.0f;
     app.cfg.target[0]   = -2.0f;
     app.cfg.target[1]   = -3.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 18.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     factory_demo_t *s = (factory_demo_t *)calloc(1, sizeof(*s));

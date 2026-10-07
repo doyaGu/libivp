@@ -317,7 +317,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_yaw   = 180.0f;
     app.cfg.orbit_pitch = -14.0f;
     app.cfg.target[1]   = -2.5f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 17.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     constraints_demo_t *s = (constraints_demo_t *)calloc(1, sizeof(*s));

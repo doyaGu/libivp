@@ -266,11 +266,11 @@ int main(int argc, char **argv)
     app.cfg.tag         = "contacts";
     app.cfg.friction    = 0.6;
     app.cfg.elasticity  = 0.5;
-    app.cfg.orbit_dist  = 21.0f;
+    app.cfg.orbit_dist  = 17.0f;
     app.cfg.orbit_yaw   = 180.0f;
     app.cfg.orbit_pitch = -20.0f;
     app.cfg.target[1]   = -2.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 14.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     contacts_demo_t *s = (contacts_demo_t *)calloc(1, sizeof(*s));

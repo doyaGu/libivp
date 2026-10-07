@@ -283,7 +283,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_yaw   = 180.0f;
     app.cfg.orbit_pitch = -16.0f;
     app.cfg.target[1]   = -4.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 16.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     zones_demo_t *s = (zones_demo_t *)calloc(1, sizeof(*s));

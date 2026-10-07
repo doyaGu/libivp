@@ -229,7 +229,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_yaw   = 160.0f;
     app.cfg.orbit_pitch = -20.0f;
     app.cfg.target[2]   = -18.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 36.0f;
     ivp_environment_config_t ecfg;
     ivp_environment_config_init(&ecfg);
     ecfg.gravity = ivp_vec3r(IVP_REAL(0.0), (ivp_real_t)9.83, IVP_REAL(0.0));

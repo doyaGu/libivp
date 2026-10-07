@@ -280,7 +280,7 @@ int main(int argc, char **argv)
     app.cfg.orbit_yaw   = 30.0f;
     app.cfg.orbit_pitch = -45.0f;
     app.cfg.target[1]   = 0.0f;
-    app.cfg.grid_extent = -1.0f;
+    app.cfg.grid_extent = 12.0f;
     if (!demo_world_init(&app.world, &app.cfg)) return 1;
 
     sensors_demo_t *s = (sensors_demo_t *)calloc(1, sizeof(*s));
