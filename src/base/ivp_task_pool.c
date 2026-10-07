@@ -34,14 +34,14 @@ struct ivp_task_pool {
 
     ivp_task_mutex_t mutex;
     ivp_task_cond_t work_ready;
-    ivp_task_cond_t work_done;
+    ivp_task_cond_t state_changed;
     bool sync_initialized;
     bool stopping;
     bool running;
     uint64_t generation;
-    int workers_ready;
-    int workers_done;
-    bool worker_setup_failed;
+    int setup_ready_count;
+    int job_done_count;
+    bool setup_failed;
 
     ivp_task_pool_fn function;
     void *context;
@@ -56,7 +56,7 @@ static bool task_sync_init(ivp_task_pool_t *pool)
 {
     InitializeCriticalSection(&pool->mutex);
     InitializeConditionVariable(&pool->work_ready);
-    InitializeConditionVariable(&pool->work_done);
+    InitializeConditionVariable(&pool->state_changed);
     return true;
 }
 static void task_sync_destroy(ivp_task_pool_t *pool)
@@ -81,7 +81,7 @@ static bool task_sync_init(ivp_task_pool_t *pool)
         (void)pthread_mutex_destroy(&pool->mutex);
         return false;
     }
-    if (pthread_cond_init(&pool->work_done, NULL) != 0) {
+    if (pthread_cond_init(&pool->state_changed, NULL) != 0) {
         (void)pthread_cond_destroy(&pool->work_ready);
         (void)pthread_mutex_destroy(&pool->mutex);
         return false;
@@ -90,7 +90,7 @@ static bool task_sync_init(ivp_task_pool_t *pool)
 }
 static void task_sync_destroy(ivp_task_pool_t *pool)
 {
-    (void)pthread_cond_destroy(&pool->work_done);
+    (void)pthread_cond_destroy(&pool->state_changed);
     (void)pthread_cond_destroy(&pool->work_ready);
     (void)pthread_mutex_destroy(&pool->mutex);
 }
@@ -161,18 +161,18 @@ static void task_worker_loop(ivp_task_worker_t *worker)
 
         bool setup_ok = fesetenv(&floating_point_environment) == 0;
         task_lock(pool);
-        if (!setup_ok) pool->worker_setup_failed = true;
-        pool->workers_ready++;
-        if (pool->workers_ready == pool->background_thread_count) {
-            task_broadcast(&pool->work_done);
+        if (!setup_ok) pool->setup_failed = true;
+        pool->setup_ready_count++;
+        if (pool->setup_ready_count == pool->background_thread_count) {
+            task_broadcast(&pool->state_changed);
         } else {
             while (!pool->stopping &&
-                   pool->workers_ready != pool->background_thread_count) {
-                task_wait(&pool->work_done, pool);
+                   pool->setup_ready_count != pool->background_thread_count) {
+                task_wait(&pool->state_changed, pool);
             }
         }
         if (pool->stopping) break;
-        bool run_tasks = !pool->worker_setup_failed;
+        bool run_tasks = !pool->setup_failed;
         task_unlock(pool);
 
         if (run_tasks) {
@@ -180,9 +180,9 @@ static void task_worker_loop(ivp_task_worker_t *worker)
         }
 
         task_lock(pool);
-        pool->workers_done++;
-        if (pool->workers_done == pool->background_thread_count) {
-            task_broadcast(&pool->work_done);
+        pool->job_done_count++;
+        if (pool->job_done_count == pool->background_thread_count) {
+            task_broadcast(&pool->state_changed);
         }
     }
     task_unlock(pool);
@@ -286,7 +286,7 @@ void ivp_task_pool_destroy(ivp_task_pool_t *pool)
     if (!pool) return;
     task_lock(pool);
     IVP_ASSERT(!pool->running);
-    while (pool->running) task_wait(&pool->work_done, pool);
+    while (pool->running) task_wait(&pool->state_changed, pool);
     pool->stopping = true;
     task_broadcast(&pool->work_ready);
     task_unlock(pool);
@@ -324,9 +324,9 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->task_grain = task_count / target_chunks;
     if (pool->task_grain == 0u) pool->task_grain = 1u;
     atomic_store_explicit(&pool->next_task, 0u, memory_order_relaxed);
-    pool->workers_ready = 0;
-    pool->workers_done = 0;
-    pool->worker_setup_failed = false;
+    pool->setup_ready_count = 0;
+    pool->job_done_count = 0;
+    pool->setup_failed = false;
     pool->running = true;
     pool->generation++;
     task_broadcast(&pool->work_ready);
@@ -334,10 +334,12 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     void *caller_context = pool->context;
     const size_t caller_task_count = pool->task_count;
     const size_t caller_task_grain = pool->task_grain;
-    while (pool->workers_ready != pool->background_thread_count) {
-        task_wait(&pool->work_done, pool);
+    /* The caller lane does not start until every background lane has adopted
+     * this dispatch's floating-point environment. */
+    while (pool->setup_ready_count != pool->background_thread_count) {
+        task_wait(&pool->state_changed, pool);
     }
-    bool setup_ok = !pool->worker_setup_failed;
+    bool setup_ok = !pool->setup_failed;
     task_unlock(pool);
 
     if (setup_ok) {
@@ -346,11 +348,11 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     }
 
     task_lock(pool);
-    while (pool->workers_done != pool->background_thread_count) {
-        task_wait(&pool->work_done, pool);
+    while (pool->job_done_count != pool->background_thread_count) {
+        task_wait(&pool->state_changed, pool);
     }
     pool->running = false;
-    task_broadcast(&pool->work_done);
+    task_broadcast(&pool->state_changed);
     pool->function = NULL;
     pool->context = NULL;
     pool->task_count = 0;

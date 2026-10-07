@@ -33,7 +33,7 @@ struct ivp_world_scheduler {
 
     ivp_worker_mutex_t mutex;
     ivp_worker_cond_t work_ready;
-    ivp_worker_cond_t work_done;
+    ivp_worker_cond_t state_changed;
     bool sync_initialized;
     bool stopping;
     bool running;
@@ -42,9 +42,9 @@ struct ivp_world_scheduler {
     ivp_environment_t *const *environments;
     size_t environment_count;
     size_t next_environment;
-    int workers_ready;
-    int workers_done;
-    bool worker_setup_failed;
+    int setup_ready_count;
+    int job_done_count;
+    bool setup_failed;
     fenv_t floating_point_environment;
     ivp_world_job_kind_t job_kind;
     ivp_real_t elapsed_time;
@@ -70,7 +70,7 @@ static bool sync_init(ivp_world_scheduler_t *s)
 {
     InitializeCriticalSection(&s->mutex);
     InitializeConditionVariable(&s->work_ready);
-    InitializeConditionVariable(&s->work_done);
+    InitializeConditionVariable(&s->state_changed);
     return true;
 }
 static void sync_destroy(ivp_world_scheduler_t *s) { DeleteCriticalSection(&s->mutex); }
@@ -89,7 +89,7 @@ static bool sync_init(ivp_world_scheduler_t *s)
         (void)pthread_mutex_destroy(&s->mutex);
         return false;
     }
-    if (pthread_cond_init(&s->work_done, NULL) != 0) {
+    if (pthread_cond_init(&s->state_changed, NULL) != 0) {
         (void)pthread_cond_destroy(&s->work_ready);
         (void)pthread_mutex_destroy(&s->mutex);
         return false;
@@ -98,7 +98,7 @@ static bool sync_init(ivp_world_scheduler_t *s)
 }
 static void sync_destroy(ivp_world_scheduler_t *s)
 {
-    (void)pthread_cond_destroy(&s->work_done);
+    (void)pthread_cond_destroy(&s->state_changed);
     (void)pthread_cond_destroy(&s->work_ready);
     (void)pthread_mutex_destroy(&s->mutex);
 }
@@ -127,19 +127,21 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
         sync_unlock(s);
         bool setup_ok = fesetenv(&floating_point_environment) == 0;
         sync_lock(s);
-        if (!setup_ok) s->worker_setup_failed = true;
-        s->workers_ready++;
-        if (s->workers_ready == s->worker_count) {
-            sync_broadcast(&s->work_done);
+        /* No world may advance until every scheduler worker has adopted the
+         * floating-point environment for this generation. */
+        if (!setup_ok) s->setup_failed = true;
+        s->setup_ready_count++;
+        if (s->setup_ready_count == s->worker_count) {
+            sync_broadcast(&s->state_changed);
         } else {
             while (!s->stopping &&
-                   s->workers_ready != s->worker_count) {
-                sync_wait(&s->work_done, s);
+                   s->setup_ready_count != s->worker_count) {
+                sync_wait(&s->state_changed, s);
             }
         }
         if (s->stopping) break;
 
-        if (!s->worker_setup_failed) {
+        if (!s->setup_failed) {
             for (;;) {
                 if (s->next_environment >= s->environment_count) break;
                 size_t index = s->next_environment++;
@@ -154,10 +156,10 @@ static void scheduler_worker_loop(ivp_world_scheduler_t *s)
             }
         }
 
-        s->workers_done++;
-        if (s->workers_done == s->worker_count) {
+        s->job_done_count++;
+        if (s->job_done_count == s->worker_count) {
             s->running = false;
-            sync_broadcast(&s->work_done);
+            sync_broadcast(&s->state_changed);
         }
     }
     sync_unlock(s);
@@ -379,9 +381,9 @@ static ivp_result_t scheduler_dispatch(
     s->environments = environments;
     s->environment_count = environment_count;
     s->next_environment = 0;
-    s->workers_ready = 0;
-    s->workers_done = 0;
-    s->worker_setup_failed = false;
+    s->setup_ready_count = 0;
+    s->job_done_count = 0;
+    s->setup_failed = false;
     s->job_kind = kind;
     s->elapsed_time = elapsed_time;
     s->running = true;
@@ -398,8 +400,8 @@ static ivp_result_t scheduler_dispatch(
     } else {
         s->generation++;
         sync_broadcast(&s->work_ready);
-        while (s->running) sync_wait(&s->work_done, s);
-        if (s->worker_setup_failed) result = IVP_ERR_INVALID_STATE;
+        while (s->running) sync_wait(&s->state_changed, s);
+        if (s->setup_failed) result = IVP_ERR_INVALID_STATE;
     }
 
     s->environments = NULL;
