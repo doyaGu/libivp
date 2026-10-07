@@ -143,3 +143,4 @@ reference/
 *.cxx
 *.hxx
 !tests/data/lcs_ref_harness.cxx
+__pycache__/
