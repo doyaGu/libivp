@@ -3,8 +3,8 @@
  * The reference creates boxes as a pointsoup of the 8 corners
  * (ivp_reference_runner/ref_runner_common.cxx build_box_compact_surface ->
  * IVP_SurfaceBuilder_Pointsoup::convert_pointsoup_to_compact_surface), so
- * libivp does the same: the convex hull builder (qhull 2.6 +
- * IVP_SurfaceBuilder_Polygon_Convex port) yields the reference ledge
+ * libivp does the same: the convex hull builder (Qhull 2020.2 libqhull_r +
+ * IVP_SurfaceBuilder_Polygon_Convex port) yields the tested reference ledge
  * layout and the ledge soup the reference surface header (mass center,
  * IVP_Rot_Inertia_Solver inertia, radius, deviation).
  *

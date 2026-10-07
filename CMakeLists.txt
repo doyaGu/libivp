@@ -22,6 +22,9 @@ option(IVP_BUILD_BENCHMARKS "Build the standalone performance benchmark" ${IVP_B
 option(IVP_BENCHMARK_DIAGNOSTICS "Enable intrusive benchmark operation counts" OFF)
 option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 
+# The Qhull reentrancy stress test uses native worker threads.
+find_package(Threads REQUIRED)
+
 function(ivp_apply_strict_fp TARGET_NAME)
     if (MSVC)
         target_compile_options(${TARGET_NAME} PRIVATE /fp:strict /Oi-)
@@ -239,24 +242,28 @@ set(IVP_SOLVER_SOURCES
         src/solver/ivp_impact_core.c
 )
 
-# ── Third-party: qhull 2.6 ───────────────────────────────────────────────
-# qhull 2.6 (Geometry Center 1999), the version the reference compiles from
-# ivp_compact_builder/qhull*.cxx, as C17.  The pointsoup builder needs its
-# exact facet / facet-vertex order for a reference identical ledge layout.
-# Non-reentrant: qhull 2.6 keeps its state in the global qh_qh.
+# ── Third-party: Qhull 2020.2 (8.0.2), reentrant C library ──────────────
+# Official libqhull_r sources.  Each convex build owns a qhT context, so
+# independent hulls may be built concurrently.  A single qhT is never shared
+# between threads.
 set(QHULL_SOURCES
-        deps/qhull/qhull.c
-        deps/qhull/qhull_geom.c
-        deps/qhull/qhull_geom2.c
-        deps/qhull/qhull_global.c
-        deps/qhull/qhull_io.c
-        deps/qhull/qhull_mem.c
-        deps/qhull/qhull_merge.c
-        deps/qhull/qhull_poly.c
-        deps/qhull/qhull_poly2.c
-        deps/qhull/qhull_qset.c
-        deps/qhull/qhull_stat.c
-        deps/qhull/qhull_user.c
+        deps/qhull/libqhull_r/global_r.c
+        deps/qhull/libqhull_r/stat_r.c
+        deps/qhull/libqhull_r/geom2_r.c
+        deps/qhull/libqhull_r/poly2_r.c
+        deps/qhull/libqhull_r/merge_r.c
+        deps/qhull/libqhull_r/libqhull_r.c
+        deps/qhull/libqhull_r/geom_r.c
+        deps/qhull/libqhull_r/poly_r.c
+        deps/qhull/libqhull_r/qset_r.c
+        deps/qhull/libqhull_r/mem_r.c
+        deps/qhull/libqhull_r/random_r.c
+        deps/qhull/libqhull_r/usermem_r.c
+        deps/qhull/libqhull_r/userprintf_r.c
+        deps/qhull/libqhull_r/io_r.c
+        deps/qhull/libqhull_r/user_r.c
+        deps/qhull/libqhull_r/rboxlib_r.c
+        deps/qhull/libqhull_r/userprintf_rbox_r.c
         deps/qhull/qhull_api.c
 )
 
@@ -268,8 +275,8 @@ target_include_directories(ivp_qhull
 
 ivp_apply_strict_fp(ivp_qhull)
 
-# Project warning set (not fatal: third-party code), with the warning
-# classes the vendored 1999 code triggers silenced for these files only
+# Project warning set (not fatal: third-party code), with the warning classes
+# emitted by the vendored upstream sources silenced for these files only.
 if (MSVC)
     target_compile_options(ivp_qhull PRIVATE /W0)
 else ()
@@ -532,7 +539,6 @@ if (IVP_BUILD_TESTS)
     enable_testing()
 
     find_package(Python3 COMPONENTS Interpreter)
-
     # Minimal test framework header is in tests/
     function(ivp_add_test TEST_NAME TEST_SOURCE)
         add_executable(${TEST_NAME} ${TEST_SOURCE})
@@ -564,6 +570,8 @@ if (IVP_BUILD_TESTS)
     # New coverage-expansion tests
     ivp_add_test(test_controllers tests/test_controllers.c)
     ivp_add_test(test_builders tests/test_builders.c)
+    ivp_add_test(test_qhull_reentrant tests/test_qhull_reentrant.c)
+    target_link_libraries(test_qhull_reentrant PRIVATE Threads::Threads)
     ivp_add_test(test_convex_layout tests/test_convex_layout.c)
     ivp_add_test(test_anomaly tests/test_anomaly.c)
     ivp_add_test(test_object_lifecycle tests/test_object_lifecycle.c)
@@ -687,7 +695,8 @@ if (IVP_BUILD_TESTS)
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry test_collision
             test_dynamics test_solver test_utility
-            test_controllers test_builders test_convex_layout test_anomaly test_object_lifecycle
+            test_controllers test_builders test_qhull_reentrant
+            test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
             test_fake_jetski

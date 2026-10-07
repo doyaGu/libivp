@@ -22,9 +22,9 @@
  *
  * The convex hull builders (and everything built on them: boxes, point
  * soups, half space soups, convex decomposition pieces, ledge tree hulls)
- * use the reference's qhull 2.6, whose state is global: they produce the
- * reference ledge layout bit for bit but are NOT reentrant -- do not call
- * them from several threads at once.
+ * use Qhull 2020.2's reentrant libqhull_r.  Each call owns a separate qhT,
+ * so independent builds may run concurrently.  Do not share an allocator
+ * between threads unless that allocator is itself thread-safe.
  */
 #ifndef IVP_BUILD_SURFACE_H
 #define IVP_BUILD_SURFACE_H

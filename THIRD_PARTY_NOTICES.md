@@ -3,15 +3,16 @@
 libivp contains or uses the following third-party code.  Their copyright
 notices are kept in the source files listed here.
 
-## qhull 2.6
+## Qhull 2020.2 (8.0.2)
 
 - Location: `deps/qhull/`
-- Copyright (c) 1993-1999 C.B. Barber and The Geometry Center, University
+- Copyright (c) 1993-2020 C.B. Barber and The Geometry Center, University
   of Minnesota.
 - License: the qhull license, see `deps/qhull/COPYING.txt`.
-- Modified for libivp (converted to C17, small build fixes, output through
-  a message sink).  The modification notice is in `deps/qhull/qhull_compat.h`.
-  The original qhull source code may be obtained from http://www.qhull.org.
+- The official reentrant `libqhull_r` C sources are vendored unmodified.
+  `qhull_api.[ch]` is libivp's separate adapter.  Source provenance is in
+  `deps/qhull/README.libivp.md`; the original source may be obtained from
+  https://github.com/qhull/qhull.
 
 ## GEOMPACK
 
