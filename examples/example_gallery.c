@@ -67,6 +67,7 @@ static const card_t cards[] = {
     { "actuators",        0, "Torque turntables, suspension springs and the reference stabilizer." },
     { "waves",            0, "A travelling-wave liquid surface and a buoyancy attacher over a set of cores." },
     { "hover",            0, "Hover pads on the floating controller, with force limits that fail." },
+    { "factory",          0, "Controllers made from templates, owned and deleted by the environment." },
     { "zones",            0, "Phantom volumes whose core sets drive a force field and two attachers." },
     { "contacts",         0, "Collision, friction and object listeners as instruments: a scale, a brake, drop tests." },
     { "sensors",          0, "Radar and sphere probe queries, the look-ahead ranges and the collision tolerance." },

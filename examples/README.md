@@ -73,6 +73,7 @@ Physics and controllers:
 | `zones` | three phantom volumes whose intruding-core sets drive a set-driven force field (updraft), the generic `ivp_attacher_to_cores` with an own speed-limit attachment, and a buoyancy attacher (a tank); the bodies sit in clusters |
 | `contacts` | listeners as instruments: a scale that sums the contact normal forces of a crate stack, a brake that counts the eliminated friction energy, drop tests that read the speed around the first impact, and a global object listener |
 | `sensors` | a radar and a sphere probe that list the objects around them, the hull range the collision detection looks ahead with, and the collision tolerance that sets the gap a resting crate keeps |
+| `factory` | controllers made from templates by `ivp_controller_factory_*` (spring, check distance, force, torque, motion, with active floats bound): the environment owns them, deleting a controller or one of its anchor objects removes them |
 | `psi_listener` | a PSI listener records trails and a strip chart of each body's mechanical energy: bounces, a tumbling box, a ball that starts sliding and ends up rolling |
 | `check_distance`, `phantom`, `callback`, `active_value` | distance triggers, trigger volumes, object and collision listeners, active value chains |
 | `collision_filter`, `raycasting`, `universe` | collision filters, the ray solver, streaming static objects |
@@ -104,7 +105,7 @@ Examples with their own F5 sliders: `offroad` and `vehicle` (engine, brake, susp
 tyres, anti-roll bar), `boat` (thrust, rudder, keel, water drag), `airboat` (full throttle, rudder range, pontoon spring), `buoyancy` (water density,
 current, drag), `springs` (bridge and bungee stiffness, damping), `forcefield` (field
 strength), `force_actuator` (magnet force, push speed, automatic switching) and `black_hole`
-(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants), `waves` (wave, water, set membership), `hover` (hover height, speed, repulsive limit), `sensors` (radar range, probe, look-ahead, tolerance), `jetski` (wave, springs, torque), `wheelcar` (torque, lock, springs, stabilizer) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
+(pull strength), `concave` (draw the convex parts), `psi_listener` (trails, energy chart), `constraints` (arm circle), `actuators` (turntable A, spring and stabilizer constants), `waves` (wave, water, set membership), `hover` (hover height, speed, repulsive limit), `sensors` (radar range, probe, look-ahead, tolerance), `jetski` (wave, springs, torque), `wheelcar` (torque, lock, springs, stabilizer), `factory` (force, torque, spring, switches) and `friction` (ground and global friction, belt speed and grip). A change wakes the sleeping bodies, since a sleeping core runs no controllers.
 
 ## Writing an example
 
