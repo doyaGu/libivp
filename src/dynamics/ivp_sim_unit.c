@@ -801,37 +801,12 @@ static bool su_is_parallel_island(const ivp_sim_unit_t *su)
     return true;
 }
 
-static bool su_try_parallel_islands(ivp_sim_units_manager_t *sman,
-                                    ivp_sim_es_t *es,
-                                    ivp_pvec_t *touched_cores)
+static bool su_try_parallel_island_run(struct ivp_environment *env,
+                                       ivp_pvec_t *units,
+                                       ivp_sim_es_t *es,
+                                       ivp_pvec_t *touched_cores)
 {
-    struct ivp_environment *env = sman->l_environment;
-    if (ivp_env_parallel_worker_count(env) < 2) return false;
-
-    ivp_pvec_t *units = &env->pl->parallel_sim_units;
-    ivp_pvec_remove_all(units);
-    for (ivp_sim_unit_t *su = sman->sim_units_slot0; su;
-         su = su->next_sim_unit) {
-        if (!su_is_parallel_island(su) ||
-            ivp_pvec_add(units, su) < 0) {
-            ivp_pvec_remove_all(units);
-            return false;
-        }
-    }
-
     const int unit_count = ivp_pvec_len(units);
-    /* The reference manager keeps a three-node lookahead and reaches its
-     * labels in reverse order.  Preserve that observable movement-check and
-     * touched-core order: forward through N-3, then N-1, N-2, N-3. */
-    if (unit_count >= 2) {
-        int tail_first = unit_count > 3 ? unit_count - 3 : 0;
-        int tail_last = unit_count - 1;
-        while (tail_first < tail_last) {
-            ivp_pvec_swap(units, tail_first, tail_last);
-            tail_first++;
-            tail_last--;
-        }
-    }
     const size_t minimum_tasks = 256u;
     if ((size_t)unit_count < minimum_tasks) return false;
 
@@ -877,12 +852,87 @@ static bool su_try_parallel_islands(ivp_sim_units_manager_t *sman,
     return true;
 }
 
+static void su_flush_parallel_island_run(struct ivp_environment *env,
+                                         ivp_pvec_t *units,
+                                         ivp_sim_es_t *es,
+                                         ivp_pvec_t *touched_cores)
+{
+    if (!su_try_parallel_island_run(env, units, es, touched_cores)) {
+        for (int i = 0; i < ivp_pvec_len(units); i++) {
+            su_simulate_single_sim_unit_psi(
+                (ivp_sim_unit_t *)ivp_pvec_at(units, i), es,
+                touched_cores);
+        }
+    }
+    ivp_pvec_remove_all(units);
+}
+
+static void su_simulate_ordered_island(struct ivp_environment *env,
+                                       ivp_sim_unit_t *su,
+                                       ivp_pvec_t *units,
+                                       ivp_sim_es_t *es,
+                                       ivp_pvec_t *touched_cores)
+{
+    if (su_is_parallel_island(su)) {
+        if (ivp_pvec_add(units, su) >= 0) return;
+
+        /* Reusing the released capacity can still succeed after growing a
+         * long run failed.  If the scratch vector itself cannot allocate,
+         * preserve progress with the reference serial path. */
+        su_flush_parallel_island_run(env, units, es, touched_cores);
+        if (ivp_pvec_add(units, su) >= 0) return;
+    } else {
+        su_flush_parallel_island_run(env, units, es, touched_cores);
+    }
+    su_simulate_single_sim_unit_psi(su, es, touched_cores);
+}
+
+static bool su_simulate_segmented_parallel_islands(
+    ivp_sim_units_manager_t *sman, ivp_sim_es_t *es,
+    ivp_pvec_t *touched_cores)
+{
+    struct ivp_environment *env = sman->l_environment;
+    if (ivp_env_parallel_worker_count(env) < 2) return false;
+
+    ivp_pvec_t *units = &env->pl->parallel_sim_units;
+    ivp_pvec_remove_all(units);
+    ivp_sim_unit_t *s_u = sman->sim_units_slot0;
+    if (!s_u) return true;
+    ivp_sim_unit_t *n0_su = s_u->next_sim_unit;
+    if (!n0_su) {
+        su_simulate_ordered_island(env, s_u, units, es, touched_cores);
+        goto finish;
+    }
+    ivp_sim_unit_t *n1_su = n0_su->next_sim_unit;
+    if (!n1_su) {
+        su_simulate_ordered_island(env, n0_su, units, es,
+                                   touched_cores);
+        su_simulate_ordered_island(env, s_u, units, es, touched_cores);
+        goto finish;
+    }
+    ivp_sim_unit_t *n2_su = n1_su->next_sim_unit;
+    while (n2_su) {
+        su_simulate_ordered_island(env, s_u, units, es, touched_cores);
+        s_u = n0_su;
+        n0_su = n1_su;
+        n1_su = n2_su;
+        n2_su = n2_su->next_sim_unit;
+    }
+    su_simulate_ordered_island(env, n1_su, units, es, touched_cores);
+    su_simulate_ordered_island(env, n0_su, units, es, touched_cores);
+    su_simulate_ordered_island(env, s_u, units, es, touched_cores);
+
+finish:
+    su_flush_parallel_island_run(env, units, es, touched_cores);
+    return true;
+}
+
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp_pvec_t *touched_cores)
 {
     ivp_sim_es_t es;
     ivp_sim_es_init(&es, sman->l_environment);
     ivp_sim_unit_t *s_u, *n0_su, *n1_su, *n2_su;
-    if (su_try_parallel_islands(sman, &es, touched_cores)) {
+    if (su_simulate_segmented_parallel_islands(sman, &es, touched_cores)) {
         goto sim_units_0;
     }
     s_u = sman->sim_units_slot0;
