@@ -39,7 +39,9 @@ struct ivp_task_pool {
     bool stopping;
     bool running;
     uint64_t generation;
+    int workers_ready;
     int workers_done;
+    bool worker_setup_failed;
 
     ivp_task_pool_fn function;
     void *context;
@@ -47,7 +49,6 @@ struct ivp_task_pool {
     atomic_size_t next_task;
     size_t task_grain;
     fenv_t floating_point_environment;
-    bool floating_point_environment_valid;
 };
 
 #if defined(_WIN32)
@@ -128,13 +129,8 @@ static bool task_claim_range(ivp_task_pool_t *pool, size_t task_count,
 
 static void task_run_claimed(ivp_task_pool_t *pool,
                              ivp_task_pool_fn function, void *context,
-                             size_t task_count, size_t task_grain,
-                             bool restore_fenv,
-                             const fenv_t *floating_point_environment)
+                             size_t task_count, size_t task_grain)
 {
-    if (restore_fenv && floating_point_environment) {
-        (void)fesetenv(floating_point_environment);
-    }
     size_t first, end;
     while (task_claim_range(pool, task_count, task_grain, &first, &end)) {
         for (size_t index = first; index < end; index++) {
@@ -159,12 +155,29 @@ static void task_worker_loop(ivp_task_worker_t *worker)
         void *context = pool->context;
         const size_t task_count = pool->task_count;
         const size_t task_grain = pool->task_grain;
-        const bool restore_fenv = pool->floating_point_environment_valid;
-        const fenv_t floating_point_environment = pool->floating_point_environment;
+        const fenv_t floating_point_environment =
+            pool->floating_point_environment;
         task_unlock(pool);
 
-        task_run_claimed(pool, function, context, task_count, task_grain,
-                         restore_fenv, &floating_point_environment);
+        bool setup_ok = fesetenv(&floating_point_environment) == 0;
+        task_lock(pool);
+        if (!setup_ok) pool->worker_setup_failed = true;
+        pool->workers_ready++;
+        if (pool->workers_ready == pool->background_thread_count) {
+            task_broadcast(&pool->work_done);
+        } else {
+            while (!pool->stopping &&
+                   pool->workers_ready != pool->background_thread_count) {
+                task_wait(&pool->work_done, pool);
+            }
+        }
+        if (pool->stopping) break;
+        bool run_tasks = !pool->worker_setup_failed;
+        task_unlock(pool);
+
+        if (run_tasks) {
+            task_run_claimed(pool, function, context, task_count, task_grain);
+        }
 
         task_lock(pool);
         pool->workers_done++;
@@ -291,12 +304,16 @@ int ivp_task_pool_worker_count(const ivp_task_pool_t *pool)
     return pool ? pool->worker_count : 0;
 }
 
-void ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
+bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
                                 ivp_task_pool_fn function, void *context)
 {
-    if (!pool || task_count == 0 || !function) return;
+    if (!pool || task_count == 0 || !function) return false;
     task_lock(pool);
     IVP_ASSERT(!pool->running && !pool->stopping);
+    if (fegetenv(&pool->floating_point_environment) != 0) {
+        task_unlock(pool);
+        return false;
+    }
     pool->function = function;
     pool->context = context;
     pool->task_count = task_count;
@@ -307,9 +324,9 @@ void ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->task_grain = task_count / target_chunks;
     if (pool->task_grain == 0u) pool->task_grain = 1u;
     atomic_store_explicit(&pool->next_task, 0u, memory_order_relaxed);
+    pool->workers_ready = 0;
     pool->workers_done = 0;
-    pool->floating_point_environment_valid =
-        fegetenv(&pool->floating_point_environment) == 0;
+    pool->worker_setup_failed = false;
     pool->running = true;
     pool->generation++;
     task_broadcast(&pool->work_ready);
@@ -317,10 +334,16 @@ void ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     void *caller_context = pool->context;
     const size_t caller_task_count = pool->task_count;
     const size_t caller_task_grain = pool->task_grain;
+    while (pool->workers_ready != pool->background_thread_count) {
+        task_wait(&pool->work_done, pool);
+    }
+    bool setup_ok = !pool->worker_setup_failed;
     task_unlock(pool);
 
-    task_run_claimed(pool, caller_function, caller_context,
-                     caller_task_count, caller_task_grain, false, NULL);
+    if (setup_ok) {
+        task_run_claimed(pool, caller_function, caller_context,
+                         caller_task_count, caller_task_grain);
+    }
 
     task_lock(pool);
     while (pool->workers_done != pool->background_thread_count) {
@@ -332,4 +355,5 @@ void ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->context = NULL;
     pool->task_count = 0;
     task_unlock(pool);
+    return setup_ok;
 }

@@ -53,7 +53,10 @@ typedef struct ivp_environment_config {
      * columns.  One keeps the reference serial path.  The simulation thread
      * owns one lane; the other lanes are persistent background threads.  No
      * background lane invokes user controllers, listeners, filters, or
-     * allocators. */
+     * allocators.  Before a parallel dispatch, every background lane adopts
+     * the simulation thread's floating-point environment.  Within one
+     * platform and build configuration, worker count must not change the
+     * resulting world state. */
     int                 parallel_worker_count;
     ivp_anomaly_config_t    anomaly_config;
     ivp_collision_filter_t  collision_filter;

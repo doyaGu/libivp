@@ -83,8 +83,10 @@ bool ivp_env_parallel_for(ivp_environment_t *env,
         task_count < min_tasks) {
         return false;
     }
-    ivp_task_pool_parallel_for(env->pl->task_pool, task_count, function,
-                               context);
+    if (!ivp_task_pool_parallel_for(env->pl->task_pool, task_count, function,
+                                    context)) {
+        return false;
+    }
     ivp_parallel_stats_t *stats = &env->pl->parallel_stats;
     if (kind == IVP_PARALLEL_WORK_ISLAND) {
         stats->island_dispatches++;
