@@ -220,6 +220,35 @@ static ivp_environment_t *create_zero_gravity_environment(
     return ivp_environment_create(&config);
 }
 
+IVP_TEST(environment_serial_worker_values_normalize)
+{
+    const int requested_counts[] = { -1, 0, 1 };
+    bool ok = true;
+    for (size_t i = 0;
+         ok && i < sizeof(requested_counts) / sizeof(requested_counts[0]);
+         i++) {
+        ivp_environment_t *environment = create_zero_gravity_environment(
+            requested_counts[i], ivp_collision_filter_allow_all());
+        if (!environment ||
+            ivp_environment_get_parallel_worker_count(environment) != 1) {
+            ok = false;
+        } else {
+            ivp_environment_simulate_one_psi(environment);
+            ivp_parallel_stats_t stats;
+            ivp_environment_get_parallel_stats(environment, &stats);
+            if (stats.island_dispatches != 0u || stats.island_tasks != 0u ||
+                stats.broadphase_dispatches != 0u ||
+                stats.broadphase_tasks != 0u ||
+                stats.solver_dispatches != 0u || stats.solver_tasks != 0u ||
+                stats.max_workers_used != 0) {
+                ok = false;
+            }
+        }
+        ivp_environment_destroy(environment);
+    }
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(broadphase_preserves_candidate_order)
 {
     ivp_environment_t *serial = create_zero_gravity_environment(
@@ -946,6 +975,7 @@ int main(void)
     IVP_REGISTER(task_pool_runs_concurrently);
     IVP_REGISTER(task_pool_claims_every_task_exactly_once);
     IVP_REGISTER(task_pool_propagates_dispatch_fenv);
+    IVP_REGISTER(environment_serial_worker_values_normalize);
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
     IVP_REGISTER(independent_constraint_islands_are_bit_exact);

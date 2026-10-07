@@ -46,6 +46,7 @@ typedef struct overlap_probe {
     atomic_int max_active;
     atomic_bool overlapped;
     ivp_world_scheduler_t *contender;
+    ivp_environment_t *unowned_environment;
     atomic_int contention_attempts;
     atomic_int contention_result;
 } overlap_probe_t;
@@ -136,9 +137,13 @@ static void overlap_hook(void *ctx, ivp_environment_t *env,
     if (probe->contender &&
         atomic_fetch_add_explicit(&probe->contention_attempts, 1,
                                   memory_order_relaxed) == 0) {
-        ivp_environment_t *same_world[] = { env };
+        /* The first environment is free and the second is owned by the
+         * outer dispatch.  Rejection must not partially advance the first. */
+        ivp_environment_t *contended_batch[] = {
+            probe->unowned_environment, env
+        };
         ivp_result_t result = ivp_world_scheduler_simulate_one_psi(
-            probe->contender, same_world, 1);
+            probe->contender, contended_batch, 2);
         atomic_store_explicit(&probe->contention_result, (int)result,
                               memory_order_release);
     }
@@ -263,6 +268,16 @@ static bool world_state_equal(const test_world_t *a, const test_world_t *b)
     return true;
 }
 
+static bool parallel_stats_are_zero(const ivp_environment_t *environment)
+{
+    ivp_parallel_stats_t stats;
+    ivp_environment_get_parallel_stats(environment, &stats);
+    return stats.island_dispatches == 0u && stats.island_tasks == 0u &&
+           stats.broadphase_dispatches == 0u &&
+           stats.broadphase_tasks == 0u && stats.solver_dispatches == 0u &&
+           stats.solver_tasks == 0u && stats.max_workers_used == 0;
+}
+
 IVP_TEST(scheduler_one_worker_is_fully_serial)
 {
     test_world_t scheduled[PARALLEL_WORLD_COUNT] = {0};
@@ -314,14 +329,8 @@ IVP_TEST(scheduler_one_worker_is_fully_serial)
     for (int i = 0; i < world_count; i++) {
         ivp_environment_set_phase_hook(scheduled[i].env, NULL, NULL);
         ivp_environment_simulate_one_psi(direct[i].env);
-        ivp_parallel_stats_t stats;
-        ivp_environment_get_parallel_stats(scheduled[i].env, &stats);
         if (!world_state_equal(&scheduled[i], &direct[i]) ||
-            stats.island_dispatches != 0u || stats.island_tasks != 0u ||
-            stats.broadphase_dispatches != 0u ||
-            stats.broadphase_tasks != 0u ||
-            stats.solver_dispatches != 0u || stats.solver_tasks != 0u ||
-            stats.max_workers_used != 0) {
+            !parallel_stats_are_zero(scheduled[i].env)) {
             ok = false;
         }
     }
@@ -335,6 +344,20 @@ IVP_TEST(scheduler_one_worker_is_fully_serial)
                               memory_order_relaxed) ||
         !atomic_load_explicit(&probe.array_order, memory_order_relaxed)) {
         ok = false;
+    }
+    if (ok) {
+        if (ivp_world_scheduler_simulate_dtime(
+                scheduler, environments, (size_t)world_count,
+                IVP_REAL(0.05)) != IVP_OK) {
+            ok = false;
+        }
+        for (int i = 0; ok && i < world_count; i++) {
+            ivp_environment_simulate_dtime(direct[i].env, IVP_REAL(0.05));
+            if (!world_state_equal(&scheduled[i], &direct[i]) ||
+                !parallel_stats_are_zero(scheduled[i].env)) {
+                ok = false;
+            }
+        }
     }
 
 cleanup:
@@ -407,6 +430,7 @@ IVP_TEST(scheduler_parallel_contract)
     ivp_world_scheduler_t *scheduler = NULL;
     ivp_world_scheduler_t *contender = NULL;
     ivp_world_scheduler_t *invalid_scheduler = NULL;
+    ivp_world_scheduler_t *negative_scheduler = NULL;
     bool ok = true;
 
     for (int i = 0; i < PARALLEL_WORLD_COUNT; i++) {
@@ -425,7 +449,9 @@ IVP_TEST(scheduler_parallel_contract)
         goto cleanup;
     }
     invalid_scheduler = ivp_world_scheduler_create(0, NULL);
+    negative_scheduler = ivp_world_scheduler_create(-1, NULL);
     if (invalid_scheduler != NULL ||
+        negative_scheduler != NULL ||
         ivp_world_scheduler_simulate_one_psi(scheduler, NULL, 0) != IVP_OK ||
         ivp_world_scheduler_simulate_one_psi(scheduler, NULL, 1) !=
             IVP_ERR_INVALID_ARG ||
@@ -434,7 +460,10 @@ IVP_TEST(scheduler_parallel_contract)
             IVP_REAL(-1.0)) != IVP_ERR_INVALID_ARG ||
         ivp_world_scheduler_simulate_dtime(
             scheduler, environments, PARALLEL_WORLD_COUNT,
-            (ivp_real_t)NAN) != IVP_ERR_INVALID_ARG) {
+            (ivp_real_t)NAN) != IVP_ERR_INVALID_ARG ||
+        ivp_world_scheduler_simulate_dtime(
+            scheduler, environments, PARALLEL_WORLD_COUNT,
+            (ivp_real_t)INFINITY) != IVP_ERR_INVALID_ARG) {
         ok = false;
         goto cleanup;
     }
@@ -464,6 +493,9 @@ IVP_TEST(scheduler_parallel_contract)
     atomic_init(&probe.max_active, 0);
     atomic_init(&probe.overlapped, false);
     probe.contender = contender;
+    probe.unowned_environment = serial[0].env;
+    const ivp_time_t unowned_time =
+        ivp_environment_get_time(probe.unowned_environment);
     atomic_init(&probe.contention_attempts, 0);
     atomic_init(&probe.contention_result, -1);
     for (int i = 0; i < PARALLEL_WORLD_COUNT; i++) {
@@ -471,6 +503,10 @@ IVP_TEST(scheduler_parallel_contract)
     }
     if (ivp_world_scheduler_simulate_one_psi(
             scheduler, environments, PARALLEL_WORLD_COUNT) != IVP_OK) {
+        ok = false;
+        goto cleanup;
+    }
+    if (ivp_environment_get_time(probe.unowned_environment) != unowned_time) {
         ok = false;
         goto cleanup;
     }
@@ -516,13 +552,18 @@ IVP_TEST(scheduler_parallel_contract)
         ivp_environment_t *duplicates[2] = {
             parallel[0].env, parallel[0].env
         };
+        const ivp_time_t time_before_rejection =
+            ivp_environment_get_time(parallel[0].env);
         if (ivp_world_scheduler_simulate_one_psi(
-                scheduler, duplicates, 2) != IVP_ERR_INVALID_ARG) {
+                scheduler, duplicates, 2) != IVP_ERR_INVALID_ARG ||
+            ivp_environment_get_time(parallel[0].env) !=
+                time_before_rejection) {
             ok = false;
         }
     }
 
 cleanup:
+    ivp_world_scheduler_destroy(negative_scheduler);
     ivp_world_scheduler_destroy(invalid_scheduler);
     ivp_world_scheduler_destroy(contender);
     ivp_world_scheduler_destroy(scheduler);
