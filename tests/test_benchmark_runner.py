@@ -88,17 +88,22 @@ class BenchmarkRunnerTests(unittest.TestCase):
         listed = subprocess.check_output(
             [RUNNER, "--profile", "large", "--list"], text=True).splitlines()
         self.assertIn("constraint_islands", listed)
-        common = [RUNNER, "--profile", "large", "--case", "constraint_islands",
-                  "--scale", "256", "--samples", "1", "--min-sample-ms", "1",
-                  "--format", "jsonl"]
-        serial = json.loads(subprocess.check_output(
-            common + ["--workers", "1"], text=True).splitlines()[-1])
-        parallel = json.loads(subprocess.check_output(
-            common + ["--workers", "2"], text=True).splitlines()[-1])
-        self.assertEqual(serial["parallel_workers"], 1)
-        self.assertEqual(parallel["parallel_workers"], 2)
-        self.assertEqual(serial["state_hash"], parallel["state_hash"])
-        self.assertEqual(serial["trajectory_hash"], parallel["trajectory_hash"])
+        self.assertIn("mixed_constraint_islands", listed)
+        for case, scale in (("constraint_islands", "256"),
+                            ("mixed_constraint_islands", "512")):
+            with self.subTest(case=case):
+                common = [RUNNER, "--profile", "large", "--case", case,
+                          "--scale", scale, "--samples", "1",
+                          "--min-sample-ms", "1", "--format", "jsonl"]
+                serial = json.loads(subprocess.check_output(
+                    common + ["--workers", "1"], text=True).splitlines()[-1])
+                parallel = json.loads(subprocess.check_output(
+                    common + ["--workers", "2"], text=True).splitlines()[-1])
+                self.assertEqual(serial["parallel_workers"], 1)
+                self.assertEqual(parallel["parallel_workers"], 2)
+                self.assertEqual(serial["state_hash"], parallel["state_hash"])
+                self.assertEqual(serial["trajectory_hash"],
+                                 parallel["trajectory_hash"])
 
 
 if __name__ == "__main__":
