@@ -86,7 +86,7 @@ static const card_t cards[] = {
     { "airboat",          2, "Valve's airboat from a lake up a beach." },
     { "jetski",           2, "The fake jetski skimming a travelling wave, with a booster." },
     { "wheelcar",         2, "A car on four real ball wheels: the car system and its constraint solver." },
-    { "ballance",         2, "A mini Ballance: roll a wood, paper and stone ball over a course." },
+    { "rolling_ball",         2, "A rolling ball game: roll a wood, paper and stone ball over a course." },
     { "platform",         2, "An elevator, a slider and a turntable carrying crates." },
     { "compound",         2, "Rigid bodies of several objects; break them apart." },
 };
