@@ -1742,6 +1742,7 @@ static void frs_setup_coords_mindists(fr_solver_t *s, ivp_fr_system_t *fs)
         info->friction.has_negative_pull_since = my_dist->has_negative_pull_since;
         int added = ivp_pvec_add(&s->contact_info_vector, info);
         IVP_ASSERT(added >= 0);
+        IVP_ASSERT(added == index_of_contact_point);
         IVP_USE(added);
         info->index_in_fs = (short)index_of_contact_point++;
     }
@@ -1753,13 +1754,21 @@ static void frs_calc_distance_matrix_column(fr_solver_t *s, int current_contact_
 {
     IVP_ASSERT(!core->physical_unmoveable);
     ivp_gmmz_t *m = &s->dist_change_mat;
-    for (int col = 0; col < ivp_pvec_len(&fr_info->friction_springs); col++) {
-        ivp_contact_pt_t *distance = cp_at(&fr_info->friction_springs, col);
-        int line_num = distance->tmp_contact_info->index_in_fs;
+    /* The loop does not resize either container.  Keep their bases and
+     * dimensions out of the dependent contact-row load chain. */
+    void **springs = fr_info->friction_springs.elems;
+    int spring_count = fr_info->friction_springs.n;
+    double *matrix_values = m->matrix_values;
+    int aligned_row_len = m->aligned_row_len;
+    for (int col = 0; col < spring_count; col++) {
+        ivp_contact_pt_t *distance = (ivp_contact_pt_t *)springs[col];
+        ivp_impact_solver_lt_t *info = distance->tmp_contact_info;
+        int line_num = info->index_in_fs;
         if (line_num < 0) continue;
+        /* frs_setup_coords_mindists installs this exact info pointer at
+         * line_num.  Reuse it instead of round-tripping through the vector. */
         int which_obj;
         double factor;
-        ivp_impact_solver_lt_t *info = frs_info_at(s, line_num);
         if (info->contact_core[0] == core) {
             which_obj = 0;
             factor = -1.0;
@@ -1769,15 +1778,15 @@ static void frs_calc_distance_matrix_column(fr_solver_t *s, int current_contact_
         }
         if (info->contact_core[which_obj]) {
             double speed_change_scalar = factor * frs_get_closing_speed_core_i(info, which_obj, rotation_vec, translation_vec);
-            m->matrix_values[line_num * m->aligned_row_len + current_contact_point_index] += speed_change_scalar;
+            matrix_values[line_num * aligned_row_len + current_contact_point_index] += speed_change_scalar;
         }
     }
 }
 
-static void frs_calc_solver_desired(fr_solver_t *s, int i)
+static void frs_calc_solver_desired(fr_solver_t *s, int i,
+                                    ivp_impact_solver_lt_t *info)
 {
     ivp_gmmz_t *m = &s->dist_change_mat;
-    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
     double dist_velocity = ivp_impact_lt_get_closing_speed(info);
     double distance_off =
         (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
@@ -1786,9 +1795,9 @@ static void frs_calc_solver_desired(fr_solver_t *s, int i)
         ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
 }
 
-static void frs_calc_solver_column_effect(fr_solver_t *s, int i)
+static void frs_calc_solver_column_effect(fr_solver_t *s, int i,
+                                          ivp_impact_solver_lt_t *info)
 {
-    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
     if (info->contact_core[0]) {
         ivp_vec3f_t rotation_vec, translation_vec;
         frs_test_push_core_i(info, 0, &rotation_vec, &translation_vec, -1.0f);
@@ -1809,8 +1818,9 @@ static void frs_calc_solver_column_task(void *opaque, size_t task_index)
 {
     fr_solver_t *s = (fr_solver_t *)opaque;
     int i = (int)task_index;
-    frs_calc_solver_desired(s, i);
-    frs_calc_solver_column_effect(s, i);
+    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+    frs_calc_solver_desired(s, i, info);
+    frs_calc_solver_column_effect(s, i, info);
 }
 
 static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
@@ -1874,13 +1884,13 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
          * desired value, active-set append, then matrix-column effects. */
         for (int i = 0; i < contact_count; i++) {
             ivp_impact_solver_lt_t *info = frs_info_at(s, i);
-            frs_calc_solver_desired(s, i);
+            frs_calc_solver_desired(s, i, info);
             if (info->friction.has_negative_pull_since != 0) {
                 *active_is_at_pos = i;
                 active_is_at_pos++;
                 active_dists_so_far++;
             }
-            frs_calc_solver_column_effect(s, i);
+            frs_calc_solver_column_effect(s, i, info);
         }
     }
     /* ivp_friction_gaps.cxx:1077: index check, CORE in every build */
