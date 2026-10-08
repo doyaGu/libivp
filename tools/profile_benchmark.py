@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Sample native benchmark stacks and separate simulation from world lifecycle."""
+"""Sample native/scenario stacks and separate simulation from world lifecycle."""
 from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
 import datetime as dt
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import platform
 import re
@@ -111,7 +113,17 @@ def scope_for(stack: tuple[str, ...]) -> str:
     return "harness"
 
 
-def aggregate_stacks(stacks: list[tuple[int, tuple[str, ...]]]) -> dict:
+def scenario_scope_for(stack: tuple[str, ...]) -> str:
+    # The two runners inline/tail-call different environment entry points.
+    # Do not classify run_benchmark_world itself: it also creates/destroys
+    # worlds. Native settling/validation classification remains separate.
+    if any(s in ("ivp_environment_simulate_until", "ivp_time_manager_event_loop") or
+           s.startswith("IVP_Time_Manager::event_loop(") for s in stack):
+        return "simulation"
+    return "lifecycle_or_harness"
+
+
+def aggregate_stacks(stacks: list[tuple[int, tuple[str, ...]]], *, scope_classifier=None) -> dict:
     counts = Counter()
     exclusive = defaultdict(Counter)
     inclusive = defaultdict(Counter)
@@ -120,7 +132,7 @@ def aggregate_stacks(stacks: list[tuple[int, tuple[str, ...]]]) -> dict:
     locations = defaultdict(lambda: defaultdict(Counter))
     for entry in stacks:
         weight, stack = entry[:2]
-        scope = scope_for(stack)
+        scope = (scope_classifier or scope_for)(stack)
         counts[scope] += weight
         exclusive[scope][stack[-1]] += weight
         for symbol in set(stack):
@@ -225,12 +237,7 @@ def validate_hull_counts(counts: dict | None, case: str) -> None:
         raise benchmark.BenchmarkError(f"{case}: inconsistent hull operation counts")
 
 
-def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
-    raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
-    command = [str(runner), "--profile", args.profile, "--case", case,
-               "--hotspot-ms", str((args.seconds + 2) * 1000), "--format", "jsonl"]
-    if args.scale:
-        command += ["--scale", str(args.scale)]
+def capture_command(runner: Path, command: list[str], args, raw: Path) -> tuple[str, list]:
     if args.backend == "sample":
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
@@ -239,7 +246,10 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
                  "-fullPaths", "-file", str(raw)], capture_output=True, text=True)
             if profiler.returncode:
                 raise benchmark.BenchmarkError(f"sample failed: {profiler.stderr.strip()}")
-            stdout, stderr = process.communicate(timeout=args.seconds * 5 + 60)
+            try:
+                stdout, stderr = process.communicate(timeout=args.seconds * 5 + 60)
+            except subprocess.TimeoutExpired as exc:
+                raise benchmark.BenchmarkError("profile runner exceeded its lifecycle timeout") from exc
             if process.returncode:
                 raise benchmark.BenchmarkError(f"profile runner failed: {stderr.strip()}")
         finally:
@@ -254,6 +264,16 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
         script = benchmark.run(["perf", "script", "-i", str(raw)], cwd=runner.parent, capture=True)
         raw.with_suffix(".txt").write_text(script, encoding="utf-8")
         stacks = perf_stacks(script)
+    return stdout, stacks
+
+
+def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path | None = None) -> dict:
+    raw = directory / f"{case}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
+    command = [str(runner), "--profile", args.profile, "--case", case,
+               "--hotspot-ms", str((args.seconds + 2) * 1000), "--format", "jsonl"]
+    if args.scale:
+        command += ["--scale", str(args.scale)]
+    stdout, stacks = capture_command(runner, command, args, raw)
     record = benchmark.parse_jsonl(stdout, case)
     if len(record) != 1 or record[0].get("kind") != "native-profile":
         raise benchmark.BenchmarkError(f"{case}: expected one native-profile record")
@@ -293,9 +313,80 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
     return report
 
 
+def scenario_command(runner: Path, scene: tuple[str, str, int], implementation: str,
+                     *, seconds: int | None = None) -> list[str]:
+    name, delta, steps = scene
+    command = [str(runner), "--scenario", name, "--dt", delta, "--steps", str(steps)]
+    if seconds is not None:
+        command += ["--benchmark", "--samples", "1", "--warmup", "1",
+                    "--min-sample-ms", str((seconds + 2) * 1000)]
+    if implementation == "libivp":
+        command += ["--counter", "noop"]
+    return command
+
+
+def validate_scenario_record(record: dict, scene: tuple[str, str, int], implementation: str) -> None:
+    name, delta, steps = scene
+    if (record.get("kind") != "scenario" or record.get("implementation") != implementation or
+            record.get("scenario") != name or record.get("steps_per_world") != steps or
+            record.get("dt") != float(delta) or type(record.get("worlds")) is not int or
+            record["worlds"] <= 0 or type(record.get("simulate_ns")) is not int or
+            type(record.get("total_ns")) is not int or
+            not 0 < record["simulate_ns"] <= record["total_ns"]):
+        raise benchmark.BenchmarkError(f"{implementation}:{name}: mismatched scenario profile record")
+    if implementation == "libivp" and (record.get("counter_mode") != "noop" or
+                                      record.get("timing_contract") != "scenario-noop-v1"):
+        raise benchmark.BenchmarkError(f"{name}: scenario profile requires the noop counter")
+
+
+def verify_scenario_snapshots(runners: dict[str, Path], scene: tuple[str, str, int]) -> dict:
+    outputs = {}
+    for implementation, runner in runners.items():
+        try:
+            result = subprocess.run(scenario_command(runner, scene, implementation),
+                                    capture_output=True, timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            raise benchmark.BenchmarkError(f"{implementation}:{scene[0]}: snapshot timed out") from exc
+        if result.returncode:
+            raise benchmark.BenchmarkError(f"{implementation}:{scene[0]}: snapshot runner failed")
+        if not result.stdout.strip():
+            raise benchmark.BenchmarkError(f"{implementation}:{scene[0]}: empty snapshot output")
+        outputs[implementation] = (result.stdout, result.stderr)
+    if "reference" in outputs and outputs["reference"] != outputs["libivp"]:
+        raise benchmark.BenchmarkError(
+            f"{scene[0]}: reference snapshots differ (stdout/stderr); run tools/parity/check.sh")
+    stdout, stderr = outputs["libivp"]
+    return {"stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+            "reference_byte_identical": True if "reference" in outputs else None}
+
+
+def capture_scenario(runner: Path, args, scene: tuple[str, str, int], implementation: str,
+                     directory: Path, verification: dict) -> dict:
+    name, delta, steps = scene
+    raw = directory / f"{name}-{implementation}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
+    command = scenario_command(runner, scene, implementation, seconds=args.seconds)
+    stdout, stacks = capture_command(runner, command, args, raw)
+    records = benchmark.parse_jsonl(stdout, f"{implementation}:{name}")
+    if len(records) != 1:
+        raise benchmark.BenchmarkError(f"{implementation}:{name}: expected one scenario record")
+    validate_scenario_record(records[0], scene, implementation)
+    report = aggregate_stacks(stacks, scope_classifier=scenario_scope_for)
+    scoped = report["scopes"].get("simulation", {})
+    report.update({"case": name, "kind": "scenario-profile", "implementation": implementation,
+                   "dt": float(delta), "steps": steps, "workload": records[0],
+                   "command": command, "raw": str(raw), "snapshot_verification": verification,
+                   "counter_contract": "scenario-noop-v1",
+                   "adequate_samples": scoped.get("samples", 0) >= args.min_samples and
+                   scoped.get("unresolved_leaf_samples", 0) <= scoped.get("samples", 0) * 0.10})
+    return report
+
+
 def print_report(result: dict, top: int) -> None:
     for case in result["cases"]:
-        print(f"\n{case['case']} n={case['scale']} main-thread samples={case['samples']}")
+        fixture = (f"{case['implementation']} steps={case['steps']} dt={case['dt']}"
+                   if case.get("kind") == "scenario-profile" else f"n={case['scale']}")
+        print(f"\n{case['case']} {fixture} main-thread samples={case['samples']}")
         for scope, item in sorted(case["scopes"].items(), key=lambda p: -p[1]["samples"]):
             print(f"  {scope}: {item['process_percent']:.1f}% of process samples ({item['samples']})")
             if scope not in ("simulation", "convex_build", "setup_or_churn", "teardown"):
@@ -353,6 +444,8 @@ def print_report(result: dict, top: int) -> None:
 
 
 def main(argv=None) -> int:
+    root = Path(__file__).resolve().parents[1]
+    all_scenes = benchmark.scenarios(root / "tools" / "scenarios.txt")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("quick", "standard", "large"), default="large")
     parser.add_argument("--case", action="append", choices=DEFAULT_CASES, dest="cases")
@@ -364,28 +457,40 @@ def main(argv=None) -> int:
     parser.add_argument("--top", type=int, default=8)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--operation-counts", action="store_true")
+    parser.add_argument("--scenario", action="append", choices=[s[0] for s in all_scenes], dest="scenarios",
+                        help="profile a fixed parity scene instead of a scalable native case")
+    parser.add_argument("--compare-reference", action="store_true",
+                        help="also sample the original IVP runner; requires matching snapshots")
     args = parser.parse_args(argv)
     if args.seconds < 1 or args.min_samples < 1 or args.top < 1 or (args.scale is not None and args.scale < 1):
         parser.error("seconds, min-samples, top and scale must be positive")
     if args.scale and (not args.cases or len(args.cases) != 1):
         parser.error("--scale requires exactly one --case")
-    if args.profile == "standard" and not args.scale:
+    if args.scenarios and (args.cases or args.scale or args.operation_counts):
+        parser.error("--scenario cannot be combined with --case, --scale or --operation-counts")
+    if args.compare_reference and not args.scenarios:
+        parser.error("--compare-reference requires --scenario")
+    if args.scenarios and sys.platform == "win32":
+        parser.error("scenario profiling uses the non-Windows noop reference counter contract")
+    if not args.scenarios and args.profile == "standard" and not args.scale:
         parser.error("standard profiling requires --case and --scale to isolate one configuration")
     if args.backend == "auto":
         args.backend = "sample" if sys.platform == "darwin" else "perf"
     if not shutil.which(args.backend):
         raise benchmark.BenchmarkError(f"{args.backend} is unavailable; install the OS profiler")
-    root = Path(__file__).resolve().parents[1]
     base = root / "build" / "benchmark" / "hotspots"
     directory = base / dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     directory.mkdir(parents=True, exist_ok=True)
     build = root / "build" / "benchmark" / "profile-lib"
+    target = "test_scenarios" if args.scenarios else "ivp_benchmark"
     if not args.no_build:
         benchmark.run(["cmake", "-S", str(root), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
-                       "-DIVP_BUILD_BENCHMARKS=ON", "-DIVP_BUILD_TESTS=OFF",
+                       "-DIVP_BUILD_BENCHMARKS=ON",
+                       f"-DIVP_BUILD_TESTS={'ON' if args.scenarios else 'OFF'}",
+                       f"-DIVP_ENABLE_SCENARIO_TESTS={'ON' if args.scenarios else 'OFF'}",
                        "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g -fno-omit-frame-pointer -fno-optimize-sibling-calls"], cwd=root)
-        benchmark.run(["cmake", "--build", str(build), "--target", "ivp_benchmark", "-j", "8"], cwd=root)
-    runner = build / "ivp_benchmark"
+        benchmark.run(["cmake", "--build", str(build), "--target", target, "-j", "8"], cwd=root)
+    runner = build / target
     if not runner.exists():
         raise benchmark.BenchmarkError(f"missing profiling runner: {runner}")
     counts_runner = None
@@ -400,16 +505,43 @@ def main(argv=None) -> int:
         if not counts_runner.exists():
             raise benchmark.BenchmarkError(f"missing operation-count runner: {counts_runner}")
     result = {
-        "schema": PROFILE_SCHEMA, "profile": args.profile, "backend": args.backend,
+        "schema": PROFILE_SCHEMA, "profile": "scenario" if args.scenarios else args.profile, "backend": args.backend,
         "seconds": args.seconds, "metadata": {"libivp": benchmark.git_info(root),
         "system": platform.system(), "architecture": platform.machine(),
         "cpu": benchmark.cpu_name(),
         "compiler": benchmark.read_compiler(build / "CMakeCache.txt")},
         "cases": [],
     }
-    for case in args.cases or DEFAULT_CASES:
-        print(f"Sampling {case} for {args.seconds}s...", file=sys.stderr, flush=True)
-        result["cases"].append(capture(runner, args, case, directory, counts_runner))
+    if args.scenarios:
+        runners = {"libivp": runner}
+        if args.compare_reference:
+            reference_root = Path(os.environ.get("IVP_REF_SRC", root.parent / "ivp")).resolve()
+            reference_build = root / "build" / "benchmark" / "reference"
+            if not args.no_build:
+                env = dict(os.environ, IVP_REF_SRC=str(reference_root), IVP_PARITY_DIR=str(reference_build))
+                benchmark.run([str(root / "tools" / "parity" / "build_reference.sh"), "release"], cwd=root, env=env)
+            reference_runner = reference_build / "ref_release" / "runner" / "legacy_runner"
+            if not reference_runner.exists():
+                raise benchmark.BenchmarkError(f"missing reference runner: {reference_runner}")
+            runners["reference"] = reference_runner
+            result["metadata"]["reference"] = benchmark.git_info(reference_root)
+        result["metadata"]["runners"] = {
+            label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for label, path in runners.items()}
+        result["metadata"]["build_skipped"] = args.no_build
+        result["metadata"]["counter_contract"] = "scenario-noop-v1"
+        for index, scene in enumerate(s for s in all_scenes if s[0] in args.scenarios):
+            verification = verify_scenario_snapshots(runners, scene)
+            order = list(runners.items())
+            if index % 2:
+                order.reverse()
+            for implementation, binary in order:
+                print(f"Sampling {implementation}:{scene[0]} for {args.seconds}s...", file=sys.stderr, flush=True)
+                result["cases"].append(capture_scenario(binary, args, scene, implementation, directory, verification))
+    else:
+        for case in args.cases or DEFAULT_CASES:
+            print(f"Sampling {case} for {args.seconds}s...", file=sys.stderr, flush=True)
+            result["cases"].append(capture(runner, args, case, directory, counts_runner))
     path = args.output or base / "results.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

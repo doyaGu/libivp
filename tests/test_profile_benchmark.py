@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 import sys
 import unittest
+import io
+import json
+from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -10,6 +15,96 @@ import profile_benchmark as profiler
 
 
 class ProfileTests(unittest.TestCase):
+    def test_scenario_scopes_exclude_world_setup(self):
+        stacks = [(30, ("main", "ivp_environment_simulate_until", "solver")),
+                  (20, ("main", "IVP_Time_Manager::event_loop(IVP_Environment*, IVP_Time)", "solver")),
+                  (10, ("main", "run_benchmark_world", "create_environment"))]
+        report = profiler.aggregate_stacks(stacks, scope_classifier=profiler.scenario_scope_for)
+        self.assertEqual(report["scopes"]["simulation"]["samples"], 50)
+        self.assertEqual(report["scopes"]["lifecycle_or_harness"]["samples"], 10)
+
+    def test_scenario_commands_match_fixture_and_counter_contract(self):
+        scene = ("cubes", "0.005555555555555556", 480)
+        c17 = profiler.scenario_command(Path("/tmp/c17"), scene, "libivp", seconds=5)
+        ref = profiler.scenario_command(Path("/tmp/ref"), scene, "reference", seconds=5)
+        self.assertEqual(c17[1:-2], ref[1:])
+        self.assertEqual(c17[-2:], ["--counter", "noop"])
+        self.assertEqual(c17[c17.index("--steps") + 1], "480")
+        self.assertEqual(c17[c17.index("--min-sample-ms") + 1], "7000")
+        snapshot = profiler.scenario_command(Path("/tmp/c17"), scene, "libivp")
+        self.assertNotIn("--benchmark", snapshot)
+
+    def test_scenario_profile_rejects_delegation_and_wrong_fixture(self):
+        scene = ("cubes", "0.005555555555555556", 480)
+        record = dict(schema=benchmark.SCHEMA, kind="scenario", implementation="reference",
+                      scenario="cubes", sample=0, worlds=1, steps_per_world=480,
+                      dt=float(scene[1]), simulate_ns=100, total_ns=120)
+        profiler.validate_scenario_record(record, scene, "reference")
+        for broken in ({"implementation": "libivp"}, {"scenario": "motor"},
+                       {"steps_per_world": 479}, {"worlds": 0}, {"dt": 0.01},
+                       {"simulate_ns": 0}, {"total_ns": 50}):
+            with self.subTest(broken=broken):
+                with self.assertRaises(benchmark.BenchmarkError):
+                    profiler.validate_scenario_record(dict(record, **broken), scene, "reference")
+        c17 = dict(record, implementation="libivp", counter_mode="noop", timing_contract="scenario-noop-v1")
+        profiler.validate_scenario_record(c17, scene, "libivp")
+        with self.assertRaises(benchmark.BenchmarkError):
+            profiler.validate_scenario_record(dict(c17, counter_mode="default"), scene, "libivp")
+
+    def test_reference_snapshots_must_match_stdout_and_stderr(self):
+        scene = ("cubes", "0.005555555555555556", 480)
+        runners = {"libivp": Path("/tmp/c17"), "reference": Path("/tmp/ref")}
+        same = SimpleNamespace(returncode=0, stdout=b'{"state":1}\n', stderr=b'')
+        with patch.object(profiler.subprocess, "run", return_value=same):
+            result = profiler.verify_scenario_snapshots(runners, scene)
+        self.assertTrue(result["reference_byte_identical"])
+        for stdout, stderr in ((b'{"state":2}\n', b''), (same.stdout, b'warning')):
+            different = SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
+            with patch.object(profiler.subprocess, "run", side_effect=[same, different]):
+                with self.assertRaisesRegex(benchmark.BenchmarkError, "snapshots differ"):
+                    profiler.verify_scenario_snapshots(runners, scene)
+
+    def test_single_runner_does_not_claim_reference_parity(self):
+        scene = ("motor", "0.005555555555555556", 480)
+        output = SimpleNamespace(returncode=0, stdout=b'{"state":1}\n', stderr=b'')
+        with patch.object(profiler.subprocess, "run", return_value=output):
+            result = profiler.verify_scenario_snapshots({"libivp": Path("/tmp/c17")}, scene)
+        self.assertIsNone(result["reference_byte_identical"])
+        with patch.object(profiler.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=b'', stderr=b'')):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "empty snapshot"):
+                profiler.verify_scenario_snapshots({"libivp": Path("/tmp/c17")}, scene)
+
+    def test_scenario_capture_checks_record_and_sample_coverage(self):
+        scene = ("motor", "0.005555555555555556", 480)
+        args = SimpleNamespace(backend="sample", seconds=3, min_samples=10)
+        record = dict(schema=benchmark.SCHEMA, kind="scenario", implementation="libivp",
+                      scenario="motor", sample=0, worlds=1, steps_per_world=480,
+                      dt=float(scene[1]), simulate_ns=100, total_ns=120,
+                      counter_mode="noop", timing_contract="scenario-noop-v1")
+        stacks = [(9, ("main", "ivp_time_manager_event_loop", "solver")),
+                  (90, ("main", "create_environment"))]
+        with patch.object(profiler, "capture_command", return_value=(json.dumps(record), stacks)):
+            result = profiler.capture_scenario(Path("/tmp/c17"), args, scene, "libivp", Path("/tmp"), {})
+        self.assertFalse(result["adequate_samples"])
+        self.assertTrue(result["raw"].endswith("motor-libivp.sample.txt"))
+        self.assertEqual(result["scopes"]["simulation"]["samples"], 9)
+        with redirect_stdout(io.StringIO()):
+            profiler.print_report({"cases": [result]}, 2)
+        with patch.object(profiler, "capture_command", return_value=(json.dumps(record) + '\n' + json.dumps(record), stacks)):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "expected one scenario record"):
+                profiler.capture_scenario(Path("/tmp/c17"), args, scene, "libivp", Path("/tmp"), {})
+
+    def test_invalid_scenario_options_fail_before_build_or_sampling(self):
+        for argv in (["--compare-reference"], ["--scenario", "invalid"],
+                     ["--scenario", "cubes", "--case", "contact_pile"],
+                     ["--scenario", "cubes", "--operation-counts"],
+                     ["--scenario", "cubes", "--scale", "10"]):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    profiler.main(argv)
+                self.assertEqual(error.exception.code, 2)
+
     def test_broadphase_work_counts_are_consistent(self):
         fields = ("rechecks", "recursive_rechecks", "max_depth", "candidates", "old_collisions",
                   "max_candidates", "max_old_collisions", "potential_search_pairs", "searches",
