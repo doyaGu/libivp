@@ -19,6 +19,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "base/ivp_simd_internal.h"
+
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
 ivp_result_t ivp_great_matrix_init(ivp_great_matrix_t *m, int n,
@@ -642,6 +644,19 @@ void ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
     const double *s = source_base + source_off;
     /* Blocks never overlap (target and source rows are >= one aligned row
      * apart), so element order inside a block is immaterial. */
+#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
+    const float64x2_t factors = vdupq_n_f64(factor);
+    for (int i = size; i > 0; i -= GM_BLOCK) {
+        float64x2_t a0 = vmulq_f64(vld1q_f64(s), factors);
+        float64x2_t a1 = vmulq_f64(vld1q_f64(s + 2), factors);
+        a0 = vaddq_f64(a0, vld1q_f64(t));
+        a1 = vaddq_f64(a1, vld1q_f64(t + 2));
+        vst1q_f64(t, a0);
+        vst1q_f64(t + 2, a1);
+        t += GM_BLOCK;
+        s += GM_BLOCK;
+    }
+#else
     for (int i = size; i > 0; i -= GM_BLOCK) {
         for (int k = 0; k < GM_BLOCK; k++) {
             double a = s[k] * factor;
@@ -651,6 +666,7 @@ void ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
         t += GM_BLOCK;
         s += GM_BLOCK;
     }
+#endif
 }
 
 void ivp_vecfpu_multiply_row(double *base, int off, double factor,
