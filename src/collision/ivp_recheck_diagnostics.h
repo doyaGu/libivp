@@ -45,9 +45,38 @@ typedef struct ivp_recheck_diagnostics {
     uint64_t hull_phantom_promotions;
     uint64_t hull_recursive_events;
     uint64_t hull_oo_events;
+    uint64_t contact_recalc_calls;
+    uint64_t contact_branch_pp;
+    uint64_t contact_branch_pk;
+    uint64_t contact_branch_pf;
+    uint64_t contact_branch_kk;
+    uint64_t contact_same_time_calls;
+    uint64_t contact_same_geometry_fingerprint;
+    uint64_t contact_same_kinematic_fingerprint;
+    uint64_t contact_same_full_input_fingerprint;
+    uint64_t contact_max_calls_per_contact_at_time;
+    uint64_t contact_side_visits;
+    uint64_t contact_object_pose_first_uses;
+    uint64_t contact_object_pose_reuses;
+    uint64_t contact_core_state_first_uses;
+    uint64_t contact_core_state_reuses;
+    uint64_t contact_point_world_uses;
+    uint64_t contact_point_world_first_uses;
+    uint64_t contact_point_world_reuses;
+    uint64_t contact_edge_world_uses;
+    uint64_t contact_edge_world_first_uses;
+    uint64_t contact_edge_world_reuses;
+    uint64_t contact_face_normal_uses;
+    uint64_t contact_face_normal_first_uses;
+    uint64_t contact_face_normal_reuses;
+    uint64_t contact_face_tangent_uses;
+    uint64_t contact_face_tangent_first_uses;
+    uint64_t contact_face_tangent_reuses;
+    uint64_t contact_tracking_overflows;
 } ivp_recheck_diagnostics_t;
 void ivp_recheck_diagnostics_reset(void);
 ivp_recheck_diagnostics_t ivp_recheck_diagnostics_get(void);
 ivp_recheck_diagnostics_t *ivp_recheck_diagnostics_mutable(void);
+void ivp_contact_recalc_diagnostics_reset(void);
 #endif
 #endif

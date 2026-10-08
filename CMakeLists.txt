@@ -670,6 +670,10 @@ if (IVP_BUILD_TESTS)
         target_include_directories(test_scenarios PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests
         )
+        if (IVP_BENCHMARK_DIAGNOSTICS)
+            target_compile_definitions(test_scenarios PRIVATE IVP_BENCHMARK_DIAGNOSTICS)
+            target_include_directories(test_scenarios PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        endif ()
         if (NOT MSVC)
             target_link_libraries(test_scenarios PRIVATE m)
             # Scene setup must round exactly like the reference runner (built

@@ -34,6 +34,7 @@ static ivp_recheck_diagnostics_t recheck_diagnostics;
 void ivp_recheck_diagnostics_reset(void)
 {
     recheck_diagnostics = (ivp_recheck_diagnostics_t){0};
+    ivp_contact_recalc_diagnostics_reset();
 }
 ivp_recheck_diagnostics_t ivp_recheck_diagnostics_get(void)
 {

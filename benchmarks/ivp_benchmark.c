@@ -1191,6 +1191,49 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
         fprintf(out, "%s%llu", i ? "," : "",
                 (unsigned long long)b->hull_callback_buckets[i]);
     fputs("]}", out);
+    fprintf(out, ",\"contact_recalc_operations\":{\"scope\":\"per-simulation-time-v1\","
+            "\"fingerprint_contract\":\"contact-input-128-v1\",\"calls\":%llu,"
+            "\"branch_pp\":%llu,\"branch_pk\":%llu,\"branch_pf\":%llu,\"branch_kk\":%llu,"
+            "\"same_time_calls\":%llu,\"same_geometry_fingerprint\":%llu,"
+            "\"same_kinematic_fingerprint\":%llu,\"same_full_input_fingerprint\":%llu,"
+            "\"max_calls_per_contact_at_time\":%llu,\"side_visits\":%llu,"
+            "\"object_pose_first_uses\":%llu,\"object_pose_reuses\":%llu,"
+            "\"core_state_first_uses\":%llu,\"core_state_reuses\":%llu,"
+            "\"point_world_uses\":%llu,\"point_world_first_uses\":%llu,"
+            "\"point_world_reuses\":%llu,\"edge_world_uses\":%llu,"
+            "\"edge_world_first_uses\":%llu,\"edge_world_reuses\":%llu,"
+            "\"face_normal_uses\":%llu,\"face_normal_first_uses\":%llu,"
+            "\"face_normal_reuses\":%llu,\"face_tangent_uses\":%llu,"
+            "\"face_tangent_first_uses\":%llu,\"face_tangent_reuses\":%llu,"
+            "\"tracking_overflows\":%llu}",
+            (unsigned long long)b->contact_recalc_calls,
+            (unsigned long long)b->contact_branch_pp,
+            (unsigned long long)b->contact_branch_pk,
+            (unsigned long long)b->contact_branch_pf,
+            (unsigned long long)b->contact_branch_kk,
+            (unsigned long long)b->contact_same_time_calls,
+            (unsigned long long)b->contact_same_geometry_fingerprint,
+            (unsigned long long)b->contact_same_kinematic_fingerprint,
+            (unsigned long long)b->contact_same_full_input_fingerprint,
+            (unsigned long long)b->contact_max_calls_per_contact_at_time,
+            (unsigned long long)b->contact_side_visits,
+            (unsigned long long)b->contact_object_pose_first_uses,
+            (unsigned long long)b->contact_object_pose_reuses,
+            (unsigned long long)b->contact_core_state_first_uses,
+            (unsigned long long)b->contact_core_state_reuses,
+            (unsigned long long)b->contact_point_world_uses,
+            (unsigned long long)b->contact_point_world_first_uses,
+            (unsigned long long)b->contact_point_world_reuses,
+            (unsigned long long)b->contact_edge_world_uses,
+            (unsigned long long)b->contact_edge_world_first_uses,
+            (unsigned long long)b->contact_edge_world_reuses,
+            (unsigned long long)b->contact_face_normal_uses,
+            (unsigned long long)b->contact_face_normal_first_uses,
+            (unsigned long long)b->contact_face_normal_reuses,
+            (unsigned long long)b->contact_face_tangent_uses,
+            (unsigned long long)b->contact_face_tangent_first_uses,
+            (unsigned long long)b->contact_face_tangent_reuses,
+            (unsigned long long)b->contact_tracking_overflows);
 #endif
 }
 

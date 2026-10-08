@@ -116,6 +116,15 @@ typedef struct ivp_contact_pt {
     ivp_vec3f_t            surf_normal_ws;
     /* IVP_Contact_Point */
     struct ivp_fr_system  *l_friction_system;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+    uint64_t               diagnostic_generation;
+    uint64_t               diagnostic_recalc_calls;
+    uint64_t               diagnostic_geometry_fingerprint[2];
+    uint64_t               diagnostic_kinematic_fingerprint[2];
+    uint64_t               diagnostic_full_input_fingerprint[2];
+    ivp_time_t             diagnostic_last_recalc_time;
+    uint64_t               diagnostic_calls_at_time;
+#endif
 } ivp_contact_pt_t;
 
 static inline ivp_fr_synapse_t *ivp_cp_get_synapse(ivp_contact_pt_t *cp, int i) { return &cp->synapse[i]; }

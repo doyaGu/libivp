@@ -18,6 +18,7 @@
 #include <ivp/geometry/ivp_compact_edge.h>
 #include <ivp/geometry/ivp_surman.h>
 #include "collision/ivp_cls_internal.h"
+#include "collision/ivp_recheck_diagnostics.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
 #include "solver/ivp_friction_internal.h"
@@ -26,6 +27,294 @@
 static inline ivp_debug_manager_t *cp_dm(struct ivp_environment *env) { return ivp_env_get_debug_manager(env); }
 
 static void core_unmovable_core_debug_friction_hash(ivp_core_t *core);
+
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+/* Intrusive, process-global probes for serial benchmark runners only.  They
+ * observe inputs and never skip engine work.  The normal build contains none
+ * of this state or the diagnostic fields in ivp_contact_pt_t. */
+typedef struct cp_fingerprint {
+    uint64_t value[2];
+} cp_fingerprint_t;
+
+typedef struct cp_seen_state {
+    uint64_t epoch;
+    const void *owner;
+    cp_fingerprint_t fingerprint;
+} cp_seen_state_t;
+
+enum { CP_DIAGNOSTIC_STATE_CAPACITY = 16384 };
+static cp_seen_state_t cp_seen_object_poses[CP_DIAGNOSTIC_STATE_CAPACITY];
+static cp_seen_state_t cp_seen_core_states[CP_DIAGNOSTIC_STATE_CAPACITY];
+static cp_seen_state_t cp_seen_point_world[CP_DIAGNOSTIC_STATE_CAPACITY];
+static cp_seen_state_t cp_seen_edge_world[CP_DIAGNOSTIC_STATE_CAPACITY];
+static cp_seen_state_t cp_seen_face_normals[CP_DIAGNOSTIC_STATE_CAPACITY];
+static cp_seen_state_t cp_seen_face_tangents[CP_DIAGNOSTIC_STATE_CAPACITY];
+static ivp_time_t cp_seen_time;
+static bool cp_seen_time_valid;
+static uint64_t cp_seen_epoch = 1;
+static uint64_t cp_diagnostic_generation = 1;
+
+static cp_fingerprint_t cp_fingerprint_init(void)
+{
+    cp_fingerprint_t fingerprint = {{UINT64_C(1469598103934665603),
+                                     UINT64_C(1099511628211)}};
+    return fingerprint;
+}
+
+static void cp_fingerprint_bytes(cp_fingerprint_t *fingerprint, const void *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *)data;
+    for (size_t i = 0; i < size; ++i) {
+        fingerprint->value[0] ^= bytes[i];
+        fingerprint->value[0] *= UINT64_C(1099511628211);
+        fingerprint->value[1] ^= (uint64_t)bytes[i] + UINT64_C(0x9e3779b97f4a7c15);
+        fingerprint->value[1] *= UINT64_C(0x100000001b3);
+        fingerprint->value[1] ^= fingerprint->value[1] >> 29;
+    }
+}
+
+static void cp_fingerprint_vec3r(cp_fingerprint_t *fingerprint, const ivp_vec3r_t *value)
+{
+    for (int i = 0; i < 3; ++i)
+        cp_fingerprint_bytes(fingerprint, &value->k[i], sizeof(value->k[i]));
+}
+
+static void cp_fingerprint_vec3f(cp_fingerprint_t *fingerprint, const ivp_vec3f_t *value)
+{
+    for (int i = 0; i < 3; ++i)
+        cp_fingerprint_bytes(fingerprint, &value->k[i], sizeof(value->k[i]));
+}
+
+static void cp_fingerprint_transform(cp_fingerprint_t *fingerprint,
+                                     const ivp_transform_r_t *transform)
+{
+    for (int row = 0; row < 3; ++row) cp_fingerprint_vec3r(fingerprint, &transform->rot.rows[row]);
+    cp_fingerprint_vec3r(fingerprint, &transform->pos);
+}
+
+static bool cp_fingerprint_equal(cp_fingerprint_t a, cp_fingerprint_t b)
+{
+    return a.value[0] == b.value[0] && a.value[1] == b.value[1];
+}
+
+static cp_fingerprint_t cp_core_state_fingerprint(const ivp_core_t *core)
+{
+    cp_fingerprint_t fingerprint = cp_fingerprint_init();
+    cp_fingerprint_bytes(&fingerprint, &core->physical_unmoveable,
+                         sizeof(core->physical_unmoveable));
+    cp_fingerprint_transform(&fingerprint, &core->m_world_f_core_last_psi);
+    if (!core->physical_unmoveable) {
+        cp_fingerprint_vec3r(&fingerprint, &core->speed);
+        cp_fingerprint_vec3f(&fingerprint, &core->rot_speed);
+        cp_fingerprint_vec3r(&fingerprint, &core->inv_rot_inertia);
+        cp_fingerprint_bytes(&fingerprint, &core->inv_mass, sizeof(core->inv_mass));
+    }
+    return fingerprint;
+}
+
+static bool cp_seen_state_insert(cp_seen_state_t *states, const void *owner,
+                                 cp_fingerprint_t fingerprint)
+{
+    uintptr_t address = (uintptr_t)owner;
+    uint64_t hash = (uint64_t)address ^ fingerprint.value[0] ^
+                    (fingerprint.value[1] * UINT64_C(0x9e3779b97f4a7c15));
+    size_t slot = (size_t)(hash & (CP_DIAGNOSTIC_STATE_CAPACITY - 1));
+    for (size_t probe = 0; probe < CP_DIAGNOSTIC_STATE_CAPACITY; ++probe) {
+        cp_seen_state_t *state = &states[slot];
+        if (state->epoch != cp_seen_epoch) {
+            state->epoch = cp_seen_epoch;
+            state->owner = owner;
+            state->fingerprint = fingerprint;
+            return true;
+        }
+        if (state->owner == owner && cp_fingerprint_equal(state->fingerprint, fingerprint))
+            return false;
+        slot = (slot + 1) & (CP_DIAGNOSTIC_STATE_CAPACITY - 1);
+    }
+    ivp_recheck_diagnostics_mutable()->contact_tracking_overflows++;
+    return true;
+}
+
+static void cp_seen_state_next_epoch(void)
+{
+    cp_seen_epoch++;
+    if (cp_seen_epoch) return;
+    memset(cp_seen_object_poses, 0, sizeof(cp_seen_object_poses));
+    memset(cp_seen_core_states, 0, sizeof(cp_seen_core_states));
+    memset(cp_seen_point_world, 0, sizeof(cp_seen_point_world));
+    memset(cp_seen_edge_world, 0, sizeof(cp_seen_edge_world));
+    memset(cp_seen_face_normals, 0, sizeof(cp_seen_face_normals));
+    memset(cp_seen_face_tangents, 0, sizeof(cp_seen_face_tangents));
+    cp_seen_epoch = 1;
+}
+
+void ivp_contact_recalc_diagnostics_reset(void)
+{
+    cp_seen_state_next_epoch();
+    cp_seen_time_valid = false;
+    cp_diagnostic_generation++;
+    if (!cp_diagnostic_generation) cp_diagnostic_generation = 1;
+}
+
+static void cp_record_feature_state(cp_seen_state_t *states, const ivp_object_t *object,
+                                    const void *feature, cp_fingerprint_t pose,
+                                    uint64_t *uses, uint64_t *first_uses, uint64_t *reuses)
+{
+    cp_fingerprint_bytes(&pose, &feature, sizeof(feature));
+    (*uses)++;
+    if (cp_seen_state_insert(states, object, pose)) (*first_uses)++;
+    else (*reuses)++;
+}
+
+static void cp_contact_recalc_diagnostics_record(ivp_contact_pt_t *cp,
+                                                 const ivp_cache_obj_t *cache0,
+                                                 const ivp_cache_obj_t *cache1,
+                                                 ivp_time_t current_time)
+{
+    ivp_recheck_diagnostics_t *counts = ivp_recheck_diagnostics_mutable();
+    ivp_fr_synapse_t *syn0 = &cp->synapse[0];
+    ivp_fr_synapse_t *syn1 = &cp->synapse[1];
+    if (cp->diagnostic_generation != cp_diagnostic_generation) {
+        cp->diagnostic_generation = cp_diagnostic_generation;
+        cp->diagnostic_recalc_calls = 0;
+        cp->diagnostic_calls_at_time = 0;
+    }
+    counts->contact_recalc_calls++;
+    if ((syn0->status == IVP_ST_BALL || syn0->status == IVP_ST_POINT) &&
+        (syn1->status == IVP_ST_BALL || syn1->status == IVP_ST_POINT))
+        counts->contact_branch_pp++;
+    else if (syn0->status == IVP_ST_EDGE)
+        counts->contact_branch_kk++;
+    else if (syn1->status == IVP_ST_EDGE)
+        counts->contact_branch_pk++;
+    else
+        counts->contact_branch_pf++;
+
+    /* These two-word fingerprints are equality detectors for consecutive
+     * calls on one contact.  They are not persisted or treated as hashes of
+     * the simulation state. */
+    cp_fingerprint_t geometry = cp_fingerprint_init();
+    cp_fingerprint_bytes(&geometry, &syn0->status, sizeof(syn0->status));
+    cp_fingerprint_bytes(&geometry, &syn1->status, sizeof(syn1->status));
+    cp_fingerprint_bytes(&geometry, &syn0->edge, sizeof(syn0->edge));
+    cp_fingerprint_bytes(&geometry, &syn1->edge, sizeof(syn1->edge));
+    cp_fingerprint_transform(&geometry, &cache0->m_world_f_object);
+    cp_fingerprint_transform(&geometry, &cache1->m_world_f_object);
+    cp_fingerprint_bytes(&geometry, &syn0->l_obj->extra_radius,
+                         sizeof(syn0->l_obj->extra_radius));
+    cp_fingerprint_bytes(&geometry, &syn1->l_obj->extra_radius,
+                         sizeof(syn1->l_obj->extra_radius));
+    cp_fingerprint_bytes(&geometry, &cp->cp_status, sizeof(cp->cp_status));
+    cp_fingerprint_bytes(&geometry, &cp->inv_triangle_det, sizeof(cp->inv_triangle_det));
+
+    cp_fingerprint_t core_state[2] = {
+        cp_core_state_fingerprint(syn0->l_obj->physical_core),
+        cp_core_state_fingerprint(syn1->l_obj->physical_core),
+    };
+    cp_fingerprint_t kinematic = geometry;
+    cp_fingerprint_bytes(&kinematic, core_state[0].value, sizeof(core_state[0].value));
+    cp_fingerprint_bytes(&kinematic, core_state[1].value, sizeof(core_state[1].value));
+    cp_fingerprint_t full_input = kinematic;
+    cp_fingerprint_bytes(&full_input, &current_time, sizeof(current_time));
+    cp_fingerprint_bytes(&full_input, &cp->last_time_of_recalc_friction_s_vals,
+                         sizeof(cp->last_time_of_recalc_friction_s_vals));
+    cp_fingerprint_bytes(&full_input, cp->span_friction_s, sizeof(cp->span_friction_s));
+    const ivp_mindist_settings_t *mindist_settings =
+        ivp_env_get_mindist_settings(syn0->l_obj->owner);
+    cp_fingerprint_bytes(&full_input, &mindist_settings->keeper_dist,
+                         sizeof(mindist_settings->keeper_dist));
+
+    if (cp->diagnostic_recalc_calls) {
+        cp_fingerprint_t previous_geometry = {{cp->diagnostic_geometry_fingerprint[0],
+                                               cp->diagnostic_geometry_fingerprint[1]}};
+        cp_fingerprint_t previous_kinematic = {{cp->diagnostic_kinematic_fingerprint[0],
+                                                cp->diagnostic_kinematic_fingerprint[1]}};
+        cp_fingerprint_t previous_full = {{cp->diagnostic_full_input_fingerprint[0],
+                                           cp->diagnostic_full_input_fingerprint[1]}};
+        if (cp_fingerprint_equal(geometry, previous_geometry))
+            counts->contact_same_geometry_fingerprint++;
+        if (cp_fingerprint_equal(kinematic, previous_kinematic))
+            counts->contact_same_kinematic_fingerprint++;
+        if (cp_fingerprint_equal(full_input, previous_full))
+            counts->contact_same_full_input_fingerprint++;
+        if (current_time == cp->diagnostic_last_recalc_time) {
+            counts->contact_same_time_calls++;
+            cp->diagnostic_calls_at_time++;
+        } else {
+            cp->diagnostic_calls_at_time = 1;
+        }
+    } else {
+        cp->diagnostic_calls_at_time = 1;
+    }
+    if (cp->diagnostic_calls_at_time > counts->contact_max_calls_per_contact_at_time)
+        counts->contact_max_calls_per_contact_at_time = cp->diagnostic_calls_at_time;
+    cp->diagnostic_recalc_calls++;
+    cp->diagnostic_last_recalc_time = current_time;
+    memcpy(cp->diagnostic_geometry_fingerprint, geometry.value, sizeof(geometry.value));
+    memcpy(cp->diagnostic_kinematic_fingerprint, kinematic.value, sizeof(kinematic.value));
+    memcpy(cp->diagnostic_full_input_fingerprint, full_input.value, sizeof(full_input.value));
+
+    if (!cp_seen_time_valid || current_time != cp_seen_time) {
+        cp_seen_state_next_epoch();
+        cp_seen_time = current_time;
+        cp_seen_time_valid = true;
+    }
+    const ivp_cache_obj_t *caches[2] = {cache0, cache1};
+    cp_fingerprint_t poses[2];
+    /* Object-pose reuse is shared input, not duplicate cache construction:
+     * ivp_object_get_cache_object already owns that cache.  Feature counters
+     * below identify transforms still repeated by this contact routine. */
+    for (int i = 0; i < 2; ++i) {
+        poses[i] = cp_fingerprint_init();
+        cp_fingerprint_transform(&poses[i], &caches[i]->m_world_f_object);
+        counts->contact_side_visits++;
+        if (cp_seen_state_insert(cp_seen_object_poses, cp->synapse[i].l_obj, poses[i]))
+            counts->contact_object_pose_first_uses++;
+        else
+            counts->contact_object_pose_reuses++;
+        if (cp_seen_state_insert(cp_seen_core_states,
+                                 cp->synapse[i].l_obj->physical_core, core_state[i]))
+            counts->contact_core_state_first_uses++;
+        else
+            counts->contact_core_state_reuses++;
+    }
+    if (syn0->status == IVP_ST_POINT)
+        cp_record_feature_state(cp_seen_point_world, syn0->l_obj, syn0->edge, poses[0],
+                                &counts->contact_point_world_uses,
+                                &counts->contact_point_world_first_uses,
+                                &counts->contact_point_world_reuses);
+    if (syn1->status == IVP_ST_POINT)
+        cp_record_feature_state(cp_seen_point_world, syn1->l_obj, syn1->edge, poses[1],
+                                &counts->contact_point_world_uses,
+                                &counts->contact_point_world_first_uses,
+                                &counts->contact_point_world_reuses);
+    if (syn0->status == IVP_ST_EDGE) {
+        cp_record_feature_state(cp_seen_edge_world, syn0->l_obj, syn0->edge, poses[0],
+                                &counts->contact_edge_world_uses,
+                                &counts->contact_edge_world_first_uses,
+                                &counts->contact_edge_world_reuses);
+        cp_record_feature_state(cp_seen_edge_world, syn1->l_obj, syn1->edge, poses[1],
+                                &counts->contact_edge_world_uses,
+                                &counts->contact_edge_world_first_uses,
+                                &counts->contact_edge_world_reuses);
+    } else if (syn1->status == IVP_ST_EDGE) {
+        cp_record_feature_state(cp_seen_edge_world, syn1->l_obj, syn1->edge, poses[1],
+                                &counts->contact_edge_world_uses,
+                                &counts->contact_edge_world_first_uses,
+                                &counts->contact_edge_world_reuses);
+    } else if (syn1->status == IVP_ST_TRIANGLE) {
+        const void *triangle = ivp_edge_get_triangle(syn1->edge);
+        cp_record_feature_state(cp_seen_face_normals, syn1->l_obj, triangle, poses[1],
+                                &counts->contact_face_normal_uses,
+                                &counts->contact_face_normal_first_uses,
+                                &counts->contact_face_normal_reuses);
+        cp_record_feature_state(cp_seen_face_tangents, syn1->l_obj, syn1->edge, poses[1],
+                                &counts->contact_face_tangent_uses,
+                                &counts->contact_face_tangent_first_uses,
+                                &counts->contact_face_tangent_reuses);
+    }
+}
+#endif
 
 /* ── IVP_Synapse_Friction ───────────────────────────────────────────────── */
 
@@ -469,6 +758,11 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
         const ivp_compact_edge_t *e0 = syn0->edge;
         ivp_cache_ledge_point_init(&m_cache_0, syn0->l_obj, ivp_edge_get_compact_ledge(e0));
         m_cache_0.tmp.synapse_friction = syn0;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        cp_contact_recalc_diagnostics_record(cp, m_cache_0.clp_cache_object,
+                                             m_cache_1.clp_cache_object,
+                                             ivp_env_get_current_time(env));
+#endif
 
         ivp_vec3r_t point0_position_ws;
         switch (stat0) {

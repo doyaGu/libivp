@@ -54,6 +54,9 @@
 #include <ivp/dynamics/ivp_universe_manager.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object_attach.h>
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+#include "collision/ivp_recheck_diagnostics.h"
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -6417,6 +6420,9 @@ int main(int argc, char **argv)
         int worlds = 0;
         int64_t aggregate_simulate_ns = 0;
         int64_t aggregate_total_ns = 0;
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+        if (benchmark) ivp_recheck_diagnostics_reset();
+#endif
         do {
             g_benchmark_simulate_ns = 0;
             int64_t total_start = benchmark ? benchmark_now_ns() : 0;
@@ -6485,10 +6491,58 @@ int main(int argc, char **argv)
                     "\"implementation\":\"libivp\",\"scenario\":\"%s\","
                     "\"counter_mode\":\"%s\",\"timing_contract\":\"scenario-%s-v1\","
                     "\"sample\":%d,\"worlds\":%d,\"steps_per_world\":%d,"
-                    "\"dt\":%.17g,\"simulate_ns\":%lld,\"total_ns\":%lld}\n",
+                    "\"dt\":%.17g,\"simulate_ns\":%lld,\"total_ns\":%lld",
                     scenario_name_from_id(scenario), g_counter_mode, g_counter_mode,
                     sample, worlds, steps, dt,
                     (long long)aggregate_simulate_ns, (long long)aggregate_total_ns);
+#ifdef IVP_BENCHMARK_DIAGNOSTICS
+            ivp_recheck_diagnostics_t diagnostics = ivp_recheck_diagnostics_get();
+            fprintf(stdout, ",\"contact_recalc_operations\":{"
+                    "\"scope\":\"per-simulation-time-v1\","
+                    "\"fingerprint_contract\":\"contact-input-128-v1\",\"calls\":%llu,"
+                    "\"branch_pp\":%llu,\"branch_pk\":%llu,\"branch_pf\":%llu,\"branch_kk\":%llu,"
+                    "\"same_time_calls\":%llu,\"same_geometry_fingerprint\":%llu,"
+                    "\"same_kinematic_fingerprint\":%llu,\"same_full_input_fingerprint\":%llu,"
+                    "\"max_calls_per_contact_at_time\":%llu,\"side_visits\":%llu,"
+                    "\"object_pose_first_uses\":%llu,\"object_pose_reuses\":%llu,"
+                    "\"core_state_first_uses\":%llu,\"core_state_reuses\":%llu,"
+                    "\"point_world_uses\":%llu,\"point_world_first_uses\":%llu,"
+                    "\"point_world_reuses\":%llu,\"edge_world_uses\":%llu,"
+                    "\"edge_world_first_uses\":%llu,\"edge_world_reuses\":%llu,"
+                    "\"face_normal_uses\":%llu,\"face_normal_first_uses\":%llu,"
+                    "\"face_normal_reuses\":%llu,\"face_tangent_uses\":%llu,"
+                    "\"face_tangent_first_uses\":%llu,\"face_tangent_reuses\":%llu,"
+                    "\"tracking_overflows\":%llu}",
+                    (unsigned long long)diagnostics.contact_recalc_calls,
+                    (unsigned long long)diagnostics.contact_branch_pp,
+                    (unsigned long long)diagnostics.contact_branch_pk,
+                    (unsigned long long)diagnostics.contact_branch_pf,
+                    (unsigned long long)diagnostics.contact_branch_kk,
+                    (unsigned long long)diagnostics.contact_same_time_calls,
+                    (unsigned long long)diagnostics.contact_same_geometry_fingerprint,
+                    (unsigned long long)diagnostics.contact_same_kinematic_fingerprint,
+                    (unsigned long long)diagnostics.contact_same_full_input_fingerprint,
+                    (unsigned long long)diagnostics.contact_max_calls_per_contact_at_time,
+                    (unsigned long long)diagnostics.contact_side_visits,
+                    (unsigned long long)diagnostics.contact_object_pose_first_uses,
+                    (unsigned long long)diagnostics.contact_object_pose_reuses,
+                    (unsigned long long)diagnostics.contact_core_state_first_uses,
+                    (unsigned long long)diagnostics.contact_core_state_reuses,
+                    (unsigned long long)diagnostics.contact_point_world_uses,
+                    (unsigned long long)diagnostics.contact_point_world_first_uses,
+                    (unsigned long long)diagnostics.contact_point_world_reuses,
+                    (unsigned long long)diagnostics.contact_edge_world_uses,
+                    (unsigned long long)diagnostics.contact_edge_world_first_uses,
+                    (unsigned long long)diagnostics.contact_edge_world_reuses,
+                    (unsigned long long)diagnostics.contact_face_normal_uses,
+                    (unsigned long long)diagnostics.contact_face_normal_first_uses,
+                    (unsigned long long)diagnostics.contact_face_normal_reuses,
+                    (unsigned long long)diagnostics.contact_face_tangent_uses,
+                    (unsigned long long)diagnostics.contact_face_tangent_first_uses,
+                    (unsigned long long)diagnostics.contact_face_tangent_reuses,
+                    (unsigned long long)diagnostics.contact_tracking_overflows);
+#endif
+            fputs("}\n", stdout);
         }
     }
 
