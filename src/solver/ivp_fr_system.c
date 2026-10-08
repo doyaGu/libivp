@@ -1100,13 +1100,13 @@ void ivp_fr_system_delete_friction_distance(ivp_fr_system_t *fs, ivp_contact_pt_
     if (ivp_pvec_len(&fr_info0->friction_springs) == 0) {
         ivp_core_delete_friction_info(core0, fr_info0);
         ivp_fr_system_remove_core_from_system(fs, core0);
-        if (core0->sim_unit) core0->sim_unit->union_find_needed_for_sim_unit = true;
+        if (core0->sim_unit) ivp_sim_unit_request_union_find(core0->sim_unit);
     }
     ivp_fr_info_delete_friction_dist(fr_info1, old_dist);
     if (ivp_pvec_len(&fr_info1->friction_springs) == 0) {
         ivp_core_delete_friction_info(core1, fr_info1);
         ivp_fr_system_remove_core_from_system(fs, core1);
-        if (core1->sim_unit) core1->sim_unit->union_find_needed_for_sim_unit = true;
+        if (core1->sim_unit) ivp_sim_unit_request_union_find(core1->sim_unit);
     }
     ivp_contact_pt_destroy(old_dist);
 }
@@ -2414,7 +2414,7 @@ static void fs_static_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pve
     }
     if (fs->friction_dist_number == 0) {
         ivp_fr_system_destroy(fs);
-        if (es->sim_unit) es->sim_unit->union_find_needed_for_sim_unit = true;
+        if (es->sim_unit) ivp_sim_unit_request_union_find(es->sim_unit);
         return;
     }
     if (fs->union_find_necessary) {
@@ -2422,7 +2422,7 @@ static void fs_static_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pve
         ivp_core_t *obj = fs_union_find_fr_sys(fs);
         if (obj) {
             fs_split_friction_system(fs, obj);
-            if (obj->sim_unit) obj->sim_unit->union_find_needed_for_sim_unit = true;
+            if (obj->sim_unit) ivp_sim_unit_request_union_find(obj->sim_unit);
         }
     }
     IVP_IF(1) /* ivp_friction.cxx:2184 */

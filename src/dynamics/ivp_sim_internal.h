@@ -98,6 +98,7 @@ typedef struct ivp_sim_unit {
     struct ivp_sim_unit *prev_sim_unit;
     struct ivp_sim_unit *next_sim_unit;
     const ivp_allocator_t *allocator;
+    struct ivp_sim_units_manager *manager; /* NULL while detached */
     ivp_pvec_t sim_unit_cores;              /* ivp_core_t*           */
     ivp_pvec_t controller_cores;            /* ivp_su_ctrl_list_t*   */
 } ivp_sim_unit_t;
@@ -106,6 +107,9 @@ typedef struct ivp_sim_units_manager {
     struct ivp_environment *l_environment;
     ivp_sim_unit_t *sim_units_slot0;        /* sim_units_slots[0] (others unused) */
     ivp_sim_unit_t *still_slot;
+    /* Exact count of linked units with union_find_needed_for_sim_unit set.
+     * Topology changes run on the world owner, never in safe island kernels. */
+    size_t pending_union_find_count;
 } ivp_sim_units_manager_t;
 
 ivp_sim_unit_t *ivp_sim_unit_new(const ivp_allocator_t *allocator);
@@ -130,6 +134,8 @@ void ivp_sim_unit_revive_for_simulation(ivp_sim_unit_t *su, struct ivp_environme
 void ivp_sim_unit_ensure_cores_movement(ivp_sim_unit_t *su);
 void ivp_sim_unit_ensure_in_simulation(ivp_sim_unit_t *su);
 void ivp_sim_unit_do_sim_unit_union_find(ivp_sim_unit_t *su);
+/* All dirty transitions must go through this helper, including OOM retries. */
+void ivp_sim_unit_request_union_find(ivp_sim_unit_t *su);
 bool ivp_sim_unit_sim_unit_calc_movement_state(ivp_sim_unit_t *su, struct ivp_environment *env);
 bool ivp_sim_unit_sim_unit_core_exists(ivp_sim_unit_t *su, ivp_core_t *core);
 #ifdef IVP_DEBUG_BUILD

@@ -59,6 +59,7 @@ void ivp_sim_unit_clean_sim_unit(ivp_sim_unit_t *su)
 void ivp_sim_unit_delete(ivp_sim_unit_t *su)
 {
     if (!su) return;
+    if (su->manager) ivp_sim_units_mgr_rem_sim_unit(su->manager, su);
     ivp_sim_unit_clean_sim_unit(su);
     ivp_pvec_clear(&su->controller_cores);
     ivp_pvec_clear(&su->sim_unit_cores);
@@ -377,6 +378,7 @@ void ivp_sim_units_mgr_init(ivp_sim_units_manager_t *m, struct ivp_environment *
     m->l_environment = env;
     m->sim_units_slot0 = NULL;
     m->still_slot = NULL;
+    m->pending_union_find_count = 0;
 }
 
 static void mgr_add_unit_to_slot(ivp_sim_unit_t *sim_u, ivp_sim_unit_t **slot)
@@ -402,17 +404,43 @@ static void mgr_rem_unit_from_slot(ivp_sim_unit_t *sim_u, ivp_sim_unit_t **slot)
 
 void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
 {
+    IVP_ASSERT(!su->manager);
+    su->manager = m;
+    if (su->union_find_needed_for_sim_unit) m->pending_union_find_count++;
     ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
     mgr_add_unit_to_slot(su, slot);
 }
 
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
 {
+    IVP_ASSERT(su->manager == m);
+    if (su->union_find_needed_for_sim_unit) {
+        IVP_ASSERT(m->pending_union_find_count > 0);
+        m->pending_union_find_count--;
+    }
     ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
     mgr_rem_unit_from_slot(su, slot);
+    su->manager = NULL;
 }
 
 /* ── merge / split / union find ────────────────────────────────────────── */
+
+void ivp_sim_unit_request_union_find(ivp_sim_unit_t *su)
+{
+    if (su->union_find_needed_for_sim_unit) return;
+    su->union_find_needed_for_sim_unit = true;
+    if (su->manager) su->manager->pending_union_find_count++;
+}
+
+static void su_clear_union_find_request(ivp_sim_unit_t *su)
+{
+    if (!su->union_find_needed_for_sim_unit) return;
+    if (su->manager) {
+        IVP_ASSERT(su->manager->pending_union_find_count > 0);
+        su->manager->pending_union_find_count--;
+    }
+    su->union_find_needed_for_sim_unit = false;
+}
 
 bool ivp_sim_unit_throw_cores_into_my_sim_unit(ivp_sim_unit_t *su, ivp_sim_unit_t *second_unit)
 {
@@ -438,7 +466,7 @@ bool ivp_sim_unit_fusion_simulation_unities(ivp_sim_unit_t *su, ivp_sim_unit_t *
     if (!ivp_sim_unit_throw_cores_into_my_sim_unit(su, second_unit)) return false;
     ivp_sim_unit_clean_sim_unit(su);
     if (!ivp_sim_unit_sim_unit_calc_redundants(su)) {
-        su->union_find_needed_for_sim_unit = true;
+        ivp_sim_unit_request_union_find(su);
     }
     return true;
 }
@@ -476,13 +504,17 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
     ivp_core_t *next_split_father = NULL;
     bool next_split_necessary = false;
     ivp_sim_unit_t *split_new_unit = ivp_sim_unit_new(su->allocator);
-    if (!split_new_unit) return;
+    if (!split_new_unit) {
+        ivp_sim_unit_request_union_find(su);
+        return;
+    }
     int split_count = 0;
     for (int i = 0; i < ivp_pvec_len(&su->sim_unit_cores); i++) {
         if (ivp_core_union_find_get_father(su_core_at(su, i)) == split_father) split_count++;
     }
     if (!ivp_pvec_reserve(&split_new_unit->sim_unit_cores, split_count)) {
         ivp_sim_unit_delete(split_new_unit);
+        ivp_sim_unit_request_union_find(su);
         return;
     }
     split_new_unit->sim_unit_movement_type = IVP_MT_MOVING;
@@ -506,7 +538,7 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
         }
     }
     bool rebuilt = ivp_sim_unit_sim_unit_calc_redundants(split_new_unit);
-    if (!rebuilt) split_new_unit->union_find_needed_for_sim_unit = true;
+    if (!rebuilt) ivp_sim_unit_request_union_find(split_new_unit);
 #ifdef IVP_DEBUG_BUILD
     IVP_IF(1)
     {
@@ -523,7 +555,7 @@ static void su_perform_test_and_split(ivp_sim_unit_t *su)
         ivp_sim_unit_clean_sim_unit(su);
         su_split_sim_unit(su, father);
         bool rebuilt = ivp_sim_unit_sim_unit_calc_redundants(su);
-        if (!rebuilt) su->union_find_needed_for_sim_unit = true;
+        if (!rebuilt) ivp_sim_unit_request_union_find(su);
 #ifdef IVP_DEBUG_BUILD
         if (rebuilt) ivp_sim_unit_sim_unit_debug_consistency(su);
 #endif
@@ -534,10 +566,10 @@ void ivp_sim_unit_do_sim_unit_union_find(ivp_sim_unit_t *su)
 {
     ivp_sim_unit_clean_sim_unit(su);
     if (!ivp_sim_unit_sim_unit_calc_redundants(su)) {
-        su->union_find_needed_for_sim_unit = true;
+        ivp_sim_unit_request_union_find(su);
         return;
     }
-    su->union_find_needed_for_sim_unit = false;
+    su_clear_union_find_request(su);
     su_perform_test_and_split(su);
 }
 
@@ -955,6 +987,11 @@ sim_units_2:
 sim_units_1:
     su_simulate_single_sim_unit_psi(s_u, &es, touched_cores);
 sim_units_0:
+    /* IVP_Sim_Units_Manager scans both lists in this order. If no linked
+     * unit is dirty, both loops can only read links/flags: skip the empty
+     * work. Otherwise retain the complete reference traversal (including
+     * its saved next pointers and treatment of newly split units). */
+    if (!sman->pending_union_find_count) return;
     for (s_u = sman->sim_units_slot0; s_u;) {
         ivp_sim_unit_t *next_su = s_u->next_sim_unit;
         if (s_u->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(s_u);
@@ -1038,7 +1075,7 @@ void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env
     }
     for (int i = ivp_pvec_len(&touched_units) - 1; i >= 0; i--) {
         ivp_sim_unit_t *reference_unit = (ivp_sim_unit_t *)ivp_pvec_at(&touched_units, i);
-        reference_unit->union_find_needed_for_sim_unit = true;
+        ivp_sim_unit_request_union_find(reference_unit);
         if (!silently) ivp_sim_unit_ensure_in_simulation(reference_unit);
     }
     ivp_pvec_clear(&touched_units);

@@ -1194,7 +1194,7 @@ static void slot_ctrl_detach_all(ivp_environment_t *env, slot_ctrl_t *sc, bool s
         ivp_object_t *obj = ivp_object_system_get_at(os, i);
         if (obj && ivp_ctrl_mgr_core_has_controller(obj->physical_core, &sc->base)) {
             ivp_core_rem_core_controller(obj->physical_core, &sc->base);
-            if (obj->physical_core->sim_unit) obj->physical_core->sim_unit->union_find_needed_for_sim_unit = true;
+            if (obj->physical_core->sim_unit) ivp_sim_unit_request_union_find(obj->physical_core->sim_unit);
         }
     }
     (void)ivp_pvec_remove_if_present(&env->pl->all_core_ctrls, &sc->base);
