@@ -98,12 +98,81 @@ class ProfileTests(unittest.TestCase):
     def test_invalid_scenario_options_fail_before_build_or_sampling(self):
         for argv in (["--compare-reference"], ["--scenario", "invalid"],
                      ["--scenario", "cubes", "--case", "contact_pile"],
-                     ["--scenario", "cubes", "--operation-counts"],
                      ["--scenario", "cubes", "--scale", "10"]):
             with self.subTest(argv=argv), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     profiler.main(argv)
                 self.assertEqual(error.exception.code, 2)
+
+    def test_contact_recalc_counts_distinguish_exact_and_shared_work(self):
+        counts = {
+            "scope": "per-simulation-time-v1",
+            "fingerprint_contract": "contact-input-128-v1",
+            "calls": 10,
+            "branch_pp": 1, "branch_pk": 2, "branch_pf": 3, "branch_kk": 4,
+            "same_time_calls": 2, "same_geometry_fingerprint": 3,
+            "same_kinematic_fingerprint": 2, "same_full_input_fingerprint": 1,
+            "max_calls_per_contact_at_time": 2,
+            "side_visits": 20, "object_pose_first_uses": 7,
+            "object_pose_reuses": 13, "core_state_first_uses": 8,
+            "core_state_reuses": 12,
+            "point_world_uses": 4, "point_world_first_uses": 3,
+            "point_world_reuses": 1, "edge_world_uses": 5,
+            "edge_world_first_uses": 3, "edge_world_reuses": 2,
+            "face_normal_uses": 3, "face_normal_first_uses": 2,
+            "face_normal_reuses": 1, "face_tangent_uses": 3,
+            "face_tangent_first_uses": 3, "face_tangent_reuses": 0,
+            "tracking_overflows": 0,
+        }
+        profiler.validate_contact_recalc_counts(counts, "contact")
+        for broken in ({"calls": 9}, {"same_time_calls": 11},
+                       {"same_full_input_fingerprint": 3}, {"side_visits": 19},
+                       {"object_pose_reuses": 14}, {"core_state_first_uses": -1},
+                       {"face_normal_reuses": 2},
+                       {"tracking_overflows": 1}):
+            with self.subTest(broken=broken):
+                with self.assertRaises(benchmark.BenchmarkError):
+                    profiler.validate_contact_recalc_counts(dict(counts, **broken), "contact")
+
+    def test_scenario_contact_counts_require_unchanged_snapshot(self):
+        scene = ("cubes", "0.005555555555555556", 480)
+        snapshot = b'{"state":1}\n'
+        verification = {
+            "stdout_sha256": profiler.hashlib.sha256(snapshot).hexdigest(),
+            "stderr_sha256": profiler.hashlib.sha256(b"").hexdigest(),
+        }
+        counts = {
+            "scope": "per-simulation-time-v1",
+            "fingerprint_contract": "contact-input-128-v1",
+            "calls": 1,
+            "branch_pp": 0, "branch_pk": 0, "branch_pf": 1, "branch_kk": 0,
+            "same_time_calls": 0, "same_geometry_fingerprint": 0,
+            "same_kinematic_fingerprint": 0, "same_full_input_fingerprint": 0,
+            "max_calls_per_contact_at_time": 1, "side_visits": 2,
+            "object_pose_first_uses": 2, "object_pose_reuses": 0,
+            "core_state_first_uses": 2, "core_state_reuses": 0,
+            "point_world_uses": 1, "point_world_first_uses": 1,
+            "point_world_reuses": 0, "edge_world_uses": 0,
+            "edge_world_first_uses": 0, "edge_world_reuses": 0,
+            "face_normal_uses": 1, "face_normal_first_uses": 1,
+            "face_normal_reuses": 0, "face_tangent_uses": 1,
+            "face_tangent_first_uses": 1, "face_tangent_reuses": 0,
+            "tracking_overflows": 0,
+        }
+        record = dict(schema=benchmark.SCHEMA, kind="scenario", implementation="libivp",
+                      scenario="cubes", sample=0, worlds=1, steps_per_world=480,
+                      dt=float(scene[1]), simulate_ns=100, total_ns=120,
+                      counter_mode="noop", timing_contract="scenario-noop-v1",
+                      contact_recalc_operations=counts)
+        completed = SimpleNamespace(returncode=0, stdout=snapshot, stderr=b"")
+        with patch.object(profiler.subprocess, "run", return_value=completed), \
+             patch.object(profiler.benchmark, "run", return_value=json.dumps(record)):
+            self.assertEqual(profiler.scenario_contact_counts(
+                Path("/tmp/diagnostic"), scene, verification), counts)
+        changed = SimpleNamespace(returncode=0, stdout=b'{"state":2}\n', stderr=b"")
+        with patch.object(profiler.subprocess, "run", return_value=changed):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "changed the snapshot"):
+                profiler.scenario_contact_counts(Path("/tmp/diagnostic"), scene, verification)
 
     def test_broadphase_work_counts_are_consistent(self):
         fields = ("rechecks", "recursive_rechecks", "max_depth", "candidates", "old_collisions",

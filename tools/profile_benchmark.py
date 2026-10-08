@@ -237,6 +237,40 @@ def validate_hull_counts(counts: dict | None, case: str) -> None:
         raise benchmark.BenchmarkError(f"{case}: inconsistent hull operation counts")
 
 
+def validate_contact_recalc_counts(counts: dict | None, case: str) -> None:
+    fields = ("calls", "branch_pp", "branch_pk", "branch_pf", "branch_kk",
+              "same_time_calls", "same_geometry_fingerprint",
+              "same_kinematic_fingerprint", "same_full_input_fingerprint",
+              "max_calls_per_contact_at_time", "side_visits",
+              "object_pose_first_uses", "object_pose_reuses",
+              "core_state_first_uses", "core_state_reuses",
+              "point_world_uses", "point_world_first_uses", "point_world_reuses",
+              "edge_world_uses", "edge_world_first_uses", "edge_world_reuses",
+              "face_normal_uses", "face_normal_first_uses", "face_normal_reuses",
+              "face_tangent_uses", "face_tangent_first_uses", "face_tangent_reuses",
+              "tracking_overflows")
+    if (not isinstance(counts, dict) or
+            counts.get("scope") != "per-simulation-time-v1" or
+            counts.get("fingerprint_contract") != "contact-input-128-v1" or
+            any(type(counts.get(field)) is not int or counts[field] < 0 for field in fields)):
+        raise benchmark.BenchmarkError(f"{case}: missing/invalid contact recalc counts")
+    if (counts["calls"] != counts["branch_pp"] + counts["branch_pk"] +
+            counts["branch_pf"] + counts["branch_kk"] or
+            counts["same_time_calls"] > counts["calls"] or
+            counts["same_kinematic_fingerprint"] > counts["same_geometry_fingerprint"] or
+            counts["same_full_input_fingerprint"] > counts["same_kinematic_fingerprint"] or
+            counts["side_visits"] != counts["calls"] * 2 or
+            counts["side_visits"] != counts["object_pose_first_uses"] +
+            counts["object_pose_reuses"] or
+            counts["side_visits"] != counts["core_state_first_uses"] +
+            counts["core_state_reuses"] or counts["tracking_overflows"] != 0):
+        raise benchmark.BenchmarkError(f"{case}: inconsistent contact recalc counts")
+    for prefix in ("point_world", "edge_world", "face_normal", "face_tangent"):
+        if counts[f"{prefix}_uses"] != (counts[f"{prefix}_first_uses"] +
+                                        counts[f"{prefix}_reuses"]):
+            raise benchmark.BenchmarkError(f"{case}: inconsistent contact feature counts")
+
+
 def capture_command(runner: Path, command: list[str], args, raw: Path) -> tuple[str, list]:
     if args.backend == "sample":
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -310,6 +344,10 @@ def capture(runner: Path, args, case: str, directory: Path, counts_runner: Path 
             hull = counted["hull_operations"]
             validate_hull_counts(hull, case)
             report["hull_operations"] = hull
+        if "contact_recalc_operations" in counted:
+            contact = counted["contact_recalc_operations"]
+            validate_contact_recalc_counts(contact, case)
+            report["contact_recalc_operations"] = contact
     return report
 
 
@@ -361,8 +399,30 @@ def verify_scenario_snapshots(runners: dict[str, Path], scene: tuple[str, str, i
             "reference_byte_identical": True if "reference" in outputs else None}
 
 
+def scenario_contact_counts(runner: Path, scene: tuple[str, str, int], verification: dict) -> dict:
+    snapshot = subprocess.run(scenario_command(runner, scene, "libivp"), capture_output=True,
+                              timeout=60)
+    if snapshot.returncode:
+        raise benchmark.BenchmarkError(f"{scene[0]}: diagnostic snapshot runner failed")
+    if (hashlib.sha256(snapshot.stdout).hexdigest() != verification["stdout_sha256"] or
+            hashlib.sha256(snapshot.stderr).hexdigest() != verification["stderr_sha256"]):
+        raise benchmark.BenchmarkError(f"{scene[0]}: contact diagnostics changed the snapshot")
+    command = scenario_command(runner, scene, "libivp")
+    command += ["--benchmark", "--samples", "1", "--warmup", "0",
+                "--min-sample-ms", "0.001"]
+    output = benchmark.run(command, cwd=runner.parent, capture=True)
+    records = benchmark.parse_jsonl(output, f"contact diagnostics:{scene[0]}")
+    if len(records) != 1:
+        raise benchmark.BenchmarkError(f"{scene[0]}: expected one diagnostic scenario record")
+    validate_scenario_record(records[0], scene, "libivp")
+    counts = records[0].get("contact_recalc_operations")
+    validate_contact_recalc_counts(counts, scene[0])
+    return counts
+
+
 def capture_scenario(runner: Path, args, scene: tuple[str, str, int], implementation: str,
-                     directory: Path, verification: dict) -> dict:
+                     directory: Path, verification: dict,
+                     counts_runner: Path | None = None) -> dict:
     name, delta, steps = scene
     raw = directory / f"{name}-{implementation}.{'sample.txt' if args.backend == 'sample' else 'perf.data'}"
     command = scenario_command(runner, scene, implementation, seconds=args.seconds)
@@ -379,6 +439,9 @@ def capture_scenario(runner: Path, args, scene: tuple[str, str, int], implementa
                    "counter_contract": "scenario-noop-v1",
                    "adequate_samples": scoped.get("samples", 0) >= args.min_samples and
                    scoped.get("unresolved_leaf_samples", 0) <= scoped.get("samples", 0) * 0.10})
+    if counts_runner:
+        report["contact_recalc_operations"] = scenario_contact_counts(
+            counts_runner, scene, verification)
     return report
 
 
@@ -441,6 +504,22 @@ def print_report(result: dict, top: int) -> None:
             print(f"    queue calls: insert={c['synapse_inserts']}, lazy insert={c['lazy_synapse_inserts']}, "
                   f"update={c['synapse_updates']}, lazy update={c['lazy_synapse_updates']}, "
                   f"remove={c['synapse_removes']}")
+        if "contact_recalc_operations" in case:
+            c = case["contact_recalc_operations"]
+            sides = c["side_visits"]
+            print(f"  contact recalc (separate intrusive run): calls={c['calls']}, "
+                  f"same-time={c['same_time_calls']}, "
+                  f"full-input-equal={c['same_full_input_fingerprint']}")
+            print(f"    branches pp/pk/pf/kk={c['branch_pp']}/{c['branch_pk']}/"
+                  f"{c['branch_pf']}/{c['branch_kk']}")
+            print(f"    shared object-pose reuse={c['object_pose_reuses'] / sides if sides else 0:.1%}, "
+                  f"core-state reuse={c['core_state_reuses'] / sides if sides else 0:.1%}")
+            for label, prefix in (("point transforms", "point_world"),
+                                  ("edge transforms", "edge_world"),
+                                  ("face normals", "face_normal"),
+                                  ("face tangents", "face_tangent")):
+                uses = c[f"{prefix}_uses"]
+                print(f"    {label}: uses={uses}, reuse={c[f'{prefix}_reuses'] / uses if uses else 0:.1%}")
 
 
 def main(argv=None) -> int:
@@ -466,8 +545,8 @@ def main(argv=None) -> int:
         parser.error("seconds, min-samples, top and scale must be positive")
     if args.scale and (not args.cases or len(args.cases) != 1):
         parser.error("--scale requires exactly one --case")
-    if args.scenarios and (args.cases or args.scale or args.operation_counts):
-        parser.error("--scenario cannot be combined with --case, --scale or --operation-counts")
+    if args.scenarios and (args.cases or args.scale):
+        parser.error("--scenario cannot be combined with --case or --scale")
     if args.compare_reference and not args.scenarios:
         parser.error("--compare-reference requires --scenario")
     if args.scenarios and sys.platform == "win32":
@@ -496,12 +575,16 @@ def main(argv=None) -> int:
     counts_runner = None
     if args.operation_counts:
         count_build = root / "build" / "benchmark" / "operation-lib"
+        count_target = "test_scenarios" if args.scenarios else "ivp_benchmark"
         if not args.no_build:
             benchmark.run(["cmake", "-S", str(root), "-B", str(count_build),
-                           "-DCMAKE_BUILD_TYPE=Release", "-DIVP_BUILD_TESTS=OFF",
-                           "-DIVP_BUILD_BENCHMARKS=ON", "-DIVP_BENCHMARK_DIAGNOSTICS=ON"], cwd=root)
-            benchmark.run(["cmake", "--build", str(count_build), "--target", "ivp_benchmark", "-j", "8"], cwd=root)
-        counts_runner = count_build / "ivp_benchmark"
+                           "-DCMAKE_BUILD_TYPE=Release", "-DIVP_BUILD_BENCHMARKS=ON",
+                           f"-DIVP_BUILD_TESTS={'ON' if args.scenarios else 'OFF'}",
+                           f"-DIVP_ENABLE_SCENARIO_TESTS={'ON' if args.scenarios else 'OFF'}",
+                           "-DIVP_BENCHMARK_DIAGNOSTICS=ON"], cwd=root)
+            benchmark.run(["cmake", "--build", str(count_build), "--target", count_target,
+                           "-j", "8"], cwd=root)
+        counts_runner = count_build / count_target
         if not counts_runner.exists():
             raise benchmark.BenchmarkError(f"missing operation-count runner: {counts_runner}")
     result = {
@@ -512,6 +595,11 @@ def main(argv=None) -> int:
         "compiler": benchmark.read_compiler(build / "CMakeCache.txt")},
         "cases": [],
     }
+    if counts_runner:
+        result["metadata"]["operation_runner"] = {
+            "path": str(counts_runner),
+            "sha256": hashlib.sha256(counts_runner.read_bytes()).hexdigest(),
+        }
     if args.scenarios:
         runners = {"libivp": runner}
         if args.compare_reference:
@@ -537,7 +625,10 @@ def main(argv=None) -> int:
                 order.reverse()
             for implementation, binary in order:
                 print(f"Sampling {implementation}:{scene[0]} for {args.seconds}s...", file=sys.stderr, flush=True)
-                result["cases"].append(capture_scenario(binary, args, scene, implementation, directory, verification))
+                diagnostic_runner = counts_runner if implementation == "libivp" else None
+                result["cases"].append(capture_scenario(
+                    binary, args, scene, implementation, directory, verification,
+                    diagnostic_runner))
     else:
         for case in args.cases or DEFAULT_CASES:
             print(f"Sampling {case} for {args.seconds}s...", file=sys.stderr, flush=True)
