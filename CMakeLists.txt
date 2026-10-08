@@ -606,6 +606,9 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_containers_ext tests/test_containers_ext.c)
     ivp_add_test(test_math_ext tests/test_math_ext.c)
     ivp_add_test(test_math_ref tests/test_math_ref.c)
+    ivp_add_test(test_lvec tests/test_lvec.c)
+    target_include_directories(test_lvec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ivp_apply_strict_fp(test_lvec)
     ivp_add_test(test_active_value_ref tests/test_active_value_ref.c)
     ivp_add_test(test_utility_ref tests/test_utility_ref.c)
     ivp_add_test(test_collision_ext tests/test_collision_ext.c)
@@ -730,7 +733,7 @@ if (IVP_BUILD_TESTS)
 
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry test_collision
-            test_dynamics test_solver test_utility
+            test_dynamics test_solver test_utility test_lvec
             test_controllers test_builders test_qhull_reentrant test_parallel_worlds
             test_internal_parallel
             test_convex_layout test_anomaly test_object_lifecycle
