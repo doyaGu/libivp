@@ -126,7 +126,7 @@ static void task_count_call(void *opaque, size_t task_index)
 
 IVP_TEST(task_pool_setup_failures_run_no_tasks)
 {
-    enum { TASK_COUNT = 37 };
+    enum { TASK_COUNT = 37, APPLY_FAILURE_ROUNDS = 8 };
     ivp_test_worker_runtime_t runtime;
     ivp_test_worker_runtime_init(&runtime, NULL);
     ivp_task_pool_t *pool = ivp_task_pool_create_with_runtime(
@@ -141,17 +141,20 @@ IVP_TEST(task_pool_setup_failures_run_no_tasks)
                  pool, TASK_COUNT, task_count_call, &probe) &&
              atomic_load_explicit(&probe.calls, memory_order_relaxed) == 0;
     }
-    if (ok) {
+    for (int round = 0; ok && round < APPLY_FAILURE_ROUNDS; round++) {
+        int expected_calls = round * TASK_COUNT;
         ivp_test_worker_runtime_fail_next_apply(&runtime);
         ok = !ivp_task_pool_parallel_for(
                  pool, TASK_COUNT, task_count_call, &probe) &&
-             atomic_load_explicit(&probe.calls, memory_order_relaxed) == 0;
-    }
-    if (ok) {
-        ok = ivp_task_pool_parallel_for(
-                 pool, TASK_COUNT, task_count_call, &probe) &&
              atomic_load_explicit(&probe.calls, memory_order_relaxed) ==
-                 TASK_COUNT;
+                 expected_calls;
+        if (ok) {
+            ok = ivp_task_pool_parallel_for(
+                     pool, TASK_COUNT, task_count_call, &probe) &&
+                 atomic_load_explicit(&probe.calls,
+                                      memory_order_relaxed) ==
+                     expected_calls + TASK_COUNT;
+        }
     }
 
     ivp_task_pool_destroy(pool);

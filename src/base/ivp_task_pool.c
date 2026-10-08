@@ -13,6 +13,7 @@ typedef CRITICAL_SECTION ivp_task_mutex_t;
 typedef CONDITION_VARIABLE ivp_task_cond_t;
 #else
 #include <pthread.h>
+#include <sched.h>
 typedef pthread_mutex_t ivp_task_mutex_t;
 typedef pthread_cond_t ivp_task_cond_t;
 #endif
@@ -36,9 +37,9 @@ struct ivp_task_pool {
     bool stopping;
     bool running;
     uint64_t generation;
-    int setup_ready_count;
+    atomic_int setup_ready_count;
     int job_done_count;
-    bool setup_failed;
+    atomic_bool setup_failed;
 
     ivp_task_pool_fn function;
     void *context;
@@ -103,6 +104,15 @@ static void task_broadcast(ivp_task_cond_t *condition)
 }
 #endif
 
+static void task_yield(void)
+{
+#if defined(_WIN32)
+    (void)SwitchToThread();
+#else
+    (void)sched_yield();
+#endif
+}
+
 static bool task_claim_range(ivp_task_pool_t *pool, size_t task_count,
                              size_t task_grain, size_t *first_out,
                              size_t *end_out)
@@ -158,20 +168,32 @@ static void task_worker_loop(ivp_task_worker_t *worker)
 
         bool setup_ok = pool->runtime->floating_point_apply(
             pool->runtime->context, &floating_point_environment);
-        task_lock(pool);
-        if (!setup_ok) pool->setup_failed = true;
-        pool->setup_ready_count++;
-        if (pool->setup_ready_count == pool->background_thread_count) {
+        if (!setup_ok) {
+            atomic_store_explicit(&pool->setup_failed, true,
+                                  memory_order_release);
+        }
+        /* Applying the captured fenv is a short, fixed setup phase.  Publish
+         * it through an atomic rendezvous so peers do not sleep and require
+         * a second condition-variable wakeup before every small kernel.  No
+         * task may start until every background lane has published setup;
+         * one failed lane therefore still cancels the whole dispatch. */
+        int ready = atomic_fetch_add_explicit(
+                        &pool->setup_ready_count, 1,
+                        memory_order_acq_rel) + 1;
+        if (ready == pool->background_thread_count) {
+            task_lock(pool);
             task_broadcast(&pool->state_changed);
+            task_unlock(pool);
         } else {
-            while (!pool->stopping &&
-                   pool->setup_ready_count != pool->background_thread_count) {
-                task_wait(&pool->state_changed, pool);
+            unsigned int spins = 0;
+            while (atomic_load_explicit(&pool->setup_ready_count,
+                                        memory_order_acquire) !=
+                   pool->background_thread_count) {
+                if ((++spins & 63u) == 0u) task_yield();
             }
         }
-        if (pool->stopping) break;
-        bool run_tasks = !pool->setup_failed;
-        task_unlock(pool);
+        bool run_tasks = !atomic_load_explicit(
+            &pool->setup_failed, memory_order_acquire);
 
         if (run_tasks) {
             task_run_claimed(pool, function, context, task_count, task_grain);
@@ -223,6 +245,8 @@ ivp_task_pool_t *ivp_task_pool_create_with_runtime(
     if (!pool) return NULL;
     memset(pool, 0, sizeof(*pool));
     atomic_init(&pool->next_task, 0u);
+    atomic_init(&pool->setup_ready_count, 0);
+    atomic_init(&pool->setup_failed, false);
     pool->allocator = *allocator;
     pool->runtime = runtime;
     pool->worker_count = worker_count;
@@ -315,9 +339,11 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->task_grain = task_count / target_chunks;
     if (pool->task_grain == 0u) pool->task_grain = 1u;
     atomic_store_explicit(&pool->next_task, 0u, memory_order_relaxed);
-    pool->setup_ready_count = 0;
+    atomic_store_explicit(&pool->setup_ready_count, 0,
+                          memory_order_relaxed);
     pool->job_done_count = 0;
-    pool->setup_failed = false;
+    atomic_store_explicit(&pool->setup_failed, false,
+                          memory_order_relaxed);
     pool->running = true;
     pool->generation++;
     task_broadcast(&pool->work_ready);
@@ -327,10 +353,13 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     const size_t caller_task_grain = pool->task_grain;
     /* The caller lane does not start until every background lane has adopted
      * this dispatch's floating-point environment. */
-    while (pool->setup_ready_count != pool->background_thread_count) {
+    while (atomic_load_explicit(&pool->setup_ready_count,
+                                memory_order_acquire) !=
+           pool->background_thread_count) {
         task_wait(&pool->state_changed, pool);
     }
-    bool setup_ok = !pool->setup_failed;
+    bool setup_ok = !atomic_load_explicit(&pool->setup_failed,
+                                          memory_order_acquire);
     task_unlock(pool);
 
     if (setup_ok) {
