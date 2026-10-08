@@ -22,6 +22,7 @@
 #include <ivp/containers/ivp_pvec.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
+#include "base/ivp_simd_internal.h"
 #include "dynamics/ivp_env_internal.h"
 
 struct ivp_environment;
@@ -238,16 +239,26 @@ void   ivp_core_values_changed_recalc_redundants(ivp_core_t *core);
 /* get_inv_rot_inertia() / get_rot_inertia() as float vectors */
 static inline ivp_vec3f_t ivp_core_inv_rot_inertia_f(const ivp_core_t *c) {
     ivp_vec3f_t r;
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1_f32(r.k, vcvt_f32_f64(vld1q_f64(c->inv_rot_inertia.k)));
+    r.k[2] = (float)c->inv_rot_inertia.k[2];
+#else
     r.k[0] = (float)c->inv_rot_inertia.k[0];
     r.k[1] = (float)c->inv_rot_inertia.k[1];
     r.k[2] = (float)c->inv_rot_inertia.k[2];
+#endif
     return r;
 }
 static inline ivp_vec3f_t ivp_core_rot_inertia_f(const ivp_core_t *c) {
     ivp_vec3f_t r;
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1_f32(r.k, vcvt_f32_f64(vld1q_f64(c->rot_inertia.k)));
+    r.k[2] = (float)c->rot_inertia.k[2];
+#else
     r.k[0] = (float)c->rot_inertia.k[0];
     r.k[1] = (float)c->rot_inertia.k[1];
     r.k[2] = (float)c->rot_inertia.k[2];
+#endif
     return r;
 }
 static inline float ivp_core_get_mass_f(const ivp_core_t *c) { return (float)c->mass; }
@@ -256,15 +267,25 @@ static inline float ivp_core_get_inv_mass_f(const ivp_core_t *c) { return (float
 /* speed (world) and speed_change as float vectors (IVP_U_Float_Point in the reference) */
 static inline ivp_vec3f_t ivp_core_speed_f(const ivp_core_t *c) {
     ivp_vec3f_t r;
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1_f32(r.k, vcvt_f32_f64(vld1q_f64(c->speed.k)));
+    r.k[2] = (float)c->speed.k[2];
+#else
     r.k[0] = (float)c->speed.k[0];
     r.k[1] = (float)c->speed.k[1];
     r.k[2] = (float)c->speed.k[2];
+#endif
     return r;
 }
 static inline void ivp_core_set_speed_f(ivp_core_t *c, const ivp_vec3f_t *v) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1q_f64(c->speed.k, vcvt_f64_f32(vld1_f32(v->k)));
+    c->speed.k[2] = (ivp_real_t)v->k[2];
+#else
     c->speed.k[0] = (ivp_real_t)v->k[0];
     c->speed.k[1] = (ivp_real_t)v->k[1];
     c->speed.k[2] = (ivp_real_t)v->k[2];
+#endif
 }
 
 /* ── IVP_Calc_Next_PSI_Solver ───────────────────────────────────────────── */

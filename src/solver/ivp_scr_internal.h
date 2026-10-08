@@ -49,9 +49,14 @@ typedef struct ivp_scr_f {
 static inline ivp_scr_p4_t ivp_scr_f_inv_masses(const ivp_core_t *core)
 {
     ivp_scr_p4_t im;
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1_f32(im.k, vcvt_f32_f64(vld1q_f64(core->inv_rot_inertia.k)));
+    im.k[2] = (float)core->inv_rot_inertia.k[2];
+#else
     im.k[0] = (float)core->inv_rot_inertia.k[0];
     im.k[1] = (float)core->inv_rot_inertia.k[1];
     im.k[2] = (float)core->inv_rot_inertia.k[2];
+#endif
     im.hesse_val = (float)core->inv_mass;
     return im;
 }
@@ -59,6 +64,9 @@ static inline ivp_scr_p4_t ivp_scr_f_inv_masses(const ivp_core_t *core)
 /* IVP_U_Point_4::set_line_wise_mult4 (float products) */
 static inline void ivp_scr_f_line_wise_mult4(ivp_scr_p4_t *out, const ivp_scr_p4_t *a, const ivp_scr_p4_t *b)
 {
+#if IVP_ARM64_NEON
+    vst1q_f32(out->k, vmulq_f32(vld1q_f32(a->k), vld1q_f32(b->k)));
+#else
     double x = (double)(a->k[0] * b->k[0]);
     double y = (double)(a->k[1] * b->k[1]);
     double z = (double)(a->k[2] * b->k[2]);
@@ -67,23 +75,46 @@ static inline void ivp_scr_f_line_wise_mult4(ivp_scr_p4_t *out, const ivp_scr_p4
     out->k[1] = (float)y;
     out->k[2] = (float)z;
     out->hesse_val = (float)w;
+#endif
 }
 
 /* IVP_U_Point_4::dot_product4 (float expression) */
 static inline double ivp_scr_f_dot4(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o)
 {
+#if IVP_ARM64_NEON
+    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
+    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
+    sum += a->k[2] * o->k[2];
+    sum += a->hesse_val * o->hesse_val;
+    return (double)sum;
+#else
     return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2] + a->hesse_val * o->hesse_val);
+#endif
 }
 
 /* IVP_U_Float_Point::dot_product on the xyz part (float expression) */
 static inline double ivp_scr_f_dot3(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o)
 {
+#if IVP_ARM64_NEON
+    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
+    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
+    sum += a->k[2] * o->k[2];
+    return (double)sum;
+#else
     return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2]);
+#endif
 }
 
 static inline double ivp_scr_f_dot_vp(const ivp_vec3f_t *a, const ivp_scr_p4_t *o)
 {
+#if IVP_ARM64_NEON
+    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
+    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
+    sum += a->k[2] * o->k[2];
+    return (double)sum;
+#else
     return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2]);
+#endif
 }
 
 static inline ivp_vec3f_t ivp_scr_f_xyz(const ivp_scr_p4_t *p)

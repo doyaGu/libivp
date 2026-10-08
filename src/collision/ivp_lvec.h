@@ -21,6 +21,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include "base/ivp_simd_internal.h"
 
 typedef ivp_real_t D;   /* IVP_DOUBLE */
 
@@ -73,56 +74,131 @@ static inline void lvf_set3(ivp_vec3f_t *a, float x, float y, float z) { a->k[0]
 static inline void lvf_setd3(ivp_vec3f_t *a, D x, D y, D z) { a->k[0] = (float)x; a->k[1] = (float)y; a->k[2] = (float)z; }
 static inline void lvf_set(ivp_vec3f_t *a, const ivp_vec3f_t *b) { *a = *b; }
 static inline void lvf_set_p(ivp_vec3f_t *a, const ivp_vec3r_t *b) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    vst1_f32(a->k, vcvt_f32_f64(vld1q_f64(b->k)));
+    a->k[2] = (float)b->k[2];
+#else
     a->k[0] = (float)b->k[0]; a->k[1] = (float)b->k[1]; a->k[2] = (float)b->k[2];
+#endif
 }
 static inline D lvf_quad_length(const ivp_vec3f_t *a) {
+#if IVP_ARM64_NEON
+    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(a->k));
+    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
+    sum += a->k[2] * a->k[2];
+    return (D)sum;
+#else
     return (D)(a->k[0] * a->k[0] + a->k[1] * a->k[1] + a->k[2] * a->k[2]);
+#endif
 }
 static inline D lvf_dot(const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
+#if IVP_ARM64_NEON
+    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(b->k));
+    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
+    sum += a->k[2] * b->k[2];
+    return (D)sum;
+#else
     return (D)(a->k[0] * b->k[0] + a->k[1] * b->k[1] + a->k[2] * b->k[2]);
+#endif
 }
 static inline D lvf_quad_distance(const ivp_vec3f_t *a, const ivp_vec3f_t *p) {
     D x = (D)(a->k[0] - p->k[0]), y = (D)(a->k[1] - p->k[1]), z = (D)(a->k[2] - p->k[2]);
     return x * x + y * y + z * z;
 }
 static inline void lvf_mult(ivp_vec3f_t *a, D f) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float64x2_t values = vcvt_f64_f32(vld1_f32(a->k));
+    values = vmulq_f64(values, vdupq_n_f64(f));
+    vst1_f32(a->k, vcvt_f32_f64(values));
+    a->k[2] = (float)((D)a->k[2] * f);
+#else
     a->k[0] = (float)((D)a->k[0] * f); a->k[1] = (float)((D)a->k[1] * f); a->k[2] = (float)((D)a->k[2] * f);
+#endif
 }
 static inline void lvf_add2(ivp_vec3f_t *r, const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
+#if IVP_ARM64_NEON
+    vst1_f32(r->k, vadd_f32(vld1_f32(a->k), vld1_f32(b->k)));
+    r->k[2] = a->k[2] + b->k[2];
+#else
     r->k[0] = a->k[0] + b->k[0]; r->k[1] = a->k[1] + b->k[1]; r->k[2] = a->k[2] + b->k[2];
+#endif
 }
 static inline void lvf_add(ivp_vec3f_t *r, const ivp_vec3f_t *b) { lvf_add2(r, r, b); }
 static inline void lvf_subtract2(ivp_vec3f_t *r, const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
+#if IVP_ARM64_NEON
+    vst1_f32(r->k, vsub_f32(vld1_f32(a->k), vld1_f32(b->k)));
+    r->k[2] = a->k[2] - b->k[2];
+#else
     r->k[0] = a->k[0] - b->k[0]; r->k[1] = a->k[1] - b->k[1]; r->k[2] = a->k[2] - b->k[2];
+#endif
 }
 static inline void lvf_subtract(ivp_vec3f_t *r, const ivp_vec3f_t *b) { lvf_subtract2(r, r, b); }
 static inline void lvf_subtract2_p(ivp_vec3f_t *r, const ivp_vec3r_t *a, const ivp_vec3r_t *b) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float64x2_t values = vsubq_f64(vld1q_f64(a->k), vld1q_f64(b->k));
+    vst1_f32(r->k, vcvt_f32_f64(values));
+    r->k[2] = (float)(a->k[2] - b->k[2]);
+#else
     r->k[0] = (float)(a->k[0] - b->k[0]); r->k[1] = (float)(a->k[1] - b->k[1]); r->k[2] = (float)(a->k[2] - b->k[2]);
+#endif
 }
 /* this = v1 + v2 * f */
 static inline void lvf_add_multiple2(ivp_vec3f_t *r, const ivp_vec3f_t *v1, const ivp_vec3f_t *v2, D f) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float64x2_t values = vcvt_f64_f32(vld1_f32(v2->k));
+    values = vmulq_f64(values, vdupq_n_f64(f));
+    values = vaddq_f64(values, vcvt_f64_f32(vld1_f32(v1->k)));
+    vst1_f32(r->k, vcvt_f32_f64(values));
+    D c = (D)v2->k[2] * f + (D)v1->k[2];
+    r->k[2] = (float)c;
+#else
     D a = (D)v2->k[0] * f + (D)v1->k[0];
     D b = (D)v2->k[1] * f + (D)v1->k[1];
     D c = (D)v2->k[2] * f + (D)v1->k[2];
     r->k[0] = (float)a; r->k[1] = (float)b; r->k[2] = (float)c;
+#endif
 }
 static inline void lvf_add_multiple(ivp_vec3f_t *r, const ivp_vec3f_t *v, D f) { lvf_add_multiple2(r, r, v, f); }
 static inline void lvf_set_multiple(ivp_vec3f_t *r, const ivp_vec3f_t *v, D f) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float64x2_t values = vmulq_f64(vcvt_f64_f32(vld1_f32(v->k)), vdupq_n_f64(f));
+    vst1_f32(r->k, vcvt_f32_f64(values));
+    r->k[2] = (float)((D)v->k[2] * f);
+#else
     r->k[0] = (float)((D)v->k[0] * f); r->k[1] = (float)((D)v->k[1] * f); r->k[2] = (float)((D)v->k[2] * f);
+#endif
 }
 static inline void lvf_set_multiple_p(ivp_vec3f_t *r, const ivp_vec3r_t *v, D f) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float64x2_t values = vmulq_f64(vld1q_f64(v->k), vdupq_n_f64(f));
+    vst1_f32(r->k, vcvt_f32_f64(values));
+    r->k[2] = (float)(v->k[2] * f);
+#else
     r->k[0] = (float)(v->k[0] * f); r->k[1] = (float)(v->k[1] * f); r->k[2] = (float)(v->k[2] * f);
+#endif
 }
 static inline void lvf_set_pairwise_mult(ivp_vec3f_t *r, const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
+#if IVP_ARM64_NEON
+    vst1_f32(r->k, vmul_f32(vld1_f32(a->k), vld1_f32(b->k)));
+    r->k[2] = a->k[2] * b->k[2];
+#else
     r->k[0] = a->k[0] * b->k[0]; r->k[1] = a->k[1] * b->k[1]; r->k[2] = a->k[2] * b->k[2];
+#endif
 }
 static inline void lvf_set_negative(ivp_vec3f_t *r, const ivp_vec3f_t *a) {
     r->k[0] = -a->k[0]; r->k[1] = -a->k[1]; r->k[2] = -a->k[2];
 }
 /* this = (v1 - v2) * f */
 static inline void lvf_subtract_and_mult(ivp_vec3f_t *r, const ivp_vec3f_t *v1, const ivp_vec3f_t *v2, D f) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    float32x2_t delta = vsub_f32(vld1_f32(v1->k), vld1_f32(v2->k));
+    vst1_f32(r->k, vcvt_f32_f64(vmulq_n_f64(vcvt_f64_f32(delta), f)));
+    D c = (D)(v1->k[2] - v2->k[2]) * f;
+    r->k[2] = (float)c;
+#else
     D a = (D)(v1->k[0] - v2->k[0]) * f, b = (D)(v1->k[1] - v2->k[1]) * f, c = (D)(v1->k[2] - v2->k[2]) * f;
     r->k[0] = (float)a; r->k[1] = (float)b; r->k[2] = (float)c;
+#endif
 }
 static inline void lvf_cross(ivp_vec3f_t *r, const ivp_vec3f_t *v1, const ivp_vec3f_t *v2) {
     D a = (D)(v1->k[1] * v2->k[2]); D a2 = (D)(v2->k[1] * v1->k[2]);
@@ -371,16 +447,42 @@ static inline void lv_hesse_normize(lv_hesse_t *h) {
 
 /* vmult3: out = R * in */
 static inline void lvm_vmult3(const ivp_transform_r_t *m, const ivp_vec3r_t *in, ivp_vec3r_t *out) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    const D x = in->k[0], y = in->k[1], z = in->k[2];
+    const float64x2_t column0 = { LVM_E(m, 0, 0), LVM_E(m, 1, 0) };
+    const float64x2_t column1 = { LVM_E(m, 0, 1), LVM_E(m, 1, 1) };
+    const float64x2_t column2 = { LVM_E(m, 0, 2), LVM_E(m, 1, 2) };
+    float64x2_t values = vmulq_n_f64(column0, x);
+    values = vaddq_f64(values, vmulq_n_f64(column1, y));
+    values = vaddq_f64(values, vmulq_n_f64(column2, z));
+    D c = LVM_E(m, 2, 0) * x + LVM_E(m, 2, 1) * y + LVM_E(m, 2, 2) * z;
+    vst1q_f64(out->k, values);
+    out->k[2] = c;
+#else
     D a = LVM_E(m, 0, 0) * in->k[0] + LVM_E(m, 0, 1) * in->k[1] + LVM_E(m, 0, 2) * in->k[2];
     D b = LVM_E(m, 1, 0) * in->k[0] + LVM_E(m, 1, 1) * in->k[1] + LVM_E(m, 1, 2) * in->k[2];
     D c = LVM_E(m, 2, 0) * in->k[0] + LVM_E(m, 2, 1) * in->k[1] + LVM_E(m, 2, 2) * in->k[2];
     out->k[0] = a; out->k[1] = b; out->k[2] = c;
+#endif
 }
 static inline void lvm_vmult3_f(const ivp_transform_r_t *m, const ivp_vec3f_t *in, ivp_vec3f_t *out) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    const D x = (D)in->k[0], y = (D)in->k[1], z = (D)in->k[2];
+    const float64x2_t column0 = { LVM_E(m, 0, 0), LVM_E(m, 1, 0) };
+    const float64x2_t column1 = { LVM_E(m, 0, 1), LVM_E(m, 1, 1) };
+    const float64x2_t column2 = { LVM_E(m, 0, 2), LVM_E(m, 1, 2) };
+    float64x2_t values = vmulq_n_f64(column0, x);
+    values = vaddq_f64(values, vmulq_n_f64(column1, y));
+    values = vaddq_f64(values, vmulq_n_f64(column2, z));
+    D c = LVM_E(m, 2, 0) * x + LVM_E(m, 2, 1) * y + LVM_E(m, 2, 2) * z;
+    vst1_f32(out->k, vcvt_f32_f64(values));
+    out->k[2] = (float)c;
+#else
     D a = LVM_E(m, 0, 0) * (D)in->k[0] + LVM_E(m, 0, 1) * (D)in->k[1] + LVM_E(m, 0, 2) * (D)in->k[2];
     D b = LVM_E(m, 1, 0) * (D)in->k[0] + LVM_E(m, 1, 1) * (D)in->k[1] + LVM_E(m, 1, 2) * (D)in->k[2];
     D c = LVM_E(m, 2, 0) * (D)in->k[0] + LVM_E(m, 2, 1) * (D)in->k[1] + LVM_E(m, 2, 2) * (D)in->k[2];
     out->k[0] = (float)a; out->k[1] = (float)b; out->k[2] = (float)c;
+#endif
 }
 /* vimult3: out = R^T * in */
 static inline void lvm_vimult3(const ivp_transform_r_t *m, const ivp_vec3r_t *in, ivp_vec3r_t *out) {
@@ -390,10 +492,23 @@ static inline void lvm_vimult3(const ivp_transform_r_t *m, const ivp_vec3r_t *in
     out->k[0] = a; out->k[1] = b; out->k[2] = c;
 }
 static inline void lvm_vimult3_f(const ivp_transform_r_t *m, const ivp_vec3f_t *in, ivp_vec3f_t *out) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    const D x = (D)in->k[0], y = (D)in->k[1], z = (D)in->k[2];
+    const float64x2_t row0 = { LVM_E(m, 0, 0), LVM_E(m, 0, 1) };
+    const float64x2_t row1 = { LVM_E(m, 1, 0), LVM_E(m, 1, 1) };
+    const float64x2_t row2 = { LVM_E(m, 2, 0), LVM_E(m, 2, 1) };
+    float64x2_t values = vmulq_n_f64(row0, x);
+    values = vaddq_f64(values, vmulq_n_f64(row1, y));
+    values = vaddq_f64(values, vmulq_n_f64(row2, z));
+    D c = LVM_E(m, 0, 2) * x + LVM_E(m, 1, 2) * y + LVM_E(m, 2, 2) * z;
+    vst1_f32(out->k, vcvt_f32_f64(values));
+    out->k[2] = (float)c;
+#else
     D a = LVM_E(m, 0, 0) * (D)in->k[0] + LVM_E(m, 1, 0) * (D)in->k[1] + LVM_E(m, 2, 0) * (D)in->k[2];
     D b = LVM_E(m, 0, 1) * (D)in->k[0] + LVM_E(m, 1, 1) * (D)in->k[1] + LVM_E(m, 2, 1) * (D)in->k[2];
     D c = LVM_E(m, 0, 2) * (D)in->k[0] + LVM_E(m, 1, 2) * (D)in->k[1] + LVM_E(m, 2, 2) * (D)in->k[2];
     out->k[0] = (float)a; out->k[1] = (float)b; out->k[2] = (float)c;
+#endif
 }
 /* vimult3 point in -> float out */
 static inline void lvm_vimult3_pf(const ivp_transform_r_t *m, const ivp_vec3r_t *in, ivp_vec3f_t *out) {
@@ -402,6 +517,22 @@ static inline void lvm_vimult3_pf(const ivp_transform_r_t *m, const ivp_vec3r_t 
 }
 /* vmult4: out = R * in + vv */
 static inline void lvm_vmult4(const ivp_transform_r_t *m, const ivp_vec3r_t *in, ivp_vec3r_t *out) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    const D x = in->k[0], y = in->k[1], z = in->k[2];
+    const float64x2_t column0 = { LVM_E(m, 0, 0), LVM_E(m, 1, 0) };
+    const float64x2_t column1 = { LVM_E(m, 0, 1), LVM_E(m, 1, 1) };
+    const float64x2_t column2 = { LVM_E(m, 0, 2), LVM_E(m, 1, 2) };
+    float64x2_t values = vmulq_n_f64(column0, x);
+    values = vaddq_f64(values, vmulq_n_f64(column1, y));
+    values = vaddq_f64(values, vmulq_n_f64(column2, z));
+    values = vaddq_f64(values, vld1q_f64(m->pos.k));
+    D c = x * LVM_E(m, 2, 0);
+    c += y * LVM_E(m, 2, 1);
+    c += z * LVM_E(m, 2, 2);
+    c += m->pos.k[2];
+    vst1q_f64(out->k, values);
+    out->k[2] = c;
+#else
     D h = in->k[0];
     D a = h * LVM_E(m, 0, 0), b = h * LVM_E(m, 1, 0), c = h * LVM_E(m, 2, 0);
     h = in->k[1];
@@ -410,6 +541,7 @@ static inline void lvm_vmult4(const ivp_transform_r_t *m, const ivp_vec3r_t *in,
     a += h * LVM_E(m, 0, 2); b += h * LVM_E(m, 1, 2); c += h * LVM_E(m, 2, 2);
     a += m->pos.k[0]; b += m->pos.k[1]; c += m->pos.k[2];
     out->k[0] = a; out->k[1] = b; out->k[2] = c;
+#endif
 }
 static inline void lvm_vmult4_fp(const ivp_transform_r_t *m, const ivp_vec3f_t *in, ivp_vec3r_t *out) {
     ivp_vec3r_t p; lvp_set_f(&p, in);
@@ -429,8 +561,21 @@ static inline void lvm_vimult4(const ivp_transform_r_t *m, const ivp_vec3r_t *in
     out->k[0] = x; out->k[1] = y; out->k[2] = z;
 }
 static inline void lvm_vimult4_pf(const ivp_transform_r_t *m, const ivp_vec3r_t *in, ivp_vec3f_t *out) {
+#if IVP_ARM64_NEON && defined(IVP_REAL_DOUBLE)
+    D a = in->k[0] - m->pos.k[0], b = in->k[1] - m->pos.k[1], c = in->k[2] - m->pos.k[2];
+    const float64x2_t row0 = { LVM_E(m, 0, 0), LVM_E(m, 0, 1) };
+    const float64x2_t row1 = { LVM_E(m, 1, 0), LVM_E(m, 1, 1) };
+    const float64x2_t row2 = { LVM_E(m, 2, 0), LVM_E(m, 2, 1) };
+    float64x2_t values = vmulq_n_f64(row0, a);
+    values = vaddq_f64(values, vmulq_n_f64(row1, b));
+    values = vaddq_f64(values, vmulq_n_f64(row2, c));
+    vst1_f32(out->k, vcvt_f32_f64(values));
+    D z = LVM_E(m, 0, 2) * a + LVM_E(m, 1, 2) * b + LVM_E(m, 2, 2) * c;
+    out->k[2] = (float)z;
+#else
     ivp_vec3r_t o; lvm_vimult4(m, in, &o);
     out->k[0] = (float)o.k[0]; out->k[1] = (float)o.k[1]; out->k[2] = (float)o.k[2];
+#endif
 }
 static inline void lvm_vimult4_ff(const ivp_transform_r_t *m, const ivp_vec3f_t *in, ivp_vec3f_t *out) {
     ivp_vec3r_t p; lvp_set_f(&p, in);
