@@ -6,6 +6,11 @@ import sys
 import unittest
 
 RUNNER = sys.argv.pop(1)
+EXPECT_SERIAL_ISLANDS = "--expect-serial-islands" in sys.argv
+if EXPECT_SERIAL_ISLANDS:
+    sys.argv.remove("--expect-serial-islands")
+if "--expect-parallel-islands" in sys.argv:
+    sys.argv.remove("--expect-parallel-islands")
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
@@ -118,10 +123,14 @@ class BenchmarkRunnerTests(unittest.TestCase):
                                      parallel["state_hash"])
                     self.assertEqual(serial["trajectory_hash"],
                                      parallel["trajectory_hash"])
-                    self.assertGreater(parallel["parallel"]["island_dispatches"], 0)
-                    self.assertGreater(parallel["parallel"]["island_tasks"], 0)
-                    self.assertEqual(parallel["parallel"]["max_workers_used"],
-                                     workers)
+                    if EXPECT_SERIAL_ISLANDS:
+                        self.assertEqual(parallel["parallel"]["island_dispatches"], 0)
+                        self.assertEqual(parallel["parallel"]["island_tasks"], 0)
+                    else:
+                        self.assertGreater(parallel["parallel"]["island_dispatches"], 0)
+                        self.assertGreater(parallel["parallel"]["island_tasks"], 0)
+                        self.assertEqual(parallel["parallel"]["max_workers_used"],
+                                         workers)
 
 
 if __name__ == "__main__":

@@ -708,7 +708,8 @@ if (IVP_BUILD_TESTS)
         if (IVP_BUILD_BENCHMARKS)
             add_test(NAME test_benchmark_runner
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py
-                             $<TARGET_FILE:ivp_benchmark>)
+                             $<TARGET_FILE:ivp_benchmark>
+                             $<IF:$<OR:$<CONFIG:Debug>,$<BOOL:${IVP_ENABLE_ASSERTS}>>,--expect-serial-islands,--expect-parallel-islands>)
             set_tests_properties(test_benchmark_runner PROPERTIES LABELS "unit;perf" TIMEOUT 30)
         endif ()
     endif ()
