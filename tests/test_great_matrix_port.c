@@ -343,6 +343,60 @@ static bool fp_rounding_fixture_end(const fp_rounding_fixture_t *fixture)
     return fesetenv(&fixture->saved) == 0;
 }
 
+IVP_TEST(vecfpu_add_multiple_row_matches_scalar_rounding)
+{
+    enum { capacity = 128 };
+    fp_rounding_fixture_t rounding;
+    IVP_ASSERT_TRUE(fp_rounding_fixture_begin(&rounding));
+    bool equal = true;
+    for (size_t mode_index = 0;
+         mode_index < sizeof(k_rounding_modes) / sizeof(k_rounding_modes[0]);
+         mode_index++) {
+        equal &= fp_rounding_fixture_select(mode_index);
+        for (int test_case = 0; equal && test_case < 32; test_case++) {
+            double source[capacity], expected[capacity], actual[capacity];
+            for (int i = 0; i < capacity; i++) {
+                source[i] = reduction_value((unsigned int)(i + test_case));
+                expected[i] = actual[i] =
+                    reduction_value((unsigned int)(3 * i + test_case + 5));
+            }
+            bool aligned = (test_case & 1) != 0;
+            int source_off = aligned ? 16 : 16 + ((test_case >> 1) & 1);
+            int target_off = aligned ? 48 : 48 + ((test_case >> 2) & 1);
+            int size = 1 + (test_case % 23);
+            double factor = reduction_value((unsigned int)(test_case + 7));
+
+            int scalar_source_off = source_off;
+            int scalar_target_off = target_off;
+            int scalar_size = size;
+#if IVP_GM_VECFPU_SIZE == 4
+            if (!aligned) {
+                int shift = scalar_source_off & 1;
+                scalar_target_off -= scalar_target_off & 1;
+                scalar_size += shift * 2;
+                scalar_source_off -= shift;
+            }
+#endif
+            int processed = ((scalar_size + IVP_GM_VECFPU_SIZE - 1) /
+                             IVP_GM_VECFPU_SIZE) * IVP_GM_VECFPU_SIZE;
+            feclearexcept(FE_ALL_EXCEPT);
+            for (int i = 0; i < processed; i++) {
+                double value = source[scalar_source_off + i] * factor;
+                value += expected[scalar_target_off + i];
+                expected[scalar_target_off + i] = value;
+            }
+            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
+            feclearexcept(FE_ALL_EXCEPT);
+            ivp_vecfpu_add_multiple_row(actual, target_off, source, source_off,
+                                        factor, size, aligned);
+            equal &= memcmp(actual, expected, sizeof(actual)) == 0;
+            equal &= fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+        }
+    }
+    IVP_ASSERT_TRUE(fp_rounding_fixture_end(&rounding));
+    IVP_ASSERT_TRUE(equal);
+}
+
 IVP_TEST(vecfpu_reduction_bitwise_scalar)
 {
     fp_rounding_fixture_t rounding;
@@ -610,6 +664,7 @@ int main(void)
     IVP_REGISTER(gmmz_invert_singular_faults);
     IVP_REGISTER(gmmz_lu_crout_solve_5x5);
     IVP_REGISTER(vecfpu_unaligned_window);
+    IVP_REGISTER(vecfpu_add_multiple_row_matches_scalar_rounding);
     IVP_REGISTER(vecfpu_reduction_bitwise_scalar);
     IVP_REGISTER(incr_lu_solve_bitwise_scalar);
     IVP_REGISTER(incr_lu_decompose_increment_decrement);
