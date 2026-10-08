@@ -333,12 +333,15 @@ IVP_TEST(broadphase_preserves_candidate_order)
 
     ivp_ov_tree_t serial_tree;
     ivp_ov_tree_t parallel_tree;
+    ivp_test_fault_allocator_t parallel_tree_allocator;
+    ivp_test_fault_allocator_init_tracked(&parallel_tree_allocator, NULL);
     memset(&serial_tree, 0, sizeof(serial_tree));
     memset(&parallel_tree, 0, sizeof(parallel_tree));
     bool serial_tree_initialized =
         ivp_ov_tree_init_with_allocator(&serial_tree, NULL) == IVP_OK;
     bool parallel_tree_initialized =
-        ivp_ov_tree_init_with_allocator(&parallel_tree, NULL) == IVP_OK;
+        ivp_ov_tree_init_with_allocator(
+            &parallel_tree, &parallel_tree_allocator.allocator) == IVP_OK;
     bool trees_initialized =
         serial_tree_initialized && parallel_tree_initialized;
     ivp_ov_element_t *serial_elements = (ivp_ov_element_t *)calloc(
@@ -382,6 +385,14 @@ IVP_TEST(broadphase_preserves_candidate_order)
             ok = false;
         }
     }
+    int expected_candidates = BROADPHASE_ELEMENT_COUNT + 1;
+    for (int i = 0; ok && i < BROADPHASE_ELEMENT_COUNT; i += 3) {
+        /* Keep these elements in the planned node but turn them into holes
+         * in each task's candidate segment. */
+        serial_elements[i].center.k[0] = 100.0f;
+        parallel_elements[i].center.k[0] = 100.0f;
+        expected_candidates--;
+    }
     if (ok) {
         serial_elements[BROADPHASE_ELEMENT_COUNT].real_object = serial_owner;
         parallel_elements[BROADPHASE_ELEMENT_COUNT].real_object =
@@ -394,10 +405,8 @@ IVP_TEST(broadphase_preserves_candidate_order)
                  &parallel_elements[BROADPHASE_ELEMENT_COUNT], 1.0, 1.0,
                  &parallel_candidates, NULL) == IVP_OK;
     }
-    ok = ok && ivp_pvec_len(&serial_candidates) ==
-                   BROADPHASE_ELEMENT_COUNT + 1 &&
-         ivp_pvec_len(&parallel_candidates) ==
-                   BROADPHASE_ELEMENT_COUNT + 1;
+    ok = ok && ivp_pvec_len(&serial_candidates) == expected_candidates &&
+         ivp_pvec_len(&parallel_candidates) == expected_candidates;
     for (int i = 0; ok && i < ivp_pvec_len(&serial_candidates); i++) {
         const ivp_ov_element_t *serial_element =
             (const ivp_ov_element_t *)ivp_pvec_at(&serial_candidates, i);
@@ -411,9 +420,9 @@ IVP_TEST(broadphase_preserves_candidate_order)
 
     ivp_parallel_stats_t stats;
     ivp_environment_get_parallel_stats(parallel, &stats);
-    ok = ok && stats.broadphase_dispatches == 2u &&
+    ok = ok && stats.broadphase_dispatches == 1u &&
          stats.broadphase_tasks >=
-             (uint64_t)(2 * INTERNAL_PARALLEL_WORKERS) &&
+             (uint64_t)INTERNAL_PARALLEL_WORKERS &&
          stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
     if (!ok) {
         fprintf(stderr,
@@ -430,6 +439,11 @@ IVP_TEST(broadphase_preserves_candidate_order)
     ivp_pvec_clear(&serial_candidates);
     if (parallel_tree_initialized) ivp_ov_tree_destroy(&parallel_tree);
     if (serial_tree_initialized) ivp_ov_tree_destroy(&serial_tree);
+    if (parallel_tree_allocator.live_bytes != 0u) {
+        fprintf(stderr, "broadphase: leaked %zu scratch/tree bytes\n",
+                parallel_tree_allocator.live_bytes);
+        ok = false;
+    }
     free(parallel_elements);
     free(serial_elements);
     ivp_environment_destroy(parallel);

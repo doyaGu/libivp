@@ -365,8 +365,8 @@ typedef struct ivp_ov_tree {
      * owned and reused by ivp_ov_tree.c. */
     void           *parallel_query_work;
     size_t          parallel_query_work_capacity;
-    size_t         *parallel_query_offsets;
-    size_t          parallel_query_offsets_capacity;
+    void           *parallel_query_results;
+    size_t          parallel_query_results_capacity;
 } ivp_ov_tree_t;
 
 void   ivp_ov_tree_init(ivp_ov_tree_t *t);

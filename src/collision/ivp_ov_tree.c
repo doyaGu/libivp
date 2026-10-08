@@ -367,13 +367,13 @@ void ivp_ov_tree_destroy(ivp_ov_tree_t *t)
                      sizeof(ivp_ov_query_work_t));
         t->parallel_query_work = NULL;
     }
-    if (t->parallel_query_offsets) {
-        ivp_free(t->allocator, t->parallel_query_offsets,
-                 t->parallel_query_offsets_capacity * sizeof(size_t));
-        t->parallel_query_offsets = NULL;
+    if (t->parallel_query_results) {
+        ivp_free(t->allocator, t->parallel_query_results,
+                 t->parallel_query_results_capacity);
+        t->parallel_query_results = NULL;
     }
     t->parallel_query_work_capacity = 0;
-    t->parallel_query_offsets_capacity = 0;
+    t->parallel_query_results_capacity = 0;
     t->hash_size = 0;
     t->node_count = 0;
 }
@@ -713,12 +713,34 @@ static bool ov_query_reserve_work(ivp_ov_tree_t *t, size_t needed)
     return true;
 }
 
-static bool ov_query_reserve_offsets(ivp_ov_tree_t *t, size_t needed)
+static bool ov_query_reserve_results(ivp_ov_tree_t *t, size_t work_count,
+                                     size_t element_count,
+                                     size_t **candidate_offsets_out,
+                                     void ***candidates_out)
 {
-    if (needed <= t->parallel_query_offsets_capacity) return true;
-    size_t capacity = t->parallel_query_offsets_capacity
-                          ? t->parallel_query_offsets_capacity
-                          : 17u;
+    /* Keep count/prefix data, candidate segment offsets, and the fixed
+     * per-element pointer slots in one aligned high-water allocation. */
+    if (work_count > (SIZE_MAX - 1u) / 2u) {
+        return false;
+    }
+    const size_t metadata_count = work_count * 2u + 1u;
+    if (metadata_count > SIZE_MAX / sizeof(size_t)) return false;
+    size_t candidate_offset = metadata_count * sizeof(size_t);
+    const size_t candidate_alignment = _Alignof(void *);
+    const size_t remainder = candidate_offset % candidate_alignment;
+    if (remainder != 0u) {
+        const size_t padding = candidate_alignment - remainder;
+        if (candidate_offset > SIZE_MAX - padding) return false;
+        candidate_offset += padding;
+    }
+    if (element_count > (SIZE_MAX - candidate_offset) / sizeof(void *)) {
+        return false;
+    }
+    const size_t needed =
+        candidate_offset + element_count * sizeof(void *);
+    size_t capacity = t->parallel_query_results_capacity
+                          ? t->parallel_query_results_capacity
+                          : 8192u * sizeof(void *);
     while (capacity < needed) {
         if (capacity > SIZE_MAX / 2u) {
             capacity = needed;
@@ -726,14 +748,19 @@ static bool ov_query_reserve_offsets(ivp_ov_tree_t *t, size_t needed)
         }
         capacity *= 2u;
     }
-    if (capacity > SIZE_MAX / sizeof(size_t)) return false;
-    size_t *offsets = (size_t *)ivp_realloc(
-        t->allocator, t->parallel_query_offsets,
-        t->parallel_query_offsets_capacity * sizeof(size_t),
-        capacity * sizeof(size_t));
-    if (!offsets) return false;
-    t->parallel_query_offsets = offsets;
-    t->parallel_query_offsets_capacity = capacity;
+    if (capacity != t->parallel_query_results_capacity) {
+        void *results = ivp_realloc(
+            t->allocator, t->parallel_query_results,
+            t->parallel_query_results_capacity, capacity);
+        if (!results) return false;
+        t->parallel_query_results = results;
+        t->parallel_query_results_capacity = capacity;
+    }
+    size_t *offsets = (size_t *)t->parallel_query_results;
+    *candidate_offsets_out =
+        offsets + work_count + 1u;
+    *candidates_out = (void **)(
+        (unsigned char *)t->parallel_query_results + candidate_offset);
     return true;
 }
 
@@ -830,7 +857,8 @@ typedef struct ivp_ov_query_context {
     const ivp_ov_element_t *element;
     const ivp_ov_query_work_t *work;
     size_t *offsets;
-    void **output;
+    const size_t *candidate_offsets;
+    void **candidates;
 } ivp_ov_query_context_t;
 
 static bool ov_query_elements_overlap(const ivp_ov_element_t *a,
@@ -841,37 +869,23 @@ static bool ov_query_elements_overlap(const ivp_ov_element_t *a,
     return qdist <= minimal_dist * minimal_dist;
 }
 
-static void ov_query_count_task(void *opaque, size_t task_index)
+static void ov_query_collect_task(void *opaque, size_t task_index)
 {
     ivp_ov_query_context_t *context = (ivp_ov_query_context_t *)opaque;
     const ivp_ov_query_work_t *work = &context->work[task_index];
     const int element_count = ivp_pvec_len(&work->node->elements);
+    void **candidates =
+        context->candidates + context->candidate_offsets[task_index];
     size_t matches = 0;
-    for (int offset = 0; offset < work->count; offset++) {
-        int index = element_count - 1 - (work->first + offset);
-        const ivp_ov_element_t *candidate =
-            (const ivp_ov_element_t *)ivp_pvec_at(&work->node->elements,
-                                                  index);
-        if (ov_query_elements_overlap(candidate, context->element)) matches++;
-    }
-    context->offsets[task_index + 1u] = matches;
-}
-
-static void ov_query_fill_task(void *opaque, size_t task_index)
-{
-    ivp_ov_query_context_t *context = (ivp_ov_query_context_t *)opaque;
-    const ivp_ov_query_work_t *work = &context->work[task_index];
-    const int element_count = ivp_pvec_len(&work->node->elements);
-    size_t output_index = context->offsets[task_index];
     for (int offset = 0; offset < work->count; offset++) {
         int index = element_count - 1 - (work->first + offset);
         ivp_ov_element_t *candidate =
             (ivp_ov_element_t *)ivp_pvec_at(&work->node->elements, index);
         if (ov_query_elements_overlap(candidate, context->element)) {
-            context->output[output_index++] = candidate;
+            candidates[matches++] = candidate;
         }
     }
-    IVP_ASSERT(output_index == context->offsets[task_index + 1u]);
+    context->offsets[task_index + 1u] = matches;
 }
 
 static ivp_ov_parallel_result_t collect_collision_partners_parallel(
@@ -889,24 +903,40 @@ static ivp_ov_parallel_result_t collect_collision_partners_parallel(
 
     size_t work_count = 0;
     size_t element_count = 0;
+    size_t *candidate_offsets = NULL;
+    void **candidates = NULL;
     if (!ov_query_plan_collision(t, t->root, new_node, &work_count,
                                  &element_count) ||
         work_count < (size_t)worker_count ||
         element_count < IVP_OV_QUERY_MIN_ELEMENTS ||
-        !ov_query_reserve_offsets(t, work_count + 1u)) {
+        !ov_query_reserve_results(t, work_count, element_count,
+                                  &candidate_offsets,
+                                  &candidates)) {
         return IVP_OV_PARALLEL_NOT_USED;
     }
 
-    size_t *offsets = t->parallel_query_offsets;
+    size_t *offsets = (size_t *)t->parallel_query_results;
+    const ivp_ov_query_work_t *work =
+        (const ivp_ov_query_work_t *)t->parallel_query_work;
+    size_t candidate_count = 0;
+    for (size_t i = 0; i < work_count; i++) {
+        candidate_offsets[i] = candidate_count;
+        candidate_count += (size_t)work[i].count;
+    }
+    IVP_ASSERT(candidate_count == element_count);
+    /* Each worker writes matches into its own worst-case segment.  Prefixing
+     * the per-segment counts and compacting in plan order below reproduces
+     * the serial DFS stream without evaluating any overlap twice. */
     offsets[0] = 0;
     ivp_ov_query_context_t context;
     context.element = element;
-    context.work = (const ivp_ov_query_work_t *)t->parallel_query_work;
+    context.work = work;
     context.offsets = offsets;
-    context.output = NULL;
+    context.candidate_offsets = candidate_offsets;
+    context.candidates = candidates;
     if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_BROADPHASE,
                               work_count, (size_t)worker_count,
-                              ov_query_count_task, &context)) {
+                              ov_query_collect_task, &context)) {
         return IVP_OV_PARALLEL_NOT_USED;
     }
     for (size_t i = 0; i < work_count; i++) {
@@ -925,13 +955,11 @@ static ivp_ov_parallel_result_t collect_collision_partners_parallel(
     if (!ivp_pvec_reserve(colliding_balls, new_count)) {
         return IVP_OV_PARALLEL_ERROR;
     }
-    context.output = colliding_balls->elems + old_count;
-    if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_BROADPHASE,
-                              work_count, (size_t)worker_count,
-                              ov_query_fill_task, &context)) {
-        for (size_t i = 0; i < work_count; i++) {
-            ov_query_fill_task(&context, i);
-        }
+    for (size_t i = 0; i < work_count; i++) {
+        const size_t count = offsets[i + 1u] - offsets[i];
+        memcpy(colliding_balls->elems + old_count + offsets[i],
+               context.candidates + candidate_offsets[i],
+               count * sizeof(void *));
     }
     colliding_balls->n = new_count;
     return IVP_OV_PARALLEL_OK;
