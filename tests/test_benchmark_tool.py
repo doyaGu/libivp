@@ -143,6 +143,15 @@ class BenchmarkToolTests(unittest.TestCase):
         with self.assertRaises(benchmark.BenchmarkError):
             benchmark.parse_jsonl('{"schema":"old"}\n', "fixture")
 
+    def test_reference_comparison_rejects_mixed_counters(self):
+        common = dict(kind="scenario", name="freefall", scale=0, median_ns=100)
+        for other in ("scenario-default-v1", "scenario-disabled-v1"):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "reference timing contract"):
+                benchmark.comparisons([
+                    dict(common, implementation="libivp", timing_contract="scenario-noop-v1"),
+                    dict(common, implementation="reference", timing_contract=other),
+                ])
+
     def test_compiler_metadata_reads_generated_cmake_file_and_actual_options(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

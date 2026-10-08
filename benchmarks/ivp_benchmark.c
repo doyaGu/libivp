@@ -81,6 +81,8 @@ typedef struct bench_measurement {
     int range_world_exceeded;
     int impacts;
     ivp_parallel_stats_t parallel;
+    ivp_parallel_stats_t parallel_before_operation;
+    int parallel_lifetime_max_workers_used;
     int valid;
     bench_verification_t verification;
     int64_t step_ns[MAX_STEPS];
@@ -198,8 +200,9 @@ static const ivp_performance_counter_vtable_t noop_counter_vtable = {
     counter_noop, counter_noop_phase, counter_noop, counter_destroy, counter_reset
 };
 
-static void begin_operation(ivp_environment_t *env)
+static void begin_operation(ivp_environment_t *env, bench_measurement_t *m)
 {
+    ivp_environment_get_parallel_stats(env, &m->parallel_before_operation);
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     ivp_minlist_diagnostics_reset();
     ivp_recheck_diagnostics_reset();
@@ -409,6 +412,15 @@ static int object_finite(const ivp_object_t *obj)
 static void collect_phases(ivp_environment_t *env, bench_measurement_t *m)
 {
     ivp_environment_get_parallel_stats(env, &m->parallel);
+    m->parallel_lifetime_max_workers_used = m->parallel.max_workers_used;
+    /* Only additive counters admit interval subtraction. Keep the lifetime
+     * high-water mark separate rather than pretending it is an interval max. */
+    m->parallel.island_dispatches -= m->parallel_before_operation.island_dispatches;
+    m->parallel.island_tasks -= m->parallel_before_operation.island_tasks;
+    m->parallel.broadphase_dispatches -= m->parallel_before_operation.broadphase_dispatches;
+    m->parallel.broadphase_tasks -= m->parallel_before_operation.broadphase_tasks;
+    m->parallel.solver_dispatches -= m->parallel_before_operation.solver_dispatches;
+    m->parallel.solver_tasks -= m->parallel_before_operation.solver_tasks;
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     m->minlist = ivp_minlist_diagnostics_get();
     m->broadphase = ivp_recheck_diagnostics_get();
@@ -471,7 +483,7 @@ static int run_active(const bench_config_t *cfg, const ivp_allocator_t *allocato
         o->physical_core->delta_world_f_core_psis = o->physical_core->speed;
         probe = o;
     }
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -516,7 +528,7 @@ static int run_contact(const bench_config_t *cfg, const ivp_allocator_t *allocat
                           (ivp_real_t)p[0], (ivp_real_t)p[1], (ivp_real_t)p[2]);
         if (!probe) { ivp_environment_destroy(env); ivp_compact_surface_free(allocator, surface); return 0; }
     }
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -601,7 +613,7 @@ static int run_dense_contacts(const bench_config_t *cfg,
     }
     dense_contact_driver_t driver = {balls, inward_speeds, cfg->scale};
     drive_dense_contacts(&driver);
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate_driven(env, cfg->steps, cfg, m, instrumented,
                           drive_dense_contacts, &driver);
@@ -656,7 +668,7 @@ static int run_constraint(const bench_config_t *cfg, const ivp_allocator_t *allo
     }
     m->verification.constraints = constraints;
     m->verification.constraint_count = cfg->scale;
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -720,7 +732,7 @@ static int run_island_constraints(const bench_config_t *cfg,
     }
     m->verification.constraints = constraints;
     m->verification.constraint_count = cfg->scale;
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -838,7 +850,7 @@ static int run_heterogeneous_constraint_islands(
 
     m->verification.constraints = constraints;
     m->verification.constraint_count = cfg->scale;
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -887,7 +899,7 @@ static int run_impacts(const bench_config_t *cfg, const ivp_allocator_t *allocat
         b->physical_core->delta_world_f_core_psis = b->physical_core->speed;
         probe = b;
     }
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -912,7 +924,7 @@ static int run_churn(const bench_config_t *cfg, const ivp_allocator_t *allocator
     if (!objects) { ivp_environment_destroy(env); return 0; }
     const int cycles = 16;
     uint64_t state_hash = UINT64_C(1469598103934665603);
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     for (int cycle = 0; cycle < cycles; ++cycle) {
         for (int i = 0; i < cfg->scale; ++i) {
@@ -972,7 +984,7 @@ static int run_sleeping(const bench_config_t *cfg, const ivp_allocator_t *alloca
         if (!probe) { ivp_environment_destroy(env); return 0; }
     }
     if (!bench_sleep_warmup(env)) { ivp_environment_destroy(env); return 0; }
-    begin_operation(env);
+    begin_operation(env, m);
     int64_t start = now_ns();
     bench_simulate(env, cfg->steps, cfg, m, instrumented);
     m->operation_ns = now_ns() - start;
@@ -1320,7 +1332,13 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 "\"statistics\":{\"mindists_generated\":%d,\"mindists_deleted\":%d,"
                 "\"range_intra_exceeded\":%d,\"range_world_exceeded\":%d,"
                 "\"impacts\":%d},"
+                "\"parallel_scope\":\"operation-v1\","
                 "\"parallel\":{\"island_dispatches\":%llu,"
+                "\"island_tasks\":%llu,\"broadphase_dispatches\":%llu,"
+                "\"broadphase_tasks\":%llu,\"solver_dispatches\":%llu,"
+                "\"solver_tasks\":%llu},"
+                "\"parallel_lifetime_max_workers_used\":%d,"
+                "\"parallel_before_operation\":{\"island_dispatches\":%llu,"
                 "\"island_tasks\":%llu,\"broadphase_dispatches\":%llu,"
                 "\"broadphase_tasks\":%llu,\"solver_dispatches\":%llu,"
                 "\"solver_tasks\":%llu,\"max_workers_used\":%d},"
@@ -1340,7 +1358,14 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                 (unsigned long long)diagnostic.parallel.broadphase_tasks,
                 (unsigned long long)diagnostic.parallel.solver_dispatches,
                 (unsigned long long)diagnostic.parallel.solver_tasks,
-                diagnostic.parallel.max_workers_used);
+                diagnostic.parallel_lifetime_max_workers_used,
+                (unsigned long long)diagnostic.parallel_before_operation.island_dispatches,
+                (unsigned long long)diagnostic.parallel_before_operation.island_tasks,
+                (unsigned long long)diagnostic.parallel_before_operation.broadphase_dispatches,
+                (unsigned long long)diagnostic.parallel_before_operation.broadphase_tasks,
+                (unsigned long long)diagnostic.parallel_before_operation.solver_dispatches,
+                (unsigned long long)diagnostic.parallel_before_operation.solver_tasks,
+                diagnostic.parallel_before_operation.max_workers_used);
         for (int i = 0; i < PHASE_COUNT; ++i) {
             if (i) fputc(',', out);
             fprintf(out, "\"%s\":%lld", phase_name(i),

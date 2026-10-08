@@ -653,8 +653,10 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_stability_benchmarks tests/test_stability_benchmarks.c)
 
     if (IVP_BUILD_BENCHMARKS)
+        # A smoke check, not the long-sample performance comparison. An idle
+        # world's creation/warmup can dominate its now near-empty PSI loop.
         add_test(NAME benchmark_quick
-                 COMMAND ivp_benchmark --profile quick --check)
+                 COMMAND ivp_benchmark --profile quick --check --samples 3 --min-sample-ms 5)
         set_tests_properties(benchmark_quick PROPERTIES TIMEOUT 180 LABELS "perf")
     endif ()
 
@@ -705,6 +707,12 @@ if (IVP_BUILD_TESTS)
         add_test(NAME test_profile_benchmark
                  COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_profile_benchmark.py)
         set_tests_properties(test_profile_benchmark PROPERTIES LABELS "unit;perf")
+        if (IVP_ENABLE_SCENARIO_TESTS)
+            add_test(NAME test_scenario_counter
+                     COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_scenario_counter.py
+                             $<TARGET_FILE:test_scenarios> ${IVP_REPO_ROOT}/tools/scenarios.txt)
+            set_tests_properties(test_scenario_counter PROPERTIES LABELS "unit;perf" TIMEOUT 120)
+        endif ()
         if (IVP_BUILD_BENCHMARKS)
             add_test(NAME test_benchmark_runner
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py

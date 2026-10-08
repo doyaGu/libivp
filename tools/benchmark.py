@@ -280,9 +280,12 @@ def comparisons(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
         reference = indexed.get(("scenario", "reference", item["name"], 0))
         if not reference:
             continue
+        if item.get("timing_contract", "native-v1") != reference.get("timing_contract", "native-v1"):
+            raise BenchmarkError(f"reference timing contract differs: {item['name']}")
         ratio = item["median_ns"] / reference["median_ns"] if reference["median_ns"] else None
         output.append({
             "scenario": item["name"],
+            "timing_contract": item.get("timing_contract", "native-v1"),
             "libivp_median_ns_per_psi": item["median_ns"],
             "reference_median_ns_per_psi": reference["median_ns"],
             "libivp_to_reference_ratio": ratio,
@@ -475,6 +478,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scale", type=int)
     parser.add_argument("--workers", type=int, default=1,
                         help="total execution width for each libivp world")
+    parser.add_argument("--scenario-counter", choices=("default", "noop", "disabled"),
+                        default="default" if sys.platform == "win32" else "noop",
+                        help="scenario instrumentation; default preserves each product's defaults")
     args = parser.parse_args(argv)
     if args.runs <= 0:
         parser.error("--runs must be positive")
@@ -486,6 +492,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--scale must be positive and requires exactly one native --case")
     if args.native_only and args.compare_reference:
         parser.error("--native-only cannot be used with --compare-reference")
+    if args.compare_reference and (args.scenario_counter == "disabled" or
+                                  (sys.platform == "win32" and args.scenario_counter == "noop")):
+        parser.error("the reference runner cannot select this counter; use --scenario-counter default")
 
     root = Path(__file__).resolve().parents[1]
     build_root = root / "build" / "benchmark"
@@ -558,25 +567,31 @@ def main(argv: list[str] | None = None) -> int:
         chosen_names.intersection_update(args.cases)
     chosen = [item for item in all_scenarios if item[0] in chosen_names]
     for run_index in range(args.runs):
-        for name, delta, steps in chosen:
+        for scenario_index, (name, delta, steps) in enumerate(chosen):
             command = [
                 "--scenario", name, "--dt", delta, "--steps", str(steps),
                 "--benchmark", "--samples", str(samples), "--warmup", "1",
                 "--min-sample-ms", str(minimum_ms),
             ]
-            scenario_records = parse_jsonl(
-                run([str(scenario_runner), *command], cwd=root, capture=True), f"libivp:{name}"
-            )
-            for record in scenario_records:
-                record["run"] = run_index
-            records.extend(scenario_records)
+            runners = [("libivp", scenario_runner,
+                        [*command, "--counter", args.scenario_counter])]
             if args.compare_reference:
-                reference_records = parse_jsonl(
-                    run([str(reference_runner), *command], cwd=root, capture=True), f"reference:{name}"
+                runners.append(("reference", reference_runner, command))
+            if (run_index + scenario_index) % 2:
+                runners.reverse()
+            for implementation, runner, arguments in runners:
+                scenario_records = parse_jsonl(
+                    run([str(runner), *arguments], cwd=root, capture=True), f"{implementation}:{name}"
                 )
-                for record in reference_records:
+                for record in scenario_records:
                     record["run"] = run_index
-                records.extend(reference_records)
+                    # The reference's non-Windows default is a no-clock
+                    # counter (ivp_performancecounter.cxx). No reference code
+                    # or flags are modified to normalize this comparison.
+                    if implementation == "reference":
+                        record["counter_mode"] = "platform-default"
+                        record["timing_contract"] = f"scenario-{args.scenario_counter}-v1"
+                records.extend(scenario_records)
 
     if not records:
         raise BenchmarkError("no native case or scenario matched --case")
@@ -594,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         "build_type": compiler.get("cmake_build_type", "unknown"),
         "ivp_real_double": compiler.get("ivp_real_double") == "ON",
         "parallel_workers": args.workers,
+        "scenario_counter": args.scenario_counter,
     }
     if args.compare_reference:
         metadata["reference"] = git_info(reference_root)

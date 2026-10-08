@@ -21,6 +21,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
+#include <ivp/diagnostics/ivp_performance_counter.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
@@ -84,6 +85,40 @@ static int64_t benchmark_now_ns(void)
 
 static int64_t g_benchmark_simulate_ns;
 static int g_benchmark_enabled;
+
+/* Keep the parity runner's default unchanged; benchmark callers can select an
+ * explicit instrumentation contract without changing the library defaults. */
+static const char *g_counter_mode = "default";
+static void scenario_counter_noop(ivp_performance_counter_t *pc) { (void)pc; }
+static void scenario_counter_phase(ivp_performance_counter_t *pc, ivp_performance_element_t el)
+{ (void)pc; (void)el; }
+static void scenario_counter_reset(ivp_performance_counter_t *pc, ivp_time_t time)
+{ (void)pc; (void)time; }
+static void scenario_counter_destroy(ivp_performance_counter_t *pc, ivp_environment_t *env)
+{
+    (void)env;
+    ivp_performance_counter_simple_destroy((ivp_performance_counter_simple_t *)pc);
+}
+static const ivp_performance_counter_vtable_t scenario_noop_vtable = {
+    scenario_counter_noop, scenario_counter_phase, scenario_counter_noop,
+    scenario_counter_destroy, scenario_counter_reset
+};
+
+static ivp_environment_t *scenario_create_environment(const ivp_environment_config_t *original)
+{
+    ivp_environment_config_t cfg = *original;
+    if (!strcmp(g_counter_mode, "disabled")) cfg.disable_performance_counter = true;
+    ivp_performance_counter_simple_t *pc = NULL;
+    if (!strcmp(g_counter_mode, "noop")) {
+        pc = ivp_performance_counter_simple_create(cfg.allocator);
+        if (!pc) return NULL;
+        pc->base.vt = &scenario_noop_vtable;
+        cfg.performance_counter = &pc->base;
+    }
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    if (!env && pc) ivp_performance_counter_simple_destroy(pc);
+    return env;
+}
 
 /* ── Scenario IDs (match reference runner) ──────────────────────────────── */
 enum {
@@ -438,7 +473,7 @@ static int run_freefall(FILE *out, int steps, double dt, invariant_result_t *inv
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_object_template_t tmpl;
@@ -532,7 +567,7 @@ static int run_two_balls(FILE *out, int steps, double dt, invariant_result_t *in
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_object_template_t tmpl;
@@ -627,7 +662,7 @@ static int run_slope_friction(FILE *out, int steps, double dt, invariant_result_
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     /* --- Build ramp surface: box 5×0.25×2.5, rotated 30° around Z --- */
@@ -745,7 +780,7 @@ static int run_springs(FILE *out, int steps, double dt, invariant_result_t *inv)
     /* Reduced gravity for springs scenario */
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(3.0), IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     /* --- Ground: static box 15×0.5×15 --- */
@@ -1040,7 +1075,7 @@ static int run_rope(FILE *out, int steps, double dt, invariant_result_t *inv)
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     /* --- Ground: static box 12×0.5×12 at (0,2,0) --- */
@@ -1234,7 +1269,7 @@ static int run_motor_common(FILE *out, int steps, double dt, invariant_result_t 
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     /* --- Ground: static box 15×0.5×15 --- */
@@ -1470,7 +1505,7 @@ static int run_buoyancy(FILE *out, int steps, double dt, invariant_result_t *inv
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
 
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     /* --- Ground: static box 15×0.5×15 at (0,5,0) --- */
@@ -1814,7 +1849,7 @@ static int run_cubes(FILE *out, int steps, double dt, invariant_result_t *inv)
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -1901,7 +1936,7 @@ static int run_force_actuator(FILE *out, int steps, double dt, invariant_result_
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -1982,7 +2017,7 @@ static int run_forcefield(FILE *out, int steps, double dt, invariant_result_t *i
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -2065,7 +2100,7 @@ static int run_stiff_spring(FILE *out, int steps, double dt, invariant_result_t 
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *anchor_surf[2] = { NULL, NULL };
@@ -2175,7 +2210,7 @@ static int run_collision_filter(FILE *out, int steps, double dt, invariant_resul
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = ref_box_surface(20.0f, 0.5f, 20.0f);
@@ -2258,7 +2293,7 @@ static int run_motion_controller(FILE *out, int steps, double dt, invariant_resu
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -2349,7 +2384,7 @@ static int run_phantom(FILE *out, int steps, double dt, invariant_result_t *inv)
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -2454,7 +2489,7 @@ static int run_vehicle(FILE *out, int steps, double dt, invariant_result_t *inv)
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -2595,7 +2630,7 @@ static int run_car_real_wheels(FILE *out, int steps, double dt, invariant_result
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    ivp_environment_t *env = ivp_environment_create(&cfg);
+    ivp_environment_t *env = scenario_create_environment(&cfg);
     if (!env) return 1;
 
     ivp_compact_surface_t *ground_surf = NULL;
@@ -2767,7 +2802,7 @@ static bool geo_scene_init(geo_scene_t *sc, double dt)
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    sc->env = ivp_environment_create(&cfg);
+    sc->env = scenario_create_environment(&cfg);
     return sc->env != NULL;
 }
 
@@ -3812,7 +3847,7 @@ static bool c2_scene_init(c2_scene_t *sc, double dt)
     ivp_environment_config_init(&cfg);
     cfg.delta_psi_time = (ivp_real_t)dt;
     ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), SCENARIO_REF_GRAVITY, IVP_REAL(0.0));
-    sc->env = ivp_environment_create(&cfg);
+    sc->env = scenario_create_environment(&cfg);
     return sc->env != NULL;
 }
 
@@ -6243,6 +6278,7 @@ static void print_usage(const char *exe)
             "spawn_remove|long_range|universe_evict|merge_objects|object_attach|merge_buoyancy|anchor_follow "
             "[--steps N] [--dt seconds] [--output file.jsonl] [--check-invariants] [--assert-continue] "
             "[--benchmark [--samples N] [--warmup N] [--min-sample-ms MS]]\n"
+            "[--counter default|noop|disabled]\n"
             "Outputs JSONL snapshots, or benchmark records in benchmark mode.\n"
             "With --check-invariants, runs physics correctness checks after simulation.\n", exe);
 }
@@ -6308,6 +6344,15 @@ int main(int argc, char **argv)
         }
         if (!strcmp(argv[i], "--benchmark")) {
             benchmark = 1;
+            continue;
+        }
+        if (!strcmp(argv[i], "--counter")) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing --counter mode\n"); return 2; }
+            g_counter_mode = argv[++i];
+            if (strcmp(g_counter_mode, "default") && strcmp(g_counter_mode, "noop") &&
+                strcmp(g_counter_mode, "disabled")) {
+                fprintf(stderr, "Invalid --counter mode\n"); return 2;
+            }
             continue;
         }
         if (!strcmp(argv[i], "--samples")) {
@@ -6438,9 +6483,11 @@ int main(int argc, char **argv)
             fprintf(stdout,
                     "{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"scenario\","
                     "\"implementation\":\"libivp\",\"scenario\":\"%s\","
+                    "\"counter_mode\":\"%s\",\"timing_contract\":\"scenario-%s-v1\","
                     "\"sample\":%d,\"worlds\":%d,\"steps_per_world\":%d,"
                     "\"dt\":%.17g,\"simulate_ns\":%lld,\"total_ns\":%lld}\n",
-                    scenario_name_from_id(scenario), sample, worlds, steps, dt,
+                    scenario_name_from_id(scenario), g_counter_mode, g_counter_mode,
+                    sample, worlds, steps, dt,
                     (long long)aggregate_simulate_ns, (long long)aggregate_total_ns);
         }
     }
