@@ -457,7 +457,6 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_hud_atlas.c
         src/render/ivp_render_core.c
         src/render/ivp_render_pick.c
-        src/render/ivp_render_stats.c
         src/render/ivp_render_frustum.c
         src/render/ivp_render_solid.c
         src/render/ivp_render_capture.c

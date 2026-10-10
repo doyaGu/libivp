@@ -1,1 +1,0 @@
-/* ivp_render_stats.c -- Empty: stats are inlined into ivp_render_core.c */
