@@ -24,6 +24,7 @@
 #include <ivp/geometry/ivp_compact_ledge_geom.h>
 #include <ivp/geometry/ivp_ledgetree.h>
 #include <ivp/containers/ivp_hashmap.h>
+#include <ivp/utility/ivp_hash.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
 
@@ -556,18 +557,6 @@ ivp_compact_surface_t *ivp_ledge_soup_compile(ivp_ledge_soup_t *soup)
     return ivp_ledge_soup_compile_ex(soup, NULL);
 }
 
-static uint32_t ls_hash_point(const void *key, size_t len)
-{
-    /* FNV-1a over the 12 key bytes */
-    const unsigned char *b = (const unsigned char *)key;
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        h ^= b[i];
-        h *= 16777619u;
-    }
-    return h;
-}
-
 ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
                                                  const ivp_ledge_soup_template_t *templ_in)
 {
@@ -669,7 +658,7 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
     if (n_ledges_compiled > 1 && templ.merge_points != IVP_SLMP_NO_MERGE) {
         int hash_cap = 16;
         while (hash_cap < n_tri_compiled * 2) hash_cap <<= 1;
-        if (!ivp_ok(ivp_hashmap_init(&pm.map, alloc, hash_cap, ls_hash_point, ivp_eq_memcmp,
+        if (!ivp_ok(ivp_hashmap_init(&pm.map, alloc, hash_cap, ivp_hash_fnv1a, ivp_eq_memcmp,
                                      3 * sizeof(float)))) {
             goto cleanup;
         }

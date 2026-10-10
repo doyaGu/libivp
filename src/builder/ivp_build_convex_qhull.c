@@ -35,6 +35,7 @@
 #include <ivp/base/ivp_message.h>
 #include <ivp/containers/ivp_hashmap.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
+#include <ivp/utility/ivp_hash.h>
 
 #include "ivp_build_polygon_convex_internal.h"
 #include "geometry/ivp_check_ledge_debug.h"
@@ -46,18 +47,6 @@
 #include <string.h>
 
 #define PS_MIN_EDGE_LEN 0.01f /* P_MIN_EDGE_LEN */
-
-/* IVP_I_Point_VHash: points are equal iff their 3 doubles are bitwise equal */
-static uint32_t ps_hash_point(const void *key, size_t len)
-{
-    const unsigned char *b = (const unsigned char *)key;
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        h ^= b[i];
-        h *= 16777619u;
-    }
-    return h;
-}
 
 /* ── try_to_build_convex_ledge_from_qhull_result ───────────────────────── */
 
@@ -303,7 +292,7 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         ivp_hashmap_t map;
         int cap = 16;
         while (cap < 2 * n_in) cap <<= 1;
-        if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, ps_hash_point, ivp_eq_memcmp,
+        if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, ivp_hash_fnv1a, ivp_eq_memcmp,
                                      3 * sizeof(double)))) {
             goto cleanup;
         }

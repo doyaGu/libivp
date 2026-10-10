@@ -28,6 +28,9 @@ static inline ivp_pair_key_t ivp_pair_key(uint32_t x, uint32_t y) {
 /* CRC-based hash (matching original IVP_Hash_crctab / IVP_VHash behavior). */
 uint32_t ivp_hash_crc(const void *key, size_t key_size);
 
+/* FNV-1a hash for arbitrary byte keys. */
+uint32_t ivp_hash_fnv1a(const void *key, size_t key_size);
+
 /* Fast hash for integer keys. */
 uint32_t ivp_hash_u32(const void *key, size_t key_size);
 uint32_t ivp_hash_u64(const void *key, size_t key_size);

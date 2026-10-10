@@ -61,6 +61,16 @@ uint32_t ivp_hash_crc(const void *key, size_t key_size) {
     return crc;
 }
 
+uint32_t ivp_hash_fnv1a(const void *key, size_t key_size) {
+    const uint8_t *bytes = (const uint8_t *)key;
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < key_size; i++) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 uint32_t ivp_hash_u32(const void *key, size_t key_size) {
     IVP_UNUSED(key_size);
     uint32_t k = *(const uint32_t *)key;

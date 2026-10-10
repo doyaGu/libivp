@@ -58,6 +58,16 @@ IVP_TEST(pvec_uses_supplied_allocator) {
  * Hashmap tests
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+IVP_TEST(hash_fnv1a_known_values) {
+    static const char empty[] = "";
+    static const char a[] = "a";
+    static const char foobar[] = "foobar";
+
+    IVP_ASSERT_EQ(ivp_hash_fnv1a(empty, 0), UINT32_C(0x811c9dc5));
+    IVP_ASSERT_EQ(ivp_hash_fnv1a(a, sizeof(a) - 1), UINT32_C(0xe40c292c));
+    IVP_ASSERT_EQ(ivp_hash_fnv1a(foobar, sizeof(foobar) - 1), UINT32_C(0xbf9cf968));
+}
+
 IVP_TEST(hashmap_put_get) {
     ivp_hashmap_t map;
     ivp_result_t r = ivp_hashmap_init(&map, NULL, 16,
@@ -411,6 +421,7 @@ int main(void) {
     IVP_REGISTER(pvec_uses_supplied_allocator);
 
     /* Hashmap */
+    IVP_REGISTER(hash_fnv1a_known_values);
     IVP_REGISTER(hashmap_put_get);
     IVP_REGISTER(hashmap_update);
     IVP_REGISTER(hashmap_remove);

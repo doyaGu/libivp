@@ -8,19 +8,9 @@
 #include <ivp/builder/ivp_build_ledge_soup.h>
 #include <ivp/geometry/ivp_compact_ledge.h>
 #include <ivp/containers/ivp_hashmap.h>
+#include <ivp/utility/ivp_hash.h>
 #include <ivp/base/ivp_assert.h>
 #include <string.h>
-
-static uint32_t cr_hash(const void *key, size_t len)
-{
-    const unsigned char *b = (const unsigned char *)key;
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        h ^= b[i];
-        h *= 16777619u;
-    }
-    return h;
-}
 
 /* Collect distinct points (bitwise float identity) of all ledges in the
  * reference visiting order: ledges from last to first, triangles forward,
@@ -41,7 +31,8 @@ static int cr_collect_points(const ivp_allocator_t *alloc,
     ivp_hashmap_t map;
     int cap = 16;
     while (cap < 2 * total) cap <<= 1;
-    if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, cr_hash, ivp_eq_memcmp, 3 * sizeof(float)))) {
+    if (!ivp_ok(ivp_hashmap_init(&map, alloc, cap, ivp_hash_fnv1a,
+                                 ivp_eq_memcmp, 3 * sizeof(float)))) {
         ivp_free(alloc, pts, sz);
         return -1;
     }
@@ -106,9 +97,12 @@ void ivp_compact_recursive_set_virtual_flags(ivp_compact_ledge_t *hull,
     ivp_hashmap_t pmap, tmap, emap;
     bool p_ok = false, t_ok = false, e_ok = false;
     if (!tkeys || !ekeys) goto done;
-    p_ok = ivp_ok(ivp_hashmap_init(&pmap, alloc, cap, cr_hash, ivp_eq_memcmp, 3 * sizeof(float)));
-    t_ok = ivp_ok(ivp_hashmap_init(&tmap, alloc, cap, cr_hash, ivp_eq_memcmp, sizeof(cr_tri_key_t)));
-    e_ok = ivp_ok(ivp_hashmap_init(&emap, alloc, cap, cr_hash, ivp_eq_memcmp, sizeof(cr_edge_key_t)));
+    p_ok = ivp_ok(ivp_hashmap_init(&pmap, alloc, cap, ivp_hash_fnv1a,
+                                   ivp_eq_memcmp, 3 * sizeof(float)));
+    t_ok = ivp_ok(ivp_hashmap_init(&tmap, alloc, cap, ivp_hash_fnv1a,
+                                   ivp_eq_memcmp, sizeof(cr_tri_key_t)));
+    e_ok = ivp_ok(ivp_hashmap_init(&emap, alloc, cap, ivp_hash_fnv1a,
+                                   ivp_eq_memcmp, sizeof(cr_edge_key_t)));
     if (!p_ok || !t_ok || !e_ok) goto done;
 
     int n_points = 0, n_tkeys = 0, n_ekeys = 0;
