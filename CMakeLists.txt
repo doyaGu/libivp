@@ -117,6 +117,7 @@ set(IVP_BASE_SOURCES
         src/base/ivp_arena.c
         src/base/ivp_message.c
         src/base/ivp_worker_runtime.c
+        src/base/ivp_worker_group.c
         src/base/ivp_task_pool.c
 )
 

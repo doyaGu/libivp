@@ -1,22 +1,14 @@
 /* ivp_world_scheduler.c -- parallel outer loop over independent environments. */
 #include <ivp/dynamics/ivp_world_scheduler.h>
 
+#include "base/ivp_worker_group.h"
 #include "dynamics/ivp_environment_parallel.h"
 #include "dynamics/ivp_world_scheduler_internal.h"
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
-
-#if defined(_WIN32)
-#include <windows.h>
-typedef CRITICAL_SECTION ivp_worker_mutex_t;
-typedef CONDITION_VARIABLE ivp_worker_cond_t;
-#else
-#include <pthread.h>
-typedef pthread_mutex_t ivp_worker_mutex_t;
-typedef pthread_cond_t ivp_worker_cond_t;
-#endif
 
 typedef enum ivp_world_job_kind {
     IVP_WORLD_JOB_ONE_PSI,
@@ -25,27 +17,9 @@ typedef enum ivp_world_job_kind {
 
 struct ivp_world_scheduler {
     ivp_allocator_t allocator;
-    const ivp_worker_runtime_t *runtime;
-    ivp_worker_thread_t *threads;
+    ivp_worker_group_t *workers;
     int worker_count;
-
-    ivp_worker_mutex_t mutex;
-    ivp_worker_cond_t work_ready;
-    ivp_worker_cond_t state_changed;
-    bool sync_initialized;
-    bool stopping;
-    bool running;
-    uint64_t generation;
-
-    ivp_environment_t *const *environments;
-    size_t environment_count;
-    size_t next_environment;
-    int setup_ready_count;
-    int job_done_count;
-    bool setup_failed;
-    fenv_t floating_point_environment;
-    ivp_world_job_kind_t job_kind;
-    ivp_real_t elapsed_time;
+    atomic_bool dispatching;
 
     /* Reused open-addressing table for duplicate detection. */
     ivp_environment_t **seen_environments;
@@ -63,116 +37,24 @@ static void scheduler_run_environment(ivp_world_job_kind_t kind,
     }
 }
 
-#if defined(_WIN32)
-static bool sync_init(ivp_world_scheduler_t *s)
-{
-    InitializeCriticalSection(&s->mutex);
-    InitializeConditionVariable(&s->work_ready);
-    InitializeConditionVariable(&s->state_changed);
-    return true;
-}
-static void sync_destroy(ivp_world_scheduler_t *s) { DeleteCriticalSection(&s->mutex); }
-static void sync_lock(ivp_world_scheduler_t *s) { EnterCriticalSection(&s->mutex); }
-static void sync_unlock(ivp_world_scheduler_t *s) { LeaveCriticalSection(&s->mutex); }
-static void sync_wait(ivp_worker_cond_t *cond, ivp_world_scheduler_t *s)
-{
-    (void)SleepConditionVariableCS(cond, &s->mutex, INFINITE);
-}
-static void sync_broadcast(ivp_worker_cond_t *cond) { WakeAllConditionVariable(cond); }
-#else
-static bool sync_init(ivp_world_scheduler_t *s)
-{
-    if (pthread_mutex_init(&s->mutex, NULL) != 0) return false;
-    if (pthread_cond_init(&s->work_ready, NULL) != 0) {
-        (void)pthread_mutex_destroy(&s->mutex);
-        return false;
-    }
-    if (pthread_cond_init(&s->state_changed, NULL) != 0) {
-        (void)pthread_cond_destroy(&s->work_ready);
-        (void)pthread_mutex_destroy(&s->mutex);
-        return false;
-    }
-    return true;
-}
-static void sync_destroy(ivp_world_scheduler_t *s)
-{
-    (void)pthread_cond_destroy(&s->state_changed);
-    (void)pthread_cond_destroy(&s->work_ready);
-    (void)pthread_mutex_destroy(&s->mutex);
-}
-static void sync_lock(ivp_world_scheduler_t *s) { (void)pthread_mutex_lock(&s->mutex); }
-static void sync_unlock(ivp_world_scheduler_t *s) { (void)pthread_mutex_unlock(&s->mutex); }
-static void sync_wait(ivp_worker_cond_t *cond, ivp_world_scheduler_t *s)
-{
-    (void)pthread_cond_wait(cond, &s->mutex);
-}
-static void sync_broadcast(ivp_worker_cond_t *cond) { (void)pthread_cond_broadcast(cond); }
-#endif
+typedef struct ivp_world_job {
+    ivp_environment_t *const *environments;
+    size_t environment_count;
+    atomic_size_t next_environment;
+    ivp_world_job_kind_t kind;
+    ivp_real_t elapsed_time;
+} ivp_world_job_t;
 
-static void scheduler_worker_loop(ivp_world_scheduler_t *s)
+static void scheduler_worker_run(void *opaque, int lane_index)
 {
-    uint64_t observed_generation = 0;
-    sync_lock(s);
+    (void)lane_index;
+    ivp_world_job_t *job = (ivp_world_job_t *)opaque;
     for (;;) {
-        while (!s->stopping && observed_generation == s->generation) {
-            sync_wait(&s->work_ready, s);
-        }
-        if (s->stopping) break;
-        observed_generation = s->generation;
-
-        const fenv_t floating_point_environment =
-            s->floating_point_environment;
-        sync_unlock(s);
-        bool setup_ok = s->runtime->floating_point_apply(
-            s->runtime->context, &floating_point_environment);
-        sync_lock(s);
-        /* No world may advance until every scheduler worker has adopted the
-         * floating-point environment for this generation. */
-        if (!setup_ok) s->setup_failed = true;
-        s->setup_ready_count++;
-        if (s->setup_ready_count == s->worker_count) {
-            sync_broadcast(&s->state_changed);
-        } else {
-            while (!s->stopping &&
-                   s->setup_ready_count != s->worker_count) {
-                sync_wait(&s->state_changed, s);
-            }
-        }
-        if (s->stopping) break;
-
-        if (!s->setup_failed) {
-            for (;;) {
-                if (s->next_environment >= s->environment_count) break;
-                size_t index = s->next_environment++;
-                ivp_environment_t *env = s->environments[index];
-                ivp_world_job_kind_t kind = s->job_kind;
-                ivp_real_t elapsed_time = s->elapsed_time;
-                sync_unlock(s);
-
-                scheduler_run_environment(kind, env, elapsed_time);
-
-                sync_lock(s);
-            }
-        }
-
-        s->job_done_count++;
-        if (s->job_done_count == s->worker_count) {
-            s->running = false;
-            sync_broadcast(&s->state_changed);
-        }
-    }
-    sync_unlock(s);
-}
-
-static void scheduler_worker_main(void *opaque)
-{
-    scheduler_worker_loop((ivp_world_scheduler_t *)opaque);
-}
-
-static void scheduler_join_threads(ivp_world_scheduler_t *s, int count)
-{
-    for (int i = 0; i < count; i++) {
-        s->runtime->thread_join(s->runtime->context, &s->threads[i]);
+        size_t index = atomic_fetch_add_explicit(
+            &job->next_environment, 1u, memory_order_relaxed);
+        if (index >= job->environment_count) break;
+        scheduler_run_environment(job->kind, job->environments[index],
+                                  job->elapsed_time);
     }
 }
 
@@ -190,9 +72,6 @@ ivp_world_scheduler_t *ivp_world_scheduler_create_with_runtime(
     if (worker_count <= 0 || !ivp_worker_runtime_is_valid(runtime)) {
         return NULL;
     }
-    if ((size_t)worker_count > SIZE_MAX / sizeof(ivp_worker_thread_t)) {
-        return NULL;
-    }
     if (!allocator) allocator = ivp_default_allocator();
 
     ivp_world_scheduler_t *s =
@@ -200,47 +79,11 @@ ivp_world_scheduler_t *ivp_world_scheduler_create_with_runtime(
     if (!s) return NULL;
     memset(s, 0, sizeof(*s));
     s->allocator = *allocator;
-    s->runtime = runtime;
     s->worker_count = worker_count;
-    if (worker_count > 1) {
-        s->threads = (ivp_worker_thread_t *)ivp_alloc(
-            &s->allocator, (size_t)worker_count * sizeof(*s->threads));
-        if (!s->threads) {
-            ivp_free(&s->allocator, s, sizeof(*s));
-            return NULL;
-        }
-    }
-    if (!sync_init(s)) {
-        if (s->threads) {
-            ivp_free(&s->allocator, s->threads,
-                     (size_t)worker_count * sizeof(*s->threads));
-        }
-        ivp_free(&s->allocator, s, sizeof(*s));
-        return NULL;
-    }
-    s->sync_initialized = true;
-
-    /* One is the complete serial fallback: retain validation and ownership
-     * checks, but create no OS thread and execute dispatches on the caller. */
-    if (worker_count == 1) return s;
-
-    int created = 0;
-    for (; created < worker_count; created++) {
-        if (!s->runtime->thread_start(
-                s->runtime->context, &s->threads[created],
-                scheduler_worker_main, s)) {
-            break;
-        }
-    }
-    if (created != worker_count) {
-        sync_lock(s);
-        s->stopping = true;
-        sync_broadcast(&s->work_ready);
-        sync_unlock(s);
-        scheduler_join_threads(s, created);
-        sync_destroy(s);
-        ivp_free(&s->allocator, s->threads,
-                 (size_t)worker_count * sizeof(*s->threads));
+    atomic_init(&s->dispatching, false);
+    s->workers = ivp_worker_group_create(
+        worker_count == 1 ? 0 : worker_count, &s->allocator, runtime);
+    if (!s->workers) {
         ivp_free(&s->allocator, s, sizeof(*s));
         return NULL;
     }
@@ -250,21 +93,10 @@ ivp_world_scheduler_t *ivp_world_scheduler_create_with_runtime(
 void ivp_world_scheduler_destroy(ivp_world_scheduler_t *s)
 {
     if (!s) return;
-    sync_lock(s);
-    s->stopping = true;
-    sync_broadcast(&s->work_ready);
-    sync_unlock(s);
-    if (s->worker_count > 1) {
-        scheduler_join_threads(s, s->worker_count);
-    }
-    if (s->sync_initialized) sync_destroy(s);
+    ivp_worker_group_destroy(s->workers);
     if (s->seen_environments) {
         ivp_free(&s->allocator, s->seen_environments,
                  s->seen_capacity * sizeof(*s->seen_environments));
-    }
-    if (s->threads) {
-        ivp_free(&s->allocator, s->threads,
-                 (size_t)s->worker_count * sizeof(*s->threads));
     }
     ivp_free(&s->allocator, s, sizeof(*s));
 }
@@ -341,22 +173,16 @@ static ivp_result_t scheduler_dispatch(
         return IVP_ERR_INVALID_ARG;
     }
 
-    sync_lock(s);
-    if (s->running || s->stopping) {
-        sync_unlock(s);
+    if (atomic_exchange_explicit(&s->dispatching, true,
+                                 memory_order_acquire)) {
         return IVP_ERR_INVALID_STATE;
     }
     ivp_result_t result = scheduler_validate_environments(
         s, environments, environment_count);
     if (result != IVP_OK || environment_count == 0) {
-        sync_unlock(s);
+        atomic_store_explicit(&s->dispatching, false,
+                              memory_order_release);
         return result;
-    }
-    if (s->worker_count > 1 &&
-        !s->runtime->floating_point_capture(
-            s->runtime->context, &s->floating_point_environment)) {
-        sync_unlock(s);
-        return IVP_ERR_INVALID_STATE;
     }
 
     size_t acquired = 0;
@@ -367,42 +193,28 @@ static ivp_result_t scheduler_dispatch(
         for (size_t i = 0; i < acquired; i++) {
             ivp_environment_end_simulation(environments[i]);
         }
-        sync_unlock(s);
+        atomic_store_explicit(&s->dispatching, false,
+                              memory_order_release);
         return IVP_ERR_INVALID_STATE;
     }
 
-    s->environments = environments;
-    s->environment_count = environment_count;
-    s->next_environment = 0;
-    s->setup_ready_count = 0;
-    s->job_done_count = 0;
-    s->setup_failed = false;
-    s->job_kind = kind;
-    s->elapsed_time = elapsed_time;
-    s->running = true;
-    if (s->worker_count == 1) {
-        /* Release the scheduler lock around application callbacks.  A nested
-         * or concurrent dispatch can then observe running and fail instead
-         * of deadlocking, just as it does while worker threads are active. */
-        sync_unlock(s);
-        for (size_t i = 0; i < environment_count; i++) {
-            scheduler_run_environment(kind, environments[i], elapsed_time);
-        }
-        sync_lock(s);
-        s->running = false;
-    } else {
-        s->generation++;
-        sync_broadcast(&s->work_ready);
-        while (s->running) sync_wait(&s->state_changed, s);
-        if (s->setup_failed) result = IVP_ERR_INVALID_STATE;
+    ivp_world_job_t job = {
+        .environments = environments,
+        .environment_count = environment_count,
+        .kind = kind,
+        .elapsed_time = elapsed_time
+    };
+    atomic_init(&job.next_environment, 0u);
+    if (!ivp_worker_group_dispatch(
+            s->workers, s->worker_count == 1,
+            scheduler_worker_run, &job)) {
+        result = IVP_ERR_INVALID_STATE;
     }
 
-    s->environments = NULL;
-    s->environment_count = 0;
     for (size_t i = 0; i < acquired; i++) {
         ivp_environment_end_simulation(environments[i]);
     }
-    sync_unlock(s);
+    atomic_store_explicit(&s->dispatching, false, memory_order_release);
     return result;
 }
 
