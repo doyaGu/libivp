@@ -10,6 +10,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_phantom.h>
 #include <ivp/dynamics/ivp_universe_manager.h>
 #include <ivp/events/ivp_listener_object.h>
 #include <ivp/geometry/ivp_surman.h>
@@ -27,6 +28,7 @@
 #define STRONG_REVIVE_OBJECT_COUNT 8
 #define STRONG_CLUSTER_OBJECT_COUNT 6
 #define STRONG_CLUSTER_VISIT_CAPACITY 128
+#define STRONG_PHANTOM_CORE_COUNT 8
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -141,6 +143,24 @@ static void reverse_cluster_tree(ivp_cluster_t *cluster)
         child = next;
     }
     cluster->first_child = new_head;
+}
+
+static void set_phantom_hash_order(
+    ivp_set_t *set,
+    ivp_object_t *const objects[STRONG_PHANTOM_CORE_COUNT],
+    bool reverse)
+{
+    ivp_vhash_t *hash = &set->hash;
+    int capacity = ivp_vhash_capacity(hash);
+    memset(hash->elems, 0,
+           (size_t)capacity * sizeof(hash->elems[0]));
+    for (int i = 0; i < STRONG_PHANTOM_CORE_COUNT; i++) {
+        int object_index = reverse
+                               ? STRONG_PHANTOM_CORE_COUNT - 1 - i
+                               : i;
+        hash->elems[i].elem = objects[object_index]->physical_core;
+    }
+    hash->nelems = STRONG_PHANTOM_CORE_COUNT;
 }
 
 static void scramble_sim_unit_contents(ivp_sim_unit_t *unit)
@@ -1341,6 +1361,103 @@ IVP_TEST(cluster_identity_blocks_sequence_reuse)
     ivp_environment_destroy(environment);
 }
 
+typedef struct strong_phantom_capture {
+    ivp_listener_phantom_t listener;
+    uint64_t keys[STRONG_PHANTOM_CORE_COUNT];
+    int count;
+} strong_phantom_capture_t;
+
+typedef struct strong_phantom_scene {
+    ivp_environment_t *environment;
+    ivp_object_t *owner;
+    ivp_object_t *objects[STRONG_PHANTOM_CORE_COUNT];
+    ivp_controller_phantom_t *phantom;
+    strong_phantom_capture_t capture;
+} strong_phantom_scene_t;
+
+static void strong_capture_phantom_left(
+    ivp_listener_phantom_t *listener,
+    ivp_controller_phantom_t *phantom,
+    ivp_core_t *core)
+{
+    (void)phantom;
+    strong_phantom_capture_t *capture =
+        (strong_phantom_capture_t *)listener;
+    IVP_ASSERT(capture->count < STRONG_PHANTOM_CORE_COUNT);
+    if (capture->count < STRONG_PHANTOM_CORE_COUNT) {
+        capture->keys[capture->count++] =
+            ivp_core_stable_order_key(core);
+    }
+}
+
+static bool strong_phantom_scene_init(strong_phantom_scene_t *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = strong_environment_create(1);
+    if (!scene->environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+    scene->owner = ivp_environment_create_object(
+        scene->environment, &object_template, NULL);
+    if (!scene->owner) return false;
+    for (int i = 0; i < STRONG_PHANTOM_CORE_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(4.0 * (double)(i + 1)),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        scene->objects[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->objects[i]) return false;
+    }
+
+    ivp_template_phantom_t phantom_template;
+    ivp_template_phantom_init(&phantom_template);
+    phantom_template.manage_intruding_cores = true;
+    scene->phantom = ivp_object_convert_to_phantom(
+        scene->owner, &phantom_template);
+    if (!scene->phantom || !scene->phantom->set_of_cores) return false;
+    memset(&scene->capture, 0, sizeof(scene->capture));
+    scene->capture.listener.core_left_volume =
+        strong_capture_phantom_left;
+    ivp_controller_phantom_add_listener(
+        scene->phantom, &scene->capture.listener);
+    for (int i = 0; i < STRONG_PHANTOM_CORE_COUNT; i++) {
+        ivp_set_active_add(scene->phantom->set_of_cores,
+                           scene->objects[i]->physical_core);
+    }
+    return true;
+}
+
+IVP_TEST(phantom_hash_order_does_not_change_callback_order)
+{
+    strong_phantom_scene_t canonical;
+    strong_phantom_scene_t perturbed;
+    bool ok = strong_phantom_scene_init(&canonical) &&
+              strong_phantom_scene_init(&perturbed);
+    if (ok) {
+        set_phantom_hash_order(&canonical.phantom->set_of_cores->set,
+                               canonical.objects, false);
+        set_phantom_hash_order(&perturbed.phantom->set_of_cores->set,
+                               perturbed.objects, true);
+        ivp_controller_phantom_destroy(canonical.phantom);
+        canonical.phantom = NULL;
+        ivp_controller_phantom_destroy(perturbed.phantom);
+        perturbed.phantom = NULL;
+        ok = canonical.capture.count == STRONG_PHANTOM_CORE_COUNT &&
+             perturbed.capture.count == STRONG_PHANTOM_CORE_COUNT &&
+             memcmp(canonical.capture.keys, perturbed.capture.keys,
+                    sizeof(canonical.capture.keys)) == 0;
+    }
+    ivp_environment_destroy(perturbed.environment);
+    ivp_environment_destroy(canonical.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
@@ -1360,5 +1477,6 @@ int main(void)
     IVP_REGISTER(revive_queue_order_does_not_change_observable_order);
     IVP_REGISTER(cluster_link_order_does_not_change_observable_order);
     IVP_REGISTER(cluster_identity_blocks_sequence_reuse);
+    IVP_REGISTER(phantom_hash_order_does_not_change_callback_order);
     IVP_RUN_ALL();
 }

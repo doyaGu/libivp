@@ -14,8 +14,11 @@
 #include <ivp/base/ivp_assert.h>
 
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_sim_internal.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 void ivp_phantom_mindist_entered_volume(void *controller_phantom, ivp_mindist_t *md);
@@ -114,6 +117,83 @@ static void fire_event_core_left(ivp_controller_phantom_t *c, ivp_core_t *core)
     for (int i = ivp_pvec_len(&c->listeners) - 1; i >= 0; i--) {
         ivp_listener_phantom_t *l = (ivp_listener_phantom_t *)ivp_pvec_at(&c->listeners, i);
         if (l->core_left_volume) l->core_left_volume(l, c, core);
+    }
+}
+
+static int phantom_compare_core_identity(const void *left,
+                                         const void *right)
+{
+    const ivp_core_t *left_core =
+        *(ivp_core_t *const *)left;
+    const ivp_core_t *right_core =
+        *(ivp_core_t *const *)right;
+    uint64_t left_key = ivp_core_stable_order_key(left_core);
+    uint64_t right_key = ivp_core_stable_order_key(right_core);
+    IVP_ASSERT(left_key != right_key || left_core == right_core);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
+                                           const ivp_set_t *set)
+{
+    if (!ivp_build_uses_canonical_internal_state()) {
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            fire_event_core_left(c, core);
+        }
+        return;
+    }
+
+    int count = ivp_set_count(set);
+    if (count <= 0) return;
+    const ivp_allocator_t *allocator = c->object->owner->allocator;
+    ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
+        allocator, (size_t)count * sizeof(*cores));
+    if (cores) {
+        int actual_count = 0;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while (actual_count < count &&
+               (core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            cores[actual_count++] = core;
+        }
+        qsort(cores, (size_t)actual_count, sizeof(*cores),
+              phantom_compare_core_identity);
+        for (int i = 0; i < actual_count; i++) {
+            fire_event_core_left(c, cores[i]);
+        }
+        ivp_free(allocator, cores, (size_t)count * sizeof(*cores));
+        return;
+    }
+
+    /* Destruction must still have a stable callback order when temporary
+     * allocation fails.  Rescan the intact set for the next identity. */
+    bool have_previous = false;
+    uint64_t previous_key = 0u;
+    for (int emitted = 0; emitted < count; emitted++) {
+        ivp_core_t *selected = NULL;
+        uint64_t selected_key = UINT64_MAX;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            uint64_t key = ivp_core_stable_order_key(core);
+            if ((!have_previous || key > previous_key) &&
+                (!selected || key < selected_key)) {
+                selected = core;
+                selected_key = key;
+            }
+        }
+        if (!selected) break;
+        fire_event_core_left(c, selected);
+        previous_key = selected_key;
+        have_previous = true;
     }
 }
 
@@ -357,21 +437,18 @@ void ivp_controller_phantom_destroy(ivp_controller_phantom_t *c)
 {
     if (!c) return;
     if (c->set_of_cores) {
-        ivp_set_enumerator_t e;
-        ivp_set_enumerator_init(&e, &c->set_of_cores->set);
-        ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(&e, &c->set_of_cores->set)) != NULL) {
-            fire_event_core_left(c, core);
-        }
+        phantom_fire_core_left_for_set(c, &c->set_of_cores->set);
     }
     if (c->set_of_sleeping_cores) {
-        ivp_set_enumerator_t e;
-        ivp_set_enumerator_init(&e, c->set_of_sleeping_cores);
+        phantom_fire_core_left_for_set(c, c->set_of_sleeping_cores);
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, c->set_of_sleeping_cores);
         ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(&e, c->set_of_sleeping_cores)) != NULL) {
-            fire_event_core_left(c, core);
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, c->set_of_sleeping_cores)) != NULL) {
             for (int i = ivp_core_n_objects(core) - 1; i >= 0; i--) {
-                ivp_object_remove_listener_object(ivp_core_object_at(core, i), ctrl_obj_listener(c));
+                ivp_object_remove_listener_object(
+                    ivp_core_object_at(core, i), ctrl_obj_listener(c));
             }
         }
     }
