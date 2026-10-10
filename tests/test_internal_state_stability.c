@@ -8,6 +8,7 @@
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/controllers/ivp_attacher_to_cores.h>
+#include <ivp/controllers/ivp_forcefield.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
@@ -31,6 +32,7 @@
 #define STRONG_CLUSTER_VISIT_CAPACITY 128
 #define STRONG_PHANTOM_CORE_COUNT 8
 #define STRONG_ATTACHER_CORE_COUNT 8
+#define STRONG_FORCEFIELD_CORE_COUNT 8
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -1633,6 +1635,86 @@ IVP_TEST(attacher_storage_order_does_not_change_destroy_order)
     IVP_ASSERT_TRUE(ok);
 }
 
+typedef struct strong_forcefield_scene {
+    ivp_environment_t *environment;
+    ivp_object_t *objects[STRONG_FORCEFIELD_CORE_COUNT];
+    ivp_set_active_t cores;
+    ivp_forcefield_state_t field;
+} strong_forcefield_scene_t;
+
+static bool strong_forcefield_scene_init(strong_forcefield_scene_t *scene,
+                                         bool reverse_set_order)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = strong_environment_create(1);
+    if (!scene->environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.start_in_simulation = true;
+    object_template.enable_collision_detection = false;
+    ivp_set_active_init(&scene->cores, scene->environment->allocator, 16);
+    for (int i = 0; i < STRONG_FORCEFIELD_CORE_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(4.0 * (double)(i + 1)),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        scene->objects[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->objects[i]) return false;
+        ivp_set_active_add(&scene->cores,
+                           scene->objects[i]->physical_core);
+    }
+    set_core_set_iteration_order(&scene->cores.set, scene->objects,
+                                 STRONG_FORCEFIELD_CORE_COUNT,
+                                 reverse_set_order);
+    ivp_vec3r_t acceleration =
+        ivp_vec3r(IVP_REAL(0.25), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_forcefield_state_init(&scene->field,
+                              IVP_FORCEFIELD_CONSTANT,
+                              &acceleration);
+    return ivp_forcefield_attach_set(
+        &scene->field, scene->environment, &scene->cores, false);
+}
+
+IVP_TEST(forcefield_hash_order_does_not_change_attachment_order)
+{
+    strong_forcefield_scene_t canonical;
+    strong_forcefield_scene_t perturbed;
+    bool ok = strong_forcefield_scene_init(&canonical, false) &&
+              strong_forcefield_scene_init(&perturbed, true);
+    if (ok) {
+        ok = ivp_pvec_len(&canonical.field.attached_cores) ==
+                 STRONG_FORCEFIELD_CORE_COUNT &&
+             ivp_pvec_len(&perturbed.field.attached_cores) ==
+                 STRONG_FORCEFIELD_CORE_COUNT;
+        uint64_t previous_key = 0u;
+        for (int i = 0; ok && i < STRONG_FORCEFIELD_CORE_COUNT; i++) {
+            ivp_core_t *canonical_core = (ivp_core_t *)ivp_pvec_at(
+                &canonical.field.attached_cores, i);
+            ivp_core_t *perturbed_core = (ivp_core_t *)ivp_pvec_at(
+                &perturbed.field.attached_cores, i);
+            uint64_t canonical_key =
+                ivp_core_stable_order_key(canonical_core);
+            uint64_t perturbed_key =
+                ivp_core_stable_order_key(perturbed_core);
+            ok = canonical_key == perturbed_key &&
+                 (i == 0 || previous_key < canonical_key);
+            previous_key = canonical_key;
+        }
+    }
+    if (ok) reverse_pvec(&perturbed.field.attached_cores);
+    ivp_forcefield_destroy(&perturbed.field);
+    ivp_forcefield_destroy(&canonical.field);
+    ivp_set_active_destroy(&perturbed.cores);
+    ivp_set_active_destroy(&canonical.cores);
+    ivp_environment_destroy(perturbed.environment);
+    ivp_environment_destroy(canonical.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
@@ -1655,5 +1737,6 @@ int main(void)
     IVP_REGISTER(phantom_hash_order_does_not_change_callback_order);
     IVP_REGISTER(attacher_hash_order_does_not_change_callback_order);
     IVP_REGISTER(attacher_storage_order_does_not_change_destroy_order);
+    IVP_REGISTER(forcefield_hash_order_does_not_change_attachment_order);
     IVP_RUN_ALL();
 }

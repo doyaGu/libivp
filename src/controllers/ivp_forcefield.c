@@ -11,6 +11,8 @@
 #include <string.h>
 
 #include "ivp_controller_attach.h"
+#include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_sim_internal.h"
 
 void ivp_forcefield_state_init(ivp_forcefield_state_t *state,
                                 ivp_forcefield_mode_t mode,
@@ -50,6 +52,33 @@ static ivp_forcefield_state_t *ff_of_listener(ivp_listener_object_t *l)
     return (ivp_forcefield_state_t *)l->user_data;
 }
 
+static void ff_restore_core_order(ivp_forcefield_state_t *state)
+{
+    if (!ivp_build_uses_canonical_internal_state()) return;
+    ivp_core_vector_sort_by_identity(&state->attached_cores);
+}
+
+static bool ff_attach_core(ivp_forcefield_state_t *state,
+                           ivp_core_t *core)
+{
+    int index = ivp_pvec_index_of(&state->attached_cores, core);
+    bool added = index < 0;
+    if (added) {
+        index = ivp_pvec_add(&state->attached_cores, core);
+        if (index < 0) return false;
+    }
+    if (!ivp_environment_add_controller_to_core(
+            state->environment, state->controller,
+            ivp_attacher_core_object(core))) {
+        if (added) {
+            ivp_pvec_remove_at(&state->attached_cores, index);
+        }
+        return false;
+    }
+    ff_restore_core_order(state);
+    return true;
+}
+
 /* element_added: attached_cores.install(elem); add_controller_to_core */
 static void ff_element_added(void *ctx, ivp_set_active_t *set, void *elem)
 {
@@ -57,9 +86,7 @@ static void ff_element_added(void *ctx, ivp_set_active_t *set, void *elem)
     ivp_forcefield_state_t *state = (ivp_forcefield_state_t *)ctx;
     ivp_core_t *core = (ivp_core_t *)elem;
     if (!core || !state->environment) return;
-    (void)ivp_pvec_install(&state->attached_cores, core);
-    (void)ivp_environment_add_controller_to_core(state->environment, state->controller,
-                                                 ivp_attacher_core_object(core));
+    (void)ff_attach_core(state, core);
 }
 
 /* element_removed: remove_controller_from_core; attached_cores.remove.
@@ -108,6 +135,7 @@ static void ff_environment_deleted(ivp_listener_object_t *l, struct ivp_environm
     (void)env;
     ivp_forcefield_state_t *state = ff_of_listener(l);
     if (!state->environment) return;
+    ff_restore_core_order(state);
     while (ivp_pvec_len(&state->attached_cores) > 0) {
         int n = ivp_pvec_len(&state->attached_cores);
         ff_core_is_going_to_be_deleted(state, (ivp_core_t *)ivp_pvec_at(&state->attached_cores, n - 1));
@@ -120,6 +148,7 @@ static void ff_environment_deleted(ivp_listener_object_t *l, struct ivp_environm
 /* ~IVP_Forcefield (+ libivp: unregister the controller slot) */
 static void ff_release(ivp_forcefield_state_t *state)
 {
+    ff_restore_core_order(state);
     for (int i = ivp_pvec_len(&state->attached_cores) - 1; i >= 0; --i) {
         ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(&state->attached_cores, i);
         if (my_core && state->environment) {
@@ -182,11 +211,42 @@ bool ivp_forcefield_attach_set(ivp_forcefield_state_t *state, ivp_environment_t 
     state->object_listener.user_data = state;
     ivp_environment_add_listener_object_global(env, &state->object_listener);
 
-    ivp_set_enumerator_t e;
-    ivp_set_enumerator_init(&e, &set_of_cores->set);
-    void *core;
-    while ((core = ivp_set_enumerator_next(&e, &set_of_cores->set)) != NULL) {
-        ff_element_added(state, set_of_cores, core);
+    if (ivp_build_uses_canonical_internal_state()) {
+        int count = ivp_set_count(&set_of_cores->set);
+        if (!ivp_pvec_reserve(&state->attached_cores, count)) {
+            state->set_is_going_to_be_deleted = true;
+            ff_release(state);
+            return false;
+        }
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, &set_of_cores->set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, &set_of_cores->set)) != NULL) {
+            if (ivp_pvec_install(&state->attached_cores, core) < 0) {
+                state->set_is_going_to_be_deleted = true;
+                ff_release(state);
+                return false;
+            }
+        }
+        ff_restore_core_order(state);
+        for (int i = 0; i < ivp_pvec_len(&state->attached_cores); i++) {
+            core = (ivp_core_t *)ivp_pvec_at(
+                &state->attached_cores, i);
+            if (!ff_attach_core(state, core)) {
+                state->set_is_going_to_be_deleted = true;
+                ff_release(state);
+                return false;
+            }
+        }
+    } else {
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, &set_of_cores->set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, &set_of_cores->set)) != NULL) {
+            ff_element_added(state, set_of_cores, core);
+        }
     }
     if (!ivp_set_active_add_listener(set_of_cores, &state->set_listener)) {
         state->set_is_going_to_be_deleted = true; /* not listening */
