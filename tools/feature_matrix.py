@@ -65,7 +65,12 @@ def cmake_test_names():
     )
     for path in (ROOT / "CMakeLists.txt", ROOT / "examples" / "CMakeLists.txt"):
         if path.exists():
-            names.update(pattern.findall(path.read_text(encoding="utf-8")))
+            text = path.read_text(encoding="utf-8")
+            declarations = "\n".join(
+                line for line in text.splitlines()
+                if not line.lstrip().startswith("#")
+            )
+            names.update(pattern.findall(declarations))
     return names
 
 
@@ -109,6 +114,17 @@ def check_string_map(data, key, errors):
     return value
 
 
+def check_keys(value, expected, label, errors):
+    missing = expected - set(value)
+    extra = set(value) - expected
+    if missing:
+        errors.append("{} is missing keys: {}".format(
+            label, ", ".join(sorted(missing))))
+    if extra:
+        errors.append("{} has unknown keys: {}".format(
+            label, ", ".join(sorted(extra))))
+
+
 def check_string_list(feature_id, key, value, errors, allow_empty=False):
     label = "feature {} {}".format(feature_id, key)
     if not isinstance(value, list) or (not value and not allow_empty):
@@ -126,16 +142,21 @@ def check_string_list(feature_id, key, value, errors, allow_empty=False):
     return value
 
 
+def check_references(feature_id, label, values, known, errors):
+    unknown = set(values) - set(known)
+    if unknown:
+        errors.append(
+            "feature {} names unknown {}: {}".format(
+                feature_id, label, ", ".join(sorted(unknown))
+            )
+        )
+
+
 def validate(data):
     errors = []
     if not isinstance(data, dict):
         return ["manifest root must be an object"], []
-    missing = ROOT_KEYS - set(data)
-    extra = set(data) - ROOT_KEYS
-    if missing:
-        errors.append("manifest is missing keys: {}".format(", ".join(sorted(missing))))
-    if extra:
-        errors.append("manifest has unknown keys: {}".format(", ".join(sorted(extra))))
+    check_keys(data, ROOT_KEYS, "manifest", errors)
     if data.get("schema_version") != 1:
         errors.append("schema_version must be 1")
 
@@ -166,20 +187,7 @@ def validate(data):
             feature_id = "#{}".format(index)
         feature_ids.append(feature_id)
 
-        missing = FEATURE_KEYS - set(feature)
-        extra = set(feature) - FEATURE_KEYS
-        if missing:
-            errors.append(
-                "feature {} is missing keys: {}".format(
-                    feature_id, ", ".join(sorted(missing))
-                )
-            )
-        if extra:
-            errors.append(
-                "feature {} has unknown keys: {}".format(
-                    feature_id, ", ".join(sorted(extra))
-                )
-            )
+        check_keys(feature, FEATURE_KEYS, "feature {}".format(feature_id), errors)
         for key in ("name", "summary"):
             if not isinstance(feature.get(key), str) or not feature[key].strip():
                 errors.append("feature {} {} must be text".format(feature_id, key))
@@ -204,44 +212,24 @@ def validate(data):
             feature_id, "docs", feature.get("docs"), errors
         )
 
-        unknown = set(feature_modules) - set(modules)
-        if unknown:
-            errors.append(
-                "feature {} names unknown modules: {}".format(
-                    feature_id, ", ".join(sorted(unknown))
-                )
-            )
-        unknown = set(feature_properties) - set(properties)
-        if unknown:
-            errors.append(
-                "feature {} names unknown properties: {}".format(
-                    feature_id, ", ".join(sorted(unknown))
-                )
-            )
-        unknown = set(feature_configurations) - set(configurations)
-        if unknown:
-            errors.append(
-                "feature {} names unknown configurations: {}".format(
-                    feature_id, ", ".join(sorted(unknown))
-                )
-            )
-        unknown = set(feature_tests) - known_tests
-        if unknown:
-            errors.append(
-                "feature {} names unknown CTest tests: {}".format(
-                    feature_id, ", ".join(sorted(unknown))
-                )
-            )
+        check_references(feature_id, "modules", feature_modules, modules, errors)
+        check_references(
+            feature_id, "properties", feature_properties, properties, errors
+        )
+        check_references(
+            feature_id, "configurations", feature_configurations,
+            configurations, errors,
+        )
+        check_references(
+            feature_id, "CTest tests", feature_tests, known_tests, errors
+        )
 
         if "@all" in feature_scenarios and feature_scenarios != ["@all"]:
             errors.append("feature {} must not mix @all with scenario names".format(feature_id))
-        unknown = set(feature_scenarios) - known_scenarios - {"@all"}
-        if unknown:
-            errors.append(
-                "feature {} names unknown scenarios: {}".format(
-                    feature_id, ", ".join(sorted(unknown))
-                )
-            )
+        check_references(
+            feature_id, "scenarios", feature_scenarios,
+            known_scenarios | {"@all"}, errors,
+        )
 
         for doc in feature_docs:
             path = Path(doc)
@@ -295,17 +283,27 @@ def render(data, scenarios):
         "of formal proof. Lists describe the combined coverage for a feature, not a",
         "Cartesian product in which every test runs in every configuration.",
         "",
-        "The checker validates every CTest name against the CMake declarations, every",
-        "scenario against `tools/scenarios.txt`, every vocabulary reference, and every",
-        "documentation path. It also rejects duplicate, unsorted, or stale entries.",
+        "The checker validates each listed CTest name against the CMake declarations,",
+        "each scenario against `tools/scenarios.txt`, every vocabulary reference, and",
+        "every documentation path. It also rejects duplicate, unsorted, or stale entries.",
         "",
         "## Verification vocabulary",
+        "",
+        "### Modules",
+        "",
+        "| id | responsibility |",
+        "|---|---|",
+    ]
+    for key, description in data["modules"].items():
+        lines.append("| `{}` | {} |".format(key, description))
+
+    lines.extend([
         "",
         "### Configurations",
         "",
         "| id | meaning |",
         "|---|---|",
-    ]
+    ])
     for key, description in data["configurations"].items():
         lines.append("| `{}` | {} |".format(key, description))
 
