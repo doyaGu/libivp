@@ -431,9 +431,28 @@ IVP_TEST(env_create_object) {
     ivp_environment_destroy(env);
 }
 
+typedef struct object_lifecycle_event_counts {
+    int created;
+    int destroyed;
+} object_lifecycle_event_counts_t;
+
+static void count_object_lifecycle_events(void *ctx, ivp_environment_t *env,
+                                          const ivp_event_t *event)
+{
+    (void)env;
+    object_lifecycle_event_counts_t *counts =
+        (object_lifecycle_event_counts_t *)ctx;
+    if (event->type == IVP_EVENT_OBJECT_CREATED) counts->created++;
+    if (event->type == IVP_EVENT_OBJECT_DESTROYED) counts->destroyed++;
+}
+
 IVP_TEST(env_create_object_reserves_psi_scratch_atomically) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     IVP_ASSERT_NOT_NULL(env);
+    object_lifecycle_event_counts_t events = {0};
+    IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(
+        ivp_environment_add_event_listener(
+            env, count_object_lifecycle_events, &events)));
 
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
@@ -444,6 +463,8 @@ IVP_TEST(env_create_object_reserves_psi_scratch_atomically) {
     IVP_ASSERT_NULL(ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle));
     IVP_ASSERT_FALSE(ivp_object_handle_is_valid(handle));
     IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 0);
+    IVP_ASSERT_EQ(events.created, 0);
+    IVP_ASSERT_EQ(events.destroyed, 0);
     env->pl->touched_cores = saved;
 
     saved = env->pl->active_hulls;
@@ -452,6 +473,8 @@ IVP_TEST(env_create_object_reserves_psi_scratch_atomically) {
     IVP_ASSERT_NULL(ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle));
     IVP_ASSERT_FALSE(ivp_object_handle_is_valid(handle));
     IVP_ASSERT_EQ(ivp_environment_get_object_count(env), 0);
+    IVP_ASSERT_EQ(events.created, 0);
+    IVP_ASSERT_EQ(events.destroyed, 0);
     env->pl->active_hulls = saved;
 
     ivp_object_t *obj = ivp_environment_create_object_with_handle(env, &tmpl, NULL, &handle);
@@ -459,6 +482,22 @@ IVP_TEST(env_create_object_reserves_psi_scratch_atomically) {
     IVP_ASSERT_TRUE(ivp_object_handle_is_valid(handle));
     IVP_ASSERT_TRUE(env->pl->touched_cores.cap >= 1);
     IVP_ASSERT_TRUE(env->pl->active_hulls.cap >= 1);
+    IVP_ASSERT_EQ(events.created, 1);
+    IVP_ASSERT_EQ(events.destroyed, 0);
+
+    const uint64_t first_sequence = obj->creation_sequence;
+    saved = env->pl->touched_cores;
+    env->pl->touched_cores = (ivp_pvec_t){ .elems = NULL, .n = 0, .cap = -1 };
+    IVP_ASSERT_NULL(ivp_environment_create_object(env, &tmpl, NULL));
+    IVP_ASSERT_EQ(events.created, 1);
+    IVP_ASSERT_EQ(events.destroyed, 0);
+    env->pl->touched_cores = saved;
+
+    ivp_object_t *second = ivp_environment_create_object(env, &tmpl, NULL);
+    IVP_ASSERT_NOT_NULL(second);
+    IVP_ASSERT_EQ(second->creation_sequence, first_sequence + 1u);
+    IVP_ASSERT_EQ(events.created, 2);
+    IVP_ASSERT_EQ(events.destroyed, 0);
 
     ivp_environment_destroy(env);
 }

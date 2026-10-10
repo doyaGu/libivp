@@ -1,5 +1,4 @@
 #include "ivp_object_system.h"
-#include "dynamics/ivp_environment_events.h"
 #include <ivp/geometry/ivp_surman.h>
 #include <string.h>
 
@@ -82,19 +81,11 @@ bool ivp_object_system_destroy_by_handle(ivp_object_system_t *sys,
     if (!sys || !sys->registry.alloc) return false;
     const ivp_allocator_t *alloc = sys->registry.alloc;
     void *removed = NULL;
-    ivp_object_t *pre = ivp_object_system_get_by_handle(sys, handle);
-    const int index_before_removal = pre ? pre->dense_index : -1;
     if (!ivp_registry_remove_by_handle(&sys->registry, handle, &removed)) {
         return false;
     }
 
-    ivp_object_t *obj = (ivp_object_t *)removed;
-    if (obj->owner) {
-        /* object_index: the dense index the object had (now invalid) */
-        ivp_environment_emit_event_internal(obj->owner, IVP_EVENT_OBJECT_DESTROYED,
-                                            IVP_REAL(0.0), index_before_removal, 0);
-    }
-    ivp_free(alloc, obj, sizeof(ivp_object_t));
+    ivp_free(alloc, removed, sizeof(ivp_object_t));
     return true;
 }
 

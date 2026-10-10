@@ -2687,7 +2687,6 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
     if (!env || !tmpl) return NULL;
     ivp_object_t *obj = ivp_object_system_create(env_object_system(env), env, tmpl, surman, out_handle);
     if (!obj) return NULL;
-    obj->creation_sequence = env->pl->next_object_sequence++;
     const int object_count = ivp_object_system_count(env_object_system(env));
     /* A PSI can touch at most one core and one hull manager per object.  Grow
      * the reusable scratch here so the simulation hot path never allocates. */
@@ -2699,15 +2698,15 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
     }
-    ivp_cluster_add_child(&env->pl->root_cluster, obj); /* IVP_Object(father = root cluster) */
     if (!ivp_object_pipeline_create(env, obj, tmpl)) {
-        ivp_cluster_remove_child(&env->pl->root_cluster, obj);
         (void)ivp_object_system_destroy_by_handle(
             env_object_system(env), ivp_environment_get_object_handle(obj));
         env_reset_object_sequence_if_empty(env);
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
     }
+    obj->creation_sequence = env->pl->next_object_sequence++;
+    ivp_cluster_add_child(&env->pl->root_cluster, obj); /* IVP_Object(father = root cluster) */
     fire_object_event_global(env, obj, OBJ_EV_CREATED); /* end of IVP_Polygon / IVP_Ball ctor */
     ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_CREATED, IVP_REAL(0.0), obj->dense_index, 0);
     if (tmpl->enable_collision_detection) ivp_object_enable_collision_detection(obj, true);
@@ -2830,8 +2829,12 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
         return;
     }
-    (void)ivp_object_system_destroy_by_handle(
-        env_object_system(env), ivp_environment_get_object_handle(obj));
+    const int object_index = obj->dense_index;
+    if (ivp_object_system_destroy_by_handle(
+            env_object_system(env), ivp_environment_get_object_handle(obj))) {
+        ivp_environment_emit_event_internal(
+            env, IVP_EVENT_OBJECT_DESTROYED, IVP_REAL(0.0), object_index, 0);
+    }
     env_reset_object_sequence_if_empty(env);
 }
 
