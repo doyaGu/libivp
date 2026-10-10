@@ -13,6 +13,9 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_mat3.h>
+
+#include "dynamics/ivp_environment_events.h"
+
 #include <string.h>
 
 /* Reference IVP_Template_Constraint defaults (ivp_template_constraint.cxx:6-28) */
@@ -306,12 +309,6 @@ void ivp_controller_constraint(const ivp_event_sim_t *event_sim,
         state->active = false;
         state->is_broken = true;
         if (event_sim->environment) {
-            extern void ivp_environment_emit_event_internal(
-                struct ivp_environment *env,
-                ivp_event_type_t type,
-                ivp_real_t dt,
-                int object_index,
-                int controller_id);
             ivp_environment_emit_event_internal(event_sim->environment,
                                                 IVP_EVENT_CONSTRAINT_BROKEN,
                                                 event_sim->delta_time,
