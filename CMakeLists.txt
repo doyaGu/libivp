@@ -686,6 +686,8 @@ if (IVP_BUILD_TESTS)
                 --energy-eps 1e-9
                 --time-eps 1e-12
         )
+        set_tests_properties(test_compare_jsonl_self PROPERTIES
+                LABELS "unit;tools")
     else ()
         message(STATUS "Skipping test_compare_jsonl_self (missing Python3 interpreter or JSONL inputs)")
     endif ()
@@ -732,7 +734,9 @@ if (IVP_BUILD_TESTS)
     # smoke:      example smoke tests
 
     set(IVP_UNIT_TESTS
-            test_base test_math test_containers test_geometry test_collision
+            test_base test_math test_containers test_geometry
+            test_geometry_parity test_ray_solver test_convex_decompose
+            test_compact_grid test_collision
             test_dynamics test_solver test_utility test_lvec
             test_controllers test_builders test_qhull_concurrency
             test_parallel_worlds
@@ -740,7 +744,9 @@ if (IVP_BUILD_TESTS)
             test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
-            test_fake_jetski
+            test_polygon_collision_debug test_fake_jetski
+            test_great_matrix_port test_matrix_cache test_deferred_deletion
+            test_lcs_parity
             test_p1_controllers test_controller_parity test_car_system
             test_controller_active test_controller_sets test_controller_factory
             test_content_pipeline
