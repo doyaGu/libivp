@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "test_sets": {
+    "unit-common": [
+      "test_active_value_ext",
+      "test_active_value_ref",
+      "test_anomaly",
+      "test_base",
+      "test_benchmark_runner",
+      "test_benchmark_tool",
+      "test_builders",
+      "test_bvh_bottomup",
+      "test_car_system",
+      "test_collision",
+      "test_collision_diff",
+      "test_collision_ext",
+      "test_collision_filter",
+      "test_compact_grid",
+      "test_compare_jsonl_self",
+      "test_containers",
+      "test_containers_ext",
+      "test_content_pipeline",
+      "test_controller_active",
+      "test_controller_factory",
+      "test_controller_parity",
+      "test_controller_sets",
+      "test_controllers",
+      "test_convex_decompose",
+      "test_convex_layout",
+      "test_deferred_deletion",
+      "test_diagnostics",
+      "test_dynamics",
+      "test_env_services",
+      "test_events",
+      "test_fake_jetski",
+      "test_geometry",
+      "test_geometry_parity",
+      "test_great_matrix_port",
+      "test_internal_parallel",
+      "test_internal_state_stability",
+      "test_lcs_parity",
+      "test_lvec",
+      "test_math",
+      "test_math_ext",
+      "test_math_ref",
+      "test_matrix_cache",
+      "test_object_lifecycle",
+      "test_p1_controllers",
+      "test_parallel_worlds",
+      "test_polygon_collision_debug",
+      "test_profile_benchmark",
+      "test_qhull_concurrency",
+      "test_qhull_overlap",
+      "test_ray_solver",
+      "test_replay_equivalence",
+      "test_solver",
+      "test_utility",
+      "test_utility_ref",
+      "test_verification_runner"
+    ]
+  },
+  "contracts": [
+    {
+      "id": "asan-ubsan-unit",
+      "description": "Focused tests under AddressSanitizer and UndefinedBehaviorSanitizer.",
+      "type": "ctest",
+      "oracle": "Every configured unit and tool-contract test except the timing-oriented benchmark runner completes under both sanitizers without failure or skip.",
+      "configuration": "Debug",
+      "required_cache": {
+        "IVP_BUILD_BENCHMARKS": "ON",
+        "IVP_BUILD_EXAMPLES": "OFF",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "ON",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "ON",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": ["test_benchmark_runner"],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": ["test_benchmark_runner"],
+        "platform_tests": {
+          "Darwin": ["test_parity_compare"],
+          "Linux": ["test_parity_compare"]
+        },
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": []
+      },
+      "reject_skips": true
+    },
+    {
+      "id": "debug-float-unit",
+      "description": "Focused tests in the Debug float-precision mainline build.",
+      "type": "ctest",
+      "oracle": "Every configured unit and tool-contract test except the timing-oriented benchmark runner completes in the float Debug domain without failure or skip.",
+      "configuration": "Debug",
+      "required_cache": {
+        "IVP_BUILD_BENCHMARKS": "ON",
+        "IVP_BUILD_EXAMPLES": "OFF",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "OFF",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": ["test_benchmark_runner"],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": ["test_benchmark_runner"],
+        "platform_tests": {
+          "Darwin": ["test_parity_compare"],
+          "Linux": ["test_parity_compare"]
+        },
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": []
+      },
+      "reject_skips": true
+    },
+    {
+      "id": "examples-headless",
+      "description": "Render helpers and every graphical example in headless mode.",
+      "type": "ctest",
+      "oracle": "All three render/example helper tests, the generated coverage table check, and the all-examples headless smoke test complete without failure or skip.",
+      "configuration": "Release",
+      "required_cache": {
+        "IVP_BUILD_EXAMPLES": "ON",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["smoke"],
+        "tests": ["test_demo_drive", "test_demo_panel", "test_render_math"]
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {},
+        "scenario_set": null,
+        "test_sets": [],
+        "tests": [
+          "test_demo_drive",
+          "test_demo_panel",
+          "test_example_coverage_table",
+          "test_render_math",
+          "test_smoke_examples"
+        ]
+      },
+      "reject_skips": true
+    },
+    {
+      "id": "parity",
+      "description": "Release and Debug comparison with the pinned C++ reference engine.",
+      "type": "command",
+      "oracle": "Both reference-development builds reproduce all 48 scenarios and both mainline builds produce exactly the 22 registered Qhull differences.",
+      "command": ["tools/parity/check.sh"],
+      "output_assertions": [
+        {"count": 2, "text": "=== 26/48 identical; 22/22 expected differences ==="},
+        {"count": 2, "text": "=== 48/48 identical ==="},
+        {"count": 1, "text": "PARITY OK"}
+      ],
+      "platforms": ["Darwin"],
+      "required_env": ["IVP_REF_SRC"]
+    },
+    {
+      "id": "release-unit",
+      "description": "Complete focused-test gate for the default Release build.",
+      "type": "ctest",
+      "oracle": "The complete platform-specific unit and tool-contract inventory executes in the default mainline domain without failure, disablement, or skip.",
+      "configuration": "Release",
+      "required_cache": {
+        "IVP_BUILD_BENCHMARKS": "ON",
+        "IVP_BUILD_EXAMPLES": "OFF",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {
+          "Darwin": ["test_parity_compare"],
+          "Linux": ["test_parity_compare"]
+        },
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": []
+      },
+      "reject_skips": true
+    },
+    {
+      "id": "scenario-invariants",
+      "description": "Every registered physics scenario with its in-process invariant checks.",
+      "type": "ctest",
+      "oracle": "The configured invariants label contains exactly one test per scenarios.txt entry and all of those tests complete without failure or skip.",
+      "configuration": "Release",
+      "required_cache": {
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "ON",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["invariants"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {},
+        "scenario_set": {
+          "prefix": "test_scenario_invariants_",
+          "source": "tools/scenarios.txt"
+        },
+        "test_sets": [],
+        "tests": []
+      },
+      "reject_skips": true
+    },
+    {
+      "id": "tsan-threading",
+      "description": "All concurrency contract tests under ThreadSanitizer.",
+      "type": "ctest",
+      "oracle": "The threading label resolves to exactly the six required concurrency tests and every test completes under ThreadSanitizer without failure or skip.",
+      "configuration": "Debug",
+      "required_cache": {
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "ON",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["threading"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {},
+        "scenario_set": null,
+        "test_sets": [],
+        "tests": [
+          "test_internal_parallel",
+          "test_internal_state_stability",
+          "test_parallel_worlds",
+          "test_qhull_concurrency",
+          "test_qhull_overlap",
+          "test_replay_equivalence"
+        ]
+      },
+      "reject_skips": true
+    }
+  ]
+}
