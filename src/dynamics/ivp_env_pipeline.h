@@ -93,7 +93,7 @@ typedef struct ivp_env_pipeline {
 
     /* libivp controller slots attached to every core (run_for_all_cores) */
     ivp_pvec_t               all_core_ctrls;         /* ivp_sim_ctrl_t* */
-    /* all slot adapters (for association refresh) */
+    /* all controller slots with sim-unit attachment state */
     ivp_pvec_t               slot_ctrls;
 
     /* Factory-created controller states are owned by this environment.

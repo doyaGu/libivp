@@ -5,7 +5,10 @@
 #include <ivp/dynamics/ivp_handle.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
+#include "dynamics/ivp_sim_internal.h"
 #include "dynamics/ivp_registry.h"
+
+struct ivp_controller_descriptor;
 
 typedef struct ivp_controller_system {
     ivp_registry_t registry;
@@ -22,8 +25,11 @@ typedef enum ivp_controller_mode {
 #define IVP_CONTROLLER_DISCOVERY_STACK_MAX 64
 
 typedef struct ivp_controller_slot {
+    /* The registered controller and its sim-unit dispatch object are one
+     * allocation.  base is first so sim-unit callbacks can recover the slot
+     * without a second adapter record. */
+    ivp_sim_ctrl_t base;
     ivp_handle_t handle;
-    uint64_t registration_sequence;
     int dense_index;
     int priority;
     ivp_controller_event_fn_t event_fn;
@@ -41,8 +47,14 @@ typedef struct ivp_controller_slot {
     int associated_count;
     int associated_capacity;
 
-    /* Simulation-unit controller adapter owned by the environment. */
-    void *sim_ctrl;
+    /* Environment-owned simulation attachment state. */
+    ivp_environment_t *env;
+    const struct ivp_controller_descriptor *descriptor;
+    ivp_pvec_t controlled_cores;             /* current discovered cores */
+    ivp_object_handle_t *dispatch_handles;   /* current discovery snapshot */
+    ivp_object_t **dispatch_objects;         /* built-in snapshot cache */
+    int dispatch_count;
+    bool deleted_with_core;
 } ivp_controller_slot_t;
 
 ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,

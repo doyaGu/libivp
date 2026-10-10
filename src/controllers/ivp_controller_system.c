@@ -79,7 +79,7 @@ static ivp_controller_handle_t ivp_controller_system_add_internal(
     slot->ctx = ctx;
     slot->enabled = true;
     slot->mode = IVP_CONTROLLER_INDEPENDENT;
-    slot->run_for_all_cores = true;
+    slot->run_for_all_cores = false;
     slot->discovery_fn = NULL;
 
     ivp_handle_t h;
@@ -187,7 +187,8 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys,
             ivp_controller_slot_t *cur = (ivp_controller_slot_t *)data[j];
             const bool tie_shift = use_reference_tiebreak
                 ? cur->handle.slot > key->handle.slot
-                : cur->registration_sequence > key->registration_sequence;
+                : cur->base.registration_sequence >
+                      key->base.registration_sequence;
             const bool should_shift =
                 (cur->priority < key->priority) ||
                 (cur->priority == key->priority && tie_shift);
