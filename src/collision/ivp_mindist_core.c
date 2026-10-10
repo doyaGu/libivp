@@ -635,47 +635,41 @@ void ivp_mindist_mgr_destroy(ivp_mindist_mgr_t *mm)
     mm->recheck_diff_storage = NULL;
 }
 
-/* IVP_Diff_Hash replacement: same resulting order (found -> swapped to n_found) */
-typedef struct diff_hash {
-    ivp_coll_fvector_t *v;
-    int n_found_objects;
-} diff_hash_t;
+/* Both the allocation preflight and the live commit reproduce the
+ * reference Diff_Hash partition.  The only difference is whether a swap is
+ * allowed to update collision-vector backlinks. */
+typedef struct ivp_ledge_partition {
+    ivp_collision_t **elements;
+    int count;
+    int found;
+    ivp_coll_fvector_t *live_vector;
+} ivp_ledge_partition_t;
 
-typedef struct pending_diff_hash {
-    ivp_pvec_t *collisions;
-    int n_found_objects;
-} pending_diff_hash_t;
-
-static bool pending_diff_hash_check_ledges(pending_diff_hash_t *dh,
-                                           const ivp_compact_ledge_t *l0,
-                                           const ivp_compact_ledge_t *l1)
+static void ledge_partition_swap(ivp_ledge_partition_t *partition,
+                                 int first, int second)
 {
-    for (int i = dh->n_found_objects; i < ivp_pvec_len(dh->collisions); i++) {
-        ivp_collision_t *collision = (ivp_collision_t *)ivp_pvec_at(dh->collisions, i);
-        const ivp_compact_ledge_t *ledges[2];
-        collision->cvt->get_ledges(collision, ledges);
-        if (ledges[0] == l0 && ledges[1] == l1) {
-            if (i > dh->n_found_objects) {
-                void *tmp = dh->collisions->elems[dh->n_found_objects];
-                dh->collisions->elems[dh->n_found_objects] = dh->collisions->elems[i];
-                dh->collisions->elems[i] = tmp;
-            }
-            dh->n_found_objects++;
-            return true;
-        }
+    if (partition->live_vector) {
+        ivp_coll_fvector_swap(partition->live_vector, first, second);
+        return;
     }
-    return false;
+    ivp_collision_t *tmp = partition->elements[first];
+    partition->elements[first] = partition->elements[second];
+    partition->elements[second] = tmp;
 }
 
-static bool diff_hash_check_ledges(diff_hash_t *dh, const ivp_compact_ledge_t *l0, const ivp_compact_ledge_t *l1)
+static bool ledge_partition_check(ivp_ledge_partition_t *partition,
+                                  const ivp_compact_ledge_t *l0,
+                                  const ivp_compact_ledge_t *l1)
 {
-    for (int i = dh->n_found_objects; i < dh->v->n; i++) {
-        ivp_collision_t *c = dh->v->elems[i];
+    for (int i = partition->found; i < partition->count; i++) {
+        ivp_collision_t *c = partition->elements[i];
         const ivp_compact_ledge_t *ls[2];
         c->cvt->get_ledges(c, ls);
         if (ls[0] == l0 && ls[1] == l1) {
-            if (i > dh->n_found_objects) ivp_coll_fvector_swap(dh->v, dh->n_found_objects, i);
-            dh->n_found_objects++;
+            if (i > partition->found) {
+                ledge_partition_swap(partition, partition->found, i);
+            }
+            partition->found++;
             return true;
         }
     }
@@ -696,9 +690,9 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
     ivp_pvec_init_with_allocator(&ledges0.ledges, allocator);
     ivp_pvec_init_with_allocator(&ledges1.ledges, allocator);
     ivp_pvec_t pending_collisions;
-    ivp_pvec_t existing_order;
+    ivp_coll_fvector_t existing_order;
     ivp_pvec_init_with_allocator(&pending_collisions, allocator);
-    ivp_pvec_init_with_allocator(&existing_order, allocator);
+    ivp_coll_fvector_init_with_allocator(&existing_order, allocator);
     bool committed = false;
     ivp_time_t now = ivp_env_get_current_time(env);
     if (!single_ledge0) {
@@ -756,20 +750,25 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
     /* Work out every allocation before changing the live collision vector.
      * The working copy reproduces Diff_Hash's swaps without touching collision
      * backlink indices. */
-    if (!ivp_pvec_reserve(&existing_order, mindists->n)) goto cleanup;
-    for (int i = 0; i < mindists->n; i++) {
-        int added = ivp_pvec_add(&existing_order, mindists->elems[i]);
-        IVP_ASSERT(added >= 0);
-        IVP_USE(added);
+    if (!ivp_coll_fvector_reserve(&existing_order, mindists->n)) goto cleanup;
+    if (mindists->n > 0) {
+        memcpy(existing_order.elems, mindists->elems,
+               (size_t)mindists->n * sizeof(*mindists->elems));
     }
-    pending_diff_hash_t pending_diff = { &existing_order, 0 };
+    existing_order.n = mindists->n;
+    ivp_ledge_partition_t pending_partition = {
+        .elements = existing_order.elems,
+        .count = existing_order.n,
+        .found = 0,
+        .live_vector = NULL
+    };
     for (int i = ivp_pvec_len(&ledges0.ledges) - 1; i >= 0; i--) {
         const ivp_compact_ledge_t *l0 =
             (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges0.ledges, i);
         for (int j = ivp_pvec_len(&ledges1.ledges) - 1; j >= 0; j--) {
             const ivp_compact_ledge_t *l1 =
                 (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges1.ledges, j);
-            if (pending_diff_hash_check_ledges(&pending_diff, l0, l1)) continue;
+            if (ledge_partition_check(&pending_partition, l0, l1)) continue;
             bool recursive = !ivp_ledge_is_terminal(l0) || !ivp_ledge_is_terminal(l1);
             ivp_mindist_t *pending = ivp_mindist_create(env, oo_watcher, recursive);
             if (!pending) goto cleanup;
@@ -794,7 +793,12 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
         }
     }
 
-    diff_hash_t dh = { mindists, 0 };
+    ivp_ledge_partition_t live_partition = {
+        .elements = mindists->elems,
+        .count = mindists->n,
+        .found = 0,
+        .live_vector = mindists
+    };
     int next_pending = 0;
     for (int i = ivp_pvec_len(&ledges0.ledges) - 1; i >= 0; i--) {
         const ivp_compact_ledge_t *l0 =
@@ -803,10 +807,11 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
         for (int j = ivp_pvec_len(&ledges1.ledges) - 1; j >= 0; j--) {
             const ivp_compact_ledge_t *l1 =
                 (const ivp_compact_ledge_t *)ivp_pvec_at(&ledges1.ledges, j);
-            if (diff_hash_check_ledges(&dh, l0, l1)) {
+            if (ledge_partition_check(&live_partition, l0, l1)) {
 #ifdef IVP_DEBUG_BUILD
                 {
-                    ivp_collision_t *found = dh.v->elems[dh.n_found_objects - 1];
+                    ivp_collision_t *found =
+                        live_partition.elements[live_partition.found - 1];
                     ivp_object_t *object[2];
                     found->cvt->get_objects(found, object);
                     IVP_ASSERT(object[0] == pop0);
@@ -828,7 +833,7 @@ void ivp_mindist_mgr_create_exact_mindists(struct ivp_object *pop0, struct ivp_o
     }
     IVP_ASSERT(next_pending == pending_collisions.n);
     /* delete unused collisions */
-    for (int x = mindists->n - 1; x >= dh.n_found_objects; x--) {
+    for (int x = mindists->n - 1; x >= live_partition.found; x--) {
         if (x >= mindists->n) continue;
         ivp_collision_t *c = mindists->elems[x];
         ivp_collision_delete(c);
@@ -850,7 +855,7 @@ cleanup:
         }
     }
     ivp_pvec_clear(&pending_collisions);
-    ivp_pvec_clear(&existing_order);
+    ivp_coll_fvector_clear(&existing_order);
     ivp_pvec_clear(&ledges0.ledges);
     ivp_pvec_clear(&ledges1.ledges);
 }
