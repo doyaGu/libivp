@@ -452,11 +452,11 @@ IVP_TEST(drive_steer_and_handbrake)
 
 IVP_TEST(wheel_look_ahead_order_does_not_change_visible_state)
 {
-    car_scene_t canonical;
+    car_scene_t baseline;
     car_scene_t perturbed;
-    bool ok = scene_create(&canonical, 1.7) &&
+    bool ok = scene_create(&baseline, 1.7) &&
               scene_create(&perturbed, 1.7) &&
-              ivp_car_system_init(&canonical.car, &canonical.tmpl) &&
+              ivp_car_system_init(&baseline.car, &baseline.tmpl) &&
               ivp_car_system_init(&perturbed.car, &perturbed.tmpl);
     bool reversed_multiple = false;
     for (int step = 0; ok && step < 240; step++) {
@@ -465,9 +465,9 @@ IVP_TEST(wheel_look_ahead_order_does_not_change_visible_state)
         reversed_multiple = reversed_multiple ||
                             ivp_pvec_len(look_ahead) > 1;
         reverse_pointer_vector(look_ahead);
-        ivp_environment_simulate_one_psi(canonical.env);
+        ivp_environment_simulate_one_psi(baseline.env);
         ivp_environment_simulate_one_psi(perturbed.env);
-        if (!car_scenes_visible_state_equal(&canonical, &perturbed)) {
+        if (!car_scenes_visible_state_equal(&baseline, &perturbed)) {
             fprintf(stderr,
                     "wheel look-ahead order changed state at step %d\n",
                     step);
@@ -476,7 +476,7 @@ IVP_TEST(wheel_look_ahead_order_does_not_change_visible_state)
     }
     ok = ok && reversed_multiple;
     scene_destroy(&perturbed);
-    scene_destroy(&canonical);
+    scene_destroy(&baseline);
     IVP_ASSERT_TRUE(ok);
 }
 

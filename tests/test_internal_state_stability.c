@@ -763,17 +763,17 @@ static bool strong_compound_scenes_equal(
 
 static bool run_perturbation(unsigned perturbations)
 {
-    strong_scene_t canonical = {0};
+    strong_scene_t baseline = {0};
     strong_scene_t perturbed = {0};
-    bool ok = strong_scene_init(&canonical, 0u, 0) &&
+    bool ok = strong_scene_init(&baseline, 0u, 0) &&
               strong_scene_init(&perturbed, perturbations, 0);
 
     for (int step = 0; ok && step < 32; step++) {
         if (perturbations & STRONG_PERTURB_ARENAS) {
             reset_arena_without_writing(
-                &canonical.environment->pl->short_term_mem);
+                &baseline.environment->pl->short_term_mem);
             reset_arena_without_writing(
-                &canonical.environment->pl->sim_unit_mem.arena);
+                &baseline.environment->pl->sim_unit_mem.arena);
             ok = poison_arena(&perturbed.environment->pl->short_term_mem,
                               0x6000u,
                               (unsigned char)(0x5au ^ (unsigned char)step)) &&
@@ -800,50 +800,50 @@ static bool run_perturbation(unsigned perturbations)
                                      STRONG_OBJECT_COUNT);
         }
 
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
-        if (!strong_scenes_equal(&canonical, &perturbed)) {
+        if (!strong_scenes_equal(&baseline, &perturbed)) {
             fprintf(stderr,
                     "visible state diverged at step %d (perturbations=%u)\n",
                     step, perturbations);
-            report_strong_scene_difference(&canonical, &perturbed);
+            report_strong_scene_difference(&baseline, &perturbed);
             ok = false;
         }
     }
 
     ivp_environment_destroy(perturbed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     return ok;
 }
 
 IVP_TEST(pool_history_does_not_change_visible_state)
 {
-    strong_scene_t canonical = {0};
+    strong_scene_t baseline = {0};
     strong_scene_t warmed = {0};
-    bool ok = strong_scene_init(&canonical, 0u, 0) &&
+    bool ok = strong_scene_init(&baseline, 0u, 0) &&
               strong_scene_init(&warmed, 0u,
                                 STRONG_POOL_WARMUP_COUNT);
     bool object_slots_changed = false;
     bool controller_slots_changed = false;
     for (int i = 0; ok && i < STRONG_OBJECT_COUNT; i++) {
         object_slots_changed = object_slots_changed ||
-            canonical.objects[i]->handle.slot !=
+            baseline.objects[i]->handle.slot !=
                 warmed.objects[i]->handle.slot;
-        if (canonical.objects[i]->creation_sequence !=
+        if (baseline.objects[i]->creation_sequence !=
             warmed.objects[i]->creation_sequence) {
             ok = false;
         }
     }
     for (int i = 0; ok && i < 2; i++) {
         controller_slots_changed = controller_slots_changed ||
-            canonical.controller_handles[i].slot !=
+            baseline.controller_handles[i].slot !=
                 warmed.controller_handles[i].slot;
     }
     ok = ok && object_slots_changed && controller_slots_changed;
     for (int step = 0; ok && step < 32; step++) {
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(warmed.environment);
-        if (!strong_scenes_equal(&canonical, &warmed)) {
+        if (!strong_scenes_equal(&baseline, &warmed)) {
             fprintf(stderr,
                     "pool history changed visible state at step %d\n",
                     step);
@@ -851,7 +851,7 @@ IVP_TEST(pool_history_does_not_change_visible_state)
         }
     }
     ivp_environment_destroy(warmed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -910,7 +910,7 @@ static bool strong_parallel_scenes_equal(
     return true;
 }
 
-IVP_TEST(worker_count_does_not_change_canonical_state)
+IVP_TEST(worker_count_does_not_change_visible_state)
 {
     strong_parallel_scene_t serial = {0};
     strong_parallel_scene_t parallel = {0};
@@ -922,7 +922,7 @@ IVP_TEST(worker_count_does_not_change_canonical_state)
         ivp_environment_simulate_one_psi(parallel.environment);
         if (!strong_parallel_scenes_equal(&serial, &parallel)) {
             fprintf(stderr,
-                    "worker count changed canonical state at step %d\n",
+                    "worker count changed visible state at step %d\n",
                     step);
             ok = false;
         }
@@ -1017,9 +1017,9 @@ IVP_TEST(relocated_and_shared_geometry_do_not_change_visible_state)
 
 IVP_TEST(contact_stack_order_does_not_change_visible_state)
 {
-    strong_cube_scene_t canonical = {0};
+    strong_cube_scene_t baseline = {0};
     strong_cube_scene_t perturbed = {0};
-    bool ok = strong_cube_scene_init(&canonical, true) &&
+    bool ok = strong_cube_scene_init(&baseline, true) &&
               strong_cube_scene_init(&perturbed, true);
     bool reversed_multiple_contacts = false;
     for (int step = 0; ok && step < 180; step++) {
@@ -1038,7 +1038,7 @@ IVP_TEST(contact_stack_order_does_not_change_visible_state)
         }
         scramble_contact_lists(perturbed.objects,
                                STRONG_CUBE_OBJECT_COUNT);
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
         if (!contact_lists_follow_creation_order(
                 perturbed.objects, STRONG_CUBE_OBJECT_COUNT)) {
@@ -1047,7 +1047,7 @@ IVP_TEST(contact_stack_order_does_not_change_visible_state)
                     step);
             ok = false;
         }
-        if (!strong_cube_scenes_equal(&canonical, &perturbed)) {
+        if (!strong_cube_scenes_equal(&baseline, &perturbed)) {
             fprintf(stderr,
                     "contact stack order changed visible state at step %d\n",
                     step);
@@ -1056,15 +1056,15 @@ IVP_TEST(contact_stack_order_does_not_change_visible_state)
     }
     ok = ok && reversed_multiple_contacts;
     strong_cube_scene_destroy(&perturbed);
-    strong_cube_scene_destroy(&canonical);
+    strong_cube_scene_destroy(&baseline);
     IVP_ASSERT_TRUE(ok);
 }
 
 IVP_TEST(mindist_stack_order_does_not_change_visible_state)
 {
-    strong_cube_scene_t canonical = {0};
+    strong_cube_scene_t baseline = {0};
     strong_cube_scene_t perturbed = {0};
-    bool ok = strong_cube_scene_init(&canonical, true) &&
+    bool ok = strong_cube_scene_init(&baseline, true) &&
               strong_cube_scene_init(&perturbed, true);
     bool reversed_multiple_mindists = false;
     for (int step = 0; ok && step < 180; step++) {
@@ -1079,9 +1079,9 @@ IVP_TEST(mindist_stack_order_does_not_change_visible_state)
         scramble_mindist_manager(perturbed.environment);
         scramble_object_mindists(perturbed.objects,
                                  STRONG_CUBE_OBJECT_COUNT);
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
-        if (!strong_cube_scenes_equal(&canonical, &perturbed)) {
+        if (!strong_cube_scenes_equal(&baseline, &perturbed)) {
             fprintf(stderr,
                     "mindist stack order changed visible state at step %d\n",
                     step);
@@ -1090,21 +1090,21 @@ IVP_TEST(mindist_stack_order_does_not_change_visible_state)
     }
     ok = ok && reversed_multiple_mindists;
     strong_cube_scene_destroy(&perturbed);
-    strong_cube_scene_destroy(&canonical);
+    strong_cube_scene_destroy(&baseline);
     IVP_ASSERT_TRUE(ok);
 }
 
 IVP_TEST(compound_object_order_does_not_change_visible_state)
 {
-    strong_compound_scene_t canonical = {0};
+    strong_compound_scene_t baseline = {0};
     strong_compound_scene_t perturbed = {0};
-    bool ok = strong_compound_scene_init(&canonical) &&
+    bool ok = strong_compound_scene_init(&baseline) &&
               strong_compound_scene_init(&perturbed);
     for (int step = 0; ok && step < 180; step++) {
         reverse_pvec(&perturbed.parts[0]->physical_core->objects);
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
-        if (!strong_compound_scenes_equal(&canonical, &perturbed)) {
+        if (!strong_compound_scenes_equal(&baseline, &perturbed)) {
             fprintf(stderr,
                     "compound object order changed visible state at step %d\n",
                     step);
@@ -1112,7 +1112,7 @@ IVP_TEST(compound_object_order_does_not_change_visible_state)
         }
     }
     ivp_environment_destroy(perturbed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1176,33 +1176,33 @@ static bool strong_queue_revive_scene(
 
 IVP_TEST(revive_queue_order_does_not_change_observable_order)
 {
-    ivp_environment_t *canonical = NULL;
+    ivp_environment_t *baseline = NULL;
     ivp_environment_t *perturbed = NULL;
-    ivp_object_t *canonical_objects[STRONG_REVIVE_OBJECT_COUNT] = {0};
+    ivp_object_t *baseline_objects[STRONG_REVIVE_OBJECT_COUNT] = {0};
     ivp_object_t *perturbed_objects[STRONG_REVIVE_OBJECT_COUNT] = {0};
-    ivp_listener_object_t canonical_listener;
+    ivp_listener_object_t baseline_listener;
     ivp_listener_object_t perturbed_listener;
-    strong_revive_capture_t canonical_capture;
+    strong_revive_capture_t baseline_capture;
     strong_revive_capture_t perturbed_capture;
     bool ok = strong_queue_revive_scene(
-                  &canonical, canonical_objects, &canonical_listener,
-                  &canonical_capture) &&
+                  &baseline, baseline_objects, &baseline_listener,
+                  &baseline_capture) &&
               strong_queue_revive_scene(
                   &perturbed, perturbed_objects, &perturbed_listener,
                   &perturbed_capture);
     if (ok) {
         reverse_pvec(&perturbed->pl->core_revive_list);
-        ivp_environment_simulate_one_psi(canonical);
+        ivp_environment_simulate_one_psi(baseline);
         ivp_environment_simulate_one_psi(perturbed);
-        ok = canonical_capture.count == STRONG_REVIVE_OBJECT_COUNT &&
+        ok = baseline_capture.count == STRONG_REVIVE_OBJECT_COUNT &&
              perturbed_capture.count == STRONG_REVIVE_OBJECT_COUNT &&
-             memcmp(canonical_capture.keys, perturbed_capture.keys,
-                    sizeof(canonical_capture.keys)) == 0;
+             memcmp(baseline_capture.keys, perturbed_capture.keys,
+                    sizeof(baseline_capture.keys)) == 0;
         for (int i = 0; ok && i < STRONG_REVIVE_OBJECT_COUNT; i++) {
             ok = visible_core_state_equal(
-                     canonical_objects[i]->physical_core,
+                     baseline_objects[i]->physical_core,
                      perturbed_objects[i]->physical_core) &&
-                 canonical_objects[i]->object_movement_state ==
+                 baseline_objects[i]->object_movement_state ==
                      perturbed_objects[i]->object_movement_state;
         }
     }
@@ -1210,12 +1210,12 @@ IVP_TEST(revive_queue_order_does_not_change_observable_order)
         ivp_environment_remove_listener_object_global(
             perturbed, &perturbed_listener);
     }
-    if (canonical) {
+    if (baseline) {
         ivp_environment_remove_listener_object_global(
-            canonical, &canonical_listener);
+            baseline, &baseline_listener);
     }
     ivp_environment_destroy(perturbed);
-    ivp_environment_destroy(canonical);
+    ivp_environment_destroy(baseline);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1306,28 +1306,28 @@ static void strong_cluster_scene_destroy(strong_cluster_scene_t *scene)
 
 IVP_TEST(cluster_link_order_does_not_change_observable_order)
 {
-    strong_cluster_scene_t canonical;
+    strong_cluster_scene_t baseline;
     strong_cluster_scene_t perturbed;
-    bool ok = strong_cluster_scene_init(&canonical) &&
+    bool ok = strong_cluster_scene_init(&baseline) &&
               strong_cluster_scene_init(&perturbed);
     for (int step = 0; ok && step < 8; step++) {
         reverse_cluster_tree(
             ivp_environment_get_root_cluster(perturbed.environment));
-        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(baseline.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
-        ok = canonical.capture.count == perturbed.capture.count &&
-             memcmp(canonical.capture.keys, perturbed.capture.keys,
-                    (size_t)canonical.capture.count *
-                        sizeof(canonical.capture.keys[0])) == 0;
+        ok = baseline.capture.count == perturbed.capture.count &&
+             memcmp(baseline.capture.keys, perturbed.capture.keys,
+                    (size_t)baseline.capture.count *
+                        sizeof(baseline.capture.keys[0])) == 0;
         for (int i = 0; ok && i < STRONG_CLUSTER_OBJECT_COUNT; i++) {
             ok = visible_core_state_equal(
-                canonical.objects[i]->physical_core,
+                baseline.objects[i]->physical_core,
                 perturbed.objects[i]->physical_core);
         }
     }
-    ok = ok && canonical.capture.count >= STRONG_CLUSTER_OBJECT_COUNT;
+    ok = ok && baseline.capture.count >= STRONG_CLUSTER_OBJECT_COUNT;
     strong_cluster_scene_destroy(&perturbed);
-    strong_cluster_scene_destroy(&canonical);
+    strong_cluster_scene_destroy(&baseline);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1441,28 +1441,28 @@ static bool strong_phantom_scene_init(strong_phantom_scene_t *scene)
 
 IVP_TEST(phantom_hash_order_does_not_change_callback_order)
 {
-    strong_phantom_scene_t canonical;
+    strong_phantom_scene_t baseline;
     strong_phantom_scene_t perturbed;
-    bool ok = strong_phantom_scene_init(&canonical) &&
+    bool ok = strong_phantom_scene_init(&baseline) &&
               strong_phantom_scene_init(&perturbed);
     if (ok) {
         set_core_set_iteration_order(
-            &canonical.phantom->set_of_cores->set,
-            canonical.objects, STRONG_PHANTOM_CORE_COUNT, false);
+            &baseline.phantom->set_of_cores->set,
+            baseline.objects, STRONG_PHANTOM_CORE_COUNT, false);
         set_core_set_iteration_order(
             &perturbed.phantom->set_of_cores->set,
             perturbed.objects, STRONG_PHANTOM_CORE_COUNT, true);
-        ivp_controller_phantom_destroy(canonical.phantom);
-        canonical.phantom = NULL;
+        ivp_controller_phantom_destroy(baseline.phantom);
+        baseline.phantom = NULL;
         ivp_controller_phantom_destroy(perturbed.phantom);
         perturbed.phantom = NULL;
-        ok = canonical.capture.count == STRONG_PHANTOM_CORE_COUNT &&
+        ok = baseline.capture.count == STRONG_PHANTOM_CORE_COUNT &&
              perturbed.capture.count == STRONG_PHANTOM_CORE_COUNT &&
-             memcmp(canonical.capture.keys, perturbed.capture.keys,
-                    sizeof(canonical.capture.keys)) == 0;
+             memcmp(baseline.capture.keys, perturbed.capture.keys,
+                    sizeof(baseline.capture.keys)) == 0;
     }
     ivp_environment_destroy(perturbed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1549,32 +1549,32 @@ static bool strong_attacher_scene_init(strong_attacher_scene_t *scene,
 
 IVP_TEST(attacher_hash_order_does_not_change_callback_order)
 {
-    strong_attacher_scene_t canonical;
+    strong_attacher_scene_t baseline;
     strong_attacher_scene_t perturbed;
-    bool ok = strong_attacher_scene_init(&canonical, false) &&
+    bool ok = strong_attacher_scene_init(&baseline, false) &&
               strong_attacher_scene_init(&perturbed, true);
     if (ok) {
-        ok = canonical.capture.created_count ==
+        ok = baseline.capture.created_count ==
                  STRONG_ATTACHER_CORE_COUNT &&
              perturbed.capture.created_count ==
                  STRONG_ATTACHER_CORE_COUNT &&
-             memcmp(canonical.capture.created,
+             memcmp(baseline.capture.created,
                     perturbed.capture.created,
-                    sizeof(canonical.capture.created)) == 0;
+                    sizeof(baseline.capture.created)) == 0;
     }
     if (ok) {
-        ivp_set_active_destroy(&canonical.cores);
+        ivp_set_active_destroy(&baseline.cores);
         ivp_set_active_destroy(&perturbed.cores);
-        ok = canonical.capture.deleted_count ==
+        ok = baseline.capture.deleted_count ==
                  STRONG_ATTACHER_CORE_COUNT &&
              perturbed.capture.deleted_count ==
                  STRONG_ATTACHER_CORE_COUNT &&
-             memcmp(canonical.capture.deleted,
+             memcmp(baseline.capture.deleted,
                     perturbed.capture.deleted,
-                    sizeof(canonical.capture.deleted)) == 0;
+                    sizeof(baseline.capture.deleted)) == 0;
     }
     ivp_environment_destroy(perturbed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1682,37 +1682,37 @@ static bool strong_forcefield_scene_init(strong_forcefield_scene_t *scene,
 
 IVP_TEST(forcefield_hash_order_does_not_change_attachment_order)
 {
-    strong_forcefield_scene_t canonical;
+    strong_forcefield_scene_t baseline;
     strong_forcefield_scene_t perturbed;
-    bool ok = strong_forcefield_scene_init(&canonical, false) &&
+    bool ok = strong_forcefield_scene_init(&baseline, false) &&
               strong_forcefield_scene_init(&perturbed, true);
     if (ok) {
-        ok = ivp_pvec_len(&canonical.field.attached_cores) ==
+        ok = ivp_pvec_len(&baseline.field.attached_cores) ==
                  STRONG_FORCEFIELD_CORE_COUNT &&
              ivp_pvec_len(&perturbed.field.attached_cores) ==
                  STRONG_FORCEFIELD_CORE_COUNT;
         uint64_t previous_key = 0u;
         for (int i = 0; ok && i < STRONG_FORCEFIELD_CORE_COUNT; i++) {
-            ivp_core_t *canonical_core = (ivp_core_t *)ivp_pvec_at(
-                &canonical.field.attached_cores, i);
+            ivp_core_t *baseline_core = (ivp_core_t *)ivp_pvec_at(
+                &baseline.field.attached_cores, i);
             ivp_core_t *perturbed_core = (ivp_core_t *)ivp_pvec_at(
                 &perturbed.field.attached_cores, i);
-            uint64_t canonical_key =
-                ivp_core_stable_order_key(canonical_core);
+            uint64_t baseline_key =
+                ivp_core_stable_order_key(baseline_core);
             uint64_t perturbed_key =
                 ivp_core_stable_order_key(perturbed_core);
-            ok = canonical_key == perturbed_key &&
-                 (i == 0 || previous_key < canonical_key);
-            previous_key = canonical_key;
+            ok = baseline_key == perturbed_key &&
+                 (i == 0 || previous_key < baseline_key);
+            previous_key = baseline_key;
         }
     }
     if (ok) reverse_pvec(&perturbed.field.attached_cores);
     ivp_forcefield_destroy(&perturbed.field);
-    ivp_forcefield_destroy(&canonical.field);
+    ivp_forcefield_destroy(&baseline.field);
     ivp_set_active_destroy(&perturbed.cores);
-    ivp_set_active_destroy(&canonical.cores);
+    ivp_set_active_destroy(&baseline.cores);
     ivp_environment_destroy(perturbed.environment);
-    ivp_environment_destroy(canonical.environment);
+    ivp_environment_destroy(baseline.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1780,12 +1780,12 @@ static bool strong_run_event_listener_scene(bool perturb_registry,
 
 IVP_TEST(event_listener_registry_history_does_not_change_callback_order)
 {
-    strong_event_capture_t canonical;
+    strong_event_capture_t baseline;
     strong_event_capture_t perturbed;
-    bool ok = strong_run_event_listener_scene(false, &canonical) &&
+    bool ok = strong_run_event_listener_scene(false, &baseline) &&
               strong_run_event_listener_scene(true, &perturbed) &&
-              memcmp(canonical.ids, perturbed.ids,
-                     sizeof(canonical.ids)) == 0;
+              memcmp(baseline.ids, perturbed.ids,
+                     sizeof(baseline.ids)) == 0;
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1800,7 +1800,7 @@ int main(void)
     IVP_REGISTER(object_mindist_order_does_not_change_visible_state);
     IVP_REGISTER(combined_internal_perturbations_do_not_change_visible_state);
     IVP_REGISTER(pool_history_does_not_change_visible_state);
-    IVP_REGISTER(worker_count_does_not_change_canonical_state);
+    IVP_REGISTER(worker_count_does_not_change_visible_state);
     IVP_REGISTER(relocated_and_shared_geometry_do_not_change_visible_state);
     IVP_REGISTER(contact_stack_order_does_not_change_visible_state);
     IVP_REGISTER(mindist_stack_order_does_not_change_visible_state);
