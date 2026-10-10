@@ -208,7 +208,9 @@ static void fac_add_object(fac_entry_t *e, ivp_object_t *obj)
     e->objects[e->n_objects++] = obj;
 }
 
-/* the reference destructor: silent removal, active values, free */
+/* The environment descriptor owns the anchors and active-value dependencies
+ * of every registered controller.  The factory only owns the state storage
+ * and the check-distance attachment, which is not an environment controller. */
 static void fac_destroy_entry(fac_registry_t *r, int index)
 {
     fac_entry_t e = r->entries[index];
@@ -219,19 +221,8 @@ static void fac_destroy_entry(fac_registry_t *r, int index)
          * ~IVP_Controller_Motion: remove_controller_from_core (a stale handle
          * of a controller the environment already removed is ignored) */
         (void)ivp_environment_remove_dependent_controller(env, e.handle, true);
-    }
-    switch (e.kind) {
-    case FAC_FORCE:  ivp_force_actuator_unbind_active((ivp_force_actuator_state_t *)e.state); break;
-    case FAC_TORQUE: ivp_torque_actuator_unbind_active((ivp_torque_actuator_state_t *)e.state); break;
-    case FAC_ROT_MOT: ivp_rot_mot_unbind_active((ivp_rot_mot_state_t *)e.state); break;
-    case FAC_SPRING: ivp_spring_unbind_active((ivp_spring_state_t *)e.state); break;
-    case FAC_CHECK_DIST: ivp_check_dist_detach((ivp_check_dist_state_t *)e.state); break;
-    case FAC_SUSPENSION:
-    case FAC_STABILIZER:
-    case FAC_MOTION:
-    case FAC_CONSTRAINT:
-    default:
-        break;
+    } else if (e.kind == FAC_CHECK_DIST) {
+        ivp_check_dist_detach((ivp_check_dist_state_t *)e.state);
     }
     ivp_free(env->allocator, e.state, e.state_size);
 }

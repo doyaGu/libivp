@@ -155,6 +155,35 @@ IVP_TEST(factory_force_world_anchor) {
     ivp_environment_destroy(env); /* frees the factory controller */
 }
 
+IVP_TEST(factory_state_outlives_direct_controller_removal) {
+    ivp_environment_t *env = make_env(false);
+    ivp_object_t *a = make_ball(env, 0.0, 0.0, 0.0, false);
+    ivp_object_t *b = make_ball(env, 1.0, 0.0, 0.0, false);
+    ivp_template_anchor_t an[2];
+    anchor_os(&an[0], a, 0.0, 0.0, 0.0);
+    anchor_os(&an[1], b, 0.0, 0.0, 0.0);
+    ivp_active_float_t *force = ivp_active_float_terminal_create(NULL, "force", 2.0);
+    ivp_template_force_t tf;
+    ivp_template_force_init(&tf);
+    tf.anchors[0] = &an[0];
+    tf.anchors[1] = &an[1];
+    tf.active_float_force = force;
+    const int n0 = controller_count(env);
+    ivp_force_actuator_state_t *f = ivp_controller_factory_create_force(env, &tf);
+    IVP_ASSERT_NOT_NULL(f);
+    ivp_controller_handle_t h = ivp_controller_factory_get_handle(env, f);
+
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, h));
+    IVP_ASSERT_EQ(controller_count(env), n0);
+    IVP_ASSERT_TRUE(f->active_float_force == NULL);
+    ivp_active_float_set(force, 3.0);
+    IVP_ASSERT_NEAR(f->force, IVP_REAL(2.0), 0.0);
+
+    IVP_ASSERT_TRUE(ivp_controller_factory_delete(env, f));
+    ivp_environment_destroy(env);
+    ivp_active_float_remove_ref(force);
+}
+
 IVP_TEST(factory_torque_axis_active_values) {
     ivp_environment_t *env = make_env(false);
     ivp_object_t *a = make_ball(env, 0.0, 0.0, 0.0, false);
@@ -420,6 +449,7 @@ int main(void)
     IVP_REGISTER(factory_template_defaults);
     IVP_REGISTER(factory_force_matches_setup_and_announces);
     IVP_REGISTER(factory_force_world_anchor);
+    IVP_REGISTER(factory_state_outlives_direct_controller_removal);
     IVP_REGISTER(factory_torque_axis_active_values);
     IVP_REGISTER(factory_rotmot);
     IVP_REGISTER(factory_spring_relative_and_active);
