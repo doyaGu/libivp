@@ -12,6 +12,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_registry.h"
 #include "controllers/ivp_controller_system.h"
 #include <math.h>
 #include <stdio.h>
@@ -382,6 +383,61 @@ static ivp_environment_t *env_create_with_fail_allocator(env_fail_alloc_state_t 
     ivp_environment_config_init(&cfg);
     cfg.allocator = allocator;
     return ivp_environment_create(&cfg);
+}
+
+typedef struct registry_probe {
+    int dense_index;
+} registry_probe_t;
+
+static void registry_probe_set_index(void *element, int index, void *userdata)
+{
+    IVP_UNUSED(userdata);
+    ((registry_probe_t *)element)->dense_index = index;
+}
+
+static int registry_probe_get_index(const void *element)
+{
+    return ((const registry_probe_t *)element)->dense_index;
+}
+
+IVP_TEST(registry_removal_reuses_slot_without_allocation) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator = {
+        .alloc = env_fail_alloc,
+        .realloc = env_fail_realloc,
+        .free = env_fail_free,
+        .ctx = &state
+    };
+    ivp_registry_t registry;
+    IVP_ASSERT_EQ(ivp_registry_init(&registry, &allocator, 0,
+                                    registry_probe_set_index, NULL,
+                                    registry_probe_get_index),
+                  IVP_OK);
+
+    registry_probe_t first = { .dense_index = -1 };
+    ivp_handle_t first_handle = ivp_handle_invalid();
+    IVP_ASSERT_EQ(ivp_registry_insert(&registry, &first, &first_handle),
+                  IVP_OK);
+    IVP_ASSERT_EQ(first_handle.slot, 0u);
+
+    const int attempts_before_remove = state.attempts;
+    state.fail_from = attempts_before_remove + 1;
+    void *removed = NULL;
+    IVP_ASSERT_TRUE(ivp_registry_remove_by_handle(
+        &registry, first_handle, &removed));
+    IVP_ASSERT_TRUE(removed == &first);
+    IVP_ASSERT_EQ(state.attempts, attempts_before_remove);
+
+    state.fail_from = 0;
+    registry_probe_t second = { .dense_index = -1 };
+    ivp_handle_t second_handle = ivp_handle_invalid();
+    IVP_ASSERT_EQ(ivp_registry_insert(&registry, &second, &second_handle),
+                  IVP_OK);
+    IVP_ASSERT_EQ(second_handle.slot, first_handle.slot);
+    IVP_ASSERT_TRUE(second_handle.generation != first_handle.generation);
+
+    ivp_registry_destroy(&registry, false, 0);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
 }
 
 IVP_TEST(env_create_allocation_failures_are_recoverable) {
@@ -2435,6 +2491,7 @@ int main(void) {
     /* Environment */
     IVP_REGISTER(env_create_destroy);
     IVP_REGISTER(env_create_with_config);
+    IVP_REGISTER(registry_removal_reuses_slot_without_allocation);
     IVP_REGISTER(env_create_allocation_failures_are_recoverable);
     IVP_REGISTER(env_create_object);
     IVP_REGISTER(env_create_object_reserves_psi_scratch_atomically);

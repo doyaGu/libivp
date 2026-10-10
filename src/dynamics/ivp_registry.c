@@ -122,6 +122,16 @@ static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
         return true;
     }
 
+    const int slot_count = ivp_pvec_len(&reg->slots);
+    if (slot_count == INT_MAX) {
+        return false;
+    }
+    const int required_capacity = slot_count + 1;
+    if (!ivp_pvec_reserve(&reg->free_slots, required_capacity) ||
+        !ivp_pvec_reserve(&reg->slots, required_capacity)) {
+        return false;
+    }
+
     ivp_registry_slot_meta_t *meta =
         (ivp_registry_slot_meta_t *)ivp_alloc(reg->alloc, sizeof(ivp_registry_slot_meta_t));
     if (!meta) {
@@ -131,12 +141,14 @@ static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
     meta->generation = 1;
     meta->element = NULL;
 
-    if (ivp_pvec_add(&reg->slots, meta) < 0) {
+    const int slot_index = ivp_pvec_add(&reg->slots, meta);
+    IVP_ASSERT(slot_index == slot_count);
+    if (slot_index != slot_count) {
         ivp_free(reg->alloc, meta, sizeof(ivp_registry_slot_meta_t));
         return false;
     }
 
-    const uint32_t slot = (uint32_t)(ivp_pvec_len(&reg->slots) - 1);
+    const uint32_t slot = (uint32_t)slot_index;
 
     *out_slot = slot;
     *out_generation = meta->generation;
@@ -200,6 +212,10 @@ bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
     if (!meta || meta->generation != handle.generation || !meta->element) {
         return false;
     }
+    IVP_ASSERT(reg->free_slots.n < reg->free_slots.cap);
+    if (reg->free_slots.n >= reg->free_slots.cap) {
+        return false;
+    }
     void *elem = meta->element;
 
     const int idx = reg->get_index(elem);
@@ -208,8 +224,8 @@ bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
     meta->element = NULL;
     meta->generation++;
     if (meta->generation == 0) meta->generation = 1;
-    (void)ivp_pvec_add(&reg->free_slots,
-                       (void *)(uintptr_t)(handle.slot + 1u));
+    reg->free_slots.elems[reg->free_slots.n++] =
+        (void *)(uintptr_t)(handle.slot + 1u);
 
     *out_removed_elem = elem;
     return true;
