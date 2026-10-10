@@ -10,7 +10,6 @@
 #include "controllers/ivp_controller_ref.h"
 #include <string.h>
 
-#include "ivp_controller_attach.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_sim_internal.h"
 
@@ -191,7 +190,8 @@ bool ivp_forcefield_attach_set(ivp_forcefield_state_t *state, ivp_environment_t 
     state->allocator = *ivp_env_get_allocator(env);
     state->allocator_bound = true;
     ivp_pvec_init_with_allocator(&state->attached_cores, &state->allocator);
-    state->controller = ivp_ctrl_attach_create(env, IVP_CP_ACTUATOR, ivp_controller_forcefield, state);
+    state->controller = ivp_environment_create_core_controller(
+        env, IVP_CP_ACTUATOR, ivp_controller_forcefield, state);
     if (!ivp_controller_handle_is_valid(state->controller)) return false;
     state->environment = env;
     state->set_of_cores = set_of_cores;

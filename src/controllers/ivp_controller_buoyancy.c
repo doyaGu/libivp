@@ -27,7 +27,6 @@
 #include <string.h>
 
 #include "ivp_buoyancy_solver.h"
-#include "ivp_controller_attach.h"
 #include "controllers/ivp_controller_ref.h"
 
 /* reference ivp_physics.hxx */
@@ -829,8 +828,9 @@ ivp_buoyancy_attacher_t *ivp_buoyancy_attacher_create(ivp_environment_t *env,
     ba->template_buoyancy.core_count = 0;
     ba->template_buoyancy.attacher = ba;
     ba->environment = env;
-    ba->controller = ivp_ctrl_attach_create(env, IVP_CP_FORCEFIELDS, ivp_controller_buoyancy,
-                                            &ba->template_buoyancy);
+    ba->controller = ivp_environment_create_core_controller(
+        env, IVP_CP_FORCEFIELDS, ivp_controller_buoyancy,
+        &ba->template_buoyancy);
     if (!ivp_controller_handle_is_valid(ba->controller)) {
         ivp_free(allocator, ba, sizeof(*ba));
         return NULL;
