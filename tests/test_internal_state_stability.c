@@ -31,7 +31,9 @@ enum strong_perturbation {
     STRONG_PERTURB_SIM_UNITS = 1u << 2,
     STRONG_PERTURB_ARENAS = 1u << 3,
     STRONG_PERTURB_CONTACT_LISTS = 1u << 4,
-    STRONG_PERTURB_ALL = (1u << 5) - 1u
+    STRONG_PERTURB_MINDIST_MANAGER = 1u << 5,
+    STRONG_PERTURB_OBJECT_MINDISTS = 1u << 6,
+    STRONG_PERTURB_ALL = (1u << 7) - 1u
 };
 
 typedef struct strong_scene {
@@ -162,6 +164,51 @@ static void reverse_contact_list(ivp_fr_system_t *system)
         contact = next;
     }
     system->first_friction_dist = new_head;
+}
+
+static void reverse_mindist_list(ivp_mindist_t **head)
+{
+    ivp_mindist_t *mindist = *head;
+    ivp_mindist_t *new_head = NULL;
+    while (mindist) {
+        ivp_mindist_t *next = mindist->next;
+        mindist->next = mindist->prev;
+        mindist->prev = next;
+        new_head = mindist;
+        mindist = next;
+    }
+    *head = new_head;
+}
+
+static void reverse_object_mindist_list(ivp_md_synapse_t **head)
+{
+    ivp_md_synapse_t *synapse = *head;
+    ivp_md_synapse_t *new_head = NULL;
+    while (synapse) {
+        ivp_md_synapse_t *next = synapse->next;
+        synapse->next = synapse->prev;
+        synapse->prev = next;
+        new_head = synapse;
+        synapse = next;
+    }
+    *head = new_head;
+}
+
+static void scramble_mindist_manager(ivp_environment_t *environment)
+{
+    ivp_mindist_mgr_t *manager = &environment->pl->mindist_mgr;
+    reverse_mindist_list(&manager->exact_mindists);
+    reverse_mindist_list(&manager->invalid_mindists);
+    reverse_pvec(&manager->wheel_look_ahead_mindists);
+}
+
+static void scramble_object_mindists(ivp_object_t *const *objects,
+                                     int object_count)
+{
+    for (int i = 0; i < object_count; i++) {
+        reverse_object_mindist_list(&objects[i]->exact_synapses);
+        reverse_object_mindist_list(&objects[i]->invalid_synapses);
+    }
 }
 
 static void scramble_contact_lists(ivp_object_t *const *objects,
@@ -694,6 +741,13 @@ static bool run_perturbation(unsigned perturbations)
             scramble_contact_lists(perturbed.objects,
                                    STRONG_OBJECT_COUNT);
         }
+        if (perturbations & STRONG_PERTURB_MINDIST_MANAGER) {
+            scramble_mindist_manager(perturbed.environment);
+        }
+        if (perturbations & STRONG_PERTURB_OBJECT_MINDISTS) {
+            scramble_object_mindists(perturbed.objects,
+                                     STRONG_OBJECT_COUNT);
+        }
 
         ivp_environment_simulate_one_psi(canonical.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
@@ -873,6 +927,16 @@ IVP_TEST(contact_list_order_does_not_change_visible_state)
     IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_CONTACT_LISTS));
 }
 
+IVP_TEST(mindist_manager_order_does_not_change_visible_state)
+{
+    IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_MINDIST_MANAGER));
+}
+
+IVP_TEST(object_mindist_order_does_not_change_visible_state)
+{
+    IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_OBJECT_MINDISTS));
+}
+
 IVP_TEST(combined_internal_perturbations_do_not_change_visible_state)
 {
     bool ok = run_perturbation(STRONG_PERTURB_ALL);
@@ -940,6 +1004,40 @@ IVP_TEST(contact_stack_order_does_not_change_visible_state)
         }
     }
     ok = ok && reversed_multiple_contacts;
+    strong_cube_scene_destroy(&perturbed);
+    strong_cube_scene_destroy(&canonical);
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(mindist_stack_order_does_not_change_visible_state)
+{
+    strong_cube_scene_t canonical = {0};
+    strong_cube_scene_t perturbed = {0};
+    bool ok = strong_cube_scene_init(&canonical, true) &&
+              strong_cube_scene_init(&perturbed, true);
+    bool reversed_multiple_mindists = false;
+    for (int step = 0; ok && step < 180; step++) {
+        int mindist_count = 0;
+        for (ivp_mindist_t *mindist =
+                 perturbed.environment->pl->mindist_mgr.exact_mindists;
+             mindist; mindist = mindist->next) {
+            mindist_count++;
+        }
+        reversed_multiple_mindists =
+            reversed_multiple_mindists || mindist_count > 1;
+        scramble_mindist_manager(perturbed.environment);
+        scramble_object_mindists(perturbed.objects,
+                                 STRONG_CUBE_OBJECT_COUNT);
+        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(perturbed.environment);
+        if (!strong_cube_scenes_equal(&canonical, &perturbed)) {
+            fprintf(stderr,
+                    "mindist stack order changed visible state at step %d\n",
+                    step);
+            ok = false;
+        }
+    }
+    ok = ok && reversed_multiple_mindists;
     strong_cube_scene_destroy(&perturbed);
     strong_cube_scene_destroy(&canonical);
     IVP_ASSERT_TRUE(ok);
@@ -1077,11 +1175,14 @@ int main(void)
     IVP_REGISTER(ov_tree_order_does_not_change_visible_state);
     IVP_REGISTER(client_pointer_order_does_not_change_visible_state);
     IVP_REGISTER(contact_list_order_does_not_change_visible_state);
+    IVP_REGISTER(mindist_manager_order_does_not_change_visible_state);
+    IVP_REGISTER(object_mindist_order_does_not_change_visible_state);
     IVP_REGISTER(combined_internal_perturbations_do_not_change_visible_state);
     IVP_REGISTER(pool_history_does_not_change_visible_state);
     IVP_REGISTER(worker_count_does_not_change_canonical_state);
     IVP_REGISTER(relocated_and_shared_geometry_do_not_change_visible_state);
     IVP_REGISTER(contact_stack_order_does_not_change_visible_state);
+    IVP_REGISTER(mindist_stack_order_does_not_change_visible_state);
     IVP_REGISTER(compound_object_order_does_not_change_visible_state);
     IVP_REGISTER(revive_queue_order_does_not_change_observable_order);
     IVP_RUN_ALL();

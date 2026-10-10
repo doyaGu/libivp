@@ -21,6 +21,7 @@
 #include <ivp/math/ivp_quat.h>
 #include "ivp_test_fault_allocator.h"
 #include "controllers/ivp_constraint_car_internal.h"
+#include "dynamics/ivp_env_pipeline.h"
 
 #include <limits.h>
 #include <math.h>
@@ -146,6 +147,51 @@ static void scene_destroy(car_scene_t *sc)
 static void scene_step(car_scene_t *sc, int n)
 {
     for (int i = 0; i < n; i++) ivp_environment_simulate_one_psi(sc->env);
+}
+
+static void reverse_pointer_vector(ivp_pvec_t *vector)
+{
+    int first = 0;
+    int last = ivp_pvec_len(vector) - 1;
+    while (first < last) {
+        ivp_pvec_swap(vector, first, last);
+        first++;
+        last--;
+    }
+}
+
+static bool car_core_state_equal(const ivp_core_t *a,
+                                 const ivp_core_t *b)
+{
+    return memcmp(&a->pos_world_f_core_last_psi,
+                  &b->pos_world_f_core_last_psi,
+                  sizeof(a->pos_world_f_core_last_psi)) == 0 &&
+           memcmp(&a->q_world_f_core_last_psi,
+                  &b->q_world_f_core_last_psi,
+                  sizeof(a->q_world_f_core_last_psi)) == 0 &&
+           memcmp(&a->q_world_f_core_next_psi,
+                  &b->q_world_f_core_next_psi,
+                  sizeof(a->q_world_f_core_next_psi)) == 0 &&
+           memcmp(&a->speed, &b->speed, sizeof(a->speed)) == 0 &&
+           memcmp(&a->rot_speed, &b->rot_speed,
+                  sizeof(a->rot_speed)) == 0 &&
+           a->movement_state == b->movement_state;
+}
+
+static bool car_scenes_visible_state_equal(const car_scene_t *a,
+                                           const car_scene_t *b)
+{
+    if (!car_core_state_equal(a->body->physical_core,
+                              b->body->physical_core)) {
+        return false;
+    }
+    for (int i = 0; i < 4; i++) {
+        if (!car_core_state_equal(a->wheels[i]->physical_core,
+                                  b->wheels[i]->physical_core)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* wheel center relative to the body center in the body core system */
@@ -402,6 +448,36 @@ IVP_TEST(drive_steer_and_handbrake)
     IVP_ASSERT_NULL(sc.car.fix_wheel_constraint[IVP_WHEEL_REAR_LEFT]);
     scene_step(&sc, 10);
     scene_destroy(&sc);
+}
+
+IVP_TEST(wheel_look_ahead_order_does_not_change_visible_state)
+{
+    car_scene_t canonical;
+    car_scene_t perturbed;
+    bool ok = scene_create(&canonical, 1.7) &&
+              scene_create(&perturbed, 1.7) &&
+              ivp_car_system_init(&canonical.car, &canonical.tmpl) &&
+              ivp_car_system_init(&perturbed.car, &perturbed.tmpl);
+    bool reversed_multiple = false;
+    for (int step = 0; ok && step < 240; step++) {
+        ivp_pvec_t *look_ahead =
+            &perturbed.env->pl->mindist_mgr.wheel_look_ahead_mindists;
+        reversed_multiple = reversed_multiple ||
+                            ivp_pvec_len(look_ahead) > 1;
+        reverse_pointer_vector(look_ahead);
+        ivp_environment_simulate_one_psi(canonical.env);
+        ivp_environment_simulate_one_psi(perturbed.env);
+        if (!car_scenes_visible_state_equal(&canonical, &perturbed)) {
+            fprintf(stderr,
+                    "wheel look-ahead order changed state at step %d\n",
+                    step);
+            ok = false;
+        }
+    }
+    ok = ok && reversed_multiple;
+    scene_destroy(&perturbed);
+    scene_destroy(&canonical);
+    IVP_ASSERT_TRUE(ok);
 }
 
 IVP_TEST(adjustment_setters)
@@ -758,6 +834,7 @@ int main(void)
     IVP_REGISTER(wheel_pos_from_objects);
     IVP_REGISTER(settles_on_suspension);
     IVP_REGISTER(drive_steer_and_handbrake);
+    IVP_REGISTER(wheel_look_ahead_order_does_not_change_visible_state);
     IVP_REGISTER(adjustment_setters);
     IVP_REGISTER(booster);
     IVP_REGISTER(destroy_after_environment);
