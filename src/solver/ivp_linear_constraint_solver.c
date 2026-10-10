@@ -12,13 +12,13 @@
  * the final result check (which overwrites delta_accel with A*x).  debug_lcs
  * is 0 as in the reference, so its verbose output stays off.
  *
- * Memory: like the reference, all scratch arrays come uninitialised from an
- * IVP_U_Memory arena (ivp_u_memory_t), in the order and with the byte sizes
- * of IVP_Linear_Constraint_Solver::alloc_memory, and the caller's A, b and x
- * are used in place.  The friction solver passes the environment's
- * persistent short-term arena, so the solver reads exactly the stale values
- * the reference reads (row padding of L/U/sub matrices that is never
- * written, VecFPU block overruns into the gaps between arrays).
+ * Memory: all scratch arrays come from an IVP_U_Memory arena
+ * (ivp_u_memory_t), in the order and with the byte sizes of
+ * IVP_Linear_Constraint_Solver::alloc_memory, and the caller's A, b and x are
+ * used in place.  The friction solver passes the environment's persistent
+ * short-term arena.  The reference-state build preserves the stale padding
+ * and VecFPU gap bytes that the original reads; the mainline build clears the
+ * complete reserved spans before the solver sees them.
  */
 #include <ivp/solver/ivp_linear_constraint_solver.h>
 #include <ivp/solver/ivp_great_matrix.h>

@@ -605,8 +605,7 @@ static void mgr_canonicalize_slot(ivp_sim_units_manager_t *manager,
 
 static void mgr_canonicalize_slots(ivp_sim_units_manager_t *manager)
 {
-    if (!ivp_env_uses_canonical_internal_state(
-            manager->l_environment)) {
+    if (!ivp_build_uses_canonical_internal_state()) {
         return;
     }
     mgr_canonicalize_slot(manager, &manager->sim_units_slot0);

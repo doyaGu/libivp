@@ -1671,8 +1671,8 @@ typedef struct fr_solver {
 
 /* IVP_Great_Matrix_Many_Zero::align_matrix_values: its IVP_IF(1) block
  * (ivp_great_matrix.cxx:471) zeroes the row padding of matrix_values and of
- * desired_vector (arena memory, so debug builds leave zeros there where
- * release builds keep stale arena bytes) */
+ * desired_vector.  Debug builds perform this explicit fill; in Release the
+ * build-wide arena policy selects cleared spans or reference-style reuse. */
 static void frs_align_matrix_values_debug_fill(ivp_gmmz_t *m)
 {
     for (int i = 0; i < m->columns; i++) {
@@ -1687,9 +1687,9 @@ static void frs_align_matrix_values_debug_fill(ivp_gmmz_t *m)
 }
 
 /* IVP_Friction_Solver::IVP_Friction_Solver: dist_change_mat from the
- * short-term arena, uninitialised (calc_solver_PSI clears the matrix; the
- * IVP_IF(1) padding fill of align_matrix_values runs in debug builds only,
- * release builds keep stale arena values in the desired_vector padding) */
+ * short-term arena and not initialized here (calc_solver_PSI clears the
+ * matrix; the IVP_IF(1) padding fill of align_matrix_values runs in debug
+ * builds only).  Release padding follows the build-wide arena policy. */
 static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs, const ivp_sim_es_t *es, ivp_u_memory_t *my_mem)
 {
     memset(s, 0, sizeof(*s));
@@ -2259,8 +2259,7 @@ static void fs_exchange_friction_dists(ivp_fr_system_t *fs, ivp_contact_pt_t *fi
 
 static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
 {
-    const bool canonical = ivp_env_uses_canonical_internal_state(
-        fs->l_environment);
+    const bool canonical = ivp_build_uses_canonical_internal_state();
     ivp_contact_pt_t *first_dist = fs->first_friction_dist;
     if (!first_dist) return;
     for (;;) {
@@ -2490,7 +2489,7 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
         }
         ivp_debug_printf("friction_system_simulating %d distances\n", (int)fs->friction_dist_number);
     }
-    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+    if (ivp_build_uses_canonical_internal_state()) {
         fs_restore_internal_order(fs);
     } else {
         fs_bubble_sort_dists_importance(fs);
@@ -2535,7 +2534,7 @@ static void fs_energy_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pve
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, energy_ctrl);
-    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+    if (ivp_build_uses_canonical_internal_state()) {
         fs_restore_internal_order(fs);
     }
     if (fs->friction_dist_number <= 1) {
@@ -2557,7 +2556,7 @@ static void fs_dyn_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, dyn_ctrl);
-    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+    if (ivp_build_uses_canonical_internal_state()) {
         fs_restore_internal_order(fs);
     }
     if (fs->friction_dist_number <= 1) {

@@ -211,7 +211,7 @@ void ivp_env_register_sim_controller(
     struct ivp_environment *env, struct ivp_sim_ctrl *controller)
 {
     if (!env || !env->pl || !controller ||
-        !ivp_env_uses_canonical_internal_state(env) ||
+        !ivp_build_uses_canonical_internal_state() ||
         controller->registration_sequence != 0u) {
         return;
     }
@@ -222,7 +222,7 @@ void ivp_env_register_sim_controller(
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 {
     if (!env || !env->pl ||
-        !ivp_env_uses_canonical_internal_state(env)) {
+        !ivp_build_uses_canonical_internal_state()) {
         return 0u;
     }
     return env_take_sequence(&env->pl->next_contact_sequence);
@@ -1123,7 +1123,7 @@ static void slot_fill_event_sim(slot_ctrl_t *sc, ivp_sim_es_t *es, ivp_event_sim
     pub->environment = sc->env;
     pub->sim_unit_index = 0;
     if (es->sim_unit &&
-        ivp_env_uses_canonical_internal_state(sc->env)) {
+        ivp_build_uses_canonical_internal_state()) {
         pub->island_identity = (int)(
             ivp_sim_unit_stable_order_key(es->sim_unit) &
             UINT64_C(0x7fffffff));
@@ -1585,7 +1585,7 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     }
     ivp_controller_system_sort(
         env_controller_system(env),
-        ivp_env_uses_canonical_internal_state(env));
+        ivp_build_uses_canonical_internal_state());
     ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_ADDED, IVP_REAL(0.0), -1, (int)out.slot);
     return out;
 }
@@ -1979,7 +1979,7 @@ void ivp_environment_set_global_collision_tolerance(ivp_environment_t *env, ivp_
 
 static void env_restore_contact_order(ivp_environment_t *env)
 {
-    if (!ivp_env_uses_canonical_internal_state(env)) return;
+    if (!ivp_build_uses_canonical_internal_state()) return;
     ivp_object_system_t *objects = env_object_system(env);
     for (int i = 0; i < ivp_object_system_count(objects); i++) {
         ivp_friction_mgr_restore_object_contact_order(
@@ -2331,7 +2331,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     }
     ivp_u_memory_set_clear_on_allocate(
         &pl->sim_unit_mem.arena,
-        ivp_env_uses_canonical_internal_state(env));
+        ivp_build_uses_canonical_internal_state());
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
@@ -2339,7 +2339,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     }
     ivp_u_memory_set_clear_on_allocate(
         &pl->short_term_mem,
-        ivp_env_uses_canonical_internal_state(env));
+        ivp_build_uses_canonical_internal_state());
     pl->state = IVP_ES_AT;
     /* standard gravity controller + set_gravity */
     pl->gravity_ctrl.vt = &gravity_vt;

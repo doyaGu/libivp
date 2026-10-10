@@ -385,8 +385,7 @@ static bool mms_check_loop_hash(mms_t *m,
     IVP_ASSERT(s0 < 4);   /* ivp_mindist_minimize.cxx:94-95: i_s0 / i_s1 */
     IVP_ASSERT(s1 < 4);
     if (m->loop_hash_size >= IVP_LOOP_LIST_SIZE) return true;
-    const bool canonical = ivp_env_uses_canonical_internal_state(
-        m->mindist->env);
+    const bool canonical = ivp_build_uses_canonical_internal_state();
     intptr_t x0 = (intptr_t)e0 | s0;
     intptr_t x1 = (intptr_t)e1 | s1;
     if (canonical) {

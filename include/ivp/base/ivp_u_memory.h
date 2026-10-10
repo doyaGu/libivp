@@ -5,11 +5,11 @@
  *
  * The reference environment owns one such arena (IVP_Environment::
  * short_term_mem) that the friction solver and its linear constraint solver
- * take all their scratch arrays from.  The arena is never cleared: a new
- * transaction hands out the same bytes again, and the reference solvers read
- * some of them before writing them (row padding, IVP_VecFPU block overruns).
- * Reproducing the reference bit for bit therefore needs the same byte layout
- * and the same contents, which is what this module provides:
+ * take all their scratch arrays from.  The reference policy never clears the
+ * arena: a new transaction hands out the same bytes again, and the reference
+ * solvers read some of them before writing them (row padding, IVP_VecFPU
+ * block overruns).  The mainline policy clears each complete reserved span.
+ * This module supports both policies while preserving the reference layout:
  *
  *  - get_mem(size): the next allocation starts at
  *        align(previous_start + size),  align(p) = (p + 0x4f) & ~0x1f
@@ -29,8 +29,10 @@
  *    every block except the first and moves the pointer back to the start of
  *    the first block.  Allocations made outside a transaction simply advance
  *    the pointer (the reference friction easing does that).
- *  - By default, contents are never cleared.  The first block starts
- *    zero-filled: in the reference it is a fresh 32816-byte malloc that
+ *  - A standalone arena defaults to reference-style reuse; an environment
+ *    selects its build-wide state policy after initialization.  The first
+ *    block starts zero-filled: in the reference it is a fresh 32816-byte
+ *    malloc that
  *    lands on fresh (zero)
  *    pages on macOS/arm64 (measured).  Blocks opened on overflow are freed at
  *    the end of the transaction; the reference allocator hands the same slot
@@ -42,9 +44,9 @@
  *
  * Every allocation is followed by at least 48 bytes that still belong to the
  * same block, so the reference's IVP_VecFPU overruns (at most 32 bytes past
- * the end of an array) never leave the block.  `clear_on_allocate` is an
- * explicit non-reference mode that clears both the requested bytes and this
- * reserved slack on every allocation. */
+ * the end of an array) never leave the block.  `clear_on_allocate` is the
+ * mainline history-independent policy: it clears both the requested bytes
+ * and this reserved slack on every allocation. */
 #ifndef IVP_U_MEMORY_H
 #define IVP_U_MEMORY_H
 

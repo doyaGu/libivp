@@ -303,7 +303,7 @@ target_include_directories(ivp
 )
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
-target_compile_definitions(ivp PRIVATE
+target_compile_definitions(ivp PUBLIC
         IVP_CANONICAL_INTERNAL_STATE=$<BOOL:${IVP_CANONICAL_INTERNAL_STATE}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
@@ -346,10 +346,10 @@ set(IVP_REFERENCE_PIPELINE_SOURCES
 )
 if (NOT MSVC)
     set_source_files_properties(${IVP_REFERENCE_PIPELINE_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-double-promotion")
-    # The friction solver and its dense solvers read stale IVP_U_Memory arena
-    # bytes as double that an earlier transaction may have stored as int (see
-    # ivp_u_memory.h); like the reference, compile them without type-based
-    # alias analysis.
+    # The reference-state policy lets the friction and dense solvers reuse
+    # stale IVP_U_Memory bytes (see ivp_u_memory.h).  Keep both policy builds
+    # free of type-based alias assumptions so this compatibility path remains
+    # valid.
     set_property(SOURCE
             src/base/ivp_u_memory.c
             src/solver/ivp_great_matrix.c

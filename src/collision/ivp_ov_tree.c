@@ -1080,8 +1080,7 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
             return IVP_ERR_OUT_OF_MEMORY;
         }
         if (element->real_object && element->real_object->owner &&
-            ivp_env_uses_canonical_internal_state(
-                element->real_object->owner)) {
+            ivp_build_uses_canonical_internal_state()) {
             ov_canonicalize_collision_partners(t->collision_partners,
                                                old_partner_count);
         }
