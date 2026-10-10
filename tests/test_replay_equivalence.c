@@ -1,5 +1,5 @@
-/* test_replay_equivalence.c -- replay one semantic operation log through
- * every supported execution mode and require bit-exact observable state. */
+/* test_replay_equivalence.c -- replay semantic operation logs through every
+ * supported execution mode and require bit-exact observable state. */
 #include "ivp_test.h"
 
 #include <ivp/dynamics/ivp_environment.h>
@@ -9,11 +9,21 @@
 #include <stdint.h>
 #include <string.h>
 
-#define REPLAY_SEED UINT32_C(0x7a5b39d1)
 #define REPLAY_OBJECT_COUNT 224
 #define REPLAY_OPERATION_COUNT 56
 #define REPLAY_EVENT_CAPACITY 2048
 #define REPLAY_CONTROLLER_SLOT 0
+
+static const uint32_t replay_seeds[] = {
+    UINT32_C(0x7a5b39d1),
+    UINT32_C(0x243f6a88),
+    UINT32_C(0x85a308d3),
+    UINT32_C(0x13198a2e),
+    UINT32_C(0x03707344),
+    UINT32_C(0xa4093822),
+    UINT32_C(0x299f31d0),
+    UINT32_C(0x082efa98)
+};
 
 typedef enum replay_mode {
     REPLAY_MODE_DIRECT = 0,
@@ -152,7 +162,7 @@ static replay_operation_t replay_make_operation(int operation_index,
 
 static void replay_reset_events(replay_world_t *world)
 {
-    /* Keep padding initialized because traces are compared byte for byte. */
+    /* Start each operation with an independent public-event trace. */
     memset(&world->events, 0, sizeof(world->events));
 }
 
@@ -465,7 +475,7 @@ static bool replay_apply_operation(replay_world_t *world,
 static void replay_capture_snapshot(const replay_world_t *world,
                                     replay_snapshot_t *snapshot)
 {
-    /* Keep padding initialized because snapshots are compared byte for byte. */
+    /* Define every field, including fields belonging to absent objects. */
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->time = ivp_environment_get_time(world->environment);
     snapshot->controller_calls = world->controller_context.calls;
@@ -517,36 +527,105 @@ static void replay_capture_snapshot(const replay_world_t *world,
 
 static bool replay_snapshots_equal(const replay_snapshot_t *expected,
                                    const replay_snapshot_t *actual,
-                                   int *different_slot)
+                                   int *different_slot,
+                                   const char **different_field)
 {
-    if (memcmp(&expected->time, &actual->time, sizeof(expected->time)) != 0 ||
-        expected->controller_calls != actual->controller_calls ||
-        expected->controller_active != actual->controller_active) {
-        *different_slot = -1;
-        return false;
-    }
+    *different_slot = -1;
+    *different_field = NULL;
+
+#define REPLAY_COMPARE_SNAPSHOT_FIELD(member)                              \
+    do {                                                                   \
+        if (memcmp(&expected->member, &actual->member,                      \
+                   sizeof(expected->member)) != 0) {                       \
+            *different_field = #member;                                    \
+            return false;                                                  \
+        }                                                                  \
+    } while (0)
+
+    REPLAY_COMPARE_SNAPSHOT_FIELD(time);
+    REPLAY_COMPARE_SNAPSHOT_FIELD(controller_calls);
+    REPLAY_COMPARE_SNAPSHOT_FIELD(controller_active);
+#undef REPLAY_COMPARE_SNAPSHOT_FIELD
+
     for (int slot = 0; slot < REPLAY_OBJECT_COUNT; slot++) {
-        if (memcmp(&expected->objects[slot], &actual->objects[slot],
-                   sizeof(expected->objects[slot])) != 0) {
-            *different_slot = slot;
-            return false;
-        }
+        const replay_object_state_t *expected_state =
+            &expected->objects[slot];
+        const replay_object_state_t *actual_state = &actual->objects[slot];
+
+#define REPLAY_COMPARE_OBJECT_FIELD(member)                                \
+        do {                                                               \
+            if (memcmp(&expected_state->member, &actual_state->member,      \
+                       sizeof(expected_state->member)) != 0) {             \
+                *different_slot = slot;                                    \
+                *different_field = #member;                                \
+                return false;                                              \
+            }                                                              \
+        } while (0)
+
+        REPLAY_COMPARE_OBJECT_FIELD(present);
+        REPLAY_COMPARE_OBJECT_FIELD(pinned);
+        REPLAY_COMPARE_OBJECT_FIELD(collision_enabled);
+        REPLAY_COMPARE_OBJECT_FIELD(movement_state);
+        REPLAY_COMPARE_OBJECT_FIELD(collision_group);
+        REPLAY_COMPARE_OBJECT_FIELD(layer_mask);
+        REPLAY_COMPARE_OBJECT_FIELD(generation);
+        REPLAY_COMPARE_OBJECT_FIELD(mass);
+        REPLAY_COMPARE_OBJECT_FIELD(time_of_last_psi);
+        REPLAY_COMPARE_OBJECT_FIELD(position);
+        REPLAY_COMPARE_OBJECT_FIELD(speed);
+        REPLAY_COMPARE_OBJECT_FIELD(speed_change);
+        REPLAY_COMPARE_OBJECT_FIELD(rot_speed_change);
+        REPLAY_COMPARE_OBJECT_FIELD(rot_speed);
+        REPLAY_COMPARE_OBJECT_FIELD(orientation);
+        REPLAY_COMPARE_OBJECT_FIELD(next_orientation);
+        REPLAY_COMPARE_OBJECT_FIELD(energy);
+#undef REPLAY_COMPARE_OBJECT_FIELD
     }
     return true;
 }
 
 static bool replay_events_equal(const replay_event_trace_t *expected,
-                                const replay_event_trace_t *actual)
+                                const replay_event_trace_t *actual,
+                                int *different_event,
+                                const char **different_field)
 {
-    if (expected->overflow || actual->overflow ||
-        expected->count != actual->count) {
+    *different_event = -1;
+    *different_field = NULL;
+    if (expected->overflow != actual->overflow) {
+        *different_field = "overflow";
         return false;
     }
-    return memcmp(expected->entries, actual->entries,
-                  expected->count * sizeof(expected->entries[0])) == 0;
+    if (expected->count != actual->count) {
+        *different_field = "count";
+        return false;
+    }
+    for (size_t index = 0; index < expected->count; index++) {
+        const replay_event_entry_t *expected_event =
+            &expected->entries[index];
+        const replay_event_entry_t *actual_event = &actual->entries[index];
+
+#define REPLAY_COMPARE_EVENT_FIELD(member)                                 \
+        do {                                                               \
+            if (memcmp(&expected_event->member, &actual_event->member,      \
+                       sizeof(expected_event->member)) != 0) {             \
+                *different_event = (int)index;                             \
+                *different_field = #member;                                \
+                return false;                                              \
+            }                                                              \
+        } while (0)
+
+        REPLAY_COMPARE_EVENT_FIELD(type);
+        REPLAY_COMPARE_EVENT_FIELD(time);
+        REPLAY_COMPARE_EVENT_FIELD(dt);
+        REPLAY_COMPARE_EVENT_FIELD(sim_unit_index);
+        REPLAY_COMPARE_EVENT_FIELD(object_index);
+#undef REPLAY_COMPARE_EVENT_FIELD
+    }
+    return true;
 }
 
 static bool replay_compare_worlds(replay_world_t worlds[REPLAY_MODE_COUNT],
+                                  uint32_t seed,
                                   int operation_index,
                                   const replay_operation_t *operation)
 {
@@ -557,24 +636,33 @@ static bool replay_compare_worlds(replay_world_t worlds[REPLAY_MODE_COUNT],
     if (worlds[REPLAY_MODE_DIRECT].events.overflow) {
         fprintf(stderr,
                 "replay event overflow: seed=0x%08" PRIx32 " op=%d\n",
-                REPLAY_SEED, operation_index);
+                seed, operation_index);
         return false;
     }
     for (replay_mode_t mode = REPLAY_MODE_SERIAL_SCHEDULER;
          mode < REPLAY_MODE_COUNT; mode++) {
         int different_slot = -1;
+        int different_event = -1;
+        const char *state_field = NULL;
+        const char *event_field = NULL;
         replay_capture_snapshot(&worlds[mode], &actual);
-        if (!replay_snapshots_equal(&expected, &actual, &different_slot) ||
-            !replay_events_equal(&worlds[REPLAY_MODE_DIRECT].events,
-                                 &worlds[mode].events)) {
+        bool states_equal = replay_snapshots_equal(
+            &expected, &actual, &different_slot, &state_field);
+        bool events_equal = replay_events_equal(
+            &worlds[REPLAY_MODE_DIRECT].events, &worlds[mode].events,
+            &different_event, &event_field);
+        if (!states_equal || !events_equal) {
             fprintf(stderr,
                     "replay mismatch: seed=0x%08" PRIx32
                     " op=%d kind=%d slot=%d mode=%s state_slot=%d"
+                    " state_field=%s event_index=%d event_field=%s"
                     " events=%zu/%zu overflow=%d\n",
-                    REPLAY_SEED, operation_index,
+                    seed, operation_index,
                     operation ? (int)operation->kind : -1,
                     operation ? operation->slot : -1,
                     replay_modes[mode].name, different_slot,
+                    state_field ? state_field : "none", different_event,
+                    event_field ? event_field : "none",
                     worlds[REPLAY_MODE_DIRECT].events.count,
                     worlds[mode].events.count,
                     worlds[mode].events.overflow ? 1 : 0);
@@ -641,7 +729,7 @@ static bool replay_step_worlds(replay_world_t worlds[REPLAY_MODE_COUNT],
     return true;
 }
 
-IVP_TEST(operation_log_matches_execution_modes)
+static bool replay_run_seed(uint32_t seed)
 {
     replay_world_t worlds[REPLAY_MODE_COUNT];
     memset(worlds, 0, sizeof(worlds));
@@ -653,21 +741,28 @@ IVP_TEST(operation_log_matches_execution_modes)
          mode < REPLAY_MODE_COUNT; mode++) {
         if (!replay_world_init(&worlds[mode], replay_modes[mode].worker_count,
                                replay_modes[mode].history_count)) {
-            fprintf(stderr, "replay setup failed for mode %s\n",
-                    replay_modes[mode].name);
+            fprintf(stderr,
+                    "replay setup failed: seed=0x%08" PRIx32 " mode=%s\n",
+                    seed, replay_modes[mode].name);
             ok = false;
             goto cleanup;
         }
     }
     serial_scheduler = ivp_world_scheduler_create(1, NULL);
     parallel_scheduler = ivp_world_scheduler_create(4, NULL);
-    if (!serial_scheduler || !parallel_scheduler ||
-        !replay_compare_worlds(worlds, -1, NULL)) {
+    if (!serial_scheduler || !parallel_scheduler) {
+        fprintf(stderr,
+                "replay scheduler setup failed: seed=0x%08" PRIx32 "\n",
+                seed);
+        ok = false;
+        goto cleanup;
+    }
+    if (!replay_compare_worlds(worlds, seed, -1, NULL)) {
         ok = false;
         goto cleanup;
     }
 
-    uint32_t random_state = REPLAY_SEED;
+    uint32_t random_state = seed;
     for (int operation_index = 0;
          operation_index < REPLAY_OPERATION_COUNT; operation_index++) {
         replay_operation_t operation = replay_make_operation(
@@ -679,7 +774,7 @@ IVP_TEST(operation_log_matches_execution_modes)
                 fprintf(stderr,
                         "replay operation failed: seed=0x%08" PRIx32
                         " op=%d kind=%d slot=%d mode=%s\n",
-                        REPLAY_SEED, operation_index, (int)operation.kind,
+                        seed, operation_index, (int)operation.kind,
                         operation.slot, replay_modes[mode].name);
                 ok = false;
                 goto cleanup;
@@ -687,8 +782,17 @@ IVP_TEST(operation_log_matches_execution_modes)
         }
         if (!replay_step_worlds(
                 worlds, serial_scheduler, parallel_scheduler,
-                operation_index % 13 == 0) ||
-            !replay_compare_worlds(worlds, operation_index, &operation)) {
+                operation_index % 13 == 0)) {
+            fprintf(stderr,
+                    "replay dispatch failed: seed=0x%08" PRIx32
+                    " op=%d kind=%d slot=%d\n",
+                    seed, operation_index, (int)operation.kind,
+                    operation.slot);
+            ok = false;
+            goto cleanup;
+        }
+        if (!replay_compare_worlds(
+                worlds, seed, operation_index, &operation)) {
             ok = false;
             goto cleanup;
         }
@@ -700,7 +804,10 @@ IVP_TEST(operation_log_matches_execution_modes)
     ivp_environment_get_parallel_stats(
         worlds[REPLAY_MODE_INTERNAL_WORKERS].environment, &stats);
     if (stats.island_dispatches == 0u || stats.island_tasks == 0u) {
-        fprintf(stderr, "replay did not exercise internal island dispatch\n");
+        fprintf(stderr,
+                "replay did not exercise internal island dispatch: "
+                "seed=0x%08" PRIx32 "\n",
+                seed);
         ok = false;
     }
 #endif
@@ -712,11 +819,19 @@ cleanup:
          mode < REPLAY_MODE_COUNT; mode++) {
         replay_world_destroy(&worlds[mode]);
     }
-    IVP_ASSERT_TRUE(ok);
+    return ok;
+}
+
+IVP_TEST(operation_logs_match_execution_modes)
+{
+    for (size_t index = 0;
+         index < sizeof(replay_seeds) / sizeof(replay_seeds[0]); index++) {
+        IVP_ASSERT_TRUE(replay_run_seed(replay_seeds[index]));
+    }
 }
 
 int main(void)
 {
-    IVP_REGISTER(operation_log_matches_execution_modes);
+    IVP_REGISTER(operation_logs_match_execution_modes);
     IVP_RUN_ALL();
 }
