@@ -1829,10 +1829,25 @@ static void frs_calc_solver_column_block_task(void *opaque, size_t task_index)
     fr_solver_t *s = context->solver;
     size_t first = task_index * IVP_FR_PARALLEL_COLUMN_BLOCK;
     size_t end = first + IVP_FR_PARALLEL_COLUMN_BLOCK;
-    if (end > (size_t)context->contact_count) {
-        end = (size_t)context->contact_count;
+    ivp_gmmz_t *m = &s->dist_change_mat;
+    if (end > (size_t)m->aligned_row_len) {
+        end = (size_t)m->aligned_row_len;
     }
-    for (size_t column = first; column < end; column++) {
+    /* Each task owns these columns across every row, including padding.
+     * Clearing here adds work to the existing barrier without changing any
+     * matrix cell's writer or the arithmetic order within a real column. */
+    for (int row = 0; row < m->columns; row++) {
+        double *values =
+            &m->matrix_values[row * m->aligned_row_len];
+        for (size_t column = first; column < end; column++) {
+            values[column] = 0.0;
+        }
+    }
+    size_t contact_end = end;
+    if (contact_end > (size_t)context->contact_count) {
+        contact_end = (size_t)context->contact_count;
+    }
+    for (size_t column = first; column < contact_end; column++) {
         int i = (int)column;
         ivp_impact_solver_lt_t *info = frs_info_at(s, i);
         frs_calc_solver_desired(s, i, info);
@@ -1848,10 +1863,6 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
     {
         int counter = ivp_env_next_global_friction_debug_counter(s->l_environment);
         ivp_debug_printf("\ndoing_friction_calc %d\n", counter);
-    }
-    {
-        int mat_width = (m->aligned_row_len * m->columns);
-        for (int d = mat_width - 1; d >= 0; d--) m->matrix_values[d] = 0.0;
     }
     const int contact_count = ivp_pvec_len(&s->contact_info_vector);
     size_t minimum_tasks = 8u;
@@ -1882,7 +1893,7 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
         }
     }
     size_t column_block_count =
-        ((size_t)contact_count + IVP_FR_PARALLEL_COLUMN_BLOCK - 1u) /
+        ((size_t)m->aligned_row_len + IVP_FR_PARALLEL_COLUMN_BLOCK - 1u) /
         IVP_FR_PARALLEL_COLUMN_BLOCK;
     frs_calc_solver_columns_context_t task_context = { s, contact_count };
     bool dispatched =
@@ -1902,6 +1913,10 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
             }
         }
     } else {
+        int mat_width = (m->aligned_row_len * m->columns);
+        for (int d = mat_width - 1; d >= 0; d--) {
+            m->matrix_values[d] = 0.0;
+        }
         /* Preserve the reference loop order on the default serial path:
          * desired value, active-set append, then matrix-column effects. */
         for (int i = 0; i < contact_count; i++) {
