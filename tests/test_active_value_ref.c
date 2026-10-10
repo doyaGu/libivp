@@ -33,8 +33,11 @@ static void log_int(void *ctx, ivp_active_int_t *src, int old_v, int new_v) {
         fprintf(stderr, "  log mismatch: got '%s' expected '%s' (line %d)\n", g_log, (expected), __LINE__); \
         (*_fail_count)++; return; } } while (0)
 
-/* Must run first: relies on the process-wide change meter still being -1. */
-IVP_TEST(ref_construction_quirk_meter_zero) {
+/* Must run first in a reference-internals build: that path reproduces the
+ * process-wide meter-zero construction quirk.  The normal build evaluates
+ * the new node independently of earlier graphs. */
+IVP_TEST(construction_update_policy) {
+#if IVP_REFERENCE_INTERNAL_STATE
     if (ivp_active_value_change_meter() != -1) {
         fprintf(stderr, "  (skipped: change meter already used)\n");
         return;
@@ -49,6 +52,17 @@ IVP_TEST(ref_construction_quirk_meter_zero) {
     ivp_active_float_set(b, 2.0); /* same value: meter++ but no propagation */
     IVP_ASSERT_TRUE(ivp_active_float_get(s) == 0.0);
     IVP_ASSERT_EQ(ivp_active_value_change_meter(), 1);
+#else
+    IVP_ASSERT_EQ(ivp_active_value_change_meter(), -1);
+    ivp_active_float_t *a = ivp_active_float_terminal_create(NULL, "qa", 1.0);
+    ivp_active_float_t *b = ivp_active_float_terminal_create(NULL, "qb", 2.0);
+    ivp_active_float_set(a, 3.0);
+    IVP_ASSERT_EQ(ivp_active_value_change_meter(), -1);
+    ivp_active_float_t *s = ivp_active_float_add_create(NULL, "qs", a, b);
+    IVP_ASSERT_TRUE(ivp_active_float_get(s) == 5.0);
+    ivp_active_float_set(b, 2.0);
+    IVP_ASSERT_TRUE(ivp_active_float_get(s) == 5.0);
+#endif
     ivp_active_float_set(b, 4.0);
     IVP_ASSERT_TRUE(ivp_active_float_get(s) == 7.0);
     ivp_active_float_remove_ref(s);
@@ -287,7 +301,7 @@ IVP_TEST(ref_manager) {
 }
 
 int main(void) {
-    IVP_REGISTER(ref_construction_quirk_meter_zero);
+    IVP_REGISTER(construction_update_policy);
     IVP_REGISTER(ref_oscillators);
     IVP_REGISTER(ref_diamond_change_meter_dedup);
     IVP_REGISTER(ref_listener_and_dependent_order);

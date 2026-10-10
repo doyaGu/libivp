@@ -165,6 +165,140 @@ IVP_TEST(sine_propagation_chain) {
     ivp_active_float_remove_ref(time_src);
 }
 
+#if !IVP_REFERENCE_INTERNAL_STATE
+
+/* Propagation history belongs to one terminal or manager.  Work performed by
+ * an unrelated graph must not change either the values or sequence observed
+ * by an otherwise equivalent graph. */
+IVP_TEST(propagation_history_is_local) {
+    ivp_active_float_t *a0 =
+        ivp_active_float_terminal_create(NULL, "a0", 1.0);
+    ivp_active_float_t *b0 =
+        ivp_active_float_terminal_create(NULL, "b0", 2.0);
+    ivp_active_float_t *sum0 =
+        ivp_active_float_add_create(NULL, "sum0", a0, b0);
+    ivp_active_float_t *a1 =
+        ivp_active_float_terminal_create(NULL, "a1", 1.0);
+    ivp_active_float_t *b1 =
+        ivp_active_float_terminal_create(NULL, "b1", 2.0);
+    ivp_active_float_t *sum1 =
+        ivp_active_float_add_create(NULL, "sum1", a1, b1);
+    ivp_active_float_t *noise =
+        ivp_active_float_terminal_create(NULL, "noise", 0.0);
+    ivp_active_float_t *noise_sum =
+        ivp_active_float_add_create(NULL, "noise_sum", noise, b0);
+
+    IVP_ASSERT_NOT_NULL(sum0);
+    IVP_ASSERT_NOT_NULL(sum1);
+    IVP_ASSERT_NOT_NULL(noise_sum);
+
+    ivp_active_float_set(a0, 4.0);
+    for (int i = 1; i <= 32; i++) {
+        ivp_active_float_set(noise, (double)i);
+    }
+    ivp_active_float_set(a1, 4.0);
+
+    IVP_ASSERT_TRUE(ivp_active_float_get(sum0) == 6.0);
+    IVP_ASSERT_TRUE(ivp_active_float_get(sum1) == 6.0);
+    IVP_ASSERT_EQ(sum0->last_update_source, a0->update_source);
+    IVP_ASSERT_EQ(sum1->last_update_source, a1->update_source);
+    IVP_ASSERT_EQ(sum0->last_update_sequence, sum1->last_update_sequence);
+
+    /* Distinct terminal sources may have the same local sequence.  Source
+     * identity keeps the second update from being mistaken for a duplicate. */
+    ivp_active_float_set(b0, 5.0);
+    IVP_ASSERT_TRUE(ivp_active_float_get(sum0) == 9.0);
+    IVP_ASSERT_EQ(sum0->last_update_source, b0->update_source);
+    IVP_ASSERT_EQ(sum0->last_update_sequence, UINT64_C(1));
+
+    ivp_active_value_manager_t *m0 = ivp_active_value_manager_create(NULL);
+    ivp_active_value_manager_t *m1 = ivp_active_value_manager_create(NULL);
+    ivp_active_value_manager_t *noise_manager =
+        ivp_active_value_manager_create(NULL);
+    IVP_ASSERT_NOT_NULL(m0);
+    IVP_ASSERT_NOT_NULL(m1);
+    IVP_ASSERT_NOT_NULL(noise_manager);
+
+    ivp_active_float_t *wave0 = ivp_active_float_sine_create(
+        NULL, "wave0", ivp_active_value_manager_current_time(m0),
+        1.0, 1.0, 0.0, 0.0);
+    ivp_active_float_t *wave1 = ivp_active_float_sine_create(
+        NULL, "wave1", ivp_active_value_manager_current_time(m1),
+        1.0, 1.0, 0.0, 0.0);
+    IVP_ASSERT_NOT_NULL(wave0);
+    IVP_ASSERT_NOT_NULL(wave1);
+
+    ivp_active_value_manager_refresh_psi(m0, 1.25);
+    for (int i = 1; i <= 32; i++) {
+        ivp_active_value_manager_refresh_psi(noise_manager, (double)i);
+    }
+    ivp_active_value_manager_refresh_psi(m1, 1.25);
+
+    IVP_ASSERT_TRUE(ivp_active_float_get(wave0) ==
+                    ivp_active_float_get(wave1));
+    IVP_ASSERT_NE(wave0->last_update_source, UINT64_C(0));
+    IVP_ASSERT_NE(wave1->last_update_source, UINT64_C(0));
+    IVP_ASSERT_NE(wave0->last_update_source,
+                  wave1->last_update_source);
+    IVP_ASSERT_EQ(wave0->last_update_sequence,
+                  wave1->last_update_sequence);
+
+    ivp_active_float_remove_ref(wave1);
+    ivp_active_float_remove_ref(wave0);
+    ivp_active_value_manager_destroy(noise_manager);
+    ivp_active_value_manager_destroy(m1);
+    ivp_active_value_manager_destroy(m0);
+    ivp_active_float_remove_ref(noise_sum);
+    ivp_active_float_remove_ref(noise);
+    ivp_active_float_remove_ref(sum1);
+    ivp_active_float_remove_ref(b1);
+    ivp_active_float_remove_ref(a1);
+    ivp_active_float_remove_ref(sum0);
+    ivp_active_float_remove_ref(b0);
+    ivp_active_float_remove_ref(a0);
+}
+
+/* A manager may disappear while a derived graph keeps one of its terminals
+ * alive.  A replacement manager must start a distinct propagation source,
+ * even if the allocator later reuses the old manager's address. */
+IVP_TEST(manager_replacement_uses_new_source) {
+    ivp_active_value_manager_t *old_manager =
+        ivp_active_value_manager_create(NULL);
+    IVP_ASSERT_NOT_NULL(old_manager);
+    ivp_active_float_t *input =
+        ivp_active_value_manager_install_float(old_manager, "input", 1.0);
+    IVP_ASSERT_NOT_NULL(input);
+    ivp_active_float_t *offset =
+        ivp_active_float_terminal_create(NULL, "offset", 2.0);
+    IVP_ASSERT_NOT_NULL(offset);
+    ivp_active_float_t *sum =
+        ivp_active_float_add_create(NULL, "sum", input, offset);
+    IVP_ASSERT_NOT_NULL(sum);
+
+    ivp_active_float_set(input, 3.0);
+    IVP_ASSERT_TRUE(ivp_active_float_get(sum) == 5.0);
+    uint64_t old_source = sum->last_update_source;
+
+    ivp_active_value_manager_remove_float(old_manager, input);
+    ivp_active_value_manager_destroy(old_manager);
+
+    ivp_active_value_manager_t *new_manager =
+        ivp_active_value_manager_create(NULL);
+    IVP_ASSERT_NOT_NULL(new_manager);
+    IVP_ASSERT_TRUE(ivp_active_value_manager_insert_float(new_manager, input));
+    ivp_active_float_set(input, 6.0);
+
+    IVP_ASSERT_TRUE(ivp_active_float_get(sum) == 8.0);
+    IVP_ASSERT_NE(sum->last_update_source, old_source);
+    IVP_ASSERT_EQ(sum->last_update_sequence, UINT64_C(1));
+
+    ivp_active_float_remove_ref(sum);
+    ivp_active_float_remove_ref(offset);
+    ivp_active_value_manager_destroy(new_manager);
+}
+
+#endif
+
 /* ── Registration ──────────────────────────────────────────────────────── */
 
 #define IVP_TEST_LIST \
@@ -178,5 +312,9 @@ IVP_TEST(sine_propagation_chain) {
 
 int main(void) {
     IVP_TEST_LIST
+#if !IVP_REFERENCE_INTERNAL_STATE
+    IVP_REGISTER(propagation_history_is_local);
+    IVP_REGISTER(manager_replacement_uses_new_source);
+#endif
     IVP_RUN_ALL();
 }

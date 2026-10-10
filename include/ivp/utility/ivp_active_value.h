@@ -16,13 +16,13 @@
  *   Terminal      IVP_U_Active_Terminal_Int
  *   Test_Range    IVP_U_Active_Test_Range (1 if low <= test <= high)
  *
- * Propagation semantics (exactly as the reference):
- *   - A process-wide atomic change meter (IVP_U_Active_Float::change_meter,
- *     initially -1) is incremented by every terminal set (float and int).
- *   - Every derived node remembers the change meter of its last update
- *     (initially 0) and ignores further notifications for the same
- *     meter value.  A propagation snapshots that value so an unrelated
- *     graph on another thread cannot split it into multiple generations.
+ * Propagation semantics:
+ *   - Every terminal update carries one propagation stamp.  Stamps are local
+ *     to the terminal or its manager, so unrelated worlds cannot affect a
+ *     graph's history.  A manager refresh uses one stamp for current_time and
+ *     all delayed terminals in that refresh.
+ *   - Every derived node remembers its last propagation stamp and ignores
+ *     further notifications carrying the same stamp.
  *     Within one terminal change each node is therefore recomputed at most
  *     once; in a diamond (A->B, A->C, B,C->D) D is
  *     computed when the FIRST of its parents notifies it and later parent
@@ -31,10 +31,11 @@
  *   - A node notifies its derived entries (dependent nodes and listeners,
  *     one ordered list) only if its value changed, iterating from the
  *     most recently added entry to the first one.
- *   - Construction evaluates the node once through the same guard (so a
- *     node constructed while the change meter is exactly 0 keeps the
- *     value 0, and Square nodes are not evaluated at construction at all —
- *     both reference quirks).
+ *   - Construction evaluates each node once through the same guard.  Square
+ *     nodes are not evaluated at construction, matching the reference.
+ *
+ * IVP_REFERENCE_INTERNAL_STATE restores the reference process-wide change
+ * meter, including its construction-at-meter-zero quirk, for parity work.
  *
  * Ownership (libivp): nodes are reference counted; create returns a node
  * with ref_count 1, every dependent node, listener and manager
@@ -47,6 +48,11 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_allocator.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+#ifndef IVP_REFERENCE_INTERNAL_STATE
+#define IVP_REFERENCE_INTERNAL_STATE 0
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -124,7 +130,14 @@ struct ivp_active_float {
     char                   *name;           /* owned copy (may be NULL) */
     double                  value;          /* IVP_U_Active_Float::double_value */
     double                  old_value;      /* terminal: value at last update */
-    int                     last_update;    /* change meter of the last update */
+#if IVP_REFERENCE_INTERNAL_STATE
+    int                     last_update;    /* reference change meter */
+#else
+    uint64_t                last_update_source;
+    uint64_t                last_update_sequence;
+    uint64_t                update_source;   /* terminal source identity */
+    uint64_t                update_sequence;
+#endif
     int                     ref_count;
     const ivp_allocator_t  *alloc;
     ivp_active_value_manager_t *manager;    /* backlink (l_mod_manager) */
@@ -164,7 +177,14 @@ struct ivp_active_int {
     char                 *name;
     int                   value;
     int                   old_value;
+#if IVP_REFERENCE_INTERNAL_STATE
     int                   last_update;
+#else
+    uint64_t              last_update_source;
+    uint64_t              last_update_sequence;
+    uint64_t              update_source;
+    uint64_t              update_sequence;
+#endif
     int                   ref_count;
     const ivp_allocator_t *alloc;
     ivp_active_value_manager_t *manager;
@@ -181,9 +201,10 @@ struct ivp_active_int {
     ivp_active_float_t   *src_high;
 };
 
-/* ── Global change meter ────────────────────────────────────────────────── */
+/* ── Reference change meter ─────────────────────────────────────────────── */
 
-/* IVP_U_Active_Float::change_meter (shared by floats and ints). */
+/* IVP_U_Active_Float::change_meter in a reference-internals build.  The
+ * normal build has no process-wide propagation state and returns -1. */
 int  ivp_active_value_change_meter(void);
 
 /* ── Terminal constructors ──────────────────────────────────────────────── */
@@ -294,9 +315,10 @@ static inline const char *ivp_active_int_name(const ivp_active_int_t *ai) {
     return ai->name;
 }
 
-/* IVP_U_Active_Terminal_Double::set_double(value): sets the value,
- * increments the change meter and propagates if the value differs from
- * the last propagated value.  No-op for non-terminal nodes. */
+/* IVP_U_Active_Terminal_Double::set_double(value): sets the value and
+ * propagates with a new source-local stamp if the value differs from the
+ * last propagated value.  A reference-internals build increments the
+ * process-wide change meter instead.  No-op for non-terminal nodes. */
 void ivp_active_float_set(ivp_active_float_t *af, double new_value);
 void ivp_active_int_set(ivp_active_int_t *ai, int new_value);
 
@@ -387,8 +409,9 @@ void ivp_active_value_manager_delay_int(ivp_active_value_manager_t *m,
  * order), then all queued ints, and clear the queues. */
 void ivp_active_value_manager_update_delayed(ivp_active_value_manager_t *m);
 
-/* refresh_psi_active_values(time): current_time.set(time) (immediate),
- * then update_delayed_active_values(). */
+/* refresh_psi_active_values(time): propagate current_time and all queued
+ * terminals as one manager-local update.  A reference-internals build uses
+ * current_time.set(time), then update_delayed_active_values(). */
 void ivp_active_value_manager_refresh_psi(ivp_active_value_manager_t *m, double time);
 
 #ifdef __cplusplus
