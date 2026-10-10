@@ -7,6 +7,7 @@
 
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
+#include <ivp/containers/ivp_set.h>
 #include <ivp/dynamics/ivp_sim_unit.h>
 #include "dynamics/ivp_sim_internal.h"
 #include "dynamics/ivp_env_hot.h"
@@ -466,6 +467,68 @@ void ivp_core_vector_sort_by_identity(ivp_pvec_t *cores)
     if (!cores || ivp_pvec_len(cores) < 2) return;
     ivp_core_sort_by_identity((ivp_core_t **)cores->elems,
                               (size_t)ivp_pvec_len(cores));
+}
+
+void ivp_core_set_visit_by_identity(
+    const ivp_set_t *set, const ivp_allocator_t *allocator,
+    ivp_core_set_filter_fn_t filter, ivp_core_set_visit_fn_t visit,
+    void *context)
+{
+    if (!set || !visit) return;
+    const int count = ivp_set_count(set);
+    if (count <= 0) return;
+    if (!allocator) allocator = ivp_default_allocator();
+
+    ivp_core_t **cores = NULL;
+    if ((size_t)count <= SIZE_MAX / sizeof(*cores)) {
+        cores = (ivp_core_t **)ivp_alloc(
+            allocator, (size_t)count * sizeof(*cores));
+    }
+    if (cores) {
+        int actual_count = 0;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while (actual_count < count &&
+               (core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            if (!filter || filter(context, core)) {
+                cores[actual_count++] = core;
+            }
+        }
+        ivp_core_sort_by_identity(cores, (size_t)actual_count);
+        for (int i = 0; i < actual_count; i++) {
+            visit(context, cores[i]);
+        }
+        ivp_free(allocator, cores, (size_t)count * sizeof(*cores));
+        return;
+    }
+
+    /* Keep visit order independent of hash slots without requiring scratch
+     * allocation.  Visits may remove the selected core from the set. */
+    bool have_previous = false;
+    uint64_t previous_key = 0u;
+    for (int emitted = 0; emitted < count; emitted++) {
+        ivp_core_t *selected = NULL;
+        uint64_t selected_key = UINT64_MAX;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            if (filter && !filter(context, core)) continue;
+            uint64_t key = ivp_core_stable_order_key(core);
+            if ((!have_previous || key > previous_key) &&
+                (!selected || key < selected_key)) {
+                selected = core;
+                selected_key = key;
+            }
+        }
+        if (!selected) break;
+        visit(context, selected);
+        previous_key = selected_key;
+        have_previous = true;
+    }
 }
 
 typedef int (*mgr_order_compare_fn)(const void *left,

@@ -71,6 +71,11 @@ static void attacher_element_removed(void *ctx, ivp_set_active_t *set, void *ele
 typedef void (*attacher_core_action_fn)(ivp_attacher_to_cores_t *attacher,
                                         ivp_core_t *core);
 
+typedef struct attacher_core_visit {
+    ivp_attacher_to_cores_t *attacher;
+    attacher_core_action_fn action;
+} attacher_core_visit_t;
+
 static void attacher_add_core(ivp_attacher_to_cores_t *a,
                               ivp_core_t *core)
 {
@@ -88,68 +93,29 @@ static void attacher_remove_core_from_set(ivp_attacher_to_cores_t *a,
     }
 }
 
+static bool attacher_core_is_attached(void *context, ivp_core_t *core)
+{
+    attacher_core_visit_t *visit = (attacher_core_visit_t *)context;
+    return ivp_vhash_store_find(
+               &visit->attacher->core_to_attachment_hash, core) != NULL;
+}
+
+static void attacher_visit_core(void *context, ivp_core_t *core)
+{
+    attacher_core_visit_t *visit = (attacher_core_visit_t *)context;
+    visit->action(visit->attacher, core);
+}
+
 static void attacher_apply_set_order(ivp_attacher_to_cores_t *a,
                                      const ivp_set_t *set,
                                      bool attached_only,
                                      attacher_core_action_fn action)
 {
-    int count = ivp_set_count(set);
-    if (count <= 0) return;
-
-    ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
-        &a->allocator, (size_t)count * sizeof(*cores));
-    if (cores) {
-        int actual_count = 0;
-        ivp_set_enumerator_t enumerator;
-        ivp_set_enumerator_init(&enumerator, set);
-        ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
-                    &enumerator, set)) != NULL) {
-            if (attached_only &&
-                !ivp_vhash_store_find(&a->core_to_attachment_hash,
-                                      core)) {
-                continue;
-            }
-            cores[actual_count++] = core;
-        }
-        ivp_core_sort_by_identity(cores, (size_t)actual_count);
-        for (int i = 0; i < actual_count; i++) {
-            action(a, cores[i]);
-        }
-        ivp_free(&a->allocator, cores,
-                 (size_t)count * sizeof(*cores));
-        return;
-    }
-
-    /* Keep callback order independent of hash slots even if the temporary
-     * snapshot cannot be allocated. */
-    bool have_previous = false;
-    uint64_t previous_key = 0u;
-    for (int emitted = 0; emitted < count; emitted++) {
-        ivp_core_t *selected = NULL;
-        uint64_t selected_key = UINT64_MAX;
-        ivp_set_enumerator_t enumerator;
-        ivp_set_enumerator_init(&enumerator, set);
-        ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
-                    &enumerator, set)) != NULL) {
-            if (attached_only &&
-                !ivp_vhash_store_find(&a->core_to_attachment_hash,
-                                      core)) {
-                continue;
-            }
-            uint64_t key = ivp_core_stable_order_key(core);
-            if ((!have_previous || key > previous_key) &&
-                (!selected || key < selected_key)) {
-                selected = core;
-                selected_key = key;
-            }
-        }
-        if (!selected) break;
-        action(a, selected);
-        previous_key = selected_key;
-        have_previous = true;
-    }
+    attacher_core_visit_t visit = { a, action };
+    ivp_core_set_visit_by_identity(
+        set, &a->allocator,
+        attached_only ? attacher_core_is_attached : NULL,
+        attacher_visit_core, &visit);
 }
 
 /* delete every attachment (hash order) */

@@ -1,5 +1,6 @@
 /* test_internal_state_stability.c -- internal-layout perturbation regressions. */
 #include "ivp_test.h"
+#include "ivp_test_fault_allocator.h"
 
 #include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_sim_internal.h"
@@ -1587,6 +1588,66 @@ typedef struct strong_phantom_scene {
     strong_phantom_capture_t capture;
 } strong_phantom_scene_t;
 
+typedef struct strong_core_set_capture {
+    ivp_set_t *set;
+    uint64_t keys[STRONG_PHANTOM_CORE_COUNT];
+    int count;
+} strong_core_set_capture_t;
+
+static void strong_capture_and_remove_core(void *context, ivp_core_t *core)
+{
+    strong_core_set_capture_t *capture =
+        (strong_core_set_capture_t *)context;
+    IVP_ASSERT(capture->count < STRONG_PHANTOM_CORE_COUNT);
+    if (capture->count < STRONG_PHANTOM_CORE_COUNT) {
+        capture->keys[capture->count++] =
+            ivp_core_stable_order_key(core);
+    }
+    ivp_set_remove(capture->set, core);
+}
+
+IVP_TEST(core_set_order_survives_snapshot_allocation_failure)
+{
+    ivp_environment_t *environment = strong_environment_create(1);
+    ivp_set_t cores;
+    ivp_set_init(&cores, environment ? environment->allocator : NULL, 16);
+    bool ok = environment != NULL && cores.hash.elems != NULL;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+    for (int i = 0; ok && i < STRONG_PHANTOM_CORE_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(4.0 * (double)(i + 1)),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_object_t *object = ivp_environment_create_object(
+            environment, &object_template, NULL);
+        ok = object != NULL;
+        if (object) ivp_set_add(&cores, object->physical_core);
+    }
+
+    strong_core_set_capture_t capture = { .set = &cores };
+    ivp_test_fault_allocator_t allocator;
+    ivp_test_fault_allocator_init(&allocator, NULL);
+    ivp_test_fault_allocator_reset(&allocator, 1);
+    if (ok) {
+        ivp_core_set_visit_by_identity(
+            &cores, &allocator.allocator, NULL,
+            strong_capture_and_remove_core, &capture);
+        ok = allocator.attempts == 1 &&
+             capture.count == STRONG_PHANTOM_CORE_COUNT &&
+             ivp_set_count(&cores) == 0;
+        for (int i = 1; ok && i < capture.count; i++) {
+            ok = capture.keys[i - 1] < capture.keys[i];
+        }
+    }
+
+    ivp_set_destroy(&cores);
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 static void strong_capture_phantom_left(
     ivp_listener_phantom_t *listener,
     ivp_controller_phantom_t *phantom,
@@ -2016,6 +2077,7 @@ int main(void)
     IVP_REGISTER(revive_queue_order_does_not_change_observable_order);
     IVP_REGISTER(cluster_link_order_does_not_change_observable_order);
     IVP_REGISTER(cluster_identity_blocks_sequence_reuse);
+    IVP_REGISTER(core_set_order_survives_snapshot_allocation_failure);
     IVP_REGISTER(phantom_hash_order_does_not_change_callback_order);
     IVP_REGISTER(attacher_hash_order_does_not_change_callback_order);
     IVP_REGISTER(attacher_storage_order_does_not_change_destroy_order);

@@ -119,6 +119,11 @@ static void fire_event_core_left(ivp_controller_phantom_t *c, ivp_core_t *core)
     }
 }
 
+static void phantom_visit_core_left(void *context, ivp_core_t *core)
+{
+    fire_event_core_left((ivp_controller_phantom_t *)context, core);
+}
+
 static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
                                            const ivp_set_t *set)
 {
@@ -132,54 +137,9 @@ static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
         }
         return;
     }
-
-    int count = ivp_set_count(set);
-    if (count <= 0) return;
-    const ivp_allocator_t *allocator = c->object->owner->allocator;
-    ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
-        allocator, (size_t)count * sizeof(*cores));
-    if (cores) {
-        int actual_count = 0;
-        ivp_set_enumerator_t enumerator;
-        ivp_set_enumerator_init(&enumerator, set);
-        ivp_core_t *core;
-        while (actual_count < count &&
-               (core = (ivp_core_t *)ivp_set_enumerator_next(
-                    &enumerator, set)) != NULL) {
-            cores[actual_count++] = core;
-        }
-        ivp_core_sort_by_identity(cores, (size_t)actual_count);
-        for (int i = 0; i < actual_count; i++) {
-            fire_event_core_left(c, cores[i]);
-        }
-        ivp_free(allocator, cores, (size_t)count * sizeof(*cores));
-        return;
-    }
-
-    /* Destruction must still have a stable callback order when temporary
-     * allocation fails.  Rescan the intact set for the next identity. */
-    bool have_previous = false;
-    uint64_t previous_key = 0u;
-    for (int emitted = 0; emitted < count; emitted++) {
-        ivp_core_t *selected = NULL;
-        uint64_t selected_key = UINT64_MAX;
-        ivp_set_enumerator_t enumerator;
-        ivp_set_enumerator_init(&enumerator, set);
-        ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
-                    &enumerator, set)) != NULL) {
-            uint64_t key = ivp_core_stable_order_key(core);
-            if ((!have_previous || key > previous_key) &&
-                (!selected || key < selected_key)) {
-                selected = core;
-                selected_key = key;
-            }
-        }
-        if (!selected) break;
-        fire_event_core_left(c, selected);
-        previous_key = selected_key;
-        have_previous = true;
-    }
+    ivp_core_set_visit_by_identity(
+        set, c->object->owner->allocator, NULL,
+        phantom_visit_core_left, c);
 }
 
 /* IVP_Controller_Phantom::mindist_entered_volume */

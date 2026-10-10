@@ -30,6 +30,7 @@ struct ivp_sim_unit;
 struct ivp_fr_system;
 struct ivp_fr_info_for_core;
 struct ivp_hull_mgr;
+struct ivp_set;
 
 /* ── IVP_Event_Sim ──────────────────────────────────────────────────────── */
 
@@ -126,6 +127,12 @@ uint64_t ivp_core_stable_order_key(const ivp_core_t *core);
 uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su);
 void ivp_core_sort_by_identity(ivp_core_t **cores, size_t count);
 void ivp_core_vector_sort_by_identity(ivp_pvec_t *cores);
+typedef bool (*ivp_core_set_filter_fn_t)(void *context, ivp_core_t *core);
+typedef void (*ivp_core_set_visit_fn_t)(void *context, ivp_core_t *core);
+void ivp_core_set_visit_by_identity(
+    const struct ivp_set *set, const ivp_allocator_t *allocator,
+    ivp_core_set_filter_fn_t filter, ivp_core_set_visit_fn_t visit,
+    void *context);
 
 bool ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);
 void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);
