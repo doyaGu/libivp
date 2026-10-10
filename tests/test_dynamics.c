@@ -1332,6 +1332,62 @@ static bool pending_union_find_count_matches(const ivp_sim_units_manager_t *m)
     return count == m->pending_union_find_count;
 }
 
+IVP_TEST(controller_removal_keeps_split_request_under_memory_pressure) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    tmpl.start_in_simulation = false;
+    ivp_object_handle_t handle_a = ivp_object_handle_invalid();
+    ivp_object_handle_t handle_b = ivp_object_handle_invalid();
+    ivp_object_t *object_a = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &handle_a);
+    tmpl.position.k[0] = IVP_REAL(10.0);
+    ivp_object_t *object_b = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &handle_b);
+    IVP_ASSERT_TRUE(object_a && object_b);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.target_a = handle_a;
+    probe.target_b = handle_b;
+    probe.discovery_handles[0] = handle_a;
+    probe.discovery_handles[1] = handle_b;
+    probe.discovery_count = 2;
+    ivp_controller_handle_t controller =
+        ivp_test_environment_announce_custom_dependent_controller(
+            env, IVP_CP_CONSTRAINTS, controller_dependent_probe, &probe,
+            dependent_discovery_fn);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(controller));
+    IVP_ASSERT_TRUE(object_a->physical_core->sim_unit ==
+                    object_b->physical_core->sim_unit);
+
+    ivp_sim_unit_t *fused_unit = object_a->physical_core->sim_unit;
+    ivp_sim_units_manager_t *manager = ivp_env_get_sim_units_manager(env);
+    IVP_ASSERT_EQ(manager->pending_union_find_count, 0u);
+    const int attempts_before_remove = state.attempts;
+    state.fail_from = attempts_before_remove + 1;
+    IVP_ASSERT_TRUE(ivp_environment_remove_dependent_controller(
+        env, controller, true));
+    IVP_ASSERT_EQ(state.attempts, attempts_before_remove);
+    IVP_ASSERT_EQ(manager->pending_union_find_count, 1u);
+    IVP_ASSERT_TRUE(pending_union_find_count_matches(manager));
+    state.fail_from = 0;
+
+    ivp_sim_unit_do_sim_unit_union_find(fused_unit);
+    IVP_ASSERT_TRUE(object_a->physical_core->sim_unit !=
+                    object_b->physical_core->sim_unit);
+    IVP_ASSERT_EQ(manager->pending_union_find_count, 0u);
+    IVP_ASSERT_TRUE(pending_union_find_count_matches(manager));
+
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
 IVP_TEST(sim_unit_pending_tracks_detach_wake_freeze_and_delete) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     IVP_ASSERT_NOT_NULL(env);
@@ -2594,6 +2650,7 @@ int main(void) {
     IVP_REGISTER(phase_hook_called);
     IVP_REGISTER(sim_unit_event_pipeline);
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
+    IVP_REGISTER(controller_removal_keeps_split_request_under_memory_pressure);
     IVP_REGISTER(sim_unit_pending_tracks_detach_wake_freeze_and_delete);
     IVP_REGISTER(sim_unit_pending_keeps_reference_scan_order);
     IVP_REGISTER(sim_unit_pending_retries_every_split_allocation_failure);

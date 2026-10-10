@@ -1366,20 +1366,13 @@ void ivp_ctrl_mgr_remove_controller_from_core(ivp_sim_ctrl_t *c, ivp_core_t *cor
     ivp_core_rem_core_controller(core, c);
 }
 
-static bool su_was_touched(ivp_pvec_t *units, ivp_sim_unit_t *unit)
-{
-    for (int i = ivp_pvec_len(units) - 1; i >= 0; i--) {
-        if (ivp_pvec_at(units, i) == unit) return true;
-    }
-    return false;
-}
-
 void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently)
 {
+    IVP_UNUSED(env);
     ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
     if (!controlled_cores) return;
-    ivp_pvec_t touched_units;
-    ivp_pvec_init_with_allocator(&touched_units, ivp_env_get_allocator(env));
+    ivp_sim_unit_t *reference_unit = NULL;
+    bool multiple_units = false;
     for (int i = ivp_pvec_len(controlled_cores) - 1; i >= 0; i--) {
         ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
         if (!my_core) continue;
@@ -1391,14 +1384,37 @@ void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env
             continue;
         }
         ivp_core_rem_core_controller(my_core, c);
-        if (!su_was_touched(&touched_units, core_unit)) ivp_pvec_add(&touched_units, core_unit);
+        ivp_sim_unit_request_union_find(core_unit);
+        if (!reference_unit) {
+            reference_unit = core_unit;
+        } else if (reference_unit != core_unit) {
+            multiple_units = true;
+        }
     }
-    for (int i = ivp_pvec_len(&touched_units) - 1; i >= 0; i--) {
-        ivp_sim_unit_t *reference_unit = (ivp_sim_unit_t *)ivp_pvec_at(&touched_units, i);
-        ivp_sim_unit_request_union_find(reference_unit);
-        if (!silently) ivp_sim_unit_ensure_in_simulation(reference_unit);
+    if (silently || !reference_unit) return;
+    if (!multiple_units) {
+        ivp_sim_unit_ensure_in_simulation(reference_unit);
+        return;
     }
-    ivp_pvec_clear(&touched_units);
+
+    /* A committed dependent controller normally owns one fused simulation
+     * unit.  Preserve the reference order without scratch storage if a
+     * partially constructed internal controller spans more than one. */
+    for (int i = 0; i < ivp_pvec_len(controlled_cores); i++) {
+        ivp_core_t *core = (ivp_core_t *)ivp_pvec_at(controlled_cores, i);
+        ivp_sim_unit_t *unit = core ? core->sim_unit : NULL;
+        if (!unit || !unit->union_find_needed_for_sim_unit) continue;
+        bool appears_later = false;
+        for (int j = i + 1; j < ivp_pvec_len(controlled_cores); j++) {
+            ivp_core_t *other =
+                (ivp_core_t *)ivp_pvec_at(controlled_cores, j);
+            if (other && other->sim_unit == unit) {
+                appears_later = true;
+                break;
+            }
+        }
+        if (!appears_later) ivp_sim_unit_ensure_in_simulation(unit);
+    }
 }
 
 void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, ivp_sim_ctrl_t *c)
