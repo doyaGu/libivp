@@ -6,6 +6,7 @@
  */
 #include "base/ivp_arena_internal.h"
 #include <ivp/base/ivp_assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -320,14 +321,20 @@ void ivp_arena_restore(ivp_arena_t *arena,
 
 void ivp_arena_begin_transaction(ivp_arena_t *arena)
 {
-    if (arena) arena->transaction_depth++;
+    if (!arena) return;
+    IVP_ASSERT(arena->transaction_depth >= 0);
+    if (arena->transaction_depth == INT_MAX) return;
+    arena->transaction_depth++;
 }
 
 void ivp_arena_end_transaction(ivp_arena_t *arena)
 {
     if (!arena) return;
+    IVP_ASSERT_MSG(arena->transaction_depth > 0,
+                   "arena transaction underflow");
+    if (arena->transaction_depth <= 0) return;
     arena->transaction_depth--;
-    ivp_arena_reset(arena);
+    if (arena->transaction_depth == 0) ivp_arena_reset(arena);
 }
 
 void ivp_arena_set_clear_on_allocate(ivp_arena_t *arena, bool enable)

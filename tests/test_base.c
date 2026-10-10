@@ -332,6 +332,7 @@ IVP_TEST(arena_transaction_overflow_blocks) {
     IVP_ASSERT_EQ(ivp_arena_init(&arena, NULL), IVP_OK);
     ivp_arena_begin_transaction(&arena);
     ivp_arena_end_transaction(&arena);
+    ivp_arena_begin_transaction(&arena);
     /* after the first reset the block holds IVU_MEMORY_BLOCK_SIZE bytes:
      * an allocation whose rounded end is still below 0x7fe0 fits */
     char *a = (char *)ivp_arena_alloc(&arena, 0x7fe0 - 0x50 - 0x20);
@@ -360,6 +361,34 @@ IVP_TEST(arena_transaction_overflow_blocks) {
     IVP_ASSERT_EQ((int)(unsigned char)b2[0], 0x77);
     IVP_ASSERT_EQ((int)(unsigned char)b2[99], 0x77);
     ivp_arena_end_transaction(&arena);
+    ivp_arena_destroy(&arena);
+}
+
+IVP_TEST(arena_nested_transactions) {
+    ivp_arena_t arena;
+    IVP_ASSERT_EQ(ivp_arena_init(&arena, NULL), IVP_OK);
+
+    ivp_arena_begin_transaction(&arena);
+    unsigned char *outer = (unsigned char *)ivp_arena_alloc(&arena, 8);
+    IVP_ASSERT_NOT_NULL(outer);
+    outer[0] = 0x2a;
+
+    ivp_arena_begin_transaction(&arena);
+    unsigned char *inner = (unsigned char *)ivp_arena_alloc(&arena, 8);
+    IVP_ASSERT_NOT_NULL(inner);
+    inner[0] = 0x5a;
+    ivp_arena_end_transaction(&arena);
+
+    IVP_ASSERT_EQ(arena.transaction_depth, 1);
+    IVP_ASSERT_EQ((int)outer[0], 0x2a);
+    IVP_ASSERT_EQ((int)inner[0], 0x5a);
+    unsigned char *after_inner =
+        (unsigned char *)ivp_arena_alloc(&arena, 8);
+    IVP_ASSERT_TRUE(after_inner > inner);
+
+    ivp_arena_end_transaction(&arena);
+    IVP_ASSERT_EQ(arena.transaction_depth, 0);
+    IVP_ASSERT_EQ(arena.position, (size_t)0);
     ivp_arena_destroy(&arena);
 }
 
@@ -534,6 +563,7 @@ int main(void) {
     IVP_REGISTER(arena_stats_smoke);
     IVP_REGISTER(arena_transaction_layout);
     IVP_REGISTER(arena_transaction_overflow_blocks);
+    IVP_REGISTER(arena_nested_transactions);
     IVP_REGISTER(arena_clear_on_allocate);
     IVP_REGISTER(arena_counting_allocator);
     IVP_REGISTER(arena_custom_first_block);

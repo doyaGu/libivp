@@ -13,14 +13,6 @@
 #include <ivp/diagnostics/ivp_statistic_manager.h>
 #include <stdatomic.h>
 
-/* Arena transaction memory (sim_unit_mem): allocations live until the
- * matching end of transaction.  Environment initialization normally enables
- * clearing; a reference-internals build leaves reused spans intact. */
-typedef struct ivp_sim_mem {
-    ivp_arena_t arena;
-    int        depth;
-} ivp_sim_mem_t;
-
 typedef struct ivp_cache_obj_mgr {
     ivp_cache_obj_t *cache_objects;
     int              n_cache_objects;
@@ -34,7 +26,10 @@ typedef struct ivp_env_pipeline {
     ivp_ov_tree_t            ov_tree;
     ivp_sim_units_manager_t  sim_units_manager;
     ivp_cache_obj_mgr_t      cache_mgr;
-    ivp_sim_mem_t            sim_unit_mem;
+    /* Allocations survive nested callers and are released by the outermost
+     * transaction. Environment initialization normally enables clearing; a
+     * reference-internals build leaves reused spans intact. */
+    ivp_arena_t              sim_unit_mem;
     /* IVP_Environment::short_term_mem: the persistent arena of the friction
      * solver and its linear constraint solver.  It preserves the reference
      * IVP_U_Memory layout; initialization normally clears reused spans. */

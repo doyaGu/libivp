@@ -210,19 +210,6 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
  * overflow blocks still use IVP_ARENA_BLOCK_SIZE for large contact systems. */
 #define IVP_SIM_MEM_FIRST_BLOCK_SIZE 0x1800u
 
-static ivp_result_t sim_mem_init(ivp_sim_mem_t *m, const ivp_allocator_t *alloc)
-{
-    m->depth = 0;
-    return ivp_arena_init_sized(&m->arena, alloc,
-                                IVP_SIM_MEM_FIRST_BLOCK_SIZE);
-}
-
-static void sim_mem_destroy(ivp_sim_mem_t *m)
-{
-    ivp_arena_destroy(&m->arena);
-    m->depth = 0;
-}
-
 struct ivp_arena *ivp_env_get_short_term_mem(struct ivp_environment *env)
 {
     return &env->pl->short_term_mem;
@@ -293,26 +280,21 @@ void ivp_env_unregister_cluster(struct ivp_environment *env,
 void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
 {
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
-    IVP_ASSERT(env->pl->sim_unit_mem.depth == 1);
+    IVP_ASSERT(env->pl->sim_unit_mem.transaction_depth == 1);
     const size_t request = size ? size : 1;
-    return ivp_arena_alloc(&env->pl->sim_unit_mem.arena, request);
+    return ivp_arena_alloc(&env->pl->sim_unit_mem, request);
 }
 
 void ivp_env_sim_mem_begin(struct ivp_environment *env)
 {
-    ivp_sim_mem_t *m = &env->pl->sim_unit_mem;
-    if (m->depth == 0) ivp_arena_begin_transaction(&m->arena);
-    m->depth++;
+    ivp_arena_begin_transaction(&env->pl->sim_unit_mem);
 }
 
 void ivp_env_sim_mem_end(struct ivp_environment *env)
 {
-    ivp_sim_mem_t *m = &env->pl->sim_unit_mem;
-    if (m->depth <= 0) return;
-    m->depth--;
     /* Inner transactions share the outer allocation lifetime because
      * tmp_contact_info may still reference their memory. */
-    if (m->depth == 0) ivp_arena_end_transaction(&m->arena);
+    ivp_arena_end_transaction(&env->pl->sim_unit_mem);
 }
 
 /* ── IVP_Environment accessors (ivp_env_internal.h) ───────────────────── */
@@ -2400,12 +2382,13 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_pvec_init_with_allocator(&pl->obj_callback_tables, env->allocator);
     ivp_pvec_init_with_allocator(&pl->global_collision_listeners, env->allocator);
     ivp_pvec_init_with_allocator(&pl->coll_callback_tables, env->allocator);
-    if (sim_mem_init(&pl->sim_unit_mem, env->allocator) != IVP_OK) {
+    if (ivp_arena_init_sized(&pl->sim_unit_mem, env->allocator,
+                             IVP_SIM_MEM_FIRST_BLOCK_SIZE) != IVP_OK) {
         ivp_environment_destroy(env);
         return NULL;
     }
     ivp_arena_set_clear_on_allocate(
-        &pl->sim_unit_mem.arena,
+        &pl->sim_unit_mem,
         !ivp_build_uses_reference_internal_state());
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_arena_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
@@ -2647,7 +2630,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
         ivp_cache_obj_mgr_destroy(&pl->cache_mgr);
         ivp_task_pool_destroy(pl->task_pool);
         pl->task_pool = NULL;
-        sim_mem_destroy(&pl->sim_unit_mem);
+        ivp_arena_destroy(&pl->sim_unit_mem);
         ivp_env_delete_draw_vector_debug(env);
         /* remaining (empty) sim units */
         for (ivp_sim_unit_t *s = pl->sim_units_manager.sim_units_slot0; s;) {

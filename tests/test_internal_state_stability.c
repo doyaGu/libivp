@@ -775,12 +775,12 @@ static bool run_perturbation(unsigned perturbations)
             reset_arena_without_writing(
                 &baseline.environment->pl->short_term_mem);
             reset_arena_without_writing(
-                &baseline.environment->pl->sim_unit_mem.arena);
+                &baseline.environment->pl->sim_unit_mem);
             ok = poison_arena(&perturbed.environment->pl->short_term_mem,
                               0x6000u,
                               (unsigned char)(0x5au ^ (unsigned char)step)) &&
                  poison_arena(
-                     &perturbed.environment->pl->sim_unit_mem.arena,
+                     &perturbed.environment->pl->sim_unit_mem,
                      0x1000u,
                      (unsigned char)(0xa5u ^ (unsigned char)step));
         }
