@@ -88,6 +88,20 @@ static void ff_element_added(void *ctx, ivp_set_active_t *set, void *elem)
     (void)ff_attach_core(state, core);
 }
 
+typedef struct ff_attach_set_context {
+    ivp_forcefield_state_t *state;
+    bool success;
+} ff_attach_set_context_t;
+
+static void ff_attach_set_core(void *context, ivp_core_t *core)
+{
+    ff_attach_set_context_t *attach =
+        (ff_attach_set_context_t *)context;
+    if (attach->success && !ff_attach_core(attach->state, core)) {
+        attach->success = false;
+    }
+}
+
 /* element_removed: remove_controller_from_core; attached_cores.remove.
  * Cores the field is not attached to are ignored (never dereferenced). */
 static void ff_element_removed(void *ctx, ivp_set_active_t *set, void *elem)
@@ -212,32 +226,14 @@ bool ivp_forcefield_attach_set(ivp_forcefield_state_t *state, ivp_environment_t 
     ivp_environment_add_listener_object_global(env, &state->object_listener);
 
     if (!ivp_build_uses_reference_internal_state()) {
-        int count = ivp_set_count(&set_of_cores->set);
-        if (!ivp_pvec_reserve(&state->attached_cores, count)) {
+        ff_attach_set_context_t attach = { state, true };
+        ivp_core_set_visit_by_identity(
+            &set_of_cores->set, &state->allocator, NULL,
+            ff_attach_set_core, &attach);
+        if (!attach.success) {
             state->set_is_going_to_be_deleted = true;
             ff_release(state);
             return false;
-        }
-        ivp_set_enumerator_t enumerator;
-        ivp_set_enumerator_init(&enumerator, &set_of_cores->set);
-        ivp_core_t *core;
-        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
-                    &enumerator, &set_of_cores->set)) != NULL) {
-            if (ivp_pvec_install(&state->attached_cores, core) < 0) {
-                state->set_is_going_to_be_deleted = true;
-                ff_release(state);
-                return false;
-            }
-        }
-        ff_restore_core_order(state);
-        for (int i = 0; i < ivp_pvec_len(&state->attached_cores); i++) {
-            core = (ivp_core_t *)ivp_pvec_at(
-                &state->attached_cores, i);
-            if (!ff_attach_core(state, core)) {
-                state->set_is_going_to_be_deleted = true;
-                ff_release(state);
-                return false;
-            }
         }
     } else {
         ivp_set_enumerator_t enumerator;
