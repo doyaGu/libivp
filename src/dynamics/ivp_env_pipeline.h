@@ -71,6 +71,9 @@ typedef struct ivp_env_pipeline {
     uint64_t                 next_object_sequence;
     uint64_t                 next_controller_sequence;
     uint64_t                 next_contact_sequence;
+#if IVP_CANONICAL_INTERNAL_STATE
+    int                      live_cluster_count;
+#endif
     ivp_parallel_stats_t     parallel_stats;
 
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */

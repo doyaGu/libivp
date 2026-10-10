@@ -10,6 +10,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_universe_manager.h>
 #include <ivp/events/ivp_listener_object.h>
 #include <ivp/geometry/ivp_surman.h>
 
@@ -24,6 +25,8 @@
 #define STRONG_PARALLEL_OBJECT_COUNT 256
 #define STRONG_PARALLEL_WORKERS 4
 #define STRONG_REVIVE_OBJECT_COUNT 8
+#define STRONG_CLUSTER_OBJECT_COUNT 6
+#define STRONG_CLUSTER_VISIT_CAPACITY 128
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -116,6 +119,28 @@ static void reverse_sim_unit_slot(ivp_sim_unit_t **head)
         node = next;
     }
     *head = new_head;
+}
+
+static void reverse_cluster_tree(ivp_cluster_t *cluster)
+{
+    for (ivp_object_t *child = cluster->first_child; child;) {
+        ivp_object_t *next = child->next_in_cluster;
+        if (child->type == IVP_OBJECT_CLUSTER) {
+            reverse_cluster_tree((ivp_cluster_t *)child);
+        }
+        child = next;
+    }
+
+    ivp_object_t *child = cluster->first_child;
+    ivp_object_t *new_head = NULL;
+    while (child) {
+        ivp_object_t *next = child->next_in_cluster;
+        child->next_in_cluster = child->prev_in_cluster;
+        child->prev_in_cluster = next;
+        new_head = child;
+        child = next;
+    }
+    cluster->first_child = new_head;
 }
 
 static void scramble_sim_unit_contents(ivp_sim_unit_t *unit)
@@ -1168,6 +1193,154 @@ IVP_TEST(revive_queue_order_does_not_change_observable_order)
     IVP_ASSERT_TRUE(ok);
 }
 
+typedef struct strong_cluster_capture {
+    uint64_t keys[STRONG_CLUSTER_VISIT_CAPACITY];
+    int count;
+} strong_cluster_capture_t;
+
+typedef struct strong_cluster_scene {
+    ivp_environment_t *environment;
+    ivp_object_t *objects[STRONG_CLUSTER_OBJECT_COUNT];
+    ivp_cluster_t *outer_cluster;
+    ivp_cluster_t *inner_cluster;
+    strong_cluster_capture_t capture;
+} strong_cluster_scene_t;
+
+static void strong_capture_cluster_visit(void *context, ivp_object_t *object)
+{
+    strong_cluster_capture_t *capture =
+        (strong_cluster_capture_t *)context;
+    IVP_ASSERT(capture->count < STRONG_CLUSTER_VISIT_CAPACITY);
+    if (capture->count < STRONG_CLUSTER_VISIT_CAPACITY) {
+        capture->keys[capture->count++] = object->creation_sequence;
+    }
+}
+
+static bool strong_cluster_scene_init(strong_cluster_scene_t *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    config.disable_performance_counter = true;
+    config.delta_psi_time = IVP_REAL(0.01);
+    ivp_vec3r_set_zero(&config.gravity);
+    scene->environment = ivp_environment_create(&config);
+    if (!scene->environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.physical_unmoveable = true;
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = true;
+    for (int i = 0; i < STRONG_CLUSTER_OBJECT_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(8.0 * (double)i),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        scene->objects[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->objects[i]) return false;
+    }
+
+    scene->outer_cluster = ivp_environment_create_cluster(
+        scene->environment, NULL, NULL);
+    scene->inner_cluster = ivp_environment_create_cluster(
+        scene->environment, scene->outer_cluster, NULL);
+    if (!scene->outer_cluster || !scene->inner_cluster ||
+        scene->outer_cluster->base.creation_sequence == 0u ||
+        scene->inner_cluster->base.creation_sequence == 0u ||
+        scene->outer_cluster->base.creation_sequence ==
+            scene->inner_cluster->base.creation_sequence) {
+        return false;
+    }
+    ivp_cluster_add_child(scene->outer_cluster, scene->objects[0]);
+    ivp_cluster_add_child(scene->outer_cluster, scene->objects[3]);
+    ivp_cluster_add_child(scene->inner_cluster, scene->objects[1]);
+    ivp_cluster_add_child(scene->inner_cluster, scene->objects[4]);
+
+    ivp_universe_manager_t manager;
+    ivp_universe_manager_init(&manager);
+    manager.evict_fn = strong_capture_cluster_visit;
+    manager.ctx = &scene->capture;
+    manager.num_objects_in_environment_threshold_0 = 1;
+    manager.check_objects_per_second_threshold_0 = 600;
+    manager.num_objects_in_environment_threshold_1 = INT_MAX;
+    ivp_environment_set_universe_manager(scene->environment, &manager);
+    return true;
+}
+
+static void strong_cluster_scene_destroy(strong_cluster_scene_t *scene)
+{
+    if (!scene->environment) return;
+    ivp_environment_set_universe_manager(scene->environment, NULL);
+    ivp_environment_destroy(scene->environment);
+    scene->environment = NULL;
+}
+
+IVP_TEST(cluster_link_order_does_not_change_observable_order)
+{
+    strong_cluster_scene_t canonical;
+    strong_cluster_scene_t perturbed;
+    bool ok = strong_cluster_scene_init(&canonical) &&
+              strong_cluster_scene_init(&perturbed);
+    for (int step = 0; ok && step < 8; step++) {
+        reverse_cluster_tree(
+            ivp_environment_get_root_cluster(perturbed.environment));
+        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(perturbed.environment);
+        ok = canonical.capture.count == perturbed.capture.count &&
+             memcmp(canonical.capture.keys, perturbed.capture.keys,
+                    (size_t)canonical.capture.count *
+                        sizeof(canonical.capture.keys[0])) == 0;
+        for (int i = 0; ok && i < STRONG_CLUSTER_OBJECT_COUNT; i++) {
+            ok = visible_core_state_equal(
+                canonical.objects[i]->physical_core,
+                perturbed.objects[i]->physical_core);
+        }
+    }
+    ok = ok && canonical.capture.count >= STRONG_CLUSTER_OBJECT_COUNT;
+    strong_cluster_scene_destroy(&perturbed);
+    strong_cluster_scene_destroy(&canonical);
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(cluster_identity_blocks_sequence_reuse)
+{
+    ivp_environment_t *environment = strong_environment_create(1);
+    IVP_ASSERT_NOT_NULL(environment);
+    ivp_cluster_t *cluster = ivp_environment_create_cluster(
+        environment, NULL, NULL);
+    IVP_ASSERT_NOT_NULL(cluster);
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+    ivp_object_t *first = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    IVP_ASSERT_NOT_NULL(first);
+    uint64_t cluster_key = cluster->base.creation_sequence;
+    uint64_t first_key = first->creation_sequence;
+    ivp_environment_destroy_object(environment, first);
+
+    ivp_object_t *second = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    IVP_ASSERT_NOT_NULL(second);
+    IVP_ASSERT_TRUE(cluster_key < first_key);
+    IVP_ASSERT_TRUE(first_key < second->creation_sequence);
+    ivp_environment_destroy_object(environment, second);
+    ivp_environment_destroy_cluster(environment, cluster);
+
+    ivp_object_t *fresh = ivp_environment_create_object(
+        environment, &object_template, NULL);
+    IVP_ASSERT_NOT_NULL(fresh);
+    IVP_ASSERT_EQ(fresh->creation_sequence, 1u);
+    ivp_environment_destroy(environment);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
@@ -1185,5 +1358,7 @@ int main(void)
     IVP_REGISTER(mindist_stack_order_does_not_change_visible_state);
     IVP_REGISTER(compound_object_order_does_not_change_visible_state);
     IVP_REGISTER(revive_queue_order_does_not_change_observable_order);
+    IVP_REGISTER(cluster_link_order_does_not_change_observable_order);
+    IVP_REGISTER(cluster_identity_blocks_sequence_reuse);
     IVP_RUN_ALL();
 }

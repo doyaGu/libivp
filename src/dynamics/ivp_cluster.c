@@ -7,6 +7,7 @@
 #include <ivp/dynamics/ivp_cluster.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/base/ivp_assert.h>
+#include "ivp_env_internal.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -68,6 +69,7 @@ void ivp_cluster_destroy(ivp_cluster_t *cluster)
 
     /* Free */
     ivp_environment_t *env = cluster->base.owner;
+    ivp_env_unregister_cluster(env, cluster->base.creation_sequence);
     if (env && env->allocator) {
         ivp_free(env->allocator, cluster, sizeof(ivp_cluster_t));
     }
@@ -84,6 +86,12 @@ void ivp_cluster_add_child(ivp_cluster_t *cluster, ivp_object_t *child)
     IVP_ASSERT(cluster->base.owner == child->owner); /* cluster->environment == environment */
     if (child->parent_cluster) {
         ivp_cluster_remove_child(child->parent_cluster, child);
+    }
+    if (child->type == IVP_OBJECT_CLUSTER &&
+        child->creation_sequence == 0u) {
+        child->creation_sequence = ivp_env_register_cluster(child->owner);
+        IVP_ASSERT(child->creation_sequence != 0u ||
+                   !ivp_build_uses_canonical_internal_state());
     }
 
     /* IVP_Cluster::add_object: insert at the head of the list */
@@ -118,6 +126,84 @@ bool ivp_cluster_remove_child(ivp_cluster_t *cluster, ivp_object_t *child)
     if (child->type == IVP_OBJECT_CLUSTER) ((ivp_cluster_t *)child)->parent = NULL;
     cluster->child_count--;
     return true;
+}
+
+/* ── Stable child order ───────────────────────────────────────────────── */
+
+static ivp_object_t *cluster_split_children(ivp_object_t *head)
+{
+    ivp_object_t *slow = head;
+    ivp_object_t *fast = head ? head->next_in_cluster : NULL;
+    while (fast && fast->next_in_cluster) {
+        slow = slow->next_in_cluster;
+        fast = fast->next_in_cluster->next_in_cluster;
+    }
+    ivp_object_t *second = slow->next_in_cluster;
+    slow->next_in_cluster = NULL;
+    return second;
+}
+
+static ivp_object_t *cluster_merge_children(ivp_object_t *left,
+                                            ivp_object_t *right)
+{
+    ivp_object_t *head = NULL;
+    ivp_object_t **tail = &head;
+    while (left && right) {
+        IVP_ASSERT(left->creation_sequence != right->creation_sequence);
+        ivp_object_t **selected =
+            left->creation_sequence > right->creation_sequence
+                ? &left
+                : &right;
+        *tail = *selected;
+        *selected = (*selected)->next_in_cluster;
+        tail = &(*tail)->next_in_cluster;
+    }
+    *tail = left ? left : right;
+    return head;
+}
+
+static ivp_object_t *cluster_sort_children(ivp_object_t *head)
+{
+    if (!head || !head->next_in_cluster) return head;
+    ivp_object_t *second = cluster_split_children(head);
+    return cluster_merge_children(cluster_sort_children(head),
+                                  cluster_sort_children(second));
+}
+
+void ivp_cluster_restore_child_order(ivp_cluster_t *root)
+{
+    if (!root) return;
+
+    bool ordered = true;
+    int count = 0;
+    ivp_object_t *previous = NULL;
+    for (ivp_object_t *child = root->first_child; child;
+         child = child->next_in_cluster) {
+        if (child->type == IVP_OBJECT_CLUSTER) {
+            ivp_cluster_restore_child_order((ivp_cluster_t *)child);
+        }
+        IVP_ASSERT(child->creation_sequence != 0u ||
+                   child->type != IVP_OBJECT_CLUSTER);
+        if (child->prev_in_cluster != previous ||
+            (previous && previous->creation_sequence <=
+                             child->creation_sequence)) {
+            ordered = false;
+        }
+        previous = child;
+        count++;
+    }
+    IVP_ASSERT(count == root->child_count);
+    (void)count;
+    if (!ordered) {
+        root->first_child = cluster_sort_children(root->first_child);
+    }
+
+    previous = NULL;
+    for (ivp_object_t *child = root->first_child; child;
+         child = child->next_in_cluster) {
+        child->prev_in_cluster = previous;
+        previous = child;
+    }
 }
 
 /* ── Iteration ──────────────────────────────────────────────────────────── */

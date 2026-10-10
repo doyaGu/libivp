@@ -228,6 +228,39 @@ uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
     return env_take_sequence(&env->pl->next_contact_sequence);
 }
 
+uint64_t ivp_env_register_cluster(struct ivp_environment *env)
+{
+#if IVP_CANONICAL_INTERNAL_STATE
+    if (!env || !env->pl) return 0u;
+    uint64_t sequence = env_take_sequence(&env->pl->next_object_sequence);
+    if (sequence != 0u) env->pl->live_cluster_count++;
+    return sequence;
+#else
+    (void)env;
+    return 0u;
+#endif
+}
+
+void ivp_env_unregister_cluster(struct ivp_environment *env,
+                                uint64_t creation_sequence)
+{
+#if IVP_CANONICAL_INTERNAL_STATE
+    if (!env || !env->pl || creation_sequence == 0u) return;
+    IVP_ASSERT(env->pl->live_cluster_count > 0);
+    if (env->pl->live_cluster_count > 0) {
+        env->pl->live_cluster_count--;
+    }
+    if (env->pl->live_cluster_count == 0 &&
+        ivp_object_system_count(env_object_system(env)) == 0) {
+        env->pl->next_object_sequence = 1u;
+        env->pl->next_contact_sequence = 1u;
+    }
+#else
+    (void)env;
+    (void)creation_sequence;
+#endif
+}
+
 void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
 {
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
@@ -545,6 +578,9 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
     ivp_env_pipeline_t *pl = env->pl;
     if (!um->provide_settings) return;
     if (env_number_of_real_objects(env) < um->num_objects_in_environment_threshold_0) return;
+    if (ivp_build_uses_canonical_internal_state()) {
+        ivp_cluster_restore_child_order(&pl->root_cluster);
+    }
     /* int(int * IVP_FLOAT get_delta_PSI_time()): float product */
     for (int i = (int)((float)um->check_objects_per_second_threshold_0 * ivp_env_get_delta_psi_time(env)); i >= 0; i--) {
         ivp_object_t *an_object = pl->an_object_to_be_checked;
@@ -2547,6 +2583,9 @@ void ivp_environment_destroy(ivp_environment_t *env)
          * P_DELETE(cluster_manager) deletes the objects in cluster order: the
          * root cluster deletes its first object (the newest one) until it is
          * empty, sub-clusters recursively */
+        if (ivp_build_uses_canonical_internal_state()) {
+            ivp_cluster_restore_child_order(&pl->root_cluster);
+        }
         env_delete_static_object(env);
         env_delete_cluster_objects(env, &pl->root_cluster);
         /* objects outside the root cluster tree, newest first */
@@ -2647,7 +2686,12 @@ void ivp_environment_destroy(ivp_environment_t *env)
 
 static void env_reset_object_sequence_if_empty(ivp_environment_t *env)
 {
-    if (ivp_object_system_count(env_object_system(env)) == 0) {
+    bool has_live_clusters = false;
+#if IVP_CANONICAL_INTERNAL_STATE
+    has_live_clusters = env->pl->live_cluster_count != 0;
+#endif
+    if (ivp_object_system_count(env_object_system(env)) == 0 &&
+        !has_live_clusters) {
         /* The static object permanently owns sequence zero.  Once no public
          * objects remain, a new scene can start from the same canonical
          * order even if registry slots and allocator pools are still warm. */

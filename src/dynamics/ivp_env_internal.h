@@ -31,6 +31,7 @@ struct ivp_contact_situation_lt;
 struct ivp_mindist;
 struct ivp_mindist_settings;
 struct ivp_sim_ctrl;
+struct ivp_cluster;
 
 /* IVP_ENV_STATE */
 typedef enum ivp_env_state {
@@ -119,6 +120,11 @@ static inline bool ivp_build_uses_canonical_internal_state(void)
 void ivp_env_register_sim_controller(struct ivp_environment *env,
                                      struct ivp_sim_ctrl *controller);
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env);
+uint64_t ivp_env_register_cluster(struct ivp_environment *env);
+void ivp_env_unregister_cluster(struct ivp_environment *env,
+                                uint64_t creation_sequence);
+/* Restore cluster children before an engine traversal exposes their order. */
+void ivp_cluster_restore_child_order(struct ivp_cluster *root);
 
 /* IVP_Environment::get_statistic_manager / get_debug_manager
  * (debug_information) */
