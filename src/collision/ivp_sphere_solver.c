@@ -15,6 +15,7 @@
 #include <ivp/base/ivp_assert.h>
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
+#include "ivp_ov_query.h"
 
 #include <math.h>
 
@@ -205,6 +206,37 @@ typedef struct sphere_env_query {
     int                                 found;
 } sphere_env_query_t;
 
+static bool sphere_object_bounds_overlap(
+    const sphere_env_query_t *query, const ivp_object_t *object)
+{
+    const ivp_vec3r_t *position =
+        &object->physical_core->m_world_f_core_last_psi.pos;
+    const double center[3] = {
+        (double)position->k[0],
+        (double)position->k[1],
+        (double)position->k[2]
+    };
+    return overlaps_d(
+        query->center, query->radius, center,
+        (double)(float)object->physical_core->upper_limit_radius);
+}
+
+static void sphere_query_check_object(
+    sphere_env_query_t *query, ivp_object_t *object)
+{
+    double center_os[3];
+    to_object_space(object, &query->tmpl->center, center_os);
+    if (!sphere_against_object_os(
+            object, center_os, query->radius, query->max_depth)) {
+        return;
+    }
+    if (query->out && query->found < query->capacity) {
+        query->out[query->found] = object;
+    }
+    query->found++;
+}
+
+#if IVP_REFERENCE_INTERNAL_STATE
 static void collect_intruding_objects(sphere_env_query_t *q, const ivp_ov_node_t *node,
                                       const float query_rlb[3], const float query_pos[3])
 {
@@ -221,19 +253,8 @@ static void collect_intruding_objects(sphere_env_query_t *q, const ivp_ov_node_t
     for (int i = 0; i < ivp_pvec_len(&node->elements); i++) {
         const ivp_ov_element_t *elem = (const ivp_ov_element_t *)ivp_pvec_at(&node->elements, i);
         ivp_object_t *obj = elem->real_object;
-        const ivp_vec3r_t *pos = &obj->physical_core->m_world_f_core_last_psi.pos;   /* get_position_PSI() */
-        double p[3] = { (double)pos->k[0], (double)pos->k[1], (double)pos->k[2] };
-
-        /* object bounding sphere against the query sphere */
-        if (!overlaps_d(q->center, q->radius, p, (double)(float)obj->physical_core->upper_limit_radius)) continue;
-
-        /* query sphere center in object space */
-        double q_os[3];
-        to_object_space(obj, &q->tmpl->center, q_os);
-        if (sphere_against_object_os(obj, q_os, q->radius, q->max_depth)) {
-            if (q->out && q->found < q->capacity) q->out[q->found] = obj;
-            q->found++;
-        }
+        if (!sphere_object_bounds_overlap(q, obj)) continue;
+        sphere_query_check_object(q, obj);
     }
 
     /* children, first to last */
@@ -242,6 +263,47 @@ static void collect_intruding_objects(sphere_env_query_t *q, const ivp_ov_node_t
                                   query_rlb, query_pos);
     }
 }
+#else
+typedef struct sphere_ov_query {
+    sphere_env_query_t *query;
+    float half_extents[3];
+    float center[3];
+} sphere_ov_query_t;
+
+static bool sphere_query_hits_node(
+    void *context, const ivp_ov_node_t *node)
+{
+    const sphere_ov_query_t *ov_query =
+        (const sphere_ov_query_t *)context;
+    float node_luf[3], node_size;
+    ivp_ov_tree_get_luf_coordinates_ws(
+        ov_query->query->tree, node, node_luf, &node_size);
+    const float half_size = node_size * 0.5f;
+    const float node_rlb[3] = {
+        half_size, half_size, half_size
+    };
+    const float node_pos[3] = {
+        node_luf[0] + half_size,
+        node_luf[1] + half_size,
+        node_luf[2] + half_size
+    };
+    return aabb_overlaps_aabb(
+        node_rlb, node_pos, ov_query->half_extents, ov_query->center);
+}
+
+static bool sphere_query_hits_object(void *context, ivp_object_t *object)
+{
+    const sphere_ov_query_t *ov_query =
+        (const sphere_ov_query_t *)context;
+    return sphere_object_bounds_overlap(ov_query->query, object);
+}
+
+static void sphere_query_visit_object(void *context, ivp_object_t *object)
+{
+    sphere_ov_query_t *ov_query = (sphere_ov_query_t *)context;
+    sphere_query_check_object(ov_query->query, object);
+}
+#endif
 
 int ivp_sphere_solver_check_environment(const ivp_sphere_solver_template_t *tmpl,
                                         const struct ivp_environment *env,
@@ -268,6 +330,18 @@ int ivp_sphere_solver_check_environment(const ivp_sphere_solver_template_t *tmpl
     /* sphere_bb_rlb.set(m_radius, ...), sphere_bb_pos.set(m_center.k[0], ...) */
     const float sphere_bb_rlb[3] = { (float)q.radius, (float)q.radius, (float)q.radius };
     const float sphere_bb_pos[3] = { (float)q.center[0], (float)q.center[1], (float)q.center[2] };
+#if IVP_REFERENCE_INTERNAL_STATE
     collect_intruding_objects(&q, root, sphere_bb_rlb, sphere_bb_pos);
+#else
+    sphere_ov_query_t ov_query = {
+        &q,
+        { sphere_bb_rlb[0], sphere_bb_rlb[1], sphere_bb_rlb[2] },
+        { sphere_bb_pos[0], sphere_bb_pos[1], sphere_bb_pos[2] }
+    };
+    ivp_ov_query_visit_objects(
+        q.tree, root, IVP_OV_QUERY_FORWARD,
+        sphere_query_hits_node, sphere_query_hits_object,
+        sphere_query_visit_object, &ov_query);
+#endif
     return q.found;
 }

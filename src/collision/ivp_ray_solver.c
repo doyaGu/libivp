@@ -19,6 +19,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
+#include "ivp_ov_query.h"
 
 #include <float.h>
 #include <math.h>
@@ -333,11 +334,54 @@ static inline void core_center_f(const ivp_object_t *obj, float c[3])
     c[2] = (float)core->m_world_f_core_last_psi.pos.k[2];
 }
 
+#if !IVP_REFERENCE_INTERNAL_STATE
+typedef struct ray_ov_query {
+    ivp_ray_solver_t *solver;
+    const ivp_ov_tree_t *tree;
+} ray_ov_query_t;
+
+static bool ray_query_hits_node(void *context, const ivp_ov_node_t *node)
+{
+    const ray_ov_query_t *query = (const ray_ov_query_t *)context;
+    float luf[3], rlb[3], cubesize;
+    ivp_ov_tree_get_luf_coordinates_ws(
+        query->tree, node, luf, &cubesize);
+    rlb[0] = luf[0] + cubesize;
+    rlb[1] = luf[1] + cubesize;
+    rlb[2] = luf[2] + cubesize;
+    return ivp_ray_solver_check_cube(query->solver, luf, rlb);
+}
+
+static bool ray_query_hits_object(void *context, ivp_object_t *object)
+{
+    const ray_ov_query_t *query = (const ray_ov_query_t *)context;
+    float center[3];
+    core_center_f(object, center);
+    return ivp_ray_solver_check_sphere(
+        query->solver, center,
+        (float)object->physical_core->upper_limit_radius);
+}
+
+static void ray_query_visit_object(void *context, ivp_object_t *object)
+{
+    ray_ov_query_t *query = (ray_ov_query_t *)context;
+    ivp_ray_solver_check_object(query->solver, object);
+}
+#endif
+
 void ivp_ray_solver_check_node(ivp_ray_solver_t *rs, const ivp_ov_node_t *node,
                                const ivp_ov_tree_t *ov_tree)
 {
     /* IVP_Ray_Solver::check_ray_against_node (ivp_ray_solver.cxx:717) */
     if (!node) return;
+
+#if !IVP_REFERENCE_INTERNAL_STATE
+    ray_ov_query_t query = { rs, ov_tree };
+    ivp_ov_query_visit_objects(
+        ov_tree, node, IVP_OV_QUERY_REVERSE,
+        ray_query_hits_node, ray_query_hits_object,
+        ray_query_visit_object, &query);
+#else
 
     /* left upper front / right lower back corners of the node cube */
     float luf[3], rlb[3], cubesize;
@@ -362,6 +406,7 @@ void ivp_ray_solver_check_node(ivp_ray_solver_t *rs, const ivp_ov_node_t *node,
     for (int i = ivp_pvec_len(&node->children) - 1; i >= 0; --i) {
         ivp_ray_solver_check_node(rs, (const ivp_ov_node_t *)ivp_pvec_at(&node->children, i), ov_tree);
     }
+#endif
 }
 
 void ivp_ray_solver_check_all_objects(ivp_ray_solver_t *rs, const ivp_environment_t *env)
@@ -792,11 +837,61 @@ void ivp_ray_solver_group_check_object(ivp_ray_solver_group_t *g, ivp_object_t *
     }
 }
 
+#if !IVP_REFERENCE_INTERNAL_STATE
+typedef struct ray_group_ov_query {
+    ivp_ray_solver_group_t *group;
+    const ivp_ov_tree_t *tree;
+} ray_group_ov_query_t;
+
+static bool ray_group_query_hits_node(
+    void *context, const ivp_ov_node_t *node)
+{
+    const ray_group_ov_query_t *query =
+        (const ray_group_ov_query_t *)context;
+    float luf[3], center[3], cubesize;
+    ivp_ov_tree_get_luf_coordinates_ws(
+        query->tree, node, luf, &cubesize);
+    const float half_size = cubesize * 0.5f;
+    center[0] = luf[0] + half_size;
+    center[1] = luf[1] + half_size;
+    center[2] = luf[2] + half_size;
+    return ivp_ray_solver_group_check_cube(
+        query->group, center, cubesize);
+}
+
+static bool ray_group_query_hits_object(
+    void *context, ivp_object_t *object)
+{
+    const ray_group_ov_query_t *query =
+        (const ray_group_ov_query_t *)context;
+    float center[3];
+    core_center_f(object, center);
+    return group_check_sphere(
+        query->group, center,
+        (float)object->physical_core->upper_limit_radius);
+}
+
+static void ray_group_query_visit_object(
+    void *context, ivp_object_t *object)
+{
+    ray_group_ov_query_t *query = (ray_group_ov_query_t *)context;
+    ivp_ray_solver_group_check_object(query->group, object);
+}
+#endif
+
 void ivp_ray_solver_group_check_node(ivp_ray_solver_group_t *g, const ivp_ov_node_t *node,
                                      const ivp_ov_tree_t *ov_tree)
 {
     /* IVP_Ray_Solver_Group::check_ray_group_against_node (ivp_ray_solver.cxx:762) */
     if (!node) return;
+
+#if !IVP_REFERENCE_INTERNAL_STATE
+    ray_group_ov_query_t query = { g, ov_tree };
+    ivp_ov_query_visit_objects(
+        ov_tree, node, IVP_OV_QUERY_REVERSE,
+        ray_group_query_hits_node, ray_group_query_hits_object,
+        ray_group_query_visit_object, &query);
+#else
 
     float luf[3], center[3], cubesize;
     ivp_ov_tree_get_luf_coordinates_ws(ov_tree, node, luf, &cubesize);
@@ -819,6 +914,7 @@ void ivp_ray_solver_group_check_node(ivp_ray_solver_group_t *g, const ivp_ov_nod
     for (int i = ivp_pvec_len(&node->children) - 1; i >= 0; --i) {
         ivp_ray_solver_group_check_node(g, (const ivp_ov_node_t *)ivp_pvec_at(&node->children, i), ov_tree);
     }
+#endif
 }
 
 void ivp_ray_solver_group_check_all_objects(ivp_ray_solver_group_t *g,

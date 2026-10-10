@@ -92,14 +92,15 @@ bool ivp_sphere_solver_check_object(const ivp_sphere_solver_template_t *tmpl,
 
 /* IVP_Sphere_Solver::check_sphere_against_environment: walks the
  * environment's OV tree (recursively_collect_intruding_objects).  A node is
- * entered when its cube overlaps the query sphere's bounding box; its
- * objects (first to last) are reported when their core sphere (position at
- * the last PSI, upper_limit_radius) overlaps the query sphere and they pass
- * ivp_sphere_solver_check_object(); then the children are visited (first
- * to last).  Objects without collision detection are not in the OV tree
- * and are never reported; phantoms are reported like any other object.
- * The output is in this traversal order.  Writes at most `capacity`
- * objects and returns the total number of intruding objects. */
+ * entered when its cube overlaps the query sphere's bounding box.  Objects
+ * are reported when their core sphere (position at the last PSI,
+ * upper_limit_radius) overlaps the query sphere and they pass
+ * ivp_sphere_solver_check_object().  Objects without collision detection are
+ * not in the OV tree and are never reported; phantoms are reported like any
+ * other object.  The normal build reports objects in forward world-local
+ * object order, independent of OV node storage; a reference-internals build
+ * preserves the original first-to-last traversal.  Writes at most
+ * `capacity` objects and returns the total number of intruding objects. */
 int ivp_sphere_solver_check_environment(const ivp_sphere_solver_template_t *tmpl,
                                         const struct ivp_environment *env,
                                         struct ivp_object **intruding_objects,

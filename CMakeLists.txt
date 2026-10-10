@@ -181,6 +181,7 @@ set(IVP_COLLISION_SOURCES
         src/collision/ivp_sphere_solver.c
         src/collision/ivp_hull_mgr.c
         src/collision/ivp_ov_tree.c
+        src/collision/ivp_ov_query.c
         src/collision/ivp_mindist_core.c
         src/collision/ivp_collision_diff.c
         src/collision/ivp_mindist_minimize.c

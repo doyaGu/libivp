@@ -409,11 +409,12 @@ IVP_TEST(sphere_solver_environment_matches_reference)
  * IVP_Sphere_Solver::check_sphere_against_environment, draining the
  * IVP_U_Min_Hash with find_min_elem / remove_min).  Many boxes share the
  * front face x = -1, so a ray along +x hits them at exactly the same
- * distance and the reported order is the OV tree traversal order.  C, N
- * (boxes) and L (ball) have collision detection disabled: they are not in
- * the OV tree and must never be reported.  P and R are phantoms (made from
- * static objects: IVP_MT_STATIC_PHANTOM, which IVP_MTIS_IS_STATIC does not
- * count as static), M and s3 are moving.
+ * distance.  The normal build reports equal-distance hits in world object
+ * order; the reference-internals build preserves the original OV traversal
+ * order.  C, N (boxes) and L (ball) have collision detection disabled: they
+ * are not in the OV tree and must never be reported.  P and R are phantoms
+ * (made from static objects: IVP_MT_STATIC_PHANTOM, which
+ * IVP_MTIS_IS_STATIC does not count as static), M and s3 are moving.
  */
 
 enum { OV_STATIC = 0, OV_DYNAMIC = 1, OV_NOCOLL = 2, OV_PHANTOM = 3 };
@@ -538,22 +539,60 @@ typedef struct ov_cast_case {
     const char *name;
     double      ray[7]; /* start, direction (not normalised), length */
     unsigned    flags;
-    const char *hits;    /* reference min hash order */
-    const char *min_hit; /* reference IVP_Ray_Solver_Min result ("" = none) */
+    const char *hits;
+    const char *min_hit; /* "" = none */
     double      min_dist;
 } ov_cast_case_t;
+
+#if IVP_REFERENCE_INTERNAL_STATE
+#define OV_PX_HITS "E M P D B A F K"
+#define OV_PX_NOPH_HITS "E M D B A F K"
+#define OV_PX_NOMOV_HITS "E D B A F K"
+#define OV_PX_LONG_HITS "E M P D B A F K s0 s1 s2 s3 s4 s5 H G"
+#define OV_DIAG_HITS "E M P B A K D"
+#define OV_PX_MIN "E"
+#define OV_PX_NOPH_MIN "E"
+#define OV_PX_NOMOV_MIN "E"
+#define OV_PX_LONG_MIN "E"
+#define OV_CB_FILTERED_HITS "E M D B F K"
+#define OV_GROUP_HITS_0 "E M P D B A F K"
+#define OV_GROUP_HITS_1 "E M P D B A K"
+#define OV_GROUP_NOPH_HITS_0 "E M D B A F K"
+#define OV_GROUP_NOPH_HITS_1 "E M D B A K"
+#define OV_SPHERE_NEAR_HITS "E A B D P M K F"
+#define OV_SPHERE_WIDE_HITS \
+    "E A B D P M K F s0 s1 s2 s3 s4 s5 T Q R"
+#else
+#define OV_PX_HITS "M P F E D B A K"
+#define OV_PX_NOPH_HITS "M F E D B A K"
+#define OV_PX_NOMOV_HITS "F E D B A K"
+#define OV_PX_LONG_HITS "M P F E D B A K s0 s1 s2 s3 s4 s5 H G"
+#define OV_DIAG_HITS "M P E B A K D"
+#define OV_PX_MIN "M"
+#define OV_PX_NOPH_MIN "M"
+#define OV_PX_NOMOV_MIN "F"
+#define OV_PX_LONG_MIN "M"
+#define OV_CB_FILTERED_HITS "M F E D B K"
+#define OV_GROUP_HITS_0 "M P F E D B A K"
+#define OV_GROUP_HITS_1 "M P E D B A K"
+#define OV_GROUP_NOPH_HITS_0 "M F E D B A K"
+#define OV_GROUP_NOPH_HITS_1 "M E D B A K"
+#define OV_SPHERE_NEAR_HITS "A B D E F P M K"
+#define OV_SPHERE_WIDE_HITS \
+    "A B D E F P M K s0 s1 s2 s3 s4 s5 Q R T"
+#endif
 
 IVP_TEST(ray_env_queries_walk_ov_tree)
 {
     ov_scene_t sc;
     ov_scene_init(&sc);
     static const ov_cast_case_t cases[] = {
-        { "px", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_ALL, "E M P D B A F K", "E", 9.0 },
-        { "px_noph", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_IGNORE_PHANTOMS, "E M D B A F K", "E", 9.0 },
-        { "px_nomov", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_IGNORE_MOVINGS, "E D B A F K", "E", 9.0 },
+        { "px", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_ALL, OV_PX_HITS, OV_PX_MIN, 9.0 },
+        { "px_noph", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_IGNORE_PHANTOMS, OV_PX_NOPH_HITS, OV_PX_NOPH_MIN, 9.0 },
+        { "px_nomov", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_IGNORE_MOVINGS, OV_PX_NOMOV_HITS, OV_PX_NOMOV_MIN, 9.0 },
         { "px_nostat", { -10, 0.1, 0.2, 1, 0, 0, 20 }, IVP_RAY_SOLVER_IGNORE_STATICS, "M P", "M", 9.0 },
         { "px_long", { -20, 0.1, 0.05, 1, 0, 0, 70 }, IVP_RAY_SOLVER_ALL,
-          "E M P D B A F K s0 s1 s2 s3 s4 s5 H G", "E", 19.0 },
+          OV_PX_LONG_HITS, OV_PX_LONG_MIN, 19.0 },
         { "my", { 0.1, 10, 0.2, 0, -1, 0, 20 }, IVP_RAY_SOLVER_ALL, "E M P B A K", "E", 8.0 },
         { "mz", { 0.1, 0.2, 10, 0, 0, -1, 80 }, IVP_RAY_SOLVER_ALL, "E M P B A K R Q", "E", 8.0 },
         { "mz_noph", { 0.1, 0.2, 10, 0, 0, -1, 80 }, IVP_RAY_SOLVER_IGNORE_PHANTOMS, "E M B A K Q", "E", 8.0 },
@@ -561,7 +600,7 @@ IVP_TEST(ray_env_queries_walk_ov_tree)
          * unrounded double distance while IVP_Ray_Solver_Min compares with
          * its float min_dist, so the closest hit is A, not the first in the
          * min hash (reference behaviour) */
-        { "diag", { -10, -7, 3, 1, 0.7, -0.3, 30 }, IVP_RAY_SOLVER_ALL, "E M P B A K D", "A", 11.3128252 },
+        { "diag", { -10, -7, 3, 1, 0.7, -0.3, 30 }, IVP_RAY_SOLVER_ALL, OV_DIAG_HITS, "A", 11.3128252 },
         { "miss", { -10, 50, 0, 1, 0, 0, 20 }, IVP_RAY_SOLVER_ALL, "", "", 0.0 },
     };
     char buf[256];
@@ -630,23 +669,23 @@ IVP_TEST(ray_env_skips_collision_disabled_and_phantoms)
     /* phantoms come from ivp_object_convert_to_phantom (controller_phantom) */
     ivp_ray_solver_min_hash_init(&s_ov_mh[0], &t);
     ivp_ray_solver_check_all_objects(&s_ov_mh[0].base, sc.env);
-    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), "E M P D B A F K", "all"));
+    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), OV_PX_HITS, "all"));
     t.ray_flags = IVP_RAY_SOLVER_IGNORE_PHANTOMS;
     ivp_ray_solver_min_hash_init(&s_ov_mh[0], &t);
     ivp_ray_solver_check_all_objects(&s_ov_mh[0].base, sc.env);
-    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), "E M D B A F K", "noph"));
+    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), OV_PX_NOPH_HITS, "noph"));
 
     /* the optional user classifier adds to the phantom controller test */
     ivp_ray_solver_min_hash_init(&s_ov_mh[0], &t);
     s_ov_mh[0].base.is_phantom = phantom_named_a;
     ivp_ray_solver_check_all_objects(&s_ov_mh[0].base, sc.env);
-    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), "E M D B F K", "noph+cb"));
+    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), OV_CB_FILTERED_HITS, "noph+cb"));
     /* ... and is ignored without the flag */
     t.ray_flags = IVP_RAY_SOLVER_ALL;
     ivp_ray_solver_min_hash_init(&s_ov_mh[0], &t);
     s_ov_mh[0].base.is_phantom = phantom_named_a;
     ivp_ray_solver_check_all_objects(&s_ov_mh[0].base, sc.env);
-    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), "E M P D B A F K", "cb only"));
+    IVP_ASSERT_TRUE(names_equal(sorted_names(&s_ov_mh[0], buf, sizeof(buf)), OV_PX_HITS, "cb only"));
     ov_scene_free(&sc);
 }
 
@@ -704,9 +743,9 @@ IVP_TEST(ray_group_env_query_walks_ov_tree)
         const char *hits[3];
     } cases[] = {
         { "g", 3, { { -1.5, 0.1, 0.2, 1, 0, 0, 1.0 }, { -1.5, -0.3, 0.1, 1, 0, 0, 1.0 }, { -1.25, 0.2, -0.2, 1, 0, 0, 0.5 } },
-          IVP_RAY_SOLVER_ALL, { "E M P D B A F K", "E M P D B A K", "E M P D B A K" } },
+          IVP_RAY_SOLVER_ALL, { OV_GROUP_HITS_0, OV_GROUP_HITS_1, OV_GROUP_HITS_1 } },
         { "g_noph", 3, { { -1.5, 0.1, 0.2, 1, 0, 0, 1.0 }, { -1.5, -0.3, 0.1, 1, 0, 0, 1.0 }, { -1.25, 0.2, -0.2, 1, 0, 0, 0.5 } },
-          IVP_RAY_SOLVER_IGNORE_PHANTOMS, { "E M D B A F K", "E M D B A K", "E M D B A K" } },
+          IVP_RAY_SOLVER_IGNORE_PHANTOMS, { OV_GROUP_NOPH_HITS_0, OV_GROUP_NOPH_HITS_1, OV_GROUP_NOPH_HITS_1 } },
         { "gs", 2, { { 3.5, 0.05, 0.02, 1, 0, 0, 3.0 }, { 3.5, -0.05, -0.02, 1, 0, 0, 5.0 } },
           IVP_RAY_SOLVER_ALL, { "s0 s1", "s0 s1 s2", "" } },
     };
@@ -744,18 +783,18 @@ IVP_TEST(sphere_env_query_walks_ov_tree)
 {
     ov_scene_t sc;
     ov_scene_init(&sc);
-    /* legacy output, identical for max_traversal_depth 0..2: traversal
-     * order, collision disabled objects (C, N, L) never reported, phantoms
-     * reported like other objects */
+    /* Collision-disabled objects (C, N, L) are never reported; phantoms are
+     * reported like other objects.  Results are identical for
+     * max_traversal_depth 0..2. */
     static const struct {
         double q[4];
         const char *expect;
     } cases[] = {
-        { { 0, 0, 0, 0.5 }, "E A B D P M K F" },
-        { { -1.2, 0.1, 0.2, 0.3 }, "E A B D P M K F" },
+        { { 0, 0, 0, 0.5 }, OV_SPHERE_NEAR_HITS },
+        { { -1.2, 0.1, 0.2, 0.3 }, OV_SPHERE_NEAR_HITS },
         { { 30.5, 0, 0, 2.0 }, "G H" },
         { { 10.0, 0, 0, 0.2 }, "s3" },
-        { { 0, 0, -20, 30 }, "E A B D P M K F s0 s1 s2 s3 s4 s5 T Q R" },
+        { { 0, 0, -20, 30 }, OV_SPHERE_WIDE_HITS },
         { { 0, 100, 0, 1 }, "" },
     };
     char buf[256];

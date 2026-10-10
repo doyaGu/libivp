@@ -7,6 +7,8 @@
 
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/collision/ivp_collision_core.h>
+#include <ivp/collision/ivp_ray_solver.h>
+#include <ivp/collision/ivp_sphere_solver.h>
 #include <ivp/controllers/ivp_attacher_to_cores.h>
 #include <ivp/controllers/ivp_forcefield.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -968,6 +970,210 @@ IVP_TEST(ov_tree_order_does_not_change_visible_state)
     IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_OV_TREE));
 }
 
+#define STRONG_OV_QUERY_OBJECT_COUNT 3
+#define STRONG_OV_QUERY_FALLBACK_COUNT 70
+#define STRONG_OV_QUERY_MAX_COUNT STRONG_OV_QUERY_FALLBACK_COUNT
+#define STRONG_OV_QUERY_PREFIX_COUNT 2
+
+typedef struct strong_ov_query_capture {
+    uint64_t closest_object;
+    uint64_t ray_objects[STRONG_OV_QUERY_MAX_COUNT];
+    uint64_t group_objects[STRONG_OV_QUERY_MAX_COUNT];
+    uint64_t sphere_objects[STRONG_OV_QUERY_MAX_COUNT];
+    uint64_t sphere_prefix[STRONG_OV_QUERY_PREFIX_COUNT];
+    int ray_count;
+    int group_count;
+    int sphere_count;
+} strong_ov_query_capture_t;
+
+static bool strong_capture_ov_queries(
+    ivp_environment_t *environment,
+    strong_ov_query_capture_t *capture,
+    int expected_count,
+    ivp_real_t ray_length,
+    ivp_real_t sphere_radius)
+{
+    if (expected_count < STRONG_OV_QUERY_PREFIX_COUNT ||
+        expected_count > STRONG_OV_QUERY_MAX_COUNT) {
+        return false;
+    }
+    memset(capture, 0, sizeof(*capture));
+
+    ivp_ray_solver_template_t ray_template;
+    ray_template.ray_start_point =
+        ivp_vec3r(IVP_REAL(-2.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ray_template.ray_normized_direction =
+        ivp_vec3r(IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ray_template.ray_length = ray_length;
+    ray_template.ray_flags = IVP_RAY_SOLVER_ALL;
+
+    ivp_ray_solver_min_t closest;
+    ivp_ray_solver_min_init(&closest, &ray_template);
+    ivp_ray_solver_check_all_objects(&closest.base, environment);
+    const ivp_ray_hit_t *closest_hit =
+        ivp_ray_solver_min_get_ray_hit(&closest);
+    if (!closest_hit) return false;
+    capture->closest_object =
+        ivp_object_order_key(closest_hit->hit_object);
+
+    ivp_ray_solver_min_hash_t all_hits;
+    ivp_ray_solver_min_hash_init(&all_hits, &ray_template);
+    ivp_ray_solver_check_all_objects(&all_hits.base, environment);
+    const ivp_ray_hit_t *sorted_hits[STRONG_OV_QUERY_MAX_COUNT];
+    capture->ray_count = ivp_ray_solver_min_hash_get_sorted(
+        &all_hits, sorted_hits, expected_count);
+    if (capture->ray_count != expected_count) return false;
+    for (int i = 0; i < expected_count; i++) {
+        capture->ray_objects[i] =
+            ivp_object_order_key(sorted_hits[i]->hit_object);
+    }
+
+    ivp_ray_solver_min_hash_t grouped_hits;
+    ivp_ray_solver_min_hash_init(&grouped_hits, &ray_template);
+    ivp_ray_solver_t *group_solvers[1] = { &grouped_hits.base };
+    ivp_ray_solver_group_t group;
+    ivp_ray_solver_group_init(&group, 1, group_solvers);
+    ivp_ray_solver_group_check_all_objects(&group, environment);
+    capture->group_count = ivp_ray_solver_min_hash_get_sorted(
+        &grouped_hits, sorted_hits, expected_count);
+    if (capture->group_count != expected_count) return false;
+    for (int i = 0; i < expected_count; i++) {
+        capture->group_objects[i] =
+            ivp_object_order_key(sorted_hits[i]->hit_object);
+    }
+
+    ivp_sphere_solver_template_t sphere_template;
+    sphere_template.center =
+        ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    sphere_template.radius = sphere_radius;
+    sphere_template.max_traversal_depth = 0;
+    ivp_object_t *sphere_objects[STRONG_OV_QUERY_MAX_COUNT];
+    capture->sphere_count = ivp_sphere_solver_check_environment(
+        &sphere_template, environment, sphere_objects,
+        expected_count);
+    if (capture->sphere_count != expected_count) return false;
+    for (int i = 0; i < expected_count; i++) {
+        capture->sphere_objects[i] =
+            ivp_object_order_key(sphere_objects[i]);
+    }
+    ivp_object_t *sphere_prefix[STRONG_OV_QUERY_PREFIX_COUNT];
+    if (ivp_sphere_solver_check_environment(
+            &sphere_template, environment, sphere_prefix,
+            STRONG_OV_QUERY_PREFIX_COUNT) != expected_count) {
+        return false;
+    }
+    for (int i = 0; i < STRONG_OV_QUERY_PREFIX_COUNT; i++) {
+        capture->sphere_prefix[i] =
+            ivp_object_order_key(sphere_prefix[i]);
+    }
+    return true;
+}
+
+IVP_TEST(ov_tree_storage_order_does_not_change_query_results)
+{
+    ivp_environment_t *environment = strong_environment_create(0);
+    bool ok = environment != NULL;
+    ivp_object_t *objects[STRONG_OV_QUERY_OBJECT_COUNT] = {0};
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.physical_unmoveable = true;
+    object_template.start_in_simulation = false;
+    for (int i = 0; ok && i < STRONG_OV_QUERY_OBJECT_COUNT; i++) {
+        object_template.ball_radius = (ivp_real_t)(1.0 + 4.0 * i);
+        object_template.position =
+            ivp_vec3r((ivp_real_t)(4.0 * i), IVP_REAL(0.0),
+                      IVP_REAL(0.0));
+        objects[i] = ivp_environment_create_object(
+            environment, &object_template, NULL);
+        ok = objects[i] != NULL;
+    }
+    ok = ok && objects[0]->ov_element && objects[1]->ov_element &&
+         objects[0]->ov_element->node != objects[1]->ov_element->node;
+
+    strong_ov_query_capture_t before;
+    strong_ov_query_capture_t after;
+    ok = ok && strong_capture_ov_queries(
+        environment, &before, STRONG_OV_QUERY_OBJECT_COUNT,
+        IVP_REAL(20.0), IVP_REAL(30.0));
+    if (ok) {
+        scramble_ov_node(environment->pl->ov_tree.root);
+        ok = strong_capture_ov_queries(
+            environment, &after, STRONG_OV_QUERY_OBJECT_COUNT,
+            IVP_REAL(20.0), IVP_REAL(30.0));
+    }
+    if (ok && memcmp(&before, &after, sizeof(before)) != 0) {
+        fprintf(stderr,
+                "OV query order changed: closest %llu/%llu, "
+                "rays %llu,%llu,%llu/%llu,%llu,%llu, "
+                "spheres %llu,%llu,%llu/%llu,%llu,%llu\n",
+                (unsigned long long)before.closest_object,
+                (unsigned long long)after.closest_object,
+                (unsigned long long)before.ray_objects[0],
+                (unsigned long long)before.ray_objects[1],
+                (unsigned long long)before.ray_objects[2],
+                (unsigned long long)after.ray_objects[0],
+                (unsigned long long)after.ray_objects[1],
+                (unsigned long long)after.ray_objects[2],
+                (unsigned long long)before.sphere_objects[0],
+                (unsigned long long)before.sphere_objects[1],
+                (unsigned long long)before.sphere_objects[2],
+                (unsigned long long)after.sphere_objects[0],
+                (unsigned long long)after.sphere_objects[1],
+                (unsigned long long)after.sphere_objects[2]);
+        ok = false;
+    }
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
+static int strong_rejected_query_allocations;
+
+static void *strong_reject_query_allocation(size_t size, void *context)
+{
+    (void)size;
+    (void)context;
+    strong_rejected_query_allocations++;
+    return NULL;
+}
+
+IVP_TEST(ov_query_allocation_failure_preserves_results)
+{
+    ivp_environment_t *environment = strong_environment_create(0);
+    bool ok = environment != NULL;
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.5);
+    object_template.physical_unmoveable = true;
+    object_template.start_in_simulation = false;
+    for (int i = 0; ok && i < STRONG_OV_QUERY_FALLBACK_COUNT; i++) {
+        ok = ivp_environment_create_object(
+                 environment, &object_template, NULL) != NULL;
+    }
+
+    strong_ov_query_capture_t baseline;
+    strong_ov_query_capture_t fallback;
+    ok = ok && strong_capture_ov_queries(
+        environment, &baseline, STRONG_OV_QUERY_FALLBACK_COUNT,
+        IVP_REAL(4.0), IVP_REAL(1.0));
+    ivp_allocator_t saved_allocator = {0};
+    if (ok) {
+        scramble_ov_node(environment->pl->ov_tree.root);
+        saved_allocator = *environment->allocator;
+        strong_rejected_query_allocations = 0;
+        environment->allocator->alloc = strong_reject_query_allocation;
+        ok = strong_capture_ov_queries(
+            environment, &fallback, STRONG_OV_QUERY_FALLBACK_COUNT,
+            IVP_REAL(4.0), IVP_REAL(1.0));
+        *environment->allocator = saved_allocator;
+        ok = ok && strong_rejected_query_allocations > 0;
+    }
+    ok = ok && memcmp(&baseline, &fallback, sizeof(baseline)) == 0;
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(client_pointer_order_does_not_change_visible_state)
 {
     IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_CLIENT_POINTERS));
@@ -1794,6 +2000,8 @@ int main(void)
     IVP_REGISTER(arena_history_does_not_change_visible_state);
     IVP_REGISTER(sim_unit_list_order_does_not_change_visible_state);
     IVP_REGISTER(ov_tree_order_does_not_change_visible_state);
+    IVP_REGISTER(ov_tree_storage_order_does_not_change_query_results);
+    IVP_REGISTER(ov_query_allocation_failure_preserves_results);
     IVP_REGISTER(client_pointer_order_does_not_change_visible_state);
     IVP_REGISTER(contact_list_order_does_not_change_visible_state);
     IVP_REGISTER(mindist_manager_order_does_not_change_visible_state);

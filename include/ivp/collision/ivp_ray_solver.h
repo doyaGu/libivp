@@ -142,16 +142,17 @@ void ivp_ray_solver_check_object(ivp_ray_solver_t *rs, struct ivp_object *object
 /* IVP_Ray_Solver::check_ray_against_all_objects_in_sim: walks the
  * environment's OV tree from its root with ivp_ray_solver_check_node().
  * Objects without collision detection are not in the tree and are never
- * reported. */
+ * reported.  The normal build visits broadphase candidates in reverse
+ * world-local object order, independent of OV node storage. */
 void ivp_ray_solver_check_all_objects(ivp_ray_solver_t *rs,
                                       const struct ivp_environment *env);
 
 /* IVP_Ray_Solver::check_ray_against_node (recursive): returns if the ray
- * misses the node cube (ivp_ray_solver_check_cube); otherwise tests the
- * node's elements from last to first (core sphere at the last PSI with
- * upper_limit_radius, ivp_ray_solver_check_sphere, then
- * ivp_ray_solver_check_object) and recurses into the children from last
- * to first.  `node` may be NULL. */
+ * misses the node cube (ivp_ray_solver_check_cube); otherwise collects
+ * objects whose core sphere at the last PSI passes
+ * ivp_ray_solver_check_sphere and tests them in reverse world-local object
+ * order.  `node` may be NULL.  A reference-internals build preserves the
+ * original last-to-first OV traversal instead. */
 void ivp_ray_solver_check_node(ivp_ray_solver_t *rs, const struct ivp_ov_node *node,
                                const struct ivp_ov_tree *ov_tree);
 
@@ -228,10 +229,10 @@ void ivp_ray_solver_min_hash_init(ivp_ray_solver_min_hash_t *rs,
 ivp_result_t ivp_ray_solver_min_hash_fill_min_hash(const ivp_ray_solver_min_hash_t *rs,
                                                    struct ivp_min_hash *out);
 
-/* Hits in the order the reference IVP_U_Min_Hash hands them out
- * (find_min_elem / remove_min): increasing double distance (hit_key), equal
- * distances in insertion (traversal) order.  Writes up to `capacity`
- * pointers, returns the number of hits. */
+/* Hits in increasing double distance (hit_key); equal distances retain
+ * insertion order.  Environment queries in the normal build insert objects
+ * in reverse world-local object order.  Writes up to `capacity` pointers and
+ * returns the number of hits. */
 int ivp_ray_solver_min_hash_get_sorted(const ivp_ray_solver_min_hash_t *rs,
                                        const ivp_ray_hit_t **out,
                                        int capacity);
