@@ -346,10 +346,10 @@ set(IVP_REFERENCE_PIPELINE_SOURCES
 )
 if (NOT MSVC)
     set_source_files_properties(${IVP_REFERENCE_PIPELINE_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-double-promotion")
-    # The reference-state policy lets the friction and dense solvers reuse
-    # stale IVP_U_Memory bytes (see ivp_u_memory.h).  Keep both policy builds
-    # free of type-based alias assumptions so this compatibility path remains
-    # valid.
+    # Reference-internals builds let the friction and dense solvers reuse
+    # stale IVP_U_Memory bytes (see ivp_u_memory.h).  Keep both build
+    # configurations free of type-based alias assumptions so this development
+    # path remains valid.
     set_property(SOURCE
             src/base/ivp_u_memory.c
             src/solver/ivp_great_matrix.c

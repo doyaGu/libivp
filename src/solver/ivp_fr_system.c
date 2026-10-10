@@ -1671,8 +1671,8 @@ typedef struct fr_solver {
 
 /* IVP_Great_Matrix_Many_Zero::align_matrix_values: its IVP_IF(1) block
  * (ivp_great_matrix.cxx:471) zeroes the row padding of matrix_values and of
- * desired_vector.  Debug builds perform this explicit fill; in Release the
- * build-wide arena policy selects cleared spans or reference-style reuse. */
+ * desired_vector.  Debug builds perform this explicit fill; Release normally
+ * clears arena spans, while reference-internals builds preserve reuse. */
 static void frs_align_matrix_values_debug_fill(ivp_gmmz_t *m)
 {
     for (int i = 0; i < m->columns; i++) {
@@ -1689,7 +1689,7 @@ static void frs_align_matrix_values_debug_fill(ivp_gmmz_t *m)
 /* IVP_Friction_Solver::IVP_Friction_Solver: dist_change_mat from the
  * short-term arena and not initialized here (calc_solver_PSI clears the
  * matrix; the IVP_IF(1) padding fill of align_matrix_values runs in debug
- * builds only).  Release padding follows the build-wide arena policy. */
+ * builds only).  Release padding follows the selected arena behavior. */
 static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs, const ivp_sim_es_t *es, ivp_u_memory_t *my_mem)
 {
     memset(s, 0, sizeof(*s));
@@ -2259,8 +2259,8 @@ static void fs_exchange_friction_dists(ivp_fr_system_t *fs, ivp_contact_pt_t *fi
 
 static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
 {
-    /* The strong-state build extends the reference's partial importance
-     * ordering to a total order with the contact's world-local identity. */
+    /* Normal ordering extends the reference's partial importance order to a
+     * total order with the contact's world-local identity. */
     const bool use_reference_order =
         ivp_build_uses_reference_internal_state();
     ivp_contact_pt_t *first_dist = fs->first_friction_dist;

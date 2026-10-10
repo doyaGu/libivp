@@ -14,8 +14,8 @@
 #include <stdatomic.h>
 
 /* IVP_U_Memory transaction memory (sim_unit_mem): allocations live until the
- * matching end of transaction.  The build-wide state policy selects whether
- * reused spans are cleared. */
+ * matching end of transaction.  Environment initialization normally enables
+ * clearing; a reference-internals build leaves reused spans intact. */
 typedef struct ivp_sim_mem {
     ivp_u_memory_t arena;
     int        depth;
@@ -36,8 +36,8 @@ typedef struct ivp_env_pipeline {
     ivp_cache_obj_mgr_t      cache_mgr;
     ivp_sim_mem_t            sim_unit_mem;
     /* IVP_Environment::short_term_mem: the persistent IVP_U_Memory arena of
-     * the friction solver and its linear constraint solver.  The mainline
-     * policy clears reused spans; the reference policy preserves them. */
+     * the friction solver and its linear constraint solver.  Initialization
+     * normally clears reused spans; reference-internals builds preserve them. */
     ivp_u_memory_t           short_term_mem;
 
     ivp_time_t               time_of_last_psi;

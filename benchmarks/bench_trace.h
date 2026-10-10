@@ -1,4 +1,4 @@
-/* Canonical, address-independent verification records shared by both runners. */
+/* Stable, address-independent verification records shared by both runners. */
 #ifndef BENCH_TRACE_H
 #define BENCH_TRACE_H
 #include <stdint.h>

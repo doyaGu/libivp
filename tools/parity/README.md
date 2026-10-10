@@ -3,14 +3,14 @@
 本工具同时检查 libivp 的两个复现域：
 
 - **reference-development：**显式使用
-  `IVP_CANONICAL_INTERNAL_STATE=OFF` 和 `IVP_QHULL_MODE=REFERENCE`，
+  `IVP_REFERENCE_INTERNAL_STATE=ON` 和 `IVP_QHULL_MODE=REFERENCE`，
   Release/Debug 必须 48/48 逐位一致。
-- **mainline：**使用默认的强内部状态策略和可重入 Qhull 2020.2，必须恰好只有
+- **mainline：**使用默认内部行为和可重入 Qhull 2020.2，必须恰好只有
   `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
 
 两个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
-主线策略差异及 Qhull 单变量的三个几何差异见
+主线差异及 Qhull 单变量的三个几何差异见
 `docs/PARITY_GAP_INVENTORY.md`。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
@@ -42,9 +42,9 @@ tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加�
 
 | 检查 | 比较内容 |
 |---|---|
-| release | 两种策略各自的 JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行、stderr、退出码 |
-| debug | 两种策略各自的 JSONL 帧、调试输出文本、stderr 中 `ASSERTION FAILURE: <expr>` 报告序列、退出码 |
-| sweep | 两种策略下每个场景在给定步长和步数下的 JSONL 帧；主线差异必须是登记集合的子集，因为不同步数可能尚未到达首个分叉 |
+| release | 两个构建域各自的 JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行、stderr、退出码 |
+| debug | 两个构建域各自的 JSONL 帧、调试输出文本、stderr 中 `ASSERTION FAILURE: <expr>` 报告序列、退出码 |
+| sweep | 两个构建域中每个场景在给定步长和步数下的 JSONL 帧；主线差异必须是登记集合的子集，因为不同步数可能尚未到达首个分叉 |
 
 ## 环境变量
 

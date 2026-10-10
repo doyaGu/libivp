@@ -1,8 +1,8 @@
-# Default strong-state policy versus the reference engine.  With the policy
-# disabled, the reentrant Qhull upgrade alone differs only in convex_hulls,
-# hull_pile, and galton.  With it enabled, both Qhull backends produce this
-# same 22-scenario difference set; the Qhull version further changes the three
-# geometry scenarios without adding another scenario to the set.
+# Default engine behavior versus the reference engine.  With reference
+# internals enabled, the reentrant Qhull upgrade alone differs only in
+# convex_hulls, hull_pile, and galton.  With normal internals, both Qhull
+# backends produce this same 22-scenario difference set; the Qhull version
+# further changes the three geometry scenarios without adding another one.
 springs
 rope
 cubes
