@@ -10,7 +10,6 @@
 #include "dynamics/ivp_sim_internal.h"
 
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ATTACHER_HASH_INIT_SIZE 16 /* core_to_attachment_hash(16) */
@@ -73,17 +72,6 @@ static void attacher_element_removed(void *ctx, ivp_set_active_t *set, void *ele
 typedef void (*attacher_core_action_fn)(ivp_attacher_to_cores_t *attacher,
                                         ivp_core_t *core);
 
-static int attacher_compare_core_identity(const void *left,
-                                          const void *right)
-{
-    const ivp_core_t *left_core = *(ivp_core_t *const *)left;
-    const ivp_core_t *right_core = *(ivp_core_t *const *)right;
-    uint64_t left_key = ivp_core_stable_order_key(left_core);
-    uint64_t right_key = ivp_core_stable_order_key(right_core);
-    IVP_ASSERT(left_key != right_key || left_core == right_core);
-    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
-}
-
 static void attacher_add_core(ivp_attacher_to_cores_t *a,
                               ivp_core_t *core)
 {
@@ -114,8 +102,7 @@ static void attacher_apply_set_order(ivp_attacher_to_cores_t *a,
             }
             cores[actual_count++] = core;
         }
-        qsort(cores, (size_t)actual_count, sizeof(*cores),
-              attacher_compare_core_identity);
+        ivp_core_sort_by_identity(cores, (size_t)actual_count);
         for (int i = 0; i < actual_count; i++) {
             action(a, cores[i]);
         }
@@ -172,8 +159,7 @@ static void attacher_delete_all(ivp_attacher_to_cores_t *a)
                         (ivp_core_t *)h->elems[i].key_elem;
                 }
             }
-            qsort(cores, (size_t)actual_count, sizeof(*cores),
-                  attacher_compare_core_identity);
+            ivp_core_sort_by_identity(cores, (size_t)actual_count);
             for (int i = 0; i < actual_count; i++) {
                 attacher_delete_core(a, cores[i]);
             }

@@ -18,7 +18,6 @@
 #include "dynamics/ivp_sim_internal.h"
 
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 void ivp_phantom_mindist_entered_volume(void *controller_phantom, ivp_mindist_t *md);
@@ -120,19 +119,6 @@ static void fire_event_core_left(ivp_controller_phantom_t *c, ivp_core_t *core)
     }
 }
 
-static int phantom_compare_core_identity(const void *left,
-                                         const void *right)
-{
-    const ivp_core_t *left_core =
-        *(ivp_core_t *const *)left;
-    const ivp_core_t *right_core =
-        *(ivp_core_t *const *)right;
-    uint64_t left_key = ivp_core_stable_order_key(left_core);
-    uint64_t right_key = ivp_core_stable_order_key(right_core);
-    IVP_ASSERT(left_key != right_key || left_core == right_core);
-    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
-}
-
 static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
                                            const ivp_set_t *set)
 {
@@ -162,8 +148,7 @@ static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
                     &enumerator, set)) != NULL) {
             cores[actual_count++] = core;
         }
-        qsort(cores, (size_t)actual_count, sizeof(*cores),
-              phantom_compare_core_identity);
+        ivp_core_sort_by_identity(cores, (size_t)actual_count);
         for (int i = 0; i < actual_count; i++) {
             fire_event_core_left(c, cores[i]);
         }

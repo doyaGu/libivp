@@ -445,6 +445,29 @@ uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
     return key;
 }
 
+static int core_identity_compare(const void *left, const void *right)
+{
+    const ivp_core_t *left_core = *(ivp_core_t *const *)left;
+    const ivp_core_t *right_core = *(ivp_core_t *const *)right;
+    uint64_t left_key = ivp_core_stable_order_key(left_core);
+    uint64_t right_key = ivp_core_stable_order_key(right_core);
+    IVP_ASSERT(left_key != right_key || left_core == right_core);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+void ivp_core_sort_by_identity(ivp_core_t **cores, size_t count)
+{
+    if (!cores || count < 2u) return;
+    qsort(cores, count, sizeof(*cores), core_identity_compare);
+}
+
+void ivp_core_vector_sort_by_identity(ivp_pvec_t *cores)
+{
+    if (!cores || ivp_pvec_len(cores) < 2) return;
+    ivp_core_sort_by_identity((ivp_core_t **)cores->elems,
+                              (size_t)ivp_pvec_len(cores));
+}
+
 typedef int (*mgr_order_compare_fn)(const void *left,
                                     const void *right);
 
