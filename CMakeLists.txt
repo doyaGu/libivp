@@ -595,6 +595,9 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_internal_parallel tests/test_internal_parallel.c)
     target_include_directories(test_internal_parallel PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
+    target_include_directories(test_internal_state_stability PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
                 IVP_BENCHMARK_DIAGNOSTICS)
@@ -740,6 +743,7 @@ if (IVP_BUILD_TESTS)
             test_dynamics test_solver test_utility test_lvec
             test_controllers test_builders test_qhull_reentrant test_parallel_worlds
             test_internal_parallel
+            test_internal_state_stability
             test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
