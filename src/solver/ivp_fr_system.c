@@ -39,6 +39,9 @@
 #define IVP_FR_REF_POINTER_SIZE 8u
 #define IVP_FR_PARALLEL_MIN_INTERACTIONS 16384u
 #define IVP_FR_PARALLEL_MAX_WORKERS 4
+/* Adjacent columns share cache lines in every matrix row.  Giving one lane a
+ * short contiguous run cuts both task claims and cross-lane row boundaries. */
+#define IVP_FR_PARALLEL_COLUMN_BLOCK 16u
 
 #define FS_FROM(ptr, member) ((ivp_fr_system_t *)(void *)((char *)(ptr) - offsetof(ivp_fr_system_t, member)))
 
@@ -1814,13 +1817,27 @@ static void frs_calc_solver_column_effect(fr_solver_t *s, int i,
     }
 }
 
-static void frs_calc_solver_column_task(void *opaque, size_t task_index)
+typedef struct frs_calc_solver_columns_context {
+    fr_solver_t *solver;
+    int contact_count;
+} frs_calc_solver_columns_context_t;
+
+static void frs_calc_solver_column_block_task(void *opaque, size_t task_index)
 {
-    fr_solver_t *s = (fr_solver_t *)opaque;
-    int i = (int)task_index;
-    ivp_impact_solver_lt_t *info = frs_info_at(s, i);
-    frs_calc_solver_desired(s, i, info);
-    frs_calc_solver_column_effect(s, i, info);
+    frs_calc_solver_columns_context_t *context =
+        (frs_calc_solver_columns_context_t *)opaque;
+    fr_solver_t *s = context->solver;
+    size_t first = task_index * IVP_FR_PARALLEL_COLUMN_BLOCK;
+    size_t end = first + IVP_FR_PARALLEL_COLUMN_BLOCK;
+    if (end > (size_t)context->contact_count) {
+        end = (size_t)context->contact_count;
+    }
+    for (size_t column = first; column < end; column++) {
+        int i = (int)column;
+        ivp_impact_solver_lt_t *info = frs_info_at(s, i);
+        frs_calc_solver_desired(s, i, info);
+        frs_calc_solver_column_effect(s, i, info);
+    }
 }
 
 static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
@@ -1864,11 +1881,16 @@ static int frs_calc_solver_psi(fr_solver_t *s, ivp_fr_system_t *fs,
             if (matrix_interactions == SIZE_MAX) break;
         }
     }
+    size_t column_block_count =
+        ((size_t)contact_count + IVP_FR_PARALLEL_COLUMN_BLOCK - 1u) /
+        IVP_FR_PARALLEL_COLUMN_BLOCK;
+    frs_calc_solver_columns_context_t task_context = { s, contact_count };
     bool dispatched =
         matrix_interactions >= IVP_FR_PARALLEL_MIN_INTERACTIONS &&
         ivp_env_parallel_for(s->l_environment, IVP_PARALLEL_WORK_SOLVER,
-                             (size_t)contact_count, minimum_tasks,
-                             frs_calc_solver_column_task, s);
+                             column_block_count, minimum_tasks,
+                             frs_calc_solver_column_block_task,
+                             &task_context);
     int active_dists_so_far = 0;
     if (dispatched) {
         for (int i = 0; i < contact_count; i++) {

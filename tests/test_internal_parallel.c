@@ -1044,7 +1044,8 @@ IVP_TEST(solver_matrix_is_bit_exact)
     ivp_parallel_stats_t stats;
     ivp_environment_get_parallel_stats(parallel.environment, &stats);
     ok = ok && stats.solver_dispatches > 0u &&
-         stats.solver_tasks >= SOLVER_CONTACT_COUNT &&
+         stats.solver_tasks == stats.solver_dispatches *
+                                   ((SOLVER_CONTACT_COUNT + 15u) / 16u) &&
          stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
     if (!ok) {
         fprintf(stderr,
