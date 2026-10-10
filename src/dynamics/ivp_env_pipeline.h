@@ -9,15 +9,15 @@
 #include <ivp/collision/ivp_collision_core.h>
 #include "dynamics/ivp_sim_internal.h"
 #include <ivp/collision/ivp_range_manager.h>
-#include <ivp/base/ivp_u_memory.h>
+#include "base/ivp_arena_internal.h"
 #include <ivp/diagnostics/ivp_statistic_manager.h>
 #include <stdatomic.h>
 
-/* IVP_U_Memory transaction memory (sim_unit_mem): allocations live until the
+/* Arena transaction memory (sim_unit_mem): allocations live until the
  * matching end of transaction.  Environment initialization normally enables
  * clearing; a reference-internals build leaves reused spans intact. */
 typedef struct ivp_sim_mem {
-    ivp_u_memory_t arena;
+    ivp_arena_t arena;
     int        depth;
 } ivp_sim_mem_t;
 
@@ -35,10 +35,10 @@ typedef struct ivp_env_pipeline {
     ivp_sim_units_manager_t  sim_units_manager;
     ivp_cache_obj_mgr_t      cache_mgr;
     ivp_sim_mem_t            sim_unit_mem;
-    /* IVP_Environment::short_term_mem: the persistent IVP_U_Memory arena of
-     * the friction solver and its linear constraint solver.  Initialization
-     * normally clears reused spans; reference-internals builds preserve them. */
-    ivp_u_memory_t           short_term_mem;
+    /* IVP_Environment::short_term_mem: the persistent arena of the friction
+     * solver and its linear constraint solver.  It preserves the reference
+     * IVP_U_Memory layout; initialization normally clears reused spans. */
+    ivp_arena_t              short_term_mem;
 
     ivp_time_t               time_of_last_psi;
     ivp_time_t               time_of_next_psi;

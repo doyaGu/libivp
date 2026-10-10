@@ -203,27 +203,27 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
     }
 }
 
-/* ── sim unit transaction memory (IVP_U_Memory) ─────────────────────── */
+/* ── sim unit transaction arena ─────────────────────────────────────── */
 
 /* Sim-unit scratch does not depend on the reference short-term arena's exact
  * 0x7fe0-byte layout.  Keep its resident block modest for small worlds;
- * overflow blocks still use IVP_U_MEM_BLOCK_SIZE for large contact systems. */
+ * overflow blocks still use IVP_ARENA_BLOCK_SIZE for large contact systems. */
 #define IVP_SIM_MEM_FIRST_BLOCK_SIZE 0x1800u
 
 static ivp_result_t sim_mem_init(ivp_sim_mem_t *m, const ivp_allocator_t *alloc)
 {
     m->depth = 0;
-    return ivp_u_memory_init_first_block(&m->arena, alloc,
-                                          IVP_SIM_MEM_FIRST_BLOCK_SIZE);
+    return ivp_arena_init_sized(&m->arena, alloc,
+                                IVP_SIM_MEM_FIRST_BLOCK_SIZE);
 }
 
 static void sim_mem_destroy(ivp_sim_mem_t *m)
 {
-    ivp_u_memory_destroy(&m->arena);
+    ivp_arena_destroy(&m->arena);
     m->depth = 0;
 }
 
-struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env)
+struct ivp_arena *ivp_env_get_short_term_mem(struct ivp_environment *env)
 {
     return &env->pl->short_term_mem;
 }
@@ -295,13 +295,13 @@ void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
     IVP_ASSERT(env->pl->sim_unit_mem.depth == 1);
     const size_t request = size ? size : 1;
-    return ivp_u_memory_get_mem(&env->pl->sim_unit_mem.arena, request);
+    return ivp_arena_alloc(&env->pl->sim_unit_mem.arena, request);
 }
 
 void ivp_env_sim_mem_begin(struct ivp_environment *env)
 {
     ivp_sim_mem_t *m = &env->pl->sim_unit_mem;
-    if (m->depth == 0) ivp_u_memory_start_transaction(&m->arena);
+    if (m->depth == 0) ivp_arena_begin_transaction(&m->arena);
     m->depth++;
 }
 
@@ -312,7 +312,7 @@ void ivp_env_sim_mem_end(struct ivp_environment *env)
     m->depth--;
     /* Inner transactions share the outer allocation lifetime because
      * tmp_contact_info may still reference their memory. */
-    if (m->depth == 0) ivp_u_memory_end_transaction(&m->arena);
+    if (m->depth == 0) ivp_arena_end_transaction(&m->arena);
 }
 
 /* ── IVP_Environment accessors (ivp_env_internal.h) ───────────────────── */
@@ -2404,15 +2404,15 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         ivp_environment_destroy(env);
         return NULL;
     }
-    ivp_u_memory_set_clear_on_allocate(
+    ivp_arena_set_clear_on_allocate(
         &pl->sim_unit_mem.arena,
         !ivp_build_uses_reference_internal_state());
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
-    if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
+    if (ivp_arena_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
         return NULL;
     }
-    ivp_u_memory_set_clear_on_allocate(
+    ivp_arena_set_clear_on_allocate(
         &pl->short_term_mem,
         !ivp_build_uses_reference_internal_state());
     pl->state = IVP_ES_AT;
@@ -2673,7 +2673,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
         cb_clear_tables(&pl->coll_callback_tables);
         ivp_pvec_clear(&pl->global_object_listeners);
         ivp_pvec_clear(&pl->global_collision_listeners);
-        ivp_u_memory_destroy(&pl->short_term_mem);
+        ivp_arena_destroy(&pl->short_term_mem);
         /* (the root cluster tree is empty: its objects and sub-clusters were deleted) */
         while (pl->root_cluster.first_child) ivp_cluster_remove_child(&pl->root_cluster, pl->root_cluster.first_child);
         ivp_free(alloc, pl, sizeof(ivp_env_pipeline_t));

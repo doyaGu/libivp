@@ -12,8 +12,8 @@
  * the final result check (which overwrites delta_accel with A*x).  debug_lcs
  * is 0 as in the reference, so its verbose output stays off.
  *
- * Memory: all scratch arrays come from an IVP_U_Memory arena
- * (ivp_u_memory_t), in the order and with the byte sizes of
+ * Memory: all scratch arrays come from an ivp_arena_t, in the order and with
+ * the byte sizes of
  * IVP_Linear_Constraint_Solver::alloc_memory, and the caller's A, b and x are
  * used in place.  The friction solver passes the environment's persistent
  * short-term arena.  The reference-state build preserves the stale padding
@@ -23,7 +23,7 @@
 #include <ivp/solver/ivp_linear_constraint_solver.h>
 #include <ivp/solver/ivp_great_matrix.h>
 #include <ivp/base/ivp_allocator.h>
-#include <ivp/base/ivp_u_memory.h>
+#include "base/ivp_arena_internal.h"
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #include <math.h>
@@ -1191,9 +1191,9 @@ static ivp_result_t lcs_solve_lc(lcs_state_t *s)
 
 ivp_result_t ivp_lcs_init_and_solve_in_memory(double *A_in, double *b_in, double *x_out,
                                               int n, int actives_at_begin,
-                                              ivp_u_memory_t *mem)
+                                              ivp_arena_t *arena)
 {
-    if (!A_in || !b_in || !x_out || !mem || n < 0 || n > IVP_MAX_GREAT_MATRIX_SIZE ||
+    if (!A_in || !b_in || !x_out || !arena || n < 0 || n > IVP_MAX_GREAT_MATRIX_SIZE ||
         actives_at_begin < 0 || actives_at_begin > n) {
         return IVP_ERR_INVALID_ARG;
     }
@@ -1211,25 +1211,25 @@ ivp_result_t ivp_lcs_init_and_solve_in_memory(double *A_in, double *b_in, double
     size_t vec_d = sizeof(double) * (size_t)as;
     size_t vec_i = sizeof(int) * (size_t)as;
     size_t mat_d = sizeof(double) * (size_t)as * (size_t)n;
-    s->actives_inactives_ignored = (int *)ivp_u_memory_get_mem(mem, vec_i);
-    s->variable_is_found_at = (int *)ivp_u_memory_get_mem(mem, vec_i);
-    s->accel = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->delta_accel = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->delta_f = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->reset_x = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->reset_accel = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->lu_sub_solver.L_matrix = (double *)ivp_u_memory_get_mem(mem, mat_d);
-    s->lu_sub_solver.U_matrix = (double *)ivp_u_memory_get_mem(mem, mat_d);
-    s->lu_sub_solver.input_vec = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->lu_sub_solver.out_vec = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->lu_sub_solver.temp_vec = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->lu_sub_solver.mult_vec = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->sub_solver_mat.matrix_values = (double *)ivp_u_memory_get_mem(mem, mat_d);
-    s->sub_solver_mat.desired_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->sub_solver_mat.result_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->inv_mat.matrix_values = (double *)ivp_u_memory_get_mem(mem, mat_d);
-    s->inv_mat.desired_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
-    s->inv_mat.result_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
+    s->actives_inactives_ignored = (int *)ivp_arena_alloc(arena, vec_i);
+    s->variable_is_found_at = (int *)ivp_arena_alloc(arena, vec_i);
+    s->accel = (double *)ivp_arena_alloc(arena, vec_d);
+    s->delta_accel = (double *)ivp_arena_alloc(arena, vec_d);
+    s->delta_f = (double *)ivp_arena_alloc(arena, vec_d);
+    s->reset_x = (double *)ivp_arena_alloc(arena, vec_d);
+    s->reset_accel = (double *)ivp_arena_alloc(arena, vec_d);
+    s->lu_sub_solver.L_matrix = (double *)ivp_arena_alloc(arena, mat_d);
+    s->lu_sub_solver.U_matrix = (double *)ivp_arena_alloc(arena, mat_d);
+    s->lu_sub_solver.input_vec = (double *)ivp_arena_alloc(arena, vec_d);
+    s->lu_sub_solver.out_vec = (double *)ivp_arena_alloc(arena, vec_d);
+    s->lu_sub_solver.temp_vec = (double *)ivp_arena_alloc(arena, vec_d);
+    s->lu_sub_solver.mult_vec = (double *)ivp_arena_alloc(arena, vec_d);
+    s->sub_solver_mat.matrix_values = (double *)ivp_arena_alloc(arena, mat_d);
+    s->sub_solver_mat.desired_vector = (double *)ivp_arena_alloc(arena, vec_d);
+    s->sub_solver_mat.result_vector = (double *)ivp_arena_alloc(arena, vec_d);
+    s->inv_mat.matrix_values = (double *)ivp_arena_alloc(arena, mat_d);
+    s->inv_mat.desired_vector = (double *)ivp_arena_alloc(arena, vec_d);
+    s->inv_mat.result_vector = (double *)ivp_arena_alloc(arena, vec_d);
     if (!s->actives_inactives_ignored || !s->variable_is_found_at || !s->accel ||
         !s->delta_accel || !s->delta_f || !s->reset_x || !s->reset_accel ||
         !s->lu_sub_solver.L_matrix || !s->lu_sub_solver.U_matrix ||
@@ -1286,9 +1286,9 @@ ivp_result_t ivp_lcs_init_and_solve_in_memory(double *A_in, double *b_in, double
     IVP_IF(1) {
         /* debug build: one more matrix from the arena (shifts every later
          * allocation of the transaction) */
-        s->debug_mat.matrix_values = (double *)ivp_u_memory_get_mem(mem, mat_d);
-        s->debug_mat.desired_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
-        s->debug_mat.result_vector = (double *)ivp_u_memory_get_mem(mem, vec_d);
+        s->debug_mat.matrix_values = (double *)ivp_arena_alloc(arena, mat_d);
+        s->debug_mat.desired_vector = (double *)ivp_arena_alloc(arena, vec_d);
+        s->debug_mat.result_vector = (double *)ivp_arena_alloc(arena, vec_d);
         s->debug_mat.matrix_eps = s->SOLVER_EPS;
         if (!s->debug_mat.matrix_values || !s->debug_mat.desired_vector || !s->debug_mat.result_vector) {
             return IVP_ERR_OUT_OF_MEMORY;
@@ -1391,18 +1391,18 @@ ivp_result_t ivp_lcs_init_and_solve_strided(const double *A, int a_stride,
     /* A fresh (zero-filled) arena laid out like the friction solver's: the
      * caller's matrix and vectors first (IVP_Friction_Solver::dist_change_mat,
      * zero padding), then the solver's own arrays. */
-    ivp_u_memory_t mem;
-    ivp_result_t ret_val = ivp_u_memory_init(&mem, alloc);
+    ivp_arena_t arena;
+    ivp_result_t ret_val = ivp_arena_init(&arena, alloc);
     if (ret_val != IVP_OK) {
         return ret_val;
     }
     int as = ivp_gm_aligned_len(n);
-    double *full_A = (double *)ivp_u_memory_get_mem(
-        &mem, sizeof(double) * ((size_t)as * (size_t)n + (size_t)(IVP_GM_VECFPU_SIZE - 1)));
-    double *full_b = (double *)ivp_u_memory_get_mem(&mem, sizeof(double) * (size_t)as);
-    double *full_x = (double *)ivp_u_memory_get_mem(&mem, sizeof(double) * (size_t)as);
+    double *full_A = (double *)ivp_arena_alloc(
+        &arena, sizeof(double) * ((size_t)as * (size_t)n + (size_t)(IVP_GM_VECFPU_SIZE - 1)));
+    double *full_b = (double *)ivp_arena_alloc(&arena, sizeof(double) * (size_t)as);
+    double *full_x = (double *)ivp_arena_alloc(&arena, sizeof(double) * (size_t)as);
     if (!full_A || !full_b || !full_x) {
-        ivp_u_memory_destroy(&mem);
+        ivp_arena_destroy(&arena);
         return IVP_ERR_OUT_OF_MEMORY;
     }
     for (int i = 0; i < n; i++) {
@@ -1412,12 +1412,13 @@ ivp_result_t ivp_lcs_init_and_solve_strided(const double *A, int a_stride,
         full_b[i] = b[i];
     }
 
-    ret_val = ivp_lcs_init_and_solve_in_memory(full_A, full_b, full_x, n, actives_at_begin, &mem);
+    ret_val = ivp_lcs_init_and_solve_in_memory(full_A, full_b, full_x, n,
+                                               actives_at_begin, &arena);
 
     for (int i = 0; i < n; i++) {
         x_out[i] = full_x[i];
     }
-    ivp_u_memory_destroy(&mem);
+    ivp_arena_destroy(&arena);
     return ret_val;
 }
 

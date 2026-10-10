@@ -20,6 +20,7 @@
 
 #include <ivp/base/ivp_result.h>
 #include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_arena.h>
 #include <ivp/solver/ivp_great_matrix.h>
 
 #ifdef __cplusplus
@@ -35,9 +36,7 @@ extern "C" {
 #define IVP_LCS_LU_EPS               (IVP_LCS_SOLVER_EPS * 10)
 #define IVP_LCS_MAX_STEP_LEN         10000.0
 
-struct ivp_u_memory;
-
-/* IVP_Linear_Constraint_Solver::init_and_solve_lc on an IVP_U_Memory arena,
+/* IVP_Linear_Constraint_Solver::init_and_solve_lc on an arena,
  * exactly as the reference friction solver calls it:
  *   A_in              n x n, row stride ivp_gm_aligned_len(n) (padding is
  *                     read where the reference reads it)
@@ -51,7 +50,7 @@ struct ivp_u_memory;
  * reference, IVP_ERR_INVALID_ARG or IVP_ERR_OUT_OF_MEMORY otherwise. */
 ivp_result_t ivp_lcs_init_and_solve_in_memory(double *A_in, double *b_in, double *x_out,
                                               int n, int actives_at_begin,
-                                              struct ivp_u_memory *mem);
+                                              ivp_arena_t *arena);
 
 /* init_and_solve_lc on a fresh zero-filled arena (the reference started on
  * zeroed IVP_U_Memory).

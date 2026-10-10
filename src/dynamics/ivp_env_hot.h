@@ -74,7 +74,7 @@ static inline ivp_sim_units_manager_t *ivp_env_hot_sim_units_manager(ivp_environ
     return &env->pl->sim_units_manager;
 }
 
-static inline ivp_u_memory_t *ivp_env_hot_short_term_mem(ivp_environment_t *env)
+static inline ivp_arena_t *ivp_env_hot_short_term_mem(ivp_environment_t *env)
 {
     return &env->pl->short_term_mem;
 }

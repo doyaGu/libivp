@@ -109,7 +109,7 @@ void  ivp_env_sim_mem_begin(struct ivp_environment *env);
 void  ivp_env_sim_mem_end(struct ivp_environment *env);
 
 /* IVP_Environment::get_memory_manager() / short_term_mem */
-struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env);
+struct ivp_arena *ivp_env_get_short_term_mem(struct ivp_environment *env);
 #ifndef IVP_REFERENCE_INTERNAL_STATE
 #error "IVP_REFERENCE_INTERNAL_STATE must be supplied by the build"
 #endif

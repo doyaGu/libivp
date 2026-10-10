@@ -347,19 +347,19 @@ static bool contact_lists_follow_creation_order(
     return true;
 }
 
-static void reset_arena_without_writing(ivp_u_memory_t *arena)
+static void reset_arena_without_writing(ivp_arena_t *arena)
 {
-    ivp_u_memory_start_transaction(arena);
-    ivp_u_memory_end_transaction(arena);
+    ivp_arena_begin_transaction(arena);
+    ivp_arena_end_transaction(arena);
 }
 
-static bool poison_arena(ivp_u_memory_t *arena, size_t bytes,
+static bool poison_arena(ivp_arena_t *arena, size_t bytes,
                          unsigned char value)
 {
-    ivp_u_memory_start_transaction(arena);
-    void *storage = ivp_u_memory_get_mem(arena, bytes);
+    ivp_arena_begin_transaction(arena);
+    void *storage = ivp_arena_alloc(arena, bytes);
     if (storage) memset(storage, value, bytes);
-    ivp_u_memory_end_transaction(arena);
+    ivp_arena_end_transaction(arena);
     return storage != NULL;
 }
 

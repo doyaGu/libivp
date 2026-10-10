@@ -115,7 +115,6 @@ set(IVP_BASE_SOURCES
         src/base/ivp_assert.c
         src/base/ivp_allocator.c
         src/base/ivp_arena.c
-        src/base/ivp_u_memory.c
         src/base/ivp_message.c
         src/base/ivp_worker_runtime.c
         src/base/ivp_task_pool.c
@@ -348,11 +347,11 @@ set(IVP_REFERENCE_PIPELINE_SOURCES
 if (NOT MSVC)
     set_source_files_properties(${IVP_REFERENCE_PIPELINE_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-double-promotion")
     # Reference-internals builds let the friction and dense solvers reuse
-    # stale IVP_U_Memory bytes (see ivp_u_memory.h).  Keep both build
+    # stale arena bytes.  Keep both build
     # configurations free of type-based alias assumptions so this development
     # path remains valid.
     set_property(SOURCE
-            src/base/ivp_u_memory.c
+            src/base/ivp_arena.c
             src/solver/ivp_great_matrix.c
             src/solver/ivp_linear_constraint_solver.c
             src/solver/ivp_fr_system.c
@@ -530,6 +529,8 @@ if (IVP_BUILD_TESTS)
     endfunction()
 
     ivp_add_test(test_base tests/test_base.c)
+    target_include_directories(test_base PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_math tests/test_math.c)
     ivp_add_test(test_containers tests/test_containers.c)
     ivp_add_test(test_geometry tests/test_geometry.c)

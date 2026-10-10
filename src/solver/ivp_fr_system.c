@@ -22,7 +22,7 @@
 #include <ivp/base/ivp_message.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
 #include <ivp/diagnostics/ivp_statistic_manager.h>
-#include <ivp/base/ivp_u_memory.h>
+#include "base/ivp_arena_internal.h"
 #include <ivp/controllers/ivp_controller.h>
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/solver/ivp_great_matrix.h>
@@ -779,12 +779,13 @@ static void frs_debug_ease_testt(ivp_contact_pt_t **all_my_dists, int total_n)
  * transaction ends) and the force vectors from alloca.  The arena bytes are
  * reserved the same way here; they are left holding zeros instead of the
  * reference's (address dependent) pointer bits. */
-static void frs_ease_friction_pair(ivp_fr_core_pair_t *my_pair, ivp_u_memory_t *my_mem,
+static void frs_ease_friction_pair(ivp_fr_core_pair_t *my_pair,
+                                   ivp_arena_t *arena,
                                    struct ivp_environment *env)
 {
     int total_n = ivp_pvec_len(&my_pair->fr_dists);
     size_t arena_bytes = (size_t)(total_n > 0 ? total_n : 0) * IVP_FR_REF_POINTER_SIZE;
-    void *arena_slot = ivp_u_memory_get_mem(my_mem, arena_bytes);
+    void *arena_slot = ivp_arena_alloc(arena, arena_bytes);
     if (arena_slot) memset(arena_slot, 0, arena_bytes);
     if (total_n <= 0) return;
     if ((size_t)total_n > SIZE_MAX / sizeof(ivp_contact_pt_t *) ||
@@ -1690,7 +1691,8 @@ static void frs_align_matrix_values_debug_fill(ivp_gmmz_t *m)
  * short-term arena and not initialized here (calc_solver_PSI clears the
  * matrix; the IVP_IF(1) padding fill of align_matrix_values runs in debug
  * builds only).  Release padding follows the selected arena behavior. */
-static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs, const ivp_sim_es_t *es, ivp_u_memory_t *my_mem)
+static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs,
+                     const ivp_sim_es_t *es, ivp_arena_t *arena)
 {
     memset(s, 0, sizeof(*s));
     s->correct_x_factor = 0;
@@ -1707,10 +1709,13 @@ static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs, const ivp_sim_es_t *es
     if (!ivp_pvec_reserve(&s->contact_info_vector, m->columns)) return false;
     ivp_gmmz_calc_aligned_row_len(m);
     size_t arl = (size_t)m->aligned_row_len;
-    m->matrix_values = (double *)ivp_u_memory_get_mem(
-        my_mem, (arl * (size_t)m->columns + (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
-    m->desired_vector = (double *)ivp_u_memory_get_mem(my_mem, arl * sizeof(double));
-    m->result_vector = (double *)ivp_u_memory_get_mem(my_mem, arl * sizeof(double));
+    m->matrix_values = (double *)ivp_arena_alloc(
+        arena, (arl * (size_t)m->columns +
+                (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
+    m->desired_vector = (double *)ivp_arena_alloc(
+        arena, arl * sizeof(double));
+    m->result_vector = (double *)ivp_arena_alloc(
+        arena, arl * sizeof(double));
     /* align_matrix_values(): arena memory is 32-byte aligned, nothing moves */
     if (!(m->matrix_values && m->desired_vector && m->result_vector)) return false;
     IVP_IF(1)
@@ -1980,11 +1985,12 @@ static void frs_factor_result_vec(fr_solver_t *s)
 }
 
 static bool frs_test_gauss_solution_suggestion(fr_solver_t *s, const double *push_results, const int *active_is_at_pos,
-                                               int total_actives, ivp_u_memory_t *mem_friction)
+                                               int total_actives, ivp_arena_t *arena)
 {
     ivp_gmmz_t *m = &s->dist_change_mat;
     /* ivp_u_bool (int) array from the arena, cleared */
-    int *was_already_tested = (int *)ivp_u_memory_get_mem(mem_friction, (size_t)m->columns * sizeof(int));
+    int *was_already_tested = (int *)ivp_arena_alloc(
+        arena, (size_t)m->columns * sizeof(int));
     if (!was_already_tested) return false;
     memset(was_already_tested, 0, sizeof(int) * (size_t)m->columns);
     int gauss_failed = 0;
@@ -2182,7 +2188,7 @@ static void frs_do_resulting_pushes(fr_solver_t *s, ivp_fr_system_t *fs)
 }
 
 static void frs_solve_linear_equation_and_push(fr_solver_t *s, ivp_fr_system_t *my_fs, int *active_is_at_pos,
-                                               int total_actives, ivp_u_memory_t *mem_friction)
+                                               int total_actives, ivp_arena_t *arena)
 {
     ivp_gmmz_t *big = &s->dist_change_mat;
     ivp_gmmz_t actives_matrix;
@@ -2193,10 +2199,13 @@ static void frs_solve_linear_equation_and_push(fr_solver_t *s, ivp_fr_system_t *
     frs_normize_constraint_equ(s);
     /* arena arrays, uninitialised, in the reference order */
     size_t arl = (size_t)actives_matrix.aligned_row_len;
-    actives_matrix.desired_vector = (double *)ivp_u_memory_get_mem(mem_friction, arl * sizeof(double));
-    actives_matrix.result_vector = (double *)ivp_u_memory_get_mem(mem_friction, arl * sizeof(double));
-    actives_matrix.matrix_values = (double *)ivp_u_memory_get_mem(
-        mem_friction, ((size_t)total_actives * arl + (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
+    actives_matrix.desired_vector = (double *)ivp_arena_alloc(
+        arena, arl * sizeof(double));
+    actives_matrix.result_vector = (double *)ivp_arena_alloc(
+        arena, arl * sizeof(double));
+    actives_matrix.matrix_values = (double *)ivp_arena_alloc(
+        arena, ((size_t)total_actives * arl +
+                (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
     /* align_matrix_values(): arena memory is 32-byte aligned, nothing moves */
     if (!actives_matrix.desired_vector || !actives_matrix.result_vector || !actives_matrix.matrix_values) return;
     IVP_IF(1)
@@ -2208,7 +2217,7 @@ static void frs_solve_linear_equation_and_push(fr_solver_t *s, ivp_fr_system_t *
     ivp_gmmz_fill_from_bigger_matrix(&actives_matrix, big, active_is_at_pos, total_actives);
     if (ivp_gmmz_solve(&actives_matrix) == IVP_OK) {
         if (frs_test_gauss_solution_suggestion(s, actives_matrix.result_vector, active_is_at_pos, total_actives,
-                                               mem_friction)) {
+                                               arena)) {
             IVP_IF(1) /* ivp_friction_gaps.cxx:209 */
             {
                 s->gauss_succed++;
@@ -2219,7 +2228,8 @@ static void frs_solve_linear_equation_and_push(fr_solver_t *s, ivp_fr_system_t *
     if (!ok) {
         int supposed_actives = fs_get_num_supposed_active_frdists(my_fs);
         if (ivp_lcs_init_and_solve_in_memory(big->matrix_values, big->desired_vector, big->result_vector,
-                                             big->columns, supposed_actives, mem_friction) == IVP_OK) {
+                                             big->columns, supposed_actives,
+                                             arena) == IVP_OK) {
             ok = true;
         } else {
             IVP_IF(1) /* ivp_friction_gaps.cxx:249 */
@@ -2481,8 +2491,8 @@ static void fs_static_fr_oversized_matrix_panic(ivp_fr_system_t *fs)
  * environment's short-term arena */
 static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in)
 {
-    ivp_u_memory_t *my_mem = ivp_env_get_short_term_mem(fs->l_environment);
-    ivp_u_memory_start_transaction(my_mem);
+    ivp_arena_t *arena = ivp_env_get_short_term_mem(fs->l_environment);
+    ivp_arena_begin_transaction(arena);
     int friction_debug_counter = 0;
 #ifdef IVP_DEBUG_BUILD
     friction_debug_counter = ivp_env_next_friction_debug_counter(fs->l_environment);
@@ -2503,14 +2513,15 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
     fs_reorder_mindists_for_complex(fs);
     if ((fs->friction_dist_number - fs->complex_not_necessary_number) > IVP_FR_MAX_FRICTION_MATRIX) {
         fs_static_fr_oversized_matrix_panic(fs);
-        ivp_u_memory_end_transaction(my_mem);
+        ivp_arena_end_transaction(arena);
         return;
     }
     fr_solver_t fr_solver;
-    if (frs_init(&fr_solver, fs, es_in, my_mem)) {
+    if (frs_init(&fr_solver, fs, es_in, arena)) {
         frs_setup_coords_mindists(&fr_solver, fs);
         int *original_pos_of_active =
-            (int *)ivp_u_memory_get_mem(my_mem, (size_t)fs->friction_dist_number * sizeof(int));
+            (int *)ivp_arena_alloc(
+                arena, (size_t)fs->friction_dist_number * sizeof(int));
         if (original_pos_of_active) {
             do { /* while (IVP_TRUE) { ... break; } */
                 int num_actives = frs_calc_solver_psi(&fr_solver, fs, original_pos_of_active);
@@ -2525,12 +2536,14 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
                         IVP_ASSERT(original_pos_of_active[j] < fs->friction_dist_number);
                     }
                 }
-                frs_solve_linear_equation_and_push(&fr_solver, fs, original_pos_of_active, num_actives, my_mem);
+                frs_solve_linear_equation_and_push(
+                    &fr_solver, fs, original_pos_of_active, num_actives,
+                    arena);
             } while (0);
         }
     }
     frs_destroy(&fr_solver);
-    ivp_u_memory_end_transaction(my_mem);
+    ivp_arena_end_transaction(arena);
 }
 
 /* ── controllers ───────────────────────────────────────────────────────── */
