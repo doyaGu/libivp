@@ -1,15 +1,17 @@
 # tools/parity — 与原版 IVP 的逐位对照
 
-libivp 与原版引擎（默认 `../ivp`）在 `tools/scenarios.txt` 的 48 个场景中
-全部逐位一致：
+本工具同时检查 libivp 的两个复现域：
 
-- **Release 构建：**对照以 `-ffp-contract=off` 构建的原版。
-- **Debug 构建：**对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
+- **reference-development：**显式使用
+  `IVP_CANONICAL_INTERNAL_STATE=OFF` 和 `IVP_QHULL_MODE=REFERENCE`，
+  Release/Debug 必须 48/48 逐位一致。
+- **mainline：**使用默认的强内部状态策略和可重入 Qhull 2020.2，必须恰好只有
+  `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
 
-检查脚本显式使用 `IVP_CANONICAL_INTERNAL_STATE=OFF` 和
-`IVP_QHULL_MODE=REFERENCE`。后者从官方固定标签获取 classic Qhull 并由适配层
-串行保护，当前 Release/Debug 均为 48/48。普通主线构建仍默认使用可重入的
-Qhull 2020.2；它的三个版本差异见 `docs/PARITY_GAP_INVENTORY.md`。
+两个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
+`-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
+主线策略差异及 Qhull 单变量的三个几何差异见
+`docs/PARITY_GAP_INVENTORY.md`。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
@@ -32,15 +34,17 @@ tools/parity/check.sh --debug
 tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加步长扫描（release）
 ```
 
-退出码为 0 表示全部一致。每个场景的结果写在 `build/parity/out/{release,debug,sweep_*}.txt`。
+退出码为 0 表示两个域都满足各自契约。结果写在
+`build/parity/out/{release,debug}_{reference,mainline}.txt`；步长扫描写入
+`build/parity/out/sweep_*/{reference,mainline}.txt`。
 
 各项检查比较的内容：
 
 | 检查 | 比较内容 |
 |---|---|
-| release | JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行（引擎输出）、stderr、退出码 |
-| debug | JSONL 帧、调试输出文本（统计行、`linear_constraint_failed` 等）、stderr 中 `ASSERTION FAILURE: <expr>` 报告的序列、退出码 |
-| sweep | 每个场景在给定步长和步数下的 JSONL 帧 |
+| release | 两种策略各自的 JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行、stderr、退出码 |
+| debug | 两种策略各自的 JSONL 帧、调试输出文本、stderr 中 `ASSERTION FAILURE: <expr>` 报告序列、退出码 |
+| sweep | 两种策略下每个场景在给定步长和步数下的 JSONL 帧；主线差异必须是登记集合的子集，因为不同步数可能尚未到达首个分叉 |
 
 ## 环境变量
 
@@ -57,7 +61,7 @@ tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加�
 |---|---|
 | `build_reference.sh [release\|debug\|fma]` | 构建原版库（CMake）和 runner，输出 `build/parity/ref_<flavor>/runner/legacy_runner` |
 | `run_scenarios.sh <ref\|lib> <binary> <out_dir> [dt steps]` | 运行全部场景，写出 `<scenario>.{jsonl,out,err,rc}` |
-| `compare.sh [--text] [--stderr] [--asserts] <ref_dir> <lib_dir>` | 逐场景比较两次运行的输出 |
+| `compare.sh [--text] [--stderr] [--asserts] [--expect-differences file\|--allow-differences file] <ref_dir> <lib_dir>` | 逐场景比较；可要求差异集合等于或包含于清单 |
 | `cmp_jsonl.py <ref.jsonl> <lib.jsonl>` | 逐位比较两个 JSONL，给出第一个不同的帧 |
 | `build_override_runner.sh <release\|debug> <out_dir> <file.cxx>...` | 用插桩后的原版源文件替换库中的同名对象，链接新的 runner |
 
@@ -73,7 +77,8 @@ tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加�
    `tools/parity/build_override_runner.sh release /tmp/ovr copy.cxx`。
    覆盖文件按原版库对象的编译选项编译，所以其余部分仍然逐位相同。
 3. **给 libivp 插桩：**在对应位置加相同的探针，运行
-   `build/parity/lib_release/test_scenarios --scenario X --steps N --dt D --output x.jsonl`。
+   `build/parity/lib_reference_release/test_scenarios --scenario X --steps N --dt D --output x.jsonl`
+   （或用 `lib_mainline_release` 检查主线路径）。
 4. **逐值比较：**比较两边的 stderr，找出第一个不同的值。用完后删除所有探针。
 
 最常见的原因是表达式的求值类型（float 还是 double）与原版不一致，规则见
