@@ -71,8 +71,6 @@ ivp_controller_handle_t ivp_controller_system_add(ivp_controller_system_t *sys,
 bool ivp_controller_system_remove(ivp_controller_system_t *sys,
                                   ivp_controller_handle_t controller_handle);
 
-void ivp_controller_system_clear(ivp_controller_system_t *sys);
-
 int ivp_controller_system_count(const ivp_controller_system_t *sys);
 ivp_controller_slot_t *ivp_controller_system_get_at(const ivp_controller_system_t *sys, int index);
 ivp_controller_slot_t *ivp_controller_system_get_by_handle(const ivp_controller_system_t *sys,
@@ -80,14 +78,6 @@ ivp_controller_slot_t *ivp_controller_system_get_by_handle(const ivp_controller_
 void ivp_controller_system_sort(ivp_controller_system_t *sys,
                                 bool use_reference_tiebreak);
 
-bool ivp_controller_slot_set_mode(ivp_controller_slot_t *slot,
-                                  ivp_controller_mode_t mode);
-bool ivp_controller_slot_set_discovery_fn(ivp_controller_slot_t *slot,
-                                          ivp_controller_discovery_fn_t fn);
-bool ivp_controller_slot_set_associated_handles(ivp_controller_slot_t *slot,
-                                                const ivp_object_handle_t *handles,
-                                                int handle_count,
-                                                const ivp_allocator_t *alloc);
 bool ivp_controller_slot_add_associated_handle(ivp_controller_slot_t *slot,
                                                ivp_object_handle_t handle,
                                                const ivp_allocator_t *alloc);

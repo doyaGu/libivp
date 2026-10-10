@@ -53,16 +53,15 @@ static bool ivp_controller_slot_ensure_associated_capacity(ivp_controller_slot_t
     return true;
 }
 
-static bool ivp_controller_handle_equal(ivp_object_handle_t a, ivp_object_handle_t b)
+static bool ivp_object_handle_equal(ivp_object_handle_t a, ivp_object_handle_t b)
 {
     return a.slot == b.slot && a.generation == b.generation;
 }
 
-static ivp_controller_handle_t ivp_controller_system_add_internal(
-    ivp_controller_system_t *sys,
-    int priority,
-    ivp_controller_event_fn_t event_fn,
-    void *ctx)
+ivp_controller_handle_t ivp_controller_system_add(ivp_controller_system_t *sys,
+                                                  int priority,
+                                                  ivp_controller_fn_t event_fn,
+                                                  void *ctx)
 {
     ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
     if (!sys || !sys->registry.alloc) return invalid;
@@ -105,21 +104,6 @@ ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,
                              ivp_controller_get_index);
 }
 
-void ivp_controller_system_destroy(ivp_controller_system_t *sys)
-{
-    if (!sys) return;
-    ivp_controller_system_clear(sys);
-    ivp_registry_destroy(&sys->registry, false, sizeof(ivp_controller_slot_t));
-}
-
-ivp_controller_handle_t ivp_controller_system_add(ivp_controller_system_t *sys,
-                                                  int priority,
-                                                  ivp_controller_fn_t fn,
-                                                  void *ctx)
-{
-    return ivp_controller_system_add_internal(sys, priority, fn, ctx);
-}
-
 bool ivp_controller_system_remove(ivp_controller_system_t *sys,
                                   ivp_controller_handle_t controller_handle)
 {
@@ -137,7 +121,7 @@ bool ivp_controller_system_remove(ivp_controller_system_t *sys,
     return true;
 }
 
-void ivp_controller_system_clear(ivp_controller_system_t *sys)
+static void ivp_controller_system_clear(ivp_controller_system_t *sys)
 {
     if (!sys || !sys->registry.alloc) return;
 
@@ -148,6 +132,13 @@ void ivp_controller_system_clear(ivp_controller_system_t *sys)
             break;
         }
     }
+}
+
+void ivp_controller_system_destroy(ivp_controller_system_t *sys)
+{
+    if (!sys) return;
+    ivp_controller_system_clear(sys);
+    ivp_registry_destroy(&sys->registry, false, sizeof(ivp_controller_slot_t));
 }
 
 int ivp_controller_system_count(const ivp_controller_system_t *sys)
@@ -202,57 +193,6 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys,
     }
 }
 
-bool ivp_controller_slot_set_mode(ivp_controller_slot_t *slot,
-                                  ivp_controller_mode_t mode)
-{
-    if (!slot) return false;
-    slot->mode = mode;
-    return true;
-}
-
-bool ivp_controller_slot_set_discovery_fn(ivp_controller_slot_t *slot,
-                                          ivp_controller_discovery_fn_t fn)
-{
-    if (!slot) return false;
-    slot->discovery_fn = fn;
-    return true;
-}
-
-bool ivp_controller_slot_set_associated_handles(ivp_controller_slot_t *slot,
-                                                const ivp_object_handle_t *handles,
-                                                int handle_count,
-                                                const ivp_allocator_t *alloc)
-{
-    if (!slot || !alloc) return false;
-    if (handle_count < 0) return false;
-    if (handle_count > 0 && !handles) return false;
-
-    if (handle_count == 0) {
-        slot->associated_count = 0;
-        return true;
-    }
-
-    if (!ivp_controller_slot_ensure_associated_capacity(slot, handle_count, alloc)) {
-        return false;
-    }
-
-    int count = 0;
-    for (int i = 0; i < handle_count; i++) {
-        if (!ivp_object_handle_is_valid(handles[i])) continue;
-        bool seen = false;
-        for (int j = 0; j < count; j++) {
-            if (ivp_controller_handle_equal(slot->associated_handles[j], handles[i])) {
-                seen = true;
-                break;
-            }
-        }
-        if (seen) continue;
-        slot->associated_handles[count++] = handles[i];
-    }
-    slot->associated_count = count;
-    return true;
-}
-
 bool ivp_controller_slot_add_associated_handle(ivp_controller_slot_t *slot,
                                                ivp_object_handle_t handle,
                                                const ivp_allocator_t *alloc)
@@ -260,7 +200,7 @@ bool ivp_controller_slot_add_associated_handle(ivp_controller_slot_t *slot,
     if (!slot || !alloc || !ivp_object_handle_is_valid(handle)) return false;
 
     for (int i = 0; i < slot->associated_count; i++) {
-        if (ivp_controller_handle_equal(slot->associated_handles[i], handle)) {
+        if (ivp_object_handle_equal(slot->associated_handles[i], handle)) {
             return true;
         }
     }
@@ -278,7 +218,7 @@ bool ivp_controller_slot_remove_associated_handle(ivp_controller_slot_t *slot,
 {
     if (!slot || !ivp_object_handle_is_valid(handle)) return false;
     for (int i = 0; i < slot->associated_count; i++) {
-        if (!ivp_controller_handle_equal(slot->associated_handles[i], handle)) continue;
+        if (!ivp_object_handle_equal(slot->associated_handles[i], handle)) continue;
         slot->associated_handles[i] = slot->associated_handles[slot->associated_count - 1];
         slot->associated_count--;
         return true;
@@ -311,7 +251,7 @@ int ivp_controller_slot_collect_associated_handles(const ivp_controller_slot_t *
         if (!ivp_object_handle_is_valid(out_handles[i])) continue;
         bool seen = false;
         for (int j = 0; j < unique; j++) {
-            if (ivp_controller_handle_equal(out_handles[j], out_handles[i])) {
+            if (ivp_object_handle_equal(out_handles[j], out_handles[i])) {
                 seen = true;
                 break;
             }
