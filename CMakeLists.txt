@@ -574,6 +574,8 @@ if (IVP_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)
         set_tests_properties(test_internal_state_stability PROPERTIES
                 LABELS "unit")
+        ivp_add_test(test_replay_equivalence tests/test_replay_equivalence.c)
+        set_tests_properties(test_replay_equivalence PROPERTIES LABELS "unit")
     endif ()
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
