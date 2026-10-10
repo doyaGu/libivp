@@ -440,6 +440,73 @@ IVP_TEST(registry_removal_reuses_slot_without_allocation) {
     IVP_ASSERT_EQ(state.live_blocks, 0);
 }
 
+typedef struct event_order_probe {
+    int id;
+    int *order;
+    int *count;
+} event_order_probe_t;
+
+static void record_removed_controller_event(void *ctx,
+                                            ivp_environment_t *env,
+                                            const ivp_event_t *event)
+{
+    IVP_UNUSED(env);
+    if (event->type != IVP_EVENT_CONTROLLER_REMOVED) return;
+    event_order_probe_t *probe = (event_order_probe_t *)ctx;
+    probe->order[(*probe->count)++] = probe->id;
+}
+
+static void event_order_noop_controller(const ivp_event_sim_t *event_sim,
+                                        ivp_object_t *object,
+                                        void *ctx)
+{
+    IVP_UNUSED(event_sim);
+    IVP_UNUSED(object);
+    IVP_UNUSED(ctx);
+}
+
+IVP_TEST(event_dispatch_survives_snapshot_allocation_failure) {
+    enum { LISTENER_COUNT = 33 };
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+
+    int order[LISTENER_COUNT] = {0};
+    int count = 0;
+    event_order_probe_t probes[LISTENER_COUNT];
+    for (int i = 0; i < LISTENER_COUNT; i++) {
+        probes[i] = (event_order_probe_t){
+            .id = i,
+            .order = order,
+            .count = &count
+        };
+        IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(
+            ivp_environment_add_event_listener(
+                env, record_removed_controller_event, &probes[i])));
+    }
+
+    ivp_controller_handle_t controller =
+        ivp_environment_create_core_controller(
+            env, IVP_CP_MOTION, event_order_noop_controller, NULL);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(controller));
+    IVP_ASSERT_EQ(count, 0);
+
+    const int attempts_before_remove = state.attempts;
+    state.fail_at = attempts_before_remove + 1;
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, controller));
+    IVP_ASSERT_EQ(state.attempts, attempts_before_remove + 1);
+    state.fail_at = 0;
+
+    IVP_ASSERT_EQ(count, LISTENER_COUNT);
+    for (int i = 0; i < LISTENER_COUNT; i++) {
+        IVP_ASSERT_EQ(order[i], LISTENER_COUNT - i - 1);
+    }
+
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
 IVP_TEST(env_create_allocation_failures_are_recoverable) {
     env_fail_alloc_state_t baseline = {0};
     ivp_allocator_t allocator;
@@ -2492,6 +2559,7 @@ int main(void) {
     IVP_REGISTER(env_create_destroy);
     IVP_REGISTER(env_create_with_config);
     IVP_REGISTER(registry_removal_reuses_slot_without_allocation);
+    IVP_REGISTER(event_dispatch_survives_snapshot_allocation_failure);
     IVP_REGISTER(env_create_allocation_failures_are_recoverable);
     IVP_REGISTER(env_create_object);
     IVP_REGISTER(env_create_object_reserves_psi_scratch_atomically);

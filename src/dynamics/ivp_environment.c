@@ -156,6 +156,42 @@ static void env_sort_event_listener_snapshot(
     }
 }
 
+static void env_emit_event_by_registration(ivp_environment_t *env,
+                                           ivp_event_system_t *es,
+                                           const ivp_event_t *event,
+                                           uint64_t last_registration)
+{
+    while (last_registration > 0u) {
+        ivp_event_listener_handle_t handle =
+            ivp_event_listener_handle_invalid();
+        uint64_t selected_registration = 0u;
+        const int count = ivp_event_system_count(es);
+        for (int i = 0; i < count; i++) {
+            ivp_event_listener_slot_t *slot =
+                ivp_event_system_get_at(es, i);
+            if (!slot || slot->registration_sequence > last_registration ||
+                slot->registration_sequence <= selected_registration) {
+                continue;
+            }
+            selected_registration = slot->registration_sequence;
+            handle.slot = slot->handle.slot;
+            handle.generation = slot->handle.generation;
+        }
+        if (selected_registration == 0u) return;
+        last_registration = selected_registration - 1u;
+
+        ivp_event_listener_slot_t *slot =
+            env_get_event_listener_by_handle(es, handle);
+        if (!slot || slot->registration_sequence != selected_registration ||
+            !slot->enabled || !slot->fn) {
+            continue;
+        }
+        ivp_event_listener_fn_t fn = slot->fn;
+        void *ctx = slot->ctx;
+        fn(ctx, env, event);
+    }
+}
+
 void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_t type, ivp_real_t dt,
                                          int object_index, int controller_id)
 {
@@ -177,7 +213,15 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
                   sizeof(local_listeners[0]))) {
         listeners = (env_event_listener_snapshot_t *)ivp_alloc(
             env->allocator, (size_t)n * sizeof(*listeners));
-        if (!listeners) return;
+        if (!listeners) {
+            const uint64_t last_registration =
+                es->next_registration_sequence > 0u
+                    ? es->next_registration_sequence - 1u
+                    : 0u;
+            env_emit_event_by_registration(
+                env, es, &evt, last_registration);
+            return;
+        }
         allocated = true;
     }
     int listener_count = 0;
