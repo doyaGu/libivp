@@ -10,6 +10,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/events/ivp_listener_object.h>
 #include <ivp/geometry/ivp_surman.h>
 
 #include <stdint.h>
@@ -22,6 +23,7 @@
 #define STRONG_POOL_WARMUP_COUNT STRONG_OBJECT_COUNT
 #define STRONG_PARALLEL_OBJECT_COUNT 256
 #define STRONG_PARALLEL_WORKERS 4
+#define STRONG_REVIVE_OBJECT_COUNT 8
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -965,6 +967,109 @@ IVP_TEST(compound_object_order_does_not_change_visible_state)
     IVP_ASSERT_TRUE(ok);
 }
 
+typedef struct strong_revive_capture {
+    uint64_t keys[STRONG_REVIVE_OBJECT_COUNT];
+    int count;
+} strong_revive_capture_t;
+
+static void strong_capture_revived(ivp_listener_object_t *listener,
+                                   ivp_event_object_t *event)
+{
+    strong_revive_capture_t *capture =
+        (strong_revive_capture_t *)listener->user_data;
+    IVP_ASSERT(capture->count < STRONG_REVIVE_OBJECT_COUNT);
+    if (capture->count < STRONG_REVIVE_OBJECT_COUNT) {
+        capture->keys[capture->count++] =
+            event->real_object->creation_sequence;
+    }
+}
+
+static bool strong_queue_revive_scene(
+    ivp_environment_t **environment_out,
+    ivp_object_t *objects[STRONG_REVIVE_OBJECT_COUNT],
+    ivp_listener_object_t *listener,
+    strong_revive_capture_t *capture)
+{
+    ivp_environment_t *environment = strong_environment_create(1);
+    if (!environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+
+    for (int i = 0; i < STRONG_REVIVE_OBJECT_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(4.0 * (double)i),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        objects[i] = ivp_environment_create_object(
+            environment, &object_template, NULL);
+        if (!objects[i]) {
+            ivp_environment_destroy(environment);
+            return false;
+        }
+    }
+
+    memset(capture, 0, sizeof(*capture));
+    memset(listener, 0, sizeof(*listener));
+    listener->event_object_revived = strong_capture_revived;
+    listener->user_data = capture;
+    ivp_environment_add_listener_object_global(environment, listener);
+    for (int i = 0; i < STRONG_REVIVE_OBJECT_COUNT; i++) {
+        ivp_object_ensure_in_simulation(objects[i]);
+    }
+    *environment_out = environment;
+    return true;
+}
+
+IVP_TEST(revive_queue_order_does_not_change_observable_order)
+{
+    ivp_environment_t *canonical = NULL;
+    ivp_environment_t *perturbed = NULL;
+    ivp_object_t *canonical_objects[STRONG_REVIVE_OBJECT_COUNT] = {0};
+    ivp_object_t *perturbed_objects[STRONG_REVIVE_OBJECT_COUNT] = {0};
+    ivp_listener_object_t canonical_listener;
+    ivp_listener_object_t perturbed_listener;
+    strong_revive_capture_t canonical_capture;
+    strong_revive_capture_t perturbed_capture;
+    bool ok = strong_queue_revive_scene(
+                  &canonical, canonical_objects, &canonical_listener,
+                  &canonical_capture) &&
+              strong_queue_revive_scene(
+                  &perturbed, perturbed_objects, &perturbed_listener,
+                  &perturbed_capture);
+    if (ok) {
+        reverse_pvec(&perturbed->pl->core_revive_list);
+        ivp_environment_simulate_one_psi(canonical);
+        ivp_environment_simulate_one_psi(perturbed);
+        ok = canonical_capture.count == STRONG_REVIVE_OBJECT_COUNT &&
+             perturbed_capture.count == STRONG_REVIVE_OBJECT_COUNT &&
+             memcmp(canonical_capture.keys, perturbed_capture.keys,
+                    sizeof(canonical_capture.keys)) == 0;
+        for (int i = 0; ok && i < STRONG_REVIVE_OBJECT_COUNT; i++) {
+            ok = visible_core_state_equal(
+                     canonical_objects[i]->physical_core,
+                     perturbed_objects[i]->physical_core) &&
+                 canonical_objects[i]->object_movement_state ==
+                     perturbed_objects[i]->object_movement_state;
+        }
+    }
+    if (perturbed) {
+        ivp_environment_remove_listener_object_global(
+            perturbed, &perturbed_listener);
+    }
+    if (canonical) {
+        ivp_environment_remove_listener_object_global(
+            canonical, &canonical_listener);
+    }
+    ivp_environment_destroy(perturbed);
+    ivp_environment_destroy(canonical);
+    IVP_ASSERT_TRUE(ok);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
@@ -978,5 +1083,6 @@ int main(void)
     IVP_REGISTER(relocated_and_shared_geometry_do_not_change_visible_state);
     IVP_REGISTER(contact_stack_order_does_not_change_visible_state);
     IVP_REGISTER(compound_object_order_does_not_change_visible_state);
+    IVP_REGISTER(revive_queue_order_does_not_change_observable_order);
     IVP_RUN_ALL();
 }

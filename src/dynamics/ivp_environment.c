@@ -566,9 +566,34 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
 }
 
 /* IVP_Environment::revive_cores_PSI */
+static void env_canonicalize_revive_cores(ivp_pvec_t *cores)
+{
+    if (!ivp_build_uses_canonical_internal_state()) return;
+    for (int i = 1; i < ivp_pvec_len(cores); i++) {
+        ivp_core_t *core = (ivp_core_t *)ivp_pvec_at(cores, i);
+        uint64_t key = ivp_core_stable_order_key(core);
+        int position = i;
+        while (position > 0) {
+            ivp_core_t *previous =
+                (ivp_core_t *)ivp_pvec_at(cores, position - 1);
+            uint64_t previous_key =
+                ivp_core_stable_order_key(previous);
+            IVP_ASSERT(previous_key != key || previous == core);
+            if (previous_key <= key) break;
+            cores->elems[position] = previous;
+            position--;
+        }
+        cores->elems[position] = core;
+    }
+}
+
 static void env_revive_cores_psi(ivp_environment_t *env)
 {
     ivp_pvec_t *l = &env->pl->core_revive_list;
+    /* Revival fires callbacks and can fuse simulation units.  Normalize the
+     * queue before either effect becomes observable; allocator and enqueue
+     * history must not select the order. */
+    env_canonicalize_revive_cores(l);
     for (int i = ivp_pvec_len(l) - 1; i >= 0; i--) {
         if (i >= ivp_pvec_len(l)) continue;
         ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(l, i);
