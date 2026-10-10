@@ -46,6 +46,18 @@ function(ivp_apply_strict_fp TARGET_NAME)
     endif ()
 endfunction()
 
+function(ivp_apply_project_warnings TARGET_NAME)
+    if (MSVC)
+        target_compile_options(${TARGET_NAME} PRIVATE /W4 /WX)
+    else ()
+        target_compile_options(${TARGET_NAME} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror
+                -Wconversion -Wshadow -Wdouble-promotion
+                -Wno-unused-parameter
+        )
+    endif ()
+endfunction()
+
 # ── Strict floating-point and warnings will be applied to ivp targets only,
 # ── not to third-party dependencies like SDL ──────────────────────────────
 
@@ -264,125 +276,9 @@ set(IVP_SOLVER_SOURCES
         src/solver/ivp_impact_core.c
 )
 
-# ── Third-party: Qhull, fetched as an immutable external dependency ──────
-include(FetchContent)
-if (POLICY CMP0135)
-    cmake_policy(SET CMP0135 NEW)
-endif ()
-string(TOUPPER "${IVP_QHULL_MODE}" IVP_QHULL_MODE_NORMALIZED)
-
-if (IVP_QHULL_MODE_NORMALIZED STREQUAL "REENTRANT")
-    # Latest stable upstream release.  Each convex build owns a qhT context,
-    # so independent hulls may be built concurrently.
-    FetchContent_Declare(
-            ivp_qhull_modern
-            URL https://github.com/qhull/qhull/archive/refs/tags/v8.0.2.tar.gz
-            URL_HASH SHA256=8774e9a12c70b0180b95d6b0b563c5aa4bea8d5960c15e18ae3b6d2521d64f8b
-            SOURCE_SUBDIR src/libqhull_r
-    )
-    FetchContent_MakeAvailable(ivp_qhull_modern)
-    set(IVP_QHULL_SOURCE_DIR ${ivp_qhull_modern_SOURCE_DIR}/src)
-    set(QHULL_SOURCES
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/global_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/stat_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/geom2_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/poly2_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/merge_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/libqhull_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/geom_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/poly_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/qset_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/mem_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/random_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/usermem_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/userprintf_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/io_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/user_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/rboxlib_r.c
-            ${IVP_QHULL_SOURCE_DIR}/libqhull_r/userprintf_rbox_r.c
-            src/builder/ivp_qhull_api_reentrant.c
-    )
-    set(IVP_QHULL_REENTRANT ON)
-    set(IVP_QHULL_BACKEND_DESCRIPTION "Qhull 2020.2 libqhull_r")
-elseif (IVP_QHULL_MODE_NORMALIZED STREQUAL "REFERENCE")
-    # Qhull does not publish the reference engine's 2.6 snapshot as a tag.
-    # Its earliest immutable upstream tag is the classic global-state line.
-    # The adapter serializes complete builds before exposing this backend.
-    FetchContent_Declare(
-            ivp_qhull_classic
-            URL https://github.com/qhull/qhull/archive/refs/tags/v3.0.tar.gz
-            URL_HASH SHA256=2389b9a1b824f626ea9e50ab536d89d2f44d0c7ed91b285d2bdbd0ae05e316c5
-            SOURCE_SUBDIR src
-    )
-    FetchContent_MakeAvailable(ivp_qhull_classic)
-    set(IVP_QHULL_SOURCE_DIR ${ivp_qhull_classic_SOURCE_DIR}/src)
-    set(QHULL_SOURCES
-            ${IVP_QHULL_SOURCE_DIR}/user.c
-            ${IVP_QHULL_SOURCE_DIR}/global.c
-            ${IVP_QHULL_SOURCE_DIR}/stat.c
-            ${IVP_QHULL_SOURCE_DIR}/io.c
-            ${IVP_QHULL_SOURCE_DIR}/geom2.c
-            ${IVP_QHULL_SOURCE_DIR}/poly2.c
-            ${IVP_QHULL_SOURCE_DIR}/merge.c
-            ${IVP_QHULL_SOURCE_DIR}/qhull.c
-            ${IVP_QHULL_SOURCE_DIR}/geom.c
-            ${IVP_QHULL_SOURCE_DIR}/poly.c
-            ${IVP_QHULL_SOURCE_DIR}/qset.c
-            ${IVP_QHULL_SOURCE_DIR}/mem.c
-            src/builder/ivp_qhull_api_classic.c
-    )
-    set(IVP_QHULL_REENTRANT OFF)
-    set(IVP_QHULL_BACKEND_DESCRIPTION "classic Qhull 3.0 (serialized)")
-else ()
-    message(FATAL_ERROR
-            "IVP_QHULL_MODE must be REENTRANT or REFERENCE, got: ${IVP_QHULL_MODE}")
-endif ()
-
-if (NOT EXISTS "${IVP_QHULL_SOURCE_DIR}/qhull.h" AND
-    NOT EXISTS "${IVP_QHULL_SOURCE_DIR}/libqhull_r/libqhull_r.h")
-    message(FATAL_ERROR
-            "The selected Qhull dependency has an unexpected source layout: ${IVP_QHULL_SOURCE_DIR}")
-endif ()
-message(STATUS "IVP Qhull backend: ${IVP_QHULL_BACKEND_DESCRIPTION}")
-
-add_library(ivp_qhull STATIC ${QHULL_SOURCES})
-target_include_directories(ivp_qhull
-        PRIVATE
-        ${IVP_QHULL_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/builder
-)
-if (NOT IVP_QHULL_REENTRANT)
-    target_link_libraries(ivp_qhull PUBLIC Threads::Threads)
-endif ()
-
-ivp_apply_strict_fp(ivp_qhull)
-
-# Project warning set (not fatal: third-party code), with the warning classes
-# emitted by the external upstream sources silenced for these files only.
-if (MSVC)
-    target_compile_options(ivp_qhull PRIVATE /W0)
-else ()
-    target_compile_options(ivp_qhull PRIVATE
-            -Wall -Wextra -Wpedantic
-            -Wconversion -Wshadow -Wdouble-promotion
-            -Wno-unused-parameter
-            -Wno-clobbered
-            -Wno-implicit-fallthrough
-            -Wno-maybe-uninitialized
-            -Wno-conversion
-            -Wno-sign-conversion
-            -Wno-sign-compare
-            -Wno-shadow
-            -Wno-double-promotion
-            -Wno-format
-            -Wno-uninitialized
-            -Wno-unused-but-set-variable
-            -Wno-unused-but-set-parameter
-            -Wno-format-pedantic
-            -Wno-deprecated-declarations
-            -Wno-unknown-warning-option
-    )
-endif ()
+# ── Third-party: external Qhull dependency and private adapter seam ───────
+include(cmake/IVPQhull.cmake)
+ivp_add_qhull_backend()
 
 # ── Library target ────────────────────────────────────────────────────────
 add_library(ivp STATIC
@@ -470,16 +366,8 @@ if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
             COMPILE_OPTIONS "-Wno-array-bounds")
 endif ()
 
-# Apply strict warning flags
-if (MSVC)
-    target_compile_options(ivp PRIVATE /W4 /WX)
-else ()
-    target_compile_options(ivp PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -Wconversion -Wshadow -Wdouble-promotion
-            -Wno-unused-parameter
-    )
-endif ()
+# Apply strict warning flags.
+ivp_apply_project_warnings(ivp)
 
 target_link_libraries(ivp PRIVATE ivp_qhull)
 target_link_libraries(ivp PUBLIC Threads::Threads)
@@ -657,12 +545,22 @@ if (IVP_BUILD_TESTS)
     # New coverage-expansion tests
     ivp_add_test(test_controllers tests/test_controllers.c)
     ivp_add_test(test_builders tests/test_builders.c)
-    if (IVP_QHULL_REENTRANT)
-        ivp_add_test(test_qhull_reentrant tests/test_qhull_reentrant.c)
-        target_link_libraries(test_qhull_reentrant PRIVATE Threads::Threads)
-    else ()
-        ivp_add_test(test_qhull_serialized tests/test_qhull_reentrant.c)
-        target_link_libraries(test_qhull_serialized PRIVATE Threads::Threads)
+    ivp_add_test(test_qhull_concurrency tests/test_qhull_concurrency.c)
+    target_link_libraries(test_qhull_concurrency PRIVATE Threads::Threads)
+    if (IVP_QHULL_SUPPORTS_PARALLEL_BUILDS)
+        target_compile_definitions(ivp_qhull PRIVATE IVP_QHULL_TEST_HOOKS)
+        add_executable(test_qhull_overlap tests/test_qhull_overlap.c)
+        target_compile_definitions(test_qhull_overlap PRIVATE
+                IVP_QHULL_TEST_HOOKS)
+        target_include_directories(test_qhull_overlap PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/builder
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_link_libraries(test_qhull_overlap PRIVATE
+                ivp_qhull Threads::Threads)
+        ivp_apply_strict_fp(test_qhull_overlap)
+        ivp_apply_project_warnings(test_qhull_overlap)
+        add_test(NAME test_qhull_overlap COMMAND test_qhull_overlap)
+        set_tests_properties(test_qhull_overlap PROPERTIES LABELS "unit")
     endif ()
     ivp_add_test(test_parallel_worlds tests/test_parallel_worlds.c)
     target_include_directories(test_parallel_worlds PRIVATE
@@ -674,6 +572,8 @@ if (IVP_BUILD_TESTS)
         ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
         target_include_directories(test_internal_state_stability PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        set_tests_properties(test_internal_state_stability PROPERTIES
+                LABELS "unit")
     endif ()
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
@@ -818,7 +718,8 @@ if (IVP_BUILD_TESTS)
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry test_collision
             test_dynamics test_solver test_utility test_lvec
-            test_controllers test_builders test_parallel_worlds
+            test_controllers test_builders test_qhull_concurrency
+            test_parallel_worlds
             test_internal_parallel
             test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
@@ -828,14 +729,6 @@ if (IVP_BUILD_TESTS)
             test_controller_active test_controller_sets test_controller_factory
             test_content_pipeline
     )
-    if (IVP_CANONICAL_INTERNAL_STATE)
-        list(APPEND IVP_UNIT_TESTS test_internal_state_stability)
-    endif ()
-    if (IVP_QHULL_REENTRANT)
-        list(APPEND IVP_UNIT_TESTS test_qhull_reentrant)
-    else ()
-        list(APPEND IVP_UNIT_TESTS test_qhull_serialized)
-    endif ()
     foreach (T ${IVP_UNIT_TESTS})
         set_tests_properties(${T} PROPERTIES LABELS "unit")
     endforeach ()

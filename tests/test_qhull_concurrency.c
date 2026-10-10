@@ -1,4 +1,4 @@
-/* test_qhull_reentrant.c -- concurrent callers receive isolated hull results.
+/* test_qhull_concurrency.c -- concurrent callers receive isolated results.
  *
  * The mainline backend achieves this with independent qhT state.  The
  * reference backend serializes its classic process-global Qhull state.

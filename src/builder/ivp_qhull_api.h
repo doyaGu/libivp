@@ -35,6 +35,14 @@ int ivp_qhull_for_each_vertex(ivp_qhull_context_t *context,
 void ivp_qhull_free_hull(ivp_qhull_context_t *context);
 void ivp_qhull_context_destroy(ivp_qhull_context_t *context);
 
+#if defined(IVP_QHULL_TEST_HOOKS)
+/* Test seam at the backend-dispatch boundary.  Install or remove the hook
+ * only while no hull build is active. */
+typedef void (*ivp_qhull_test_hook_fn)(void *context);
+void ivp_qhull_set_test_before_build_hook(ivp_qhull_test_hook_fn hook,
+                                          void *context);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

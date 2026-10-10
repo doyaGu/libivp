@@ -13,6 +13,18 @@ struct ivp_qhull_context {
     bool hull_active;
 };
 
+#if defined(IVP_QHULL_TEST_HOOKS)
+static ivp_qhull_test_hook_fn s_before_build_hook;
+static void *s_before_build_context;
+
+void ivp_qhull_set_test_before_build_hook(ivp_qhull_test_hook_fn hook,
+                                          void *context)
+{
+    s_before_build_hook = hook;
+    s_before_build_context = context;
+}
+#endif
+
 ivp_qhull_context_t *ivp_qhull_context_create(void)
 {
     ivp_qhull_context_t *context =
@@ -38,6 +50,10 @@ int ivp_qhull_new_hull(ivp_qhull_context_t *context, double *points,
 
     context->memory_initialized = true;
     context->hull_active = true;
+#if defined(IVP_QHULL_TEST_HOOKS)
+    if (s_before_build_hook)
+        s_before_build_hook(s_before_build_context);
+#endif
     return qh_new_qhull(&context->qh, 3, n_points, points, False,
                         command, NULL, stderr);
 }
