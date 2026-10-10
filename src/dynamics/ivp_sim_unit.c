@@ -1356,7 +1356,32 @@ void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, i
     if (fallback_core) ivp_core_ensure_core_in_simulation_delayed(fallback_core);
 }
 
-bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c)
+static bool ctrl_list_contains(const ivp_pvec_t *cores,
+                               const ivp_core_t *core)
+{
+    return cores && ivp_pvec_index_of(cores, core) >= 0;
+}
+
+static void ctrl_remove_cores_not_in(ivp_sim_ctrl_t *controller,
+                                     const ivp_pvec_t *cores,
+                                     const ivp_pvec_t *keep)
+{
+    if (!cores) return;
+    for (int i = ivp_pvec_len(cores) - 1; i >= 0; i--) {
+        ivp_core_t *core = (ivp_core_t *)ivp_pvec_at(cores, i);
+        if (!core || ctrl_list_contains(keep, core) ||
+            !ivp_ctrl_mgr_core_has_controller(core, controller)) {
+            continue;
+        }
+        ivp_sim_unit_t *unit = core->sim_unit;
+        ivp_core_rem_core_controller(core, controller);
+        if (unit) ivp_sim_unit_request_union_find(unit);
+    }
+}
+
+static bool ctrl_commit_controller_cores(
+    struct ivp_environment *env, ivp_sim_ctrl_t *c,
+    const ivp_pvec_t *previous_cores)
 {
     ivp_pvec_t *controlled_cores = c->vt->get_associated_controlled_cores(c);
     if (!controlled_cores) return true;
@@ -1408,7 +1433,11 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
     }
 
     if (!success) {
-        ivp_ctrl_mgr_remove_controller_from_environment(env, c, true);
+        if (previous_cores) {
+            ctrl_remove_cores_not_in(c, controlled_cores, previous_cores);
+        } else {
+            ivp_ctrl_mgr_remove_controller_from_environment(env, c, true);
+        }
         for (int i = ivp_pvec_len(&deferred_units) - 1; i >= 0; i--) {
             ivp_sim_unit_t *restored =
                 (ivp_sim_unit_t *)ivp_pvec_at(&deferred_units, i);
@@ -1426,6 +1455,7 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
         for (int i = ivp_pvec_len(&deferred_units) - 1; i >= 0; i--) {
             ivp_sim_unit_delete((ivp_sim_unit_t *)ivp_pvec_at(&deferred_units, i));
         }
+        ctrl_remove_cores_not_in(c, previous_cores, controlled_cores);
     }
     ivp_pvec_clear(&deferred_units);
 
@@ -1433,4 +1463,18 @@ bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env
         ivp_sim_unit_revive_for_simulation(reference_unit, env);
     }
     return success;
+}
+
+bool ivp_ctrl_mgr_announce_controller_to_environment(
+    struct ivp_environment *env, ivp_sim_ctrl_t *c)
+{
+    return ctrl_commit_controller_cores(env, c, NULL);
+}
+
+bool ivp_ctrl_mgr_replace_controller_cores(
+    struct ivp_environment *env, ivp_sim_ctrl_t *c,
+    const ivp_pvec_t *previous_cores)
+{
+    if (!previous_cores) return false;
+    return ctrl_commit_controller_cores(env, c, previous_cores);
 }

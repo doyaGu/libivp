@@ -1385,13 +1385,26 @@ static bool slot_ctrl_refresh_dependent(ivp_environment_t *env,
         }
 
         if (!same_cores) {
-            if (ivp_pvec_len(&slot->controlled_cores) > 0) {
-                ivp_ctrl_mgr_remove_controller_from_environment(
-                    env, &slot->base, true);
-            }
-            ivp_pvec_clear(&slot->controlled_cores);
+            ivp_pvec_t previous_cores = slot->controlled_cores;
             slot->controlled_cores = cores;
             ivp_pvec_init_with_allocator(&cores, env->allocator);
+            if (slot->mode == IVP_CONTROLLER_DEPENDENT &&
+                !ivp_ctrl_mgr_replace_controller_cores(
+                    env, &slot->base, &previous_cores)) {
+                ivp_pvec_clear(&slot->controlled_cores);
+                slot->controlled_cores = previous_cores;
+                if (new_objects) {
+                    ivp_free(env->allocator, new_objects,
+                             (size_t)n * sizeof(*new_objects));
+                }
+                if (new_handles) {
+                    ivp_free(env->allocator, new_handles,
+                             (size_t)n * sizeof(*new_handles));
+                }
+                ivp_pvec_clear(&cores);
+                return false;
+            }
+            ivp_pvec_clear(&previous_cores);
         }
         if (slot->dispatch_handles) {
             ivp_free(env->allocator, slot->dispatch_handles,
@@ -1406,13 +1419,6 @@ static bool slot_ctrl_refresh_dependent(ivp_environment_t *env,
         slot->dispatch_handles = new_handles;
         slot->dispatch_objects = new_objects;
         slot->dispatch_count = n;
-        if (!same_cores && ivp_pvec_len(&slot->controlled_cores) > 0) {
-            if (!ivp_ctrl_mgr_announce_controller_to_environment(
-                    env, &slot->base)) {
-                ivp_pvec_clear(&cores);
-                return false;
-            }
-        }
     }
     ivp_pvec_clear(&cores);
     return true;

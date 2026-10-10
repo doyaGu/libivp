@@ -152,6 +152,9 @@ void ivp_sim_unit_sim_unit_debug_out(ivp_sim_unit_t *su);
 
 /* IVP_Controller_Manager */
 bool ivp_ctrl_mgr_announce_controller_to_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c);
+bool ivp_ctrl_mgr_replace_controller_cores(struct ivp_environment *env,
+                                           ivp_sim_ctrl_t *c,
+                                           const ivp_pvec_t *previous_cores);
 void ivp_ctrl_mgr_remove_controller_from_environment(struct ivp_environment *env, ivp_sim_ctrl_t *c, bool silently);
 void ivp_ctrl_mgr_ensure_controller_in_simulation(struct ivp_environment *env, ivp_sim_ctrl_t *c);
 bool ivp_ctrl_mgr_add_controller_to_core(ivp_sim_ctrl_t *c, ivp_core_t *core);
