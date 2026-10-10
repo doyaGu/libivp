@@ -8,6 +8,9 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
+option(IVP_CANONICAL_INTERNAL_STATE
+       "Use stable internal ordering and history-independent scratch state"
+       ON)
 option(IVP_ENABLE_ASSERTS "Enable IVP_ASSERT in Release builds" OFF)
 option(IVP_CONTAINER_DEBUG "Enable container debug checks (iterator, bounds, canaries)" OFF)
 option(IVP_ENABLE_STATS "Enable runtime statistics counters" OFF)
@@ -339,6 +342,8 @@ target_include_directories(ivp
 )
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
+target_compile_definitions(ivp PRIVATE
+        IVP_CANONICAL_INTERNAL_STATE=$<BOOL:${IVP_CANONICAL_INTERNAL_STATE}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
     target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)
@@ -595,9 +600,11 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_internal_parallel tests/test_internal_parallel.c)
     target_include_directories(test_internal_parallel PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
-    target_include_directories(test_internal_state_stability PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if (IVP_CANONICAL_INTERNAL_STATE)
+        ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
+        target_include_directories(test_internal_state_stability PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    endif ()
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
                 IVP_BENCHMARK_DIAGNOSTICS)
@@ -743,7 +750,6 @@ if (IVP_BUILD_TESTS)
             test_dynamics test_solver test_utility test_lvec
             test_controllers test_builders test_qhull_reentrant test_parallel_worlds
             test_internal_parallel
-            test_internal_state_stability
             test_convex_layout test_anomaly test_object_lifecycle
             test_containers_ext test_math_ext test_collision_ext test_collision_diff test_events test_diagnostics test_env_services
             test_active_value_ext test_collision_filter test_bvh_bottomup
@@ -752,6 +758,9 @@ if (IVP_BUILD_TESTS)
             test_controller_active test_controller_sets test_controller_factory
             test_content_pipeline
     )
+    if (IVP_CANONICAL_INTERNAL_STATE)
+        list(APPEND IVP_UNIT_TESTS test_internal_state_stability)
+    endif ()
     foreach (T ${IVP_UNIT_TESTS})
         set_tests_properties(${T} PROPERTIES LABELS "unit")
     endforeach ()

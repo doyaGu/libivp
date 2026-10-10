@@ -199,12 +199,6 @@ struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env)
     return &env->pl->short_term_mem;
 }
 
-bool ivp_env_uses_canonical_internal_state(
-    const struct ivp_environment *env)
-{
-    return env && env->pl && env->pl->canonical_internal_state;
-}
-
 static uint64_t env_take_sequence(uint64_t *next_sequence)
 {
     if (*next_sequence == 0u) *next_sequence = 1u;
@@ -217,7 +211,7 @@ void ivp_env_register_sim_controller(
     struct ivp_environment *env, struct ivp_sim_ctrl *controller)
 {
     if (!env || !env->pl || !controller ||
-        !env->pl->canonical_internal_state ||
+        !ivp_env_uses_canonical_internal_state(env) ||
         controller->registration_sequence != 0u) {
         return;
     }
@@ -227,7 +221,8 @@ void ivp_env_register_sim_controller(
 
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 {
-    if (!env || !env->pl || !env->pl->canonical_internal_state) {
+    if (!env || !env->pl ||
+        !ivp_env_uses_canonical_internal_state(env)) {
         return 0u;
     }
     return env_take_sequence(&env->pl->next_contact_sequence);
@@ -1931,7 +1926,6 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     cfg->initial_event_listener_capacity = IVP_EVENT_LISTENERS_INIT_CAPACITY;
     cfg->sim_unit_count = IVP_SIM_UNIT_COUNT_DEFAULT;
     cfg->parallel_worker_count = IVP_PARALLEL_WORKER_COUNT_DEFAULT;
-    cfg->canonical_internal_state = false;
     ivp_anomaly_config_init(&cfg->anomaly_config);
     cfg->collision_filter = ivp_collision_filter_allow_all();
     cfg->ccd_enabled = false;
@@ -2291,8 +2285,6 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     pl->parallel_worker_count = cfg.parallel_worker_count > 1
                                     ? cfg.parallel_worker_count
                                     : 1;
-    pl->canonical_internal_state =
-        cfg.canonical_internal_state;
     if (pl->parallel_worker_count > 1) {
         pl->task_pool = ivp_task_pool_create(pl->parallel_worker_count,
                                              env->allocator);
@@ -2338,14 +2330,16 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         return NULL;
     }
     ivp_u_memory_set_clear_on_allocate(
-        &pl->sim_unit_mem.arena, pl->canonical_internal_state);
+        &pl->sim_unit_mem.arena,
+        ivp_env_uses_canonical_internal_state(env));
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
         return NULL;
     }
     ivp_u_memory_set_clear_on_allocate(
-        &pl->short_term_mem, pl->canonical_internal_state);
+        &pl->short_term_mem,
+        ivp_env_uses_canonical_internal_state(env));
     pl->state = IVP_ES_AT;
     /* standard gravity controller + set_gravity */
     pl->gravity_ctrl.vt = &gravity_vt;

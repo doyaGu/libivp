@@ -65,7 +65,6 @@ static ivp_environment_t *strong_environment_create(int worker_count)
 {
     ivp_environment_config_t config;
     ivp_environment_config_init(&config);
-    config.canonical_internal_state = true;
     config.parallel_worker_count = worker_count;
     config.disable_performance_counter = true;
     ivp_vec3r_set_zero(&config.gravity);
@@ -76,7 +75,6 @@ static ivp_environment_t *strong_gravity_environment_create(void)
 {
     ivp_environment_config_t config;
     ivp_environment_config_init(&config);
-    config.canonical_internal_state = true;
     config.disable_performance_counter = true;
     return ivp_environment_create(&config);
 }

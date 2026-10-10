@@ -109,8 +109,15 @@ void  ivp_env_sim_mem_end(struct ivp_environment *env);
 
 /* IVP_Environment::get_memory_manager() / short_term_mem */
 struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env);
-bool ivp_env_uses_canonical_internal_state(
-    const struct ivp_environment *env);
+#ifndef IVP_CANONICAL_INTERNAL_STATE
+#define IVP_CANONICAL_INTERNAL_STATE 1
+#endif
+static inline bool ivp_env_uses_canonical_internal_state(
+    const struct ivp_environment *env)
+{
+    (void)env;
+    return IVP_CANONICAL_INTERNAL_STATE != 0;
+}
 void ivp_env_register_sim_controller(struct ivp_environment *env,
                                      struct ivp_sim_ctrl *controller);
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env);
