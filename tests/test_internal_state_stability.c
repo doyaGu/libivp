@@ -3,10 +3,12 @@
 
 #include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_sim_internal.h"
+#include "solver/ivp_friction_internal.h"
 
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/dynamics/ivp_environment.h>
+#include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/geometry/ivp_surman.h>
 
@@ -26,13 +28,16 @@ enum strong_perturbation {
     STRONG_PERTURB_OV_TREE = 1u << 1,
     STRONG_PERTURB_SIM_UNITS = 1u << 2,
     STRONG_PERTURB_ARENAS = 1u << 3,
-    STRONG_PERTURB_ALL = (1u << 4) - 1u
+    STRONG_PERTURB_CONTACT_LISTS = 1u << 4,
+    STRONG_PERTURB_ALL = (1u << 5) - 1u
 };
 
 typedef struct strong_scene {
     ivp_environment_t *environment;
     ivp_object_t *objects[STRONG_OBJECT_COUNT];
     uintptr_t client_tokens[STRONG_OBJECT_COUNT];
+    int controller_operations[2];
+    ivp_controller_handle_t controller_handles[2];
 } strong_scene_t;
 
 #define STRONG_CUBE_COUNT 16
@@ -47,6 +52,14 @@ typedef struct strong_cube_scene {
     ivp_surman_polygon_t cube_surmans[STRONG_CUBE_COUNT];
     bool shared_surface;
 } strong_cube_scene_t;
+
+#define STRONG_COMPOUND_PART_COUNT 3
+
+typedef struct strong_compound_scene {
+    ivp_environment_t *environment;
+    ivp_object_t *ground;
+    ivp_object_t *parts[STRONG_COMPOUND_PART_COUNT];
+} strong_compound_scene_t;
 
 static ivp_environment_t *strong_environment_create(int worker_count)
 {
@@ -103,12 +116,135 @@ static void reverse_sim_unit_slot(ivp_sim_unit_t **head)
     *head = new_head;
 }
 
+static void scramble_sim_unit_contents(ivp_sim_unit_t *unit)
+{
+    reverse_pvec(&unit->sim_unit_cores);
+    reverse_pvec(&unit->controller_cores);
+    for (int i = 0; i < ivp_pvec_len(&unit->controller_cores); i++) {
+        ivp_su_ctrl_list_t *controller =
+            (ivp_su_ctrl_list_t *)ivp_pvec_at(&unit->controller_cores, i);
+        reverse_pvec(&controller->cores_controlled_by);
+    }
+    for (int i = 0; i < ivp_pvec_len(&unit->sim_unit_cores); i++) {
+        ivp_core_t *core =
+            (ivp_core_t *)ivp_pvec_at(&unit->sim_unit_cores, i);
+        reverse_pvec(&core->controllers_of_core);
+    }
+}
+
+static void scramble_sim_unit_slot_contents(ivp_sim_unit_t *head)
+{
+    for (ivp_sim_unit_t *unit = head; unit;
+         unit = unit->next_sim_unit) {
+        scramble_sim_unit_contents(unit);
+    }
+}
+
 static void scramble_sim_unit_lists(ivp_environment_t *environment)
 {
     ivp_sim_units_manager_t *manager =
         &environment->pl->sim_units_manager;
     reverse_sim_unit_slot(&manager->sim_units_slot0);
     reverse_sim_unit_slot(&manager->still_slot);
+    scramble_sim_unit_slot_contents(manager->sim_units_slot0);
+    scramble_sim_unit_slot_contents(manager->still_slot);
+}
+
+static void reverse_contact_list(ivp_fr_system_t *system)
+{
+    ivp_contact_pt_t *contact = system->first_friction_dist;
+    ivp_contact_pt_t *new_head = NULL;
+    while (contact) {
+        ivp_contact_pt_t *next = contact->next_dist_in_friction;
+        contact->next_dist_in_friction = contact->prev_dist_in_friction;
+        contact->prev_dist_in_friction = next;
+        new_head = contact;
+        contact = next;
+    }
+    system->first_friction_dist = new_head;
+}
+
+static void scramble_contact_lists(ivp_object_t *const *objects,
+                                   int object_count)
+{
+    ivp_fr_system_t *seen[128];
+    int seen_count = 0;
+    for (int i = 0; i < object_count; i++) {
+        for (ivp_fr_synapse_t *synapse = objects[i]->fr_synapses;
+             synapse; synapse = synapse->next) {
+            ivp_fr_system_t *system =
+                synapse->contact_point->l_friction_system;
+            bool already_seen = false;
+            for (int j = 0; j < seen_count; j++) {
+                if (seen[j] == system) {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if (already_seen) continue;
+            IVP_ASSERT(seen_count <
+                       (int)(sizeof(seen) / sizeof(seen[0])));
+            if (seen_count >=
+                (int)(sizeof(seen) / sizeof(seen[0]))) {
+                return;
+            }
+            seen[seen_count++] = system;
+            reverse_contact_list(system);
+            for (int j = 0;
+                 j < ivp_pvec_len(&system->fr_pairs_of_objs);
+                 j++) {
+                ivp_fr_core_pair_t *pair =
+                    (ivp_fr_core_pair_t *)ivp_pvec_at(
+                        &system->fr_pairs_of_objs, j);
+                reverse_pvec(&pair->fr_dists);
+            }
+            for (int j = 0;
+                 j < ivp_pvec_len(&system->cores_of_friction_system);
+                 j++) {
+                ivp_core_t *core =
+                    (ivp_core_t *)ivp_pvec_at(
+                        &system->cores_of_friction_system, j);
+                ivp_fr_info_for_core_t *info =
+                    ivp_core_get_friction_info(core, system);
+                if (info) reverse_pvec(&info->friction_springs);
+            }
+            reverse_pvec(&system->cores_of_friction_system);
+            reverse_pvec(&system->moveable_cores_of_friction_system);
+            reverse_pvec(&system->fr_pairs_of_objs);
+        }
+    }
+    for (int i = 0; i < object_count; i++) {
+        ivp_fr_synapse_t *synapse = objects[i]->fr_synapses;
+        ivp_fr_synapse_t *new_head = NULL;
+        while (synapse) {
+            ivp_fr_synapse_t *next = synapse->next;
+            synapse->next = synapse->prev;
+            synapse->prev = next;
+            new_head = synapse;
+            synapse = next;
+        }
+        objects[i]->fr_synapses = new_head;
+    }
+}
+
+static bool contact_lists_follow_creation_order(
+    ivp_object_t *const *objects, int object_count)
+{
+    for (int i = 0; i < object_count; i++) {
+        ivp_fr_synapse_t *previous = NULL;
+        uint64_t previous_key = 0u;
+        for (ivp_fr_synapse_t *synapse = objects[i]->fr_synapses;
+             synapse; synapse = synapse->next) {
+            uint64_t key = synapse->contact_point->creation_sequence;
+            if (synapse->prev != previous || key == 0u ||
+                (previous && previous_key >= key)) {
+                return false;
+            }
+            previous = synapse;
+            previous_key = key;
+        }
+    }
+    return true;
 }
 
 static void reset_arena_without_writing(ivp_u_memory_t *arena)
@@ -125,6 +261,26 @@ static bool poison_arena(ivp_u_memory_t *arena, size_t bytes,
     if (storage) memset(storage, value, bytes);
     ivp_u_memory_end_transaction(arena);
     return storage != NULL;
+}
+
+static void strong_ordered_controller(
+    const ivp_event_sim_t *event_sim, ivp_object_t *object, void *ctx)
+{
+    (void)event_sim;
+    int operation = *(const int *)ctx;
+    if (operation == 0) {
+        object->physical_core->speed.k[0] += IVP_REAL(0.125);
+    } else {
+        object->physical_core->speed.k[0] *= IVP_REAL(1.0009765625);
+    }
+}
+
+static void strong_noop_controller(
+    const ivp_event_sim_t *event_sim, ivp_object_t *object, void *ctx)
+{
+    (void)event_sim;
+    (void)object;
+    (void)ctx;
 }
 
 static bool strong_scene_init(strong_scene_t *scene, unsigned perturbations,
@@ -160,6 +316,22 @@ static bool strong_scene_init(strong_scene_t *scene, unsigned perturbations,
         ivp_environment_destroy_object(scene->environment,
                                        warmup_objects[i]);
     }
+    if (pool_warmup_count > 0) {
+        ivp_controller_handle_t warmup_controllers[2];
+        for (int i = 0; i < 2; i++) {
+            warmup_controllers[i] = ivp_environment_add_controller(
+                scene->environment, 1300, strong_noop_controller, NULL);
+            if (!ivp_controller_handle_is_valid(warmup_controllers[i])) {
+                return false;
+            }
+        }
+        for (int i = 0; i < 2; i++) {
+            if (!ivp_environment_remove_controller(
+                    scene->environment, warmup_controllers[i])) {
+                return false;
+            }
+        }
+    }
     object_template.start_in_simulation = true;
 
     static const double offsets[STRONG_OBJECTS_PER_ISLAND][2] = {
@@ -194,6 +366,16 @@ static bool strong_scene_init(strong_scene_t *scene, unsigned perturbations,
             scramble_ov_node(scene->environment->pl->ov_tree.root);
         }
         ivp_object_enable_collision_detection(scene->objects[i], true);
+    }
+    for (int i = 0; i < 2; i++) {
+        scene->controller_operations[i] = i;
+        scene->controller_handles[i] = ivp_environment_add_controller(
+            scene->environment, 1300, strong_ordered_controller,
+            &scene->controller_operations[i]);
+        if (!ivp_controller_handle_is_valid(
+                scene->controller_handles[i])) {
+            return false;
+        }
     }
     return true;
 }
@@ -411,6 +593,76 @@ static bool strong_cube_scenes_equal(const strong_cube_scene_t *a,
     return true;
 }
 
+static bool strong_compound_scene_init(strong_compound_scene_t *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = strong_gravity_environment_create();
+    if (!scene->environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(2.0);
+    object_template.physical_unmoveable = true;
+    object_template.mass = IVP_REAL(1000000.0);
+    ivp_vec3r_set(&object_template.position,
+                  IVP_REAL(0.0), IVP_REAL(3.0), IVP_REAL(0.0));
+    scene->ground = ivp_environment_create_object(
+        scene->environment, &object_template, NULL);
+    if (!scene->ground) return false;
+
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.55);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.material.friction = IVP_REAL(0.8);
+    object_template.material.elasticity = IVP_REAL(0.0);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+    for (int i = 0; i < STRONG_COMPOUND_PART_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(-0.9 + 0.9 * (double)i),
+                      IVP_REAL(-3.0), IVP_REAL(0.0));
+        scene->parts[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->parts[i]) return false;
+    }
+    if (!ivp_environment_merge_objects(
+            scene->environment, scene->parts,
+            STRONG_COMPOUND_PART_COUNT)) {
+        return false;
+    }
+    for (int i = 0; i < STRONG_COMPOUND_PART_COUNT; i++) {
+        ivp_object_enable_collision_detection(scene->parts[i], true);
+    }
+    ivp_object_ensure_in_simulation_now(scene->parts[0]);
+    scene->parts[0]->physical_core->speed.k[0] = IVP_REAL(0.05);
+    return true;
+}
+
+static bool strong_compound_scenes_equal(
+    const strong_compound_scene_t *a,
+    const strong_compound_scene_t *b)
+{
+    if (ivp_environment_get_time(a->environment) !=
+        ivp_environment_get_time(b->environment)) {
+        return false;
+    }
+    if (!visible_core_state_equal(a->ground->physical_core,
+                                  b->ground->physical_core)) {
+        return false;
+    }
+    for (int i = 0; i < STRONG_COMPOUND_PART_COUNT; i++) {
+        if (!visible_core_state_equal(a->parts[i]->physical_core,
+                                      b->parts[i]->physical_core) ||
+            a->parts[i]->object_movement_state !=
+                b->parts[i]->object_movement_state) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool run_perturbation(unsigned perturbations)
 {
     strong_scene_t canonical = {0};
@@ -438,6 +690,10 @@ static bool run_perturbation(unsigned perturbations)
         if (perturbations & STRONG_PERTURB_OV_TREE) {
             scramble_ov_node(perturbed.environment->pl->ov_tree.root);
         }
+        if (perturbations & STRONG_PERTURB_CONTACT_LISTS) {
+            scramble_contact_lists(perturbed.objects,
+                                   STRONG_OBJECT_COUNT);
+        }
 
         ivp_environment_simulate_one_psi(canonical.environment);
         ivp_environment_simulate_one_psi(perturbed.environment);
@@ -462,9 +718,10 @@ IVP_TEST(pool_history_does_not_change_visible_state)
     bool ok = strong_scene_init(&canonical, 0u, 0) &&
               strong_scene_init(&warmed, 0u,
                                 STRONG_POOL_WARMUP_COUNT);
-    bool handle_slots_changed = false;
+    bool object_slots_changed = false;
+    bool controller_slots_changed = false;
     for (int i = 0; ok && i < STRONG_OBJECT_COUNT; i++) {
-        handle_slots_changed = handle_slots_changed ||
+        object_slots_changed = object_slots_changed ||
             canonical.objects[i]->handle.slot !=
                 warmed.objects[i]->handle.slot;
         if (canonical.objects[i]->creation_sequence !=
@@ -472,7 +729,12 @@ IVP_TEST(pool_history_does_not_change_visible_state)
             ok = false;
         }
     }
-    ok = ok && handle_slots_changed;
+    for (int i = 0; ok && i < 2; i++) {
+        controller_slots_changed = controller_slots_changed ||
+            canonical.controller_handles[i].slot !=
+                warmed.controller_handles[i].slot;
+    }
+    ok = ok && object_slots_changed && controller_slots_changed;
     for (int step = 0; ok && step < 32; step++) {
         ivp_environment_simulate_one_psi(canonical.environment);
         ivp_environment_simulate_one_psi(warmed.environment);
@@ -606,6 +868,11 @@ IVP_TEST(client_pointer_order_does_not_change_visible_state)
     IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_CLIENT_POINTERS));
 }
 
+IVP_TEST(contact_list_order_does_not_change_visible_state)
+{
+    IVP_ASSERT_TRUE(run_perturbation(STRONG_PERTURB_CONTACT_LISTS));
+}
+
 IVP_TEST(combined_internal_perturbations_do_not_change_visible_state)
 {
     bool ok = run_perturbation(STRONG_PERTURB_ALL);
@@ -633,15 +900,85 @@ IVP_TEST(relocated_and_shared_geometry_do_not_change_visible_state)
     IVP_ASSERT_TRUE(ok);
 }
 
+IVP_TEST(contact_stack_order_does_not_change_visible_state)
+{
+    strong_cube_scene_t canonical = {0};
+    strong_cube_scene_t perturbed = {0};
+    bool ok = strong_cube_scene_init(&canonical, true) &&
+              strong_cube_scene_init(&perturbed, true);
+    bool reversed_multiple_contacts = false;
+    for (int step = 0; ok && step < 180; step++) {
+        for (int i = 0; i < STRONG_CUBE_OBJECT_COUNT; i++) {
+            for (ivp_fr_synapse_t *synapse =
+                     perturbed.objects[i]->fr_synapses;
+                 synapse; synapse = synapse->next) {
+                ivp_fr_system_t *system =
+                    synapse->contact_point->l_friction_system;
+                if (system->friction_dist_number > 1) {
+                    reversed_multiple_contacts = true;
+                    break;
+                }
+            }
+            if (reversed_multiple_contacts) break;
+        }
+        scramble_contact_lists(perturbed.objects,
+                               STRONG_CUBE_OBJECT_COUNT);
+        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(perturbed.environment);
+        if (!contact_lists_follow_creation_order(
+                perturbed.objects, STRONG_CUBE_OBJECT_COUNT)) {
+            fprintf(stderr,
+                    "contact stack order was not restored at step %d\n",
+                    step);
+            ok = false;
+        }
+        if (!strong_cube_scenes_equal(&canonical, &perturbed)) {
+            fprintf(stderr,
+                    "contact stack order changed visible state at step %d\n",
+                    step);
+            ok = false;
+        }
+    }
+    ok = ok && reversed_multiple_contacts;
+    strong_cube_scene_destroy(&perturbed);
+    strong_cube_scene_destroy(&canonical);
+    IVP_ASSERT_TRUE(ok);
+}
+
+IVP_TEST(compound_object_order_does_not_change_visible_state)
+{
+    strong_compound_scene_t canonical = {0};
+    strong_compound_scene_t perturbed = {0};
+    bool ok = strong_compound_scene_init(&canonical) &&
+              strong_compound_scene_init(&perturbed);
+    for (int step = 0; ok && step < 180; step++) {
+        reverse_pvec(&perturbed.parts[0]->physical_core->objects);
+        ivp_environment_simulate_one_psi(canonical.environment);
+        ivp_environment_simulate_one_psi(perturbed.environment);
+        if (!strong_compound_scenes_equal(&canonical, &perturbed)) {
+            fprintf(stderr,
+                    "compound object order changed visible state at step %d\n",
+                    step);
+            ok = false;
+        }
+    }
+    ivp_environment_destroy(perturbed.environment);
+    ivp_environment_destroy(canonical.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
     IVP_REGISTER(sim_unit_list_order_does_not_change_visible_state);
     IVP_REGISTER(ov_tree_order_does_not_change_visible_state);
     IVP_REGISTER(client_pointer_order_does_not_change_visible_state);
+    IVP_REGISTER(contact_list_order_does_not_change_visible_state);
     IVP_REGISTER(combined_internal_perturbations_do_not_change_visible_state);
     IVP_REGISTER(pool_history_does_not_change_visible_state);
     IVP_REGISTER(worker_count_does_not_change_canonical_state);
     IVP_REGISTER(relocated_and_shared_geometry_do_not_change_visible_state);
+    IVP_REGISTER(contact_stack_order_does_not_change_visible_state);
+    IVP_REGISTER(compound_object_order_does_not_change_visible_state);
     IVP_RUN_ALL();
 }
