@@ -11,7 +11,6 @@
 #include <ivp/base/ivp_time.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
-#include <ivp/containers/ivp_elem_typeinfo.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,18 +33,12 @@ typedef struct ivp_minheap {
     int                 cap;
     const ivp_allocator_t *alloc;
     ivp_heap_index_cb_t index_cb;   /* may be NULL */
-    const ivp_elem_typeinfo_t *elem_type;
-    void                *elem_ctx;
 } ivp_minheap_t;
 
 /* ── Create / Destroy ───────────────────────────────────────────────────── */
 
 ivp_result_t ivp_minheap_init(ivp_minheap_t *heap, const ivp_allocator_t *alloc,
                                int initial_capacity, ivp_heap_index_cb_t cb);
-ivp_result_t ivp_minheap_init_ex(ivp_minheap_t *heap, const ivp_allocator_t *alloc,
-                                  int initial_capacity, ivp_heap_index_cb_t cb,
-                                  const ivp_elem_typeinfo_t *elem_type,
-                                  void *elem_ctx);
 void         ivp_minheap_destroy(ivp_minheap_t *heap);
 
 /* ── Operations ─────────────────────────────────────────────────────────── */
@@ -58,7 +51,8 @@ static inline ivp_heap_entry_t *ivp_minheap_peek(const ivp_minheap_t *heap) {
     return heap->len > 0 ? (ivp_heap_entry_t *)&heap->data[0] : NULL;
 }
 
-/* Pop minimum element. Stores in *out_entry if non-NULL. Returns IVP_ERR_CAPACITY if empty. */
+/* Pop minimum element. Stores in *out_entry if non-NULL.
+ * Returns IVP_ERR_INVALID_STATE if empty. */
 ivp_result_t ivp_minheap_pop(ivp_minheap_t *heap, ivp_heap_entry_t *out_entry);
 
 /* Update the key of element at given index. Re-heapifies. */

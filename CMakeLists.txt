@@ -131,8 +131,6 @@ set(IVP_MATH_SOURCES
 )
 
 set(IVP_CONTAINER_SOURCES
-        src/containers/ivp_elem_typeinfo.c
-        src/containers/ivp_array.c
         src/containers/ivp_hashmap.c
         src/containers/ivp_minheap.c
         src/containers/ivp_vhash.c

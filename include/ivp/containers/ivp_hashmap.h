@@ -1,6 +1,6 @@
 /* ivp_hashmap.h — Open-addressing hash map for IVP C17
  *
- * Power-of-2 sized. Robin Hood linear probing. Auto-expands at 50% load.
+ * Power-of-2 sized. Linear probing. Auto-expands at 50% load.
  * NOT to be used for iteration order in solver logic.
  */
 #ifndef IVP_HASHMAP_H
@@ -9,7 +9,6 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
-#include <ivp/containers/ivp_elem_typeinfo.h>
 #include <ivp/utility/ivp_hash.h>
 
 #ifdef __cplusplus
@@ -38,8 +37,6 @@ typedef struct ivp_hashmap {
     ivp_hash_fn_t        hash_fn;
     ivp_eq_fn_t          eq_fn;
     const ivp_allocator_t *alloc;
-    const ivp_elem_typeinfo_t *elem_type;
-    void                *elem_ctx;
 } ivp_hashmap_t;
 
 /* ── Create / Destroy ───────────────────────────────────────────────────── */
@@ -49,12 +46,6 @@ ivp_result_t ivp_hashmap_init(ivp_hashmap_t *map, const ivp_allocator_t *alloc,
                                int initial_capacity,
                                ivp_hash_fn_t hash_fn, ivp_eq_fn_t eq_fn,
                                size_t key_size);
-ivp_result_t ivp_hashmap_init_ex(ivp_hashmap_t *map, const ivp_allocator_t *alloc,
-                                  int initial_capacity,
-                                  ivp_hash_fn_t hash_fn, ivp_eq_fn_t eq_fn,
-                                  size_t key_size,
-                                  const ivp_elem_typeinfo_t *elem_type,
-                                  void *elem_ctx);
 void         ivp_hashmap_destroy(ivp_hashmap_t *map);
 
 /* ── Operations ─────────────────────────────────────────────────────────── */

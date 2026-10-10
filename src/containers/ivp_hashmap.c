@@ -1,6 +1,5 @@
 /* ivp_hashmap.c — Open-addressing hash map implementation */
 #include <ivp/containers/ivp_hashmap.h>
-#include <ivp/containers/ivp_lifecycle_helpers.h>
 #include <ivp/base/ivp_assert.h>
 #include <limits.h>
 #include <string.h>
@@ -15,8 +14,8 @@ static inline uint32_t fix_hash(uint32_t h) {
 }
 
 static ivp_result_t hashmap_rehash(ivp_hashmap_t *map, int new_cap);
-static ivp_result_t hashmap_put_internal(ivp_hashmap_t *map, const void *key, void *value,
-                                          bool fire_init, int *out_pos);
+static ivp_result_t hashmap_put_internal(ivp_hashmap_t *map,
+                                         const void *key, void *value);
 
 /* ── API implementation ─────────────────────────────────────────────────── */
 
@@ -24,28 +23,6 @@ ivp_result_t ivp_hashmap_init(ivp_hashmap_t *map, const ivp_allocator_t *alloc,
                                int initial_capacity,
                                ivp_hash_fn_t hash_fn, ivp_eq_fn_t eq_fn,
                                size_t key_size) {
-    return ivp_hashmap_init_ex(map, alloc, initial_capacity, hash_fn, eq_fn, key_size,
-                               &IVP_ELEM_TYPEINFO_PTR, NULL);
-}
-
-ivp_result_t ivp_hashmap_reserve(ivp_hashmap_t *map, int min_count) {
-    if (!map) return IVP_ERR_INVALID_ARG;
-    if (min_count <= 0) return IVP_OK;
-    int needed_cap = 16;
-    while ((needed_cap / 2) < min_count) {
-        if (needed_cap > INT_MAX / 2) return IVP_ERR_CAPACITY_EXCEEDED;
-        needed_cap *= 2;
-    }
-    if (needed_cap <= map->capacity) return IVP_OK;
-    return hashmap_rehash(map, needed_cap);
-}
-
-ivp_result_t ivp_hashmap_init_ex(ivp_hashmap_t *map, const ivp_allocator_t *alloc,
-                                  int initial_capacity,
-                                  ivp_hash_fn_t hash_fn, ivp_eq_fn_t eq_fn,
-                                  size_t key_size,
-                                  const ivp_elem_typeinfo_t *elem_type,
-                                  void *elem_ctx) {
     if (!map) return IVP_ERR_INVALID_ARG;
     if (!hash_fn || !eq_fn) return IVP_ERR_INVALID_ARG;
     if (!alloc) alloc = ivp_default_allocator();
@@ -73,19 +50,24 @@ ivp_result_t ivp_hashmap_init_ex(ivp_hashmap_t *map, const ivp_allocator_t *allo
     map->hash_fn  = hash_fn;
     map->eq_fn    = eq_fn;
     map->alloc    = alloc;
-    map->elem_type = elem_type;
-    map->elem_ctx = elem_ctx;
 
     return IVP_OK;
 }
 
+ivp_result_t ivp_hashmap_reserve(ivp_hashmap_t *map, int min_count) {
+    if (!map) return IVP_ERR_INVALID_ARG;
+    if (min_count <= 0) return IVP_OK;
+    int needed_cap = 16;
+    while ((needed_cap / 2) < min_count) {
+        if (needed_cap > INT_MAX / 2) return IVP_ERR_CAPACITY_EXCEEDED;
+        needed_cap *= 2;
+    }
+    if (needed_cap <= map->capacity) return IVP_OK;
+    return hashmap_rehash(map, needed_cap);
+}
+
 void ivp_hashmap_destroy(ivp_hashmap_t *map) {
     if (!map) return;
-    for (int i = 0; i < map->capacity; i++) {
-        if (map->entries[i].hash != EMPTY_HASH) {
-            ivp_lifecycle_dispose(map->elem_type, map->elem_ctx, map->entries[i].value);
-        }
-    }
     if (map->entries) {
         ivp_free(map->alloc, map->entries,
                  (size_t)map->capacity * sizeof(ivp_hashmap_entry_t));
@@ -121,8 +103,6 @@ static ivp_result_t hashmap_rehash(ivp_hashmap_t *map, int new_cap) {
             pos = (pos + 1) & new_mask;
         }
         new_entries[pos] = old[i];
-        ivp_lifecycle_copy(map->elem_type, map->elem_ctx, old[i].value, i, pos);
-        ivp_lifecycle_move(map->elem_type, map->elem_ctx, old[i].value, i, pos);
     }
 
     ivp_free(map->alloc, old, (size_t)old_cap * sizeof(ivp_hashmap_entry_t));
@@ -133,8 +113,8 @@ static ivp_result_t hashmap_rehash(ivp_hashmap_t *map, int new_cap) {
     return IVP_OK;
 }
 
-static ivp_result_t hashmap_put_internal(ivp_hashmap_t *map, const void *key, void *value,
-                                          bool fire_init, int *out_pos) {
+static ivp_result_t hashmap_put_internal(ivp_hashmap_t *map,
+                                         const void *key, void *value) {
     uint32_t h = fix_hash(map->hash_fn(key, map->key_size));
     int pos = (int)(h & (uint32_t)map->mask);
 
@@ -144,22 +124,11 @@ static ivp_result_t hashmap_put_internal(ivp_hashmap_t *map, const void *key, vo
             map->entries[pos].key   = key;
             map->entries[pos].value = value;
             map->count++;
-            if (fire_init) {
-                ivp_lifecycle_init(map->elem_type, map->elem_ctx, value);
-            }
-            if (out_pos) *out_pos = pos;
             return IVP_OK;
         }
         if (map->entries[pos].hash == h &&
             map->eq_fn(map->entries[pos].key, key, map->key_size)) {
-            if (map->entries[pos].value != value) {
-                ivp_lifecycle_dispose(map->elem_type, map->elem_ctx, map->entries[pos].value);
-                map->entries[pos].value = value;
-                if (fire_init) {
-                    ivp_lifecycle_init(map->elem_type, map->elem_ctx, value);
-                }
-            }
-            if (out_pos) *out_pos = pos;
+            map->entries[pos].value = value;
             return IVP_OK;
         }
         pos = (pos + 1) & map->mask;
@@ -175,7 +144,7 @@ ivp_result_t ivp_hashmap_put(ivp_hashmap_t *map, const void *key, void *value) {
         if (r != IVP_OK) return r;
     }
 
-    return hashmap_put_internal(map, key, value, true, NULL);
+    return hashmap_put_internal(map, key, value);
 }
 
 void *ivp_hashmap_get(const ivp_hashmap_t *map, const void *key) {
@@ -212,14 +181,11 @@ void *ivp_hashmap_remove(ivp_hashmap_t *map, const void *key) {
             int next = (pos + 1) & map->mask;
             for (int s = 0; s < map->capacity && map->entries[next].hash != EMPTY_HASH; s++) {
                 ivp_hashmap_entry_t tmp = map->entries[next];
-                int dst = -1;
                 map->entries[next].hash = EMPTY_HASH;
                 map->entries[next].key  = NULL;
                 map->entries[next].value = NULL;
                 map->count--;
-                hashmap_put_internal(map, tmp.key, tmp.value, false, &dst);
-                ivp_lifecycle_copy(map->elem_type, map->elem_ctx, tmp.value, next, dst);
-                ivp_lifecycle_move(map->elem_type, map->elem_ctx, tmp.value, next, dst);
+                (void)hashmap_put_internal(map, tmp.key, tmp.value);
                 next = (next + 1) & map->mask;
             }
 
@@ -235,12 +201,6 @@ bool ivp_hashmap_contains(const ivp_hashmap_t *map, const void *key) {
 }
 
 void ivp_hashmap_clear(ivp_hashmap_t *map) {
-    for (int i = 0; i < map->capacity; i++) {
-        if (map->entries[i].hash != EMPTY_HASH) {
-            ivp_lifecycle_reset(map->elem_type, map->elem_ctx, map->entries[i].value);
-            ivp_lifecycle_dispose(map->elem_type, map->elem_ctx, map->entries[i].value);
-        }
-    }
     memset(map->entries, 0, (size_t)map->capacity * sizeof(ivp_hashmap_entry_t));
     map->count = 0;
 }
