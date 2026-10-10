@@ -360,7 +360,7 @@ static inline void mms_sort_synapses(mms_t *m, ivp_md_synapse_t *a, ivp_md_synap
 /* IVP_LOOP_LIST_SIZE variant of check_loop_hash (the IVP_Hash variant with
  * its IVP_MINDIST_BEHAVIOUR_DEBUG "start loop check" trace,
  * ivp_mindist_minimize.cxx:53, is not compiled by the reference). */
-static intptr_t mms_canonical_feature_key(
+static intptr_t mms_feature_order_key(
     int status, const ivp_compact_edge_t *edge,
     const ivp_compact_ledge_t *ledge)
 {
@@ -385,15 +385,16 @@ static bool mms_check_loop_hash(mms_t *m,
     IVP_ASSERT(s0 < 4);   /* ivp_mindist_minimize.cxx:94-95: i_s0 / i_s1 */
     IVP_ASSERT(s1 < 4);
     if (m->loop_hash_size >= IVP_LOOP_LIST_SIZE) return true;
-    const bool canonical = ivp_build_uses_canonical_internal_state();
+    const bool use_reference_order =
+        ivp_build_uses_reference_internal_state();
     intptr_t x0 = (intptr_t)e0 | s0;
     intptr_t x1 = (intptr_t)e1 | s1;
-    if (canonical) {
-        x0 = mms_canonical_feature_key(s0, e0, ledge0);
-        x1 = mms_canonical_feature_key(s1, e1, ledge1);
+    if (!use_reference_order) {
+        x0 = mms_feature_order_key(s0, e0, ledge0);
+        x1 = mms_feature_order_key(s1, e1, ledge1);
     }
     bool swap;
-    if (canonical) {
+    if (!use_reference_order) {
         const uint64_t object_key0 =
             ivp_object_order_key(object0);
         const uint64_t object_key1 =

@@ -110,12 +110,12 @@ void  ivp_env_sim_mem_end(struct ivp_environment *env);
 
 /* IVP_Environment::get_memory_manager() / short_term_mem */
 struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env);
-#ifndef IVP_CANONICAL_INTERNAL_STATE
-#error "IVP_CANONICAL_INTERNAL_STATE must be supplied by the build"
+#ifndef IVP_REFERENCE_INTERNAL_STATE
+#error "IVP_REFERENCE_INTERNAL_STATE must be supplied by the build"
 #endif
-static inline bool ivp_build_uses_canonical_internal_state(void)
+static inline bool ivp_build_uses_reference_internal_state(void)
 {
-    return IVP_CANONICAL_INTERNAL_STATE != 0;
+    return IVP_REFERENCE_INTERNAL_STATE != 0;
 }
 void ivp_env_register_sim_controller(struct ivp_environment *env,
                                      struct ivp_sim_ctrl *controller);

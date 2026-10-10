@@ -36,11 +36,11 @@ parity_check_ref_src
 FAIL=0
 EXPECTED_MAINLINE="$HERE/mainline_expected_differences.txt"
 
-build_lib() { # <dir> <build type> <canonical state> <qhull mode>
+build_lib() { # <dir> <build type> <reference internals> <qhull mode>
   mkdir -p "$1"
   cmake -B "$1" -S "$PARITY_REPO" -DCMAKE_BUILD_TYPE="$2" \
     -DIVP_ENABLE_SCENARIO_TESTS=ON \
-    -DIVP_CANONICAL_INTERNAL_STATE="$3" \
+    -DIVP_REFERENCE_INTERNAL_STATE="$3" \
     -DIVP_QHULL_MODE="$4" > "$1.cmake.log" &&
     cmake --build "$1" --target test_scenarios -j"$IVP_JOBS" > "$1.build.log" ||
     parity_die "libivp $2/$4 build failed (see $1.build.log)"
@@ -56,8 +56,8 @@ report_comparison() { # <result file> <compare exit code>
 
 if [ $DO_REL = 1 ]; then
   "$HERE/build_reference.sh" release > /dev/null || parity_die "reference release build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release OFF REFERENCE
-  build_lib "$IVP_PARITY_DIR/lib_mainline_release" Release ON REENTRANT
+  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release ON REFERENCE
+  build_lib "$IVP_PARITY_DIR/lib_mainline_release" Release OFF REENTRANT
   REF_RUNNER="$(parity_ref_dir release)/runner/legacy_runner"
   echo "=== release: reference-development policy ==="
   rm -rf "$IVP_PARITY_DIR/out/ref_release" \
@@ -105,8 +105,8 @@ fi
 
 if [ $DO_DBG = 1 ]; then
   "$HERE/build_reference.sh" debug > /dev/null || parity_die "reference debug build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug OFF REFERENCE
-  build_lib "$IVP_PARITY_DIR/lib_mainline_debug" Debug ON REENTRANT
+  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug ON REFERENCE
+  build_lib "$IVP_PARITY_DIR/lib_mainline_debug" Debug OFF REENTRANT
   echo "=== debug: reference-development policy ==="
   rm -rf "$IVP_PARITY_DIR/out/ref_debug" \
          "$IVP_PARITY_DIR/out/lib_reference_debug" \

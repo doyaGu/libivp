@@ -240,7 +240,7 @@ void ivp_env_register_sim_controller(
     struct ivp_environment *env, struct ivp_sim_ctrl *controller)
 {
     if (!env || !env->pl || !controller ||
-        !ivp_build_uses_canonical_internal_state() ||
+        ivp_build_uses_reference_internal_state() ||
         controller->registration_sequence != 0u) {
         return;
     }
@@ -251,7 +251,7 @@ void ivp_env_register_sim_controller(
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 {
     if (!env || !env->pl ||
-        !ivp_build_uses_canonical_internal_state()) {
+        ivp_build_uses_reference_internal_state()) {
         return 0u;
     }
     return env_take_sequence(&env->pl->next_contact_sequence);
@@ -259,7 +259,7 @@ uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 
 uint64_t ivp_env_register_cluster(struct ivp_environment *env)
 {
-#if IVP_CANONICAL_INTERNAL_STATE
+#if !IVP_REFERENCE_INTERNAL_STATE
     if (!env || !env->pl) return 0u;
     uint64_t sequence = env_take_sequence(&env->pl->next_object_sequence);
     if (sequence != 0u) env->pl->live_cluster_count++;
@@ -273,7 +273,7 @@ uint64_t ivp_env_register_cluster(struct ivp_environment *env)
 void ivp_env_unregister_cluster(struct ivp_environment *env,
                                 uint64_t creation_sequence)
 {
-#if IVP_CANONICAL_INTERNAL_STATE
+#if !IVP_REFERENCE_INTERNAL_STATE
     if (!env || !env->pl || creation_sequence == 0u) return;
     IVP_ASSERT(env->pl->live_cluster_count > 0);
     if (env->pl->live_cluster_count > 0) {
@@ -607,7 +607,7 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
     ivp_env_pipeline_t *pl = env->pl;
     if (!um->provide_settings) return;
     if (env_number_of_real_objects(env) < um->num_objects_in_environment_threshold_0) return;
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         ivp_cluster_restore_child_order(&pl->root_cluster);
     }
     /* int(int * IVP_FLOAT get_delta_PSI_time()): float product */
@@ -631,9 +631,9 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
 }
 
 /* IVP_Environment::revive_cores_PSI */
-static void env_canonicalize_revive_cores(ivp_pvec_t *cores)
+static void env_restore_revive_core_order(ivp_pvec_t *cores)
 {
-    if (!ivp_build_uses_canonical_internal_state()) return;
+    if (ivp_build_uses_reference_internal_state()) return;
     ivp_core_vector_sort_by_identity(cores);
 }
 
@@ -643,7 +643,7 @@ static void env_revive_cores_psi(ivp_environment_t *env)
     /* Revival fires callbacks and can fuse simulation units.  Normalize the
      * queue before either effect becomes observable; allocator and enqueue
      * history must not select the order. */
-    env_canonicalize_revive_cores(l);
+    env_restore_revive_core_order(l);
     for (int i = ivp_pvec_len(l) - 1; i >= 0; i--) {
         if (i >= ivp_pvec_len(l)) continue;
         ivp_core_t *my_core = (ivp_core_t *)ivp_pvec_at(l, i);
@@ -1198,7 +1198,7 @@ static void slot_fill_event_sim(slot_ctrl_t *sc, ivp_sim_es_t *es, ivp_event_sim
     pub->environment = sc->env;
     pub->sim_unit_index = 0;
     if (es->sim_unit &&
-        ivp_build_uses_canonical_internal_state()) {
+        !ivp_build_uses_reference_internal_state()) {
         pub->island_identity = (int)(
             ivp_sim_unit_stable_order_key(es->sim_unit) &
             UINT64_C(0x7fffffff));
@@ -1660,7 +1660,7 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     }
     ivp_controller_system_sort(
         env_controller_system(env),
-        ivp_build_uses_canonical_internal_state());
+        ivp_build_uses_reference_internal_state());
     ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_ADDED, IVP_REAL(0.0), -1, (int)out.slot);
     return out;
 }
@@ -2054,7 +2054,7 @@ void ivp_environment_set_global_collision_tolerance(ivp_environment_t *env, ivp_
 
 static void env_restore_contact_order(ivp_environment_t *env)
 {
-    if (!ivp_build_uses_canonical_internal_state()) return;
+    if (ivp_build_uses_reference_internal_state()) return;
     ivp_object_system_t *objects = env_object_system(env);
     for (int i = 0; i < ivp_object_system_count(objects); i++) {
         ivp_friction_mgr_restore_object_contact_order(
@@ -2406,7 +2406,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     }
     ivp_u_memory_set_clear_on_allocate(
         &pl->sim_unit_mem.arena,
-        ivp_build_uses_canonical_internal_state());
+        !ivp_build_uses_reference_internal_state());
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
@@ -2414,7 +2414,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     }
     ivp_u_memory_set_clear_on_allocate(
         &pl->short_term_mem,
-        ivp_build_uses_canonical_internal_state());
+        !ivp_build_uses_reference_internal_state());
     pl->state = IVP_ES_AT;
     /* standard gravity controller + set_gravity */
     pl->gravity_ctrl.vt = &gravity_vt;
@@ -2597,7 +2597,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
          * P_DELETE(cluster_manager) deletes the objects in cluster order: the
          * root cluster deletes its first object (the newest one) until it is
          * empty, sub-clusters recursively */
-        if (ivp_build_uses_canonical_internal_state()) {
+        if (!ivp_build_uses_reference_internal_state()) {
             ivp_cluster_restore_child_order(&pl->root_cluster);
         }
         env_delete_static_object(env);
@@ -2701,13 +2701,13 @@ void ivp_environment_destroy(ivp_environment_t *env)
 static void env_reset_object_sequence_if_empty(ivp_environment_t *env)
 {
     bool has_live_clusters = false;
-#if IVP_CANONICAL_INTERNAL_STATE
+#if !IVP_REFERENCE_INTERNAL_STATE
     has_live_clusters = env->pl->live_cluster_count != 0;
 #endif
     if (ivp_object_system_count(env_object_system(env)) == 0 &&
         !has_live_clusters) {
         /* The static object permanently owns sequence zero.  Once no public
-         * objects remain, a new scene can start from the same canonical
+         * objects remain, a new scene can start from the same stable
          * order even if registry slots and allocator pools are still warm. */
         env->pl->next_object_sequence = 1u;
         env->pl->next_contact_sequence = 1u;

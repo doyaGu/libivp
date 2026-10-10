@@ -70,7 +70,7 @@ ivp_controller_slot_t *ivp_controller_system_get_at(const ivp_controller_system_
 ivp_controller_slot_t *ivp_controller_system_get_by_handle(const ivp_controller_system_t *sys,
                                                             ivp_controller_handle_t handle);
 void ivp_controller_system_sort(ivp_controller_system_t *sys,
-                                bool canonical_order);
+                                bool use_reference_tiebreak);
 
 bool ivp_controller_slot_set_mode(ivp_controller_slot_t *slot,
                                   ivp_controller_mode_t mode);

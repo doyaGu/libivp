@@ -2261,7 +2261,8 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
 {
     /* The strong-state build extends the reference's partial importance
      * ordering to a total order with the contact's world-local identity. */
-    const bool canonical = ivp_build_uses_canonical_internal_state();
+    const bool use_reference_order =
+        ivp_build_uses_reference_internal_state();
     ivp_contact_pt_t *first_dist = fs->first_friction_dist;
     if (!first_dist) return;
     for (;;) {
@@ -2270,7 +2271,7 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
         bool should_shift =
             first_dist->has_negative_pull_since >
                 second_dist->has_negative_pull_since;
-        if (canonical &&
+        if (!use_reference_order &&
             first_dist->has_negative_pull_since ==
                 second_dist->has_negative_pull_since) {
             IVP_ASSERT(first_dist->creation_sequence !=
@@ -2285,7 +2286,7 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
                 bool test_should_shift =
                     test_dist->has_negative_pull_since >
                         second_dist->has_negative_pull_since;
-                if (canonical &&
+                if (!use_reference_order &&
                     test_dist->has_negative_pull_since ==
                         second_dist->has_negative_pull_since) {
                     IVP_ASSERT(test_dist->creation_sequence !=
@@ -2307,7 +2308,7 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
             ivp_contact_pt_t *second_dist = first_dist->next_dist_in_friction;
             if (second_dist) {
                 IVP_ASSERT(!(first_dist->has_negative_pull_since > second_dist->has_negative_pull_since));
-                if (canonical &&
+                if (!use_reference_order &&
                     first_dist->has_negative_pull_since ==
                         second_dist->has_negative_pull_since) {
                     IVP_ASSERT(first_dist->creation_sequence <
@@ -2494,7 +2495,7 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
         }
         ivp_debug_printf("friction_system_simulating %d distances\n", (int)fs->friction_dist_number);
     }
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         fs_restore_internal_order(fs);
     } else {
         fs_bubble_sort_dists_importance(fs);
@@ -2539,7 +2540,7 @@ static void fs_energy_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pve
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, energy_ctrl);
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         fs_restore_internal_order(fs);
     }
     if (fs->friction_dist_number <= 1) {
@@ -2561,7 +2562,7 @@ static void fs_dyn_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, dyn_ctrl);
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         fs_restore_internal_order(fs);
     }
     if (fs->friction_dist_number <= 1) {

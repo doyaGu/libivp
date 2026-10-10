@@ -54,7 +54,7 @@ static ivp_exclusive_pair_t make_pair(const struct ivp_object *a, const struct i
     uintptr_t pa = (uintptr_t)a;
     uintptr_t pb = (uintptr_t)b;
     ivp_exclusive_pair_t pair;
-    /* Order-independent canonicalization: always store smaller pointer first. */
+    /* Normalize unordered pairs by storing the smaller pointer first. */
     if (pa > pb) {
         uintptr_t tmp = pa;
         pa = pb;

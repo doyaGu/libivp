@@ -54,7 +54,7 @@ static ivp_forcefield_state_t *ff_of_listener(ivp_listener_object_t *l)
 
 static void ff_restore_core_order(ivp_forcefield_state_t *state)
 {
-    if (!ivp_build_uses_canonical_internal_state()) return;
+    if (ivp_build_uses_reference_internal_state()) return;
     ivp_core_vector_sort_by_identity(&state->attached_cores);
 }
 
@@ -211,7 +211,7 @@ bool ivp_forcefield_attach_set(ivp_forcefield_state_t *state, ivp_environment_t 
     state->object_listener.user_data = state;
     ivp_environment_add_listener_object_global(env, &state->object_listener);
 
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         int count = ivp_set_count(&set_of_cores->set);
         if (!ivp_pvec_reserve(&state->attached_cores, count)) {
             state->set_is_going_to_be_deleted = true;

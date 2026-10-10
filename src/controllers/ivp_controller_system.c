@@ -172,7 +172,7 @@ ivp_controller_slot_t *ivp_controller_system_get_by_handle(const ivp_controller_
 }
 
 void ivp_controller_system_sort(ivp_controller_system_t *sys,
-                                bool canonical_order)
+                                bool use_reference_tiebreak)
 {
     const int n = ivp_registry_count(&sys->registry);
     void **data = sys->registry.dense.data;
@@ -185,9 +185,9 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys,
         int j = i - 1;
         while (j >= 0) {
             ivp_controller_slot_t *cur = (ivp_controller_slot_t *)data[j];
-            const bool tie_shift = canonical_order
-                ? cur->registration_sequence > key->registration_sequence
-                : cur->handle.slot > key->handle.slot;
+            const bool tie_shift = use_reference_tiebreak
+                ? cur->handle.slot > key->handle.slot
+                : cur->registration_sequence > key->registration_sequence;
             const bool should_shift =
                 (cur->priority < key->priority) ||
                 (cur->priority == key->priority && tie_shift);

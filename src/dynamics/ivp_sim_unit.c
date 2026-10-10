@@ -537,8 +537,8 @@ static int mgr_compare_controller_lists(const void *left,
                                    right_list->l_controller);
 }
 
-static void mgr_canonicalize_unit(ivp_sim_units_manager_t *manager,
-                                  ivp_sim_unit_t *unit)
+static void mgr_restore_unit_order(ivp_sim_units_manager_t *manager,
+                                   ivp_sim_unit_t *unit)
 {
     for (int i = 0; i < ivp_pvec_len(&unit->sim_unit_cores); i++) {
         ivp_core_t *core = su_core_at(unit, i);
@@ -566,8 +566,8 @@ static void mgr_canonicalize_unit(ivp_sim_units_manager_t *manager,
                     mgr_compare_controller_lists);
 }
 
-static ivp_sim_unit_t *mgr_merge_canonical_units(ivp_sim_unit_t *left,
-                                                  ivp_sim_unit_t *right)
+static ivp_sim_unit_t *mgr_merge_ordered_units(ivp_sim_unit_t *left,
+                                                ivp_sim_unit_t *right)
 {
     ivp_sim_unit_t head;
     ivp_sim_unit_t *tail = &head;
@@ -586,7 +586,7 @@ static ivp_sim_unit_t *mgr_merge_canonical_units(ivp_sim_unit_t *left,
     return head.next_sim_unit;
 }
 
-static ivp_sim_unit_t *mgr_sort_canonical_units(ivp_sim_unit_t *head)
+static ivp_sim_unit_t *mgr_sort_units_by_identity(ivp_sim_unit_t *head)
 {
     if (!head || !head->next_sim_unit) return head;
     bool already_sorted = true;
@@ -608,31 +608,31 @@ static ivp_sim_unit_t *mgr_sort_canonical_units(ivp_sim_unit_t *head)
     }
     ivp_sim_unit_t *right = slow->next_sim_unit;
     slow->next_sim_unit = NULL;
-    return mgr_merge_canonical_units(
-        mgr_sort_canonical_units(head),
-        mgr_sort_canonical_units(right));
+    return mgr_merge_ordered_units(
+        mgr_sort_units_by_identity(head),
+        mgr_sort_units_by_identity(right));
 }
 
-static void mgr_canonicalize_slot(ivp_sim_units_manager_t *manager,
-                                  ivp_sim_unit_t **slot)
+static void mgr_restore_slot_order(ivp_sim_units_manager_t *manager,
+                                   ivp_sim_unit_t **slot)
 {
-    *slot = mgr_sort_canonical_units(*slot);
+    *slot = mgr_sort_units_by_identity(*slot);
     ivp_sim_unit_t *previous = NULL;
     for (ivp_sim_unit_t *unit = *slot; unit;
          unit = unit->next_sim_unit) {
         unit->prev_sim_unit = previous;
-        mgr_canonicalize_unit(manager, unit);
+        mgr_restore_unit_order(manager, unit);
         previous = unit;
     }
 }
 
-static void mgr_canonicalize_slots(ivp_sim_units_manager_t *manager)
+static void mgr_restore_unit_ordering(ivp_sim_units_manager_t *manager)
 {
-    if (!ivp_build_uses_canonical_internal_state()) {
+    if (ivp_build_uses_reference_internal_state()) {
         return;
     }
-    mgr_canonicalize_slot(manager, &manager->sim_units_slot0);
-    mgr_canonicalize_slot(manager, &manager->still_slot);
+    mgr_restore_slot_order(manager, &manager->sim_units_slot0);
+    mgr_restore_slot_order(manager, &manager->still_slot);
 }
 
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
@@ -1216,7 +1216,7 @@ finish:
 
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp_pvec_t *touched_cores)
 {
-    mgr_canonicalize_slots(sman);
+    mgr_restore_unit_ordering(sman);
     ivp_sim_es_t es;
     ivp_sim_es_init(&es, sman->l_environment);
     ivp_sim_unit_t *s_u, *n0_su, *n1_su, *n2_su;
@@ -1273,7 +1273,7 @@ static void su_reset_time(ivp_sim_unit_t *su, double offset)
 
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset)
 {
-    mgr_canonicalize_slots(m);
+    mgr_restore_unit_ordering(m);
     for (ivp_sim_unit_t *s = m->sim_units_slot0; s; s = s->next_sim_unit) su_reset_time(s, offset);
     for (ivp_sim_unit_t *s = m->still_slot; s; s = s->next_sim_unit) su_reset_time(s, offset);
 }

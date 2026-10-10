@@ -556,7 +556,7 @@ void ivp_mindist_init_mindist(ivp_mindist_t *md, struct ivp_object *pop0, struct
     case IVP_OBJECT_BALL:
         if (obj_is_ball(pop0)) {
             bool swap_ball_synapses;
-            if (ivp_build_uses_canonical_internal_state()) {
+            if (!ivp_build_uses_reference_internal_state()) {
                 swap_ball_synapses =
                     ivp_object_order_key(pop0) <
                     ivp_object_order_key(pop1);

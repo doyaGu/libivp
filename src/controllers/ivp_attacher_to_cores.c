@@ -156,7 +156,7 @@ static void attacher_apply_set_order(ivp_attacher_to_cores_t *a,
 static void attacher_delete_all(ivp_attacher_to_cores_t *a)
 {
     ivp_vhash_store_t *h = &a->core_to_attachment_hash;
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         int count = ivp_vhash_store_count(h);
         if (count <= 0) return;
         ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
@@ -228,7 +228,7 @@ static void attacher_stop_listening(ivp_attacher_to_cores_t *a)
 static void attacher_pset_is_going_to_be_deleted(void *ctx, ivp_set_active_t *set)
 {
     ivp_attacher_to_cores_t *a = attacher_of_set_ctx(ctx);
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         attacher_apply_set_order(a, &set->set, true,
                                  attacher_remove_element);
     } else {
@@ -276,7 +276,7 @@ static void attacher_environment_deleted(ivp_listener_object_t *l, struct ivp_en
     ivp_attacher_to_cores_t *a = attacher_of_listener(l);
     if (!a->environment) return;
     if (a->set_of_cores) {
-        if (ivp_build_uses_canonical_internal_state()) {
+        if (!ivp_build_uses_reference_internal_state()) {
             attacher_apply_set_order(a, &a->set_of_cores->set, false,
                                      attacher_remove_core_from_set);
         } else {
@@ -330,7 +330,7 @@ bool ivp_attacher_to_cores_init(ivp_attacher_to_cores_t *a, struct ivp_environme
     ivp_environment_add_listener_object_global(env, &a->object_listener);
 
     /* attach to every core already in the set, then listen */
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         attacher_apply_set_order(a, &set_of_cores->set, false,
                                  attacher_add_core);
     } else {

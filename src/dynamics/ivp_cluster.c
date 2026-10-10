@@ -91,7 +91,7 @@ void ivp_cluster_add_child(ivp_cluster_t *cluster, ivp_object_t *child)
         child->creation_sequence == 0u) {
         child->creation_sequence = ivp_env_register_cluster(child->owner);
         IVP_ASSERT(child->creation_sequence != 0u ||
-                   !ivp_build_uses_canonical_internal_state());
+                   ivp_build_uses_reference_internal_state());
     }
 
     /* IVP_Cluster::add_object: insert at the head of the list */

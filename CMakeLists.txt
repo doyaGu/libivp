@@ -8,9 +8,9 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
-option(IVP_CANONICAL_INTERNAL_STATE
-       "Use stable internal ordering and history-independent scratch state"
-       ON)
+option(IVP_REFERENCE_INTERNAL_STATE
+       "Preserve address/history-sensitive reference internals for parity work"
+       OFF)
 set(IVP_QHULL_MODE "REENTRANT" CACHE STRING
     "Qhull backend: REENTRANT (mainline) or REFERENCE (parity work)")
 set_property(CACHE IVP_QHULL_MODE PROPERTY STRINGS REENTRANT REFERENCE)
@@ -304,7 +304,7 @@ target_include_directories(ivp
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
-        IVP_CANONICAL_INTERNAL_STATE=$<BOOL:${IVP_CANONICAL_INTERNAL_STATE}>)
+        IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
     target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)
@@ -568,7 +568,7 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_internal_parallel tests/test_internal_parallel.c)
     target_include_directories(test_internal_parallel PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    if (IVP_CANONICAL_INTERNAL_STATE)
+    if (NOT IVP_REFERENCE_INTERNAL_STATE)
         ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
         target_include_directories(test_internal_state_stability PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)

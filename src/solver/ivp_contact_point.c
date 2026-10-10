@@ -481,7 +481,7 @@ ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
     ivp_contact_pt_t *cp = (ivp_contact_pt_t *)ivp_alloc(allocator, sizeof(*cp));
     if (!cp) return NULL;
     memset(cp, 0, sizeof(*cp));
-    if (ivp_build_uses_canonical_internal_state()) {
+    if (!ivp_build_uses_reference_internal_state()) {
         cp->creation_sequence = ivp_env_next_contact_sequence(md->env);
         if (cp->creation_sequence == 0u) {
             ivp_free(allocator, cp, sizeof(*cp));

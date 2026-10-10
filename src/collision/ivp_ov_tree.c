@@ -678,7 +678,7 @@ static bool collect_collision_partners(ivp_ov_tree_t *t, const ivp_ov_element_t 
     return true;
 }
 
-static int ov_compare_canonical_elements(const void *a_in, const void *b_in)
+static int ov_compare_elements_by_identity(const void *a_in, const void *b_in)
 {
     const ivp_ov_element_t *a =
         *(const ivp_ov_element_t *const *)a_in;
@@ -692,13 +692,12 @@ static int ov_compare_canonical_elements(const void *a_in, const void *b_in)
     return key_a < key_b ? 1 : key_a > key_b ? -1 : 0;
 }
 
-static void ov_canonicalize_collision_partners(ivp_pvec_t *partners,
-                                               int first)
+static void ov_sort_collision_partners(ivp_pvec_t *partners, int first)
 {
     const int count = ivp_pvec_len(partners) - first;
     if (count < 2) return;
     qsort(partners->elems + first, (size_t)count,
-          sizeof(*partners->elems), ov_compare_canonical_elements);
+          sizeof(*partners->elems), ov_compare_elements_by_identity);
 }
 
 /* ── deterministic parallel overlap query ──────────────────────────────── */
@@ -1080,9 +1079,9 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
             return IVP_ERR_OUT_OF_MEMORY;
         }
         if (element->real_object && element->real_object->owner &&
-            ivp_build_uses_canonical_internal_state()) {
-            ov_canonicalize_collision_partners(t->collision_partners,
-                                               old_partner_count);
+            !ivp_build_uses_reference_internal_state()) {
+            ov_sort_collision_partners(t->collision_partners,
+                                       old_partner_count);
         }
     }
     return IVP_OK;

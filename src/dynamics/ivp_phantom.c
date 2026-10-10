@@ -122,7 +122,7 @@ static void fire_event_core_left(ivp_controller_phantom_t *c, ivp_core_t *core)
 static void phantom_fire_core_left_for_set(ivp_controller_phantom_t *c,
                                            const ivp_set_t *set)
 {
-    if (!ivp_build_uses_canonical_internal_state()) {
+    if (ivp_build_uses_reference_internal_state()) {
         ivp_set_enumerator_t enumerator;
         ivp_set_enumerator_init(&enumerator, set);
         ivp_core_t *core;
