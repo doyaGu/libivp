@@ -6,7 +6,7 @@
   `IVP_CANONICAL_INTERNAL_STATE=OFF` 和 `IVP_QHULL_MODE=REFERENCE`，
   Release/Debug 必须 48/48 逐位一致。
 - **mainline：**使用默认的强内部状态策略和可重入 Qhull 2020.2，必须恰好只有
-  `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
+  `mainline_expected_differences.txt` 登记的 17 个场景不同；多一个或少一个都失败。
 
 两个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
