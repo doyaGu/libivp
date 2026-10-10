@@ -58,6 +58,13 @@ typedef struct ivp_environment_config {
      * floating-point environment.  Within one platform and build
      * configuration, worker count must not change the resulting world state. */
     int                 parallel_worker_count;
+    /* Opt in to canonical internal ordering and history-independent scratch
+     * memory.  This mode makes observable physics independent of OV-tree
+     * storage order, simulation-unit linked-list order, allocator addresses,
+     * and prior arena contents.  It deliberately does not reproduce the
+     * reference engine's reads from stale IVP_U_Memory bytes, so the default
+     * remains false for strict reference parity. */
+    bool                    canonical_internal_state;
     ivp_anomaly_config_t    anomaly_config;
     ivp_collision_filter_t  collision_filter;
     bool                    ccd_enabled;          /* unused (the reference pipeline is continuous) */

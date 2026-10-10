@@ -415,6 +415,95 @@ void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
     mgr_add_unit_to_slot(su, slot);
 }
 
+uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
+{
+    uint64_t key = UINT64_MAX;
+    for (int core_index = 0;
+         core_index < ivp_pvec_len(&su->sim_unit_cores);
+         core_index++) {
+        const ivp_core_t *core = su_core_at(su, core_index);
+        for (int object_index = 0;
+             object_index < ivp_pvec_len(&core->objects);
+             object_index++) {
+            const ivp_object_t *object =
+                (const ivp_object_t *)ivp_pvec_at(&core->objects,
+                                                  object_index);
+            uint64_t object_key = ivp_object_order_key(object);
+            if (object_key < key) key = object_key;
+        }
+    }
+    IVP_ASSERT(key != UINT64_MAX);
+    return key;
+}
+
+static ivp_sim_unit_t *mgr_merge_canonical_units(ivp_sim_unit_t *left,
+                                                  ivp_sim_unit_t *right)
+{
+    ivp_sim_unit_t head;
+    ivp_sim_unit_t *tail = &head;
+    head.next_sim_unit = NULL;
+    while (left && right) {
+        ivp_sim_unit_t **selected =
+            ivp_sim_unit_stable_order_key(left) >=
+                    ivp_sim_unit_stable_order_key(right)
+                ? &left
+                : &right;
+        tail->next_sim_unit = *selected;
+        tail = *selected;
+        *selected = (*selected)->next_sim_unit;
+    }
+    tail->next_sim_unit = left ? left : right;
+    return head.next_sim_unit;
+}
+
+static ivp_sim_unit_t *mgr_sort_canonical_units(ivp_sim_unit_t *head)
+{
+    if (!head || !head->next_sim_unit) return head;
+    bool already_sorted = true;
+    for (ivp_sim_unit_t *unit = head; unit->next_sim_unit;
+         unit = unit->next_sim_unit) {
+        if (ivp_sim_unit_stable_order_key(unit) <
+            ivp_sim_unit_stable_order_key(unit->next_sim_unit)) {
+            already_sorted = false;
+            break;
+        }
+    }
+    if (already_sorted) return head;
+
+    ivp_sim_unit_t *slow = head;
+    ivp_sim_unit_t *fast = head->next_sim_unit;
+    while (fast && fast->next_sim_unit) {
+        slow = slow->next_sim_unit;
+        fast = fast->next_sim_unit->next_sim_unit;
+    }
+    ivp_sim_unit_t *right = slow->next_sim_unit;
+    slow->next_sim_unit = NULL;
+    return mgr_merge_canonical_units(
+        mgr_sort_canonical_units(head),
+        mgr_sort_canonical_units(right));
+}
+
+static void mgr_canonicalize_slot(ivp_sim_unit_t **slot)
+{
+    *slot = mgr_sort_canonical_units(*slot);
+    ivp_sim_unit_t *previous = NULL;
+    for (ivp_sim_unit_t *unit = *slot; unit;
+         unit = unit->next_sim_unit) {
+        unit->prev_sim_unit = previous;
+        previous = unit;
+    }
+}
+
+static void mgr_canonicalize_slots(ivp_sim_units_manager_t *manager)
+{
+    if (!ivp_env_uses_canonical_internal_state(
+            manager->l_environment)) {
+        return;
+    }
+    mgr_canonicalize_slot(&manager->sim_units_slot0);
+    mgr_canonicalize_slot(&manager->still_slot);
+}
+
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
 {
     IVP_ASSERT(su->manager == m);
@@ -996,6 +1085,7 @@ finish:
 
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *sman, ivp_pvec_t *touched_cores)
 {
+    mgr_canonicalize_slots(sman);
     ivp_sim_es_t es;
     ivp_sim_es_init(&es, sman->l_environment);
     ivp_sim_unit_t *s_u, *n0_su, *n1_su, *n2_su;
@@ -1052,6 +1142,7 @@ static void su_reset_time(ivp_sim_unit_t *su, double offset)
 
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset)
 {
+    mgr_canonicalize_slots(m);
     for (ivp_sim_unit_t *s = m->sim_units_slot0; s; s = s->next_sim_unit) su_reset_time(s, offset);
     for (ivp_sim_unit_t *s = m->still_slot; s; s = s->next_sim_unit) su_reset_time(s, offset);
 }

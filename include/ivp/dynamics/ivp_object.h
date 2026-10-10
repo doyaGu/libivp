@@ -115,6 +115,7 @@ typedef struct ivp_object {
     struct ivp_environment *owner;      /* back-link to owning world    */
     int                  dense_index;   /* index in object system array */
     ivp_handle_t         handle;        /* generational handle */
+    uint64_t             creation_sequence; /* engine-owned world-local order */
 
     /* flags.collision_listener_exists: per-object collision listeners are
      * kept by the environment (IVP_Cluster_Manager::collision_callback_hash) */
@@ -152,6 +153,12 @@ typedef struct ivp_object {
     bool                    object_listener_exists; /* flags.object_listener_exists */
     struct ivp_anchor      *anchors;           /* anchors of registered actuators (ivp_anchor.h) */
 } ivp_object_t;
+
+/* Internal physics ordering must not depend on allocation addresses or on
+ * the registry's reusable handle slots. */
+static inline uint64_t ivp_object_order_key(const ivp_object_t *obj) {
+    return obj->creation_sequence;
+}
 
 /* IVP_Real_Object::get_core: the current (physical) core.  Several objects
  * share one core after ivp_environment_merge_objects / ivp_object_attach_object;

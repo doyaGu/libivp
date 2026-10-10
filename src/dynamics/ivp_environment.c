@@ -199,6 +199,12 @@ struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env)
     return &env->pl->short_term_mem;
 }
 
+bool ivp_env_uses_canonical_internal_state(
+    const struct ivp_environment *env)
+{
+    return env && env->pl && env->pl->canonical_internal_state;
+}
+
 void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
 {
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
@@ -1093,7 +1099,17 @@ static void slot_fill_event_sim(slot_ctrl_t *sc, ivp_sim_es_t *es, ivp_event_sim
     pub->inverse_delta_time = (ivp_real_t)es->i_delta_time;
     pub->environment = sc->env;
     pub->sim_unit_index = 0;
-    pub->island_identity = es->sim_unit ? (int)((uintptr_t)es->sim_unit & 0x7fffffff) : -1;
+    if (es->sim_unit &&
+        ivp_env_uses_canonical_internal_state(sc->env)) {
+        pub->island_identity = (int)(
+            ivp_sim_unit_stable_order_key(es->sim_unit) &
+            UINT64_C(0x7fffffff));
+    } else {
+        pub->island_identity =
+            es->sim_unit
+                ? (int)((uintptr_t)es->sim_unit & 0x7fffffff)
+                : -1;
+    }
     pub->associated_core_handles = sc->assoc_handles;
     pub->associated_core_count = sc->assoc_count;
 }
@@ -1883,6 +1899,7 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     cfg->initial_event_listener_capacity = IVP_EVENT_LISTENERS_INIT_CAPACITY;
     cfg->sim_unit_count = IVP_SIM_UNIT_COUNT_DEFAULT;
     cfg->parallel_worker_count = IVP_PARALLEL_WORKER_COUNT_DEFAULT;
+    cfg->canonical_internal_state = false;
     ivp_anomaly_config_init(&cfg->anomaly_config);
     cfg->collision_filter = ivp_collision_filter_allow_all();
     cfg->ccd_enabled = false;
@@ -2231,6 +2248,8 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     pl->parallel_worker_count = cfg.parallel_worker_count > 1
                                     ? cfg.parallel_worker_count
                                     : 1;
+    pl->canonical_internal_state =
+        cfg.canonical_internal_state;
     if (pl->parallel_worker_count > 1) {
         pl->task_pool = ivp_task_pool_create(pl->parallel_worker_count,
                                              env->allocator);
@@ -2275,11 +2294,15 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         ivp_environment_destroy(env);
         return NULL;
     }
+    ivp_u_memory_set_clear_on_allocate(
+        &pl->sim_unit_mem.arena, pl->canonical_internal_state);
     /* short_term_mem = new IVP_U_Memory(); init_mem_transaction_usage() */
     if (ivp_u_memory_init(&pl->short_term_mem, env->allocator) != IVP_OK) {
         ivp_environment_destroy(env);
         return NULL;
     }
+    ivp_u_memory_set_clear_on_allocate(
+        &pl->short_term_mem, pl->canonical_internal_state);
     pl->state = IVP_ES_AT;
     /* standard gravity controller + set_gravity */
     pl->gravity_ctrl.vt = &gravity_vt;
@@ -2377,6 +2400,7 @@ static bool env_create_static_object(ivp_environment_t *env)
     obj->dense_index = -1;
     obj->handle.slot = 0xFFFFFFFFu;
     obj->handle.generation = 0;
+    obj->creation_sequence = env->pl->next_object_sequence++;
     obj->shift_core_f_object_is_zero = true;
     if (!ivp_object_pipeline_create(env, obj, &t)) {
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
@@ -2558,6 +2582,16 @@ void ivp_environment_destroy(ivp_environment_t *env)
 
 /* ── objects ───────────────────────────────────────────────────────────── */
 
+static void env_reset_object_sequence_if_empty(ivp_environment_t *env)
+{
+    if (ivp_object_system_count(env_object_system(env)) == 0) {
+        /* The static object permanently owns sequence zero.  Once no public
+         * objects remain, a new scene can start from the same canonical
+         * order even if registry slots and allocator pools are still warm. */
+        env->pl->next_object_sequence = 1u;
+    }
+}
+
 ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, const ivp_object_template_t *tmpl,
                                                         const ivp_surman_t *surman, ivp_object_handle_t *out_handle)
 {
@@ -2565,6 +2599,7 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
     if (!env || !tmpl) return NULL;
     ivp_object_t *obj = ivp_object_system_create(env_object_system(env), env, tmpl, surman, out_handle);
     if (!obj) return NULL;
+    obj->creation_sequence = env->pl->next_object_sequence++;
     const int object_count = ivp_object_system_count(env_object_system(env));
     /* A PSI can touch at most one core and one hull manager per object.  Grow
      * the reusable scratch here so the simulation hot path never allocates. */
@@ -2573,6 +2608,7 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
         (void)ivp_object_system_destroy_by_handle(env_object_system(env),
                                                   ivp_environment_get_object_handle(obj),
                                                   env->allocator);
+        env_reset_object_sequence_if_empty(env);
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
     }
@@ -2581,6 +2617,7 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
         ivp_cluster_remove_child(&env->pl->root_cluster, obj);
         (void)ivp_object_system_destroy_by_handle(env_object_system(env), ivp_environment_get_object_handle(obj),
                                                   env->allocator);
+        env_reset_object_sequence_if_empty(env);
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
     }
@@ -2706,7 +2743,10 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
         ivp_free(env->allocator, obj, sizeof(ivp_object_t));
         return;
     }
-    (void)ivp_object_system_destroy_by_handle(env_object_system(env), ivp_environment_get_object_handle(obj), env->allocator);
+    (void)ivp_object_system_destroy_by_handle(
+        env_object_system(env), ivp_environment_get_object_handle(obj),
+        env->allocator);
+    env_reset_object_sequence_if_empty(env);
 }
 
 bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle)

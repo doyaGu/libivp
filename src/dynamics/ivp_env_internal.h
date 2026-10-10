@@ -108,6 +108,8 @@ void  ivp_env_sim_mem_end(struct ivp_environment *env);
 
 /* IVP_Environment::get_memory_manager() / short_term_mem */
 struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env);
+bool ivp_env_uses_canonical_internal_state(
+    const struct ivp_environment *env);
 
 /* IVP_Environment::get_statistic_manager / get_debug_manager
  * (debug_information) */
