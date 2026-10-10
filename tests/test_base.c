@@ -363,6 +363,57 @@ IVP_TEST(u_memory_overflow_blocks) {
     ivp_u_memory_destroy(&m);
 }
 
+IVP_TEST(u_memory_clear_on_allocate) {
+    enum { REQUEST_SIZE = 17, RESERVED_SIZE = 96 };
+    ivp_u_memory_t m;
+    IVP_ASSERT_EQ(ivp_u_memory_init(&m, NULL), IVP_OK);
+
+    /* Reset the first block to offset zero, poison one complete reserved
+     * span, then require both the request and its VecFPU slack to be clear. */
+    ivp_u_memory_start_transaction(&m);
+    ivp_u_memory_end_transaction(&m);
+    ivp_u_memory_start_transaction(&m);
+    unsigned char *first =
+        (unsigned char *)ivp_u_memory_get_mem(&m, REQUEST_SIZE);
+    IVP_ASSERT_NOT_NULL(first);
+    memset(first, 0xa5, RESERVED_SIZE);
+    ivp_u_memory_end_transaction(&m);
+
+    ivp_u_memory_set_clear_on_allocate(&m, true);
+    ivp_u_memory_start_transaction(&m);
+    unsigned char *cleared =
+        (unsigned char *)ivp_u_memory_get_mem(&m, REQUEST_SIZE);
+    IVP_ASSERT_EQ(cleared, first);
+    for (int i = 0; i < RESERVED_SIZE; i++) {
+        IVP_ASSERT_EQ(cleared[i], 0);
+    }
+    ivp_u_memory_end_transaction(&m);
+
+    /* Recycled overflow blocks must follow the same rule. */
+    ivp_u_memory_set_clear_on_allocate(&m, false);
+    ivp_u_memory_start_transaction(&m);
+    IVP_ASSERT_NOT_NULL(ivp_u_memory_get_mem(
+        &m, 0x7fe0u - 0x50u - 0x20u));
+    unsigned char *overflow =
+        (unsigned char *)ivp_u_memory_get_mem(&m, 100u);
+    IVP_ASSERT_NOT_NULL(overflow);
+    memset(overflow, 0x5a, 160u);
+    ivp_u_memory_end_transaction(&m);
+
+    ivp_u_memory_set_clear_on_allocate(&m, true);
+    ivp_u_memory_start_transaction(&m);
+    IVP_ASSERT_NOT_NULL(ivp_u_memory_get_mem(
+        &m, 0x7fe0u - 0x50u - 0x20u));
+    unsigned char *cleared_overflow =
+        (unsigned char *)ivp_u_memory_get_mem(&m, 100u);
+    IVP_ASSERT_EQ(cleared_overflow, overflow);
+    for (int i = 0; i < 160; i++) {
+        IVP_ASSERT_EQ(cleared_overflow[i], 0);
+    }
+    ivp_u_memory_end_transaction(&m);
+    ivp_u_memory_destroy(&m);
+}
+
 IVP_TEST(u_memory_counting_allocator) {
     ivp_allocator_t ca = ivp_counting_allocator_create(NULL);
     ivp_u_memory_t m;
@@ -480,6 +531,7 @@ int main(void) {
     IVP_REGISTER(arena_stats_smoke);
     IVP_REGISTER(u_memory_layout);
     IVP_REGISTER(u_memory_overflow_blocks);
+    IVP_REGISTER(u_memory_clear_on_allocate);
     IVP_REGISTER(u_memory_counting_allocator);
     IVP_REGISTER(u_memory_custom_first_block);
     IVP_REGISTER(time_calc_steps_basic);

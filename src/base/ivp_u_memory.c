@@ -139,6 +139,9 @@ static void *u_mem_new_block(ivp_u_memory_t *mem, size_t groesse)
     mem->pos = groesse;
     mem->end = ng;
     u_mem_guard(raw, ng);
+    if (mem->clear_on_allocate && groesse != 0u) {
+        memset(mem->block_start, 0, groesse);
+    }
     return mem->block_start;
 }
 
@@ -200,12 +203,18 @@ void *ivp_u_memory_get_mem(ivp_u_memory_t *mem, size_t size)
     }
     mem->pos = p;
     char *op_ptr = mem->block_start + op;
+    if (mem->clear_on_allocate) memset(op_ptr, 0, p - op);
     IVP_IF(((intptr_t)op_ptr > 0x780000) && ((intptr_t)op_ptr < 0x792f48)) /* ivu_memory.hxx:109, no-op */
     {
         op_ptr++;
         op_ptr--;
     }
     return op_ptr;
+}
+
+void ivp_u_memory_set_clear_on_allocate(ivp_u_memory_t *mem, bool enable)
+{
+    if (mem) mem->clear_on_allocate = enable;
 }
 
 void ivp_u_memory_start_transaction(ivp_u_memory_t *mem)
