@@ -58,12 +58,7 @@ static void attacher_delete_core(ivp_attacher_to_cores_t *a, ivp_core_t *core)
 static void attacher_remove_element(ivp_attacher_to_cores_t *a, ivp_core_t *core)
 {
     void *con = ivp_vhash_store_find(&a->core_to_attachment_hash, core);
-    if (!con) {
-        if (!ivp_build_uses_canonical_internal_state()) {
-            IVP_ASSERT(con);
-        }
-        return;
-    }
+    if (!con) return;
     attacher_delete_core(a, core);
 }
 
@@ -253,20 +248,16 @@ static void attacher_pset_is_going_to_be_deleted(void *ctx, ivp_set_active_t *se
     if (a->cls->attacher_deleted) a->cls->attacher_deleted(a);
 }
 
-/* The last object's deletion retires its core.  The strong-state policy
- * removes that core from the active set while it is still valid; explicit
- * core replacement APIs still require callers to update their core sets. */
+/* The last object's deletion retires its core.  Remove it from the active
+ * set while it is still valid; explicit core replacement APIs still require
+ * callers to update their core sets. */
 static void attacher_object_deleted(ivp_listener_object_t *l, ivp_event_object_t *ev)
 {
     ivp_attacher_to_cores_t *a = attacher_of_listener(l);
     if (!a->environment || !ev->real_object) return;
     ivp_core_t *core = ev->real_object->physical_core;
     if (!core || ivp_pvec_len(&core->objects) > 1) return;   /* the core outlives the object */
-    if (ivp_build_uses_canonical_internal_state()) {
-        attacher_remove_core_from_set(a, core);
-    } else {
-        attacher_delete_core(a, core);
-    }
+    attacher_remove_core_from_set(a, core);
 }
 
 static void attacher_object_created(ivp_listener_object_t *l, ivp_event_object_t *ev)
@@ -284,9 +275,22 @@ static void attacher_environment_deleted(ivp_listener_object_t *l, struct ivp_en
     (void)env;
     ivp_attacher_to_cores_t *a = attacher_of_listener(l);
     if (!a->environment) return;
-    if (ivp_build_uses_canonical_internal_state() && a->set_of_cores) {
-        attacher_apply_set_order(a, &a->set_of_cores->set, false,
-                                 attacher_remove_core_from_set);
+    if (a->set_of_cores) {
+        if (ivp_build_uses_canonical_internal_state()) {
+            attacher_apply_set_order(a, &a->set_of_cores->set, false,
+                                     attacher_remove_core_from_set);
+        } else {
+            while (ivp_set_count(&a->set_of_cores->set) > 0) {
+                ivp_set_enumerator_t enumerator;
+                ivp_set_enumerator_init(
+                    &enumerator, &a->set_of_cores->set);
+                ivp_core_t *core = (ivp_core_t *)
+                    ivp_set_enumerator_next(
+                        &enumerator, &a->set_of_cores->set);
+                if (!core) break;
+                attacher_remove_core_from_set(a, core);
+            }
+        }
         IVP_ASSERT(ivp_vhash_store_count(
                        &a->core_to_attachment_hash) == 0);
     } else {

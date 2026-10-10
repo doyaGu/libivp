@@ -14,9 +14,8 @@
  *     the set are deleted, then the attacher deletes itself
  *     (attacher_deleted hook);
  *   - core deleted (object deletion): the attachment and the now-invalid
- *     core entry are removed together.  The reference template leaves set
- *     lifetime coordination to its caller; the default strong-state build
- *     instead guarantees that a live set never retains a freed core.
+ *     core entry are removed together, so a live set never retains a freed
+ *     core.
  * The class callbacks play the role of ATTACH_T: create_attachment must
  * attach itself to the core (typically ivp_environment_add_controller_to_core)
  * and delete_attachment must detach it again.  The core -> attachment hash
@@ -28,9 +27,9 @@
  *   - ivp_attacher_to_cores_destroy deletes all attachments and stops
  *     listening (the reference destructor is only reachable through the
  *     deletion of the set);
- *   - on environment deletion the strong-state build removes every core
- *     from the set while the environment is still valid; this deletes the
- *     attachments and leaves the caller-owned set free of stale pointers;
+ *   - on environment deletion every core is removed from the set while the
+ *     environment is still valid; this deletes the attachments and leaves
+ *     the caller-owned set free of stale pointers;
  *   - optional object filter (ivp_attacher_to_cores_set_object_filter): a
  *     created object accepted by the filter has its core installed into the
  *     set (and is thereby attached).

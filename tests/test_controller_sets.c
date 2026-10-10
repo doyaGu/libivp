@@ -131,17 +131,12 @@ IVP_TEST(attacher_follows_set) {
     IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&at), 2);
 
     /* Core deletion deletes the attachment and removes the invalid set
-     * entry in the strong-state build. */
+     * entry. */
     ivp_core_t *dead = o3->physical_core;
     ivp_environment_destroy_object(env, o3);
     IVP_ASSERT_EQ(g_deleted, 2);
     IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&at), 1);
-#if IVP_CANONICAL_INTERNAL_STATE
     IVP_ASSERT_NULL(ivp_set_find(&set.set, dead));
-#else
-    IVP_ASSERT_TRUE(ivp_set_find(&set.set, dead) == dead);
-    ivp_set_remove(&set.set, dead);
-#endif
 
     /* deleting the set deletes the attachments and the attacher */
     ivp_set_active_destroy(&set);
@@ -169,22 +164,15 @@ IVP_TEST(attacher_destroy_and_environment_deletion) {
     /* environment deleted first: attachments go with it */
     IVP_ASSERT_TRUE(ivp_attacher_to_cores_init(&at, env, &set, &cnt_class, NULL));
     IVP_ASSERT_EQ(g_created, 2);
-    ivp_core_t *dead = o1->physical_core;
     ivp_environment_destroy(env);
     IVP_ASSERT_EQ(g_deleted, 2);
     IVP_ASSERT_TRUE(at.environment_deleted);
-#if IVP_CANONICAL_INTERNAL_STATE
     IVP_ASSERT_EQ(ivp_set_count(&set.set), 0);
-#else
-    IVP_ASSERT_EQ(ivp_set_count(&set.set), 1);
-    ivp_set_remove(&set.set, dead);
-#endif
     ivp_set_active_destroy(&set);
     IVP_ASSERT_EQ(g_attacher_deleted, 1);
     IVP_ASSERT_EQ(g_deleted, 2);
 }
 
-#if IVP_CANONICAL_INTERNAL_STATE
 static void *no_attachment_create(ivp_attacher_to_cores_t *a,
                                   ivp_core_t *core)
 {
@@ -219,7 +207,6 @@ IVP_TEST(attacher_allows_core_without_attachment) {
     IVP_ASSERT_EQ(g_attacher_deleted, 1);
     ivp_environment_destroy(env);
 }
-#endif
 
 static bool far_x_filter(void *ctx, ivp_object_t *obj)
 {
@@ -533,9 +520,7 @@ IVP_TEST(buoyancy_attacher_more_than_64_cores) {
 int main(void) {
     IVP_REGISTER(attacher_follows_set);
     IVP_REGISTER(attacher_destroy_and_environment_deletion);
-#if IVP_CANONICAL_INTERNAL_STATE
     IVP_REGISTER(attacher_allows_core_without_attachment);
-#endif
     IVP_REGISTER(attacher_object_filter_installs_created_objects);
     IVP_REGISTER(forcefield_set_driven_acts_on_set_cores_only);
     IVP_REGISTER(forcefield_empty_set_attaches_nothing);
