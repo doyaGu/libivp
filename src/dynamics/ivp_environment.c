@@ -45,6 +45,7 @@
 #include <ivp/diagnostics/ivp_better_statistics_manager.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
 #include <ivp/diagnostics/ivp_statistic_manager.h>
+#include <ivp/utility/ivp_string.h>
 
 #include "collision/ivp_lvec.h"
 #include "ivp_object_system.h"
@@ -422,12 +423,7 @@ void ivp_env_add_draw_vector(struct ivp_environment *env, const double start_p[3
             draw_vector->first_point.k[i] = start_p[i];
             draw_vector->direction_vec.k[i] = (double)dir_vec[i];
         }
-        draw_vector->debug_text = NULL;
-        if (debug_text_in) { /* p_strdup */
-            size_t len = strlen(debug_text_in) + 1;
-            draw_vector->debug_text = (char *)ivp_alloc(env->allocator, len);
-            if (draw_vector->debug_text) memcpy(draw_vector->debug_text, debug_text_in, len);
-        }
+        draw_vector->debug_text = ivp_string_dup(env->allocator, debug_text_in);
         draw_vector->color = v_color;
         draw_vector->next = pl->draw_vectors;
         pl->draw_vectors = draw_vector;
@@ -441,7 +437,7 @@ void ivp_env_delete_draw_vector_debug(struct ivp_environment *env)
     ivp_draw_vector_debug_t *dv = pl->draw_vectors;
     while (dv != NULL) {
         ivp_draw_vector_debug_t *next_dv = dv->next;
-        if (dv->debug_text) ivp_free(env->allocator, dv->debug_text, strlen(dv->debug_text) + 1);
+        ivp_string_free(env->allocator, dv->debug_text);
         ivp_free(env->allocator, dv, sizeof(ivp_draw_vector_debug_t));
         dv = next_dv;
     }

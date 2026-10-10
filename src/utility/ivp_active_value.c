@@ -5,6 +5,7 @@
  * propagation.  See ivp_active_value.h for the semantics.
  */
 #include <ivp/utility/ivp_active_value.h>
+#include <ivp/utility/ivp_string.h>
 #include <ivp/containers/ivp_vhash.h>
 #include <ivp/utility/ivp_hash.h>
 #include <ivp/base/ivp_assert.h>
@@ -30,18 +31,6 @@ int ivp_active_value_change_meter(void) {
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
-
-static char *dup_name(const ivp_allocator_t *alloc, const char *name) {
-    if (!name) return NULL;
-    size_t n = strlen(name) + 1;
-    char *s = (char *)ivp_alloc(alloc, n);
-    if (s) memcpy(s, name, n);
-    return s;
-}
-
-static void free_name(const ivp_allocator_t *alloc, char *name) {
-    if (name) ivp_free(alloc, name, strlen(name) + 1);
-}
 
 static bool derived_reserve(const ivp_allocator_t *alloc, ivp_active_derived_t **arr,
                             int *count, int *cap) {
@@ -101,7 +90,7 @@ static ivp_active_float_t *alloc_float(const ivp_allocator_t *alloc, const char 
     memset(af, 0, sizeof(*af));
     af->alloc = alloc;
     af->type = type;
-    af->name = dup_name(alloc, name);
+    af->name = ivp_string_dup(alloc, name);
     if (name && !af->name) {
         ivp_free(alloc, af, sizeof(*af));
         return NULL;
@@ -119,7 +108,7 @@ static ivp_active_int_t *alloc_int(const ivp_allocator_t *alloc, const char *nam
     memset(ai, 0, sizeof(*ai));
     ai->alloc = alloc;
     ai->type = type;
-    ai->name = dup_name(alloc, name);
+    ai->name = ivp_string_dup(alloc, name);
     if (name && !ai->name) {
         ivp_free(alloc, ai, sizeof(*ai));
         return NULL;
@@ -573,7 +562,7 @@ void ivp_active_float_remove_ref(ivp_active_float_t *af) {
     if (af->derived) {
         ivp_free(af->alloc, af->derived, (size_t)af->derived_cap * sizeof(*af->derived));
     }
-    free_name(af->alloc, af->name);
+    ivp_string_free(af->alloc, af->name);
     IVP_ASSERT(af->ref_count == 0); /* ~IVP_U_Active_Value */
     ivp_free(af->alloc, af, sizeof(*af));
 }
@@ -590,7 +579,7 @@ void ivp_active_int_remove_ref(ivp_active_int_t *ai) {
     if (ai->derived) {
         ivp_free(ai->alloc, ai->derived, (size_t)ai->derived_cap * sizeof(*ai->derived));
     }
-    free_name(ai->alloc, ai->name);
+    ivp_string_free(ai->alloc, ai->name);
     IVP_ASSERT(ai->ref_count == 0); /* ~IVP_U_Active_Value */
     ivp_free(ai->alloc, ai, sizeof(*ai));
 }

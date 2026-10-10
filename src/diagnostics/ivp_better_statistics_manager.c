@@ -1,18 +1,8 @@
 /* ivp_better_statistics_manager.c — port of ivp_physics/ivp_betterstatisticsmanager.cxx */
 #include <ivp/diagnostics/ivp_better_statistics_manager.h>
+#include <ivp/utility/ivp_string.h>
 
 #include <string.h>
-
-/* p_strdup */
-static char *bsm_strdup(const ivp_allocator_t *allocator, const char *s)
-{
-    if (!s) return NULL;
-    size_t n = strlen(s) + 1;
-    char *d = (char *)ivp_alloc(allocator, n);
-    if (!d) return NULL;
-    memcpy(d, s, n);
-    return d;
-}
 
 /* ── IVP_BetterStatisticsmanager_Data_Entity ───────────────────────────── */
 
@@ -104,9 +94,9 @@ bool ivp_better_statistics_data_entity_get_state(const ivp_better_statistics_dat
 void ivp_better_statistics_data_entity_set_text(ivp_better_statistics_data_entity_t *e, const char *text_in)
 {
     if (!e) return;
-    char *new_text = bsm_strdup(&e->allocator, text_in);
+    char *new_text = ivp_string_dup(&e->allocator, text_in);
     if (!new_text) return;
-    if (e->text) ivp_free(&e->allocator, e->text, strlen(e->text) + 1);
+    ivp_string_free(&e->allocator, e->text);
     e->text = new_text;
 }
 
@@ -127,7 +117,7 @@ void ivp_better_statistics_data_entity_init_with_allocator(
     e->allocator = *(allocator ? allocator : ivp_default_allocator());
     e->enabled = true;
     e->type = type_in;
-    e->text = bsm_strdup(&e->allocator, "Value: ");
+    e->text = ivp_string_dup(&e->allocator, "Value: ");
     e->text_color = 0;
     e->xpos = 0;
     e->ypos = 0;
@@ -202,7 +192,7 @@ void ivp_better_statistics_data_entity_destroy(ivp_better_statistics_data_entity
     default:
         break;
     }
-    if (e->text) ivp_free(&e->allocator, e->text, strlen(e->text) + 1);
+    ivp_string_free(&e->allocator, e->text);
     e->text = NULL;
 }
 
