@@ -38,7 +38,7 @@ jobs:
             test_args: -L unit --parallel 2
           - name: tsan-parallel
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
-            test_args: -R "test_(parallel_worlds|internal_parallel|qhull_reentrant)$" --parallel 1
+            test_args: -R "test_(parallel_worlds|internal_parallel|internal_state_stability|qhull_(concurrency|overlap))$" --parallel 1
     name: verification (${{ matrix.name }})
     runs-on: ubuntu-latest
     env:
