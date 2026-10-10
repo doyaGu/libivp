@@ -1,11 +1,12 @@
 # Default strong-state policy versus the reference engine.  With the policy
 # disabled, the reentrant Qhull upgrade alone differs only in convex_hulls,
 # hull_pile, and galton.  With it enabled, both Qhull backends produce this
-# same 17-scenario difference set; the Qhull version further changes the three
+# same 22-scenario difference set; the Qhull version further changes the three
 # geometry scenarios without adding another scenario to the set.
 springs
 rope
 cubes
+vehicle
 concave_static
 compound_dynamic
 convex_hulls
@@ -17,6 +18,10 @@ spawn_remove
 long_range
 stabilizer
 world_friction
+golem
+fixed_keyed
 hinge_limits
+constraint_break
+attacher
 merge_objects
 object_attach
