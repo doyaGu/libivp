@@ -33,6 +33,7 @@
 #define STRONG_PHANTOM_CORE_COUNT 8
 #define STRONG_ATTACHER_CORE_COUNT 8
 #define STRONG_FORCEFIELD_CORE_COUNT 8
+#define STRONG_EVENT_LISTENER_COUNT 3
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -1715,6 +1716,79 @@ IVP_TEST(forcefield_hash_order_does_not_change_attachment_order)
     IVP_ASSERT_TRUE(ok);
 }
 
+typedef struct strong_event_capture {
+    int ids[STRONG_EVENT_LISTENER_COUNT];
+    int count;
+} strong_event_capture_t;
+
+typedef struct strong_event_listener_context {
+    strong_event_capture_t *capture;
+    int id;
+} strong_event_listener_context_t;
+
+static void strong_capture_event_listener(
+    void *context, ivp_environment_t *environment,
+    const ivp_event_t *event_data)
+{
+    (void)environment;
+    if (event_data->type != IVP_EVENT_SIM_UNIT_BEGIN) return;
+    strong_event_listener_context_t *listener =
+        (strong_event_listener_context_t *)context;
+    IVP_ASSERT(listener->capture->count <
+               STRONG_EVENT_LISTENER_COUNT);
+    if (listener->capture->count < STRONG_EVENT_LISTENER_COUNT) {
+        listener->capture->ids[listener->capture->count++] =
+            listener->id;
+    }
+}
+
+static bool strong_run_event_listener_scene(bool perturb_registry,
+                                            strong_event_capture_t *capture)
+{
+    memset(capture, 0, sizeof(*capture));
+    ivp_environment_t *environment = strong_environment_create(1);
+    if (!environment) return false;
+    strong_event_listener_context_t listeners[STRONG_EVENT_LISTENER_COUNT];
+    strong_event_listener_context_t removed = {capture, -1};
+    ivp_event_listener_handle_t removed_handle =
+        ivp_event_listener_handle_invalid();
+    bool ok = true;
+    for (int i = 0; i < STRONG_EVENT_LISTENER_COUNT; i++) {
+        listeners[i].capture = capture;
+        listeners[i].id = i;
+        ivp_event_listener_handle_t handle =
+            ivp_environment_add_event_listener(
+                environment, strong_capture_event_listener,
+                &listeners[i]);
+        ok = ok && ivp_event_listener_handle_is_valid(handle);
+        if (perturb_registry && i == 0) {
+            removed_handle = ivp_environment_add_event_listener(
+                environment, strong_capture_event_listener, &removed);
+            ok = ok &&
+                 ivp_event_listener_handle_is_valid(removed_handle);
+        }
+    }
+    if (ok && perturb_registry) {
+        ok = ivp_environment_remove_event_listener(
+            environment, removed_handle);
+    }
+    if (ok) ivp_environment_simulate_one_psi(environment);
+    ok = ok && capture->count == STRONG_EVENT_LISTENER_COUNT;
+    ivp_environment_destroy(environment);
+    return ok;
+}
+
+IVP_TEST(event_listener_registry_history_does_not_change_callback_order)
+{
+    strong_event_capture_t canonical;
+    strong_event_capture_t perturbed;
+    bool ok = strong_run_event_listener_scene(false, &canonical) &&
+              strong_run_event_listener_scene(true, &perturbed) &&
+              memcmp(canonical.ids, perturbed.ids,
+                     sizeof(canonical.ids)) == 0;
+    IVP_ASSERT_TRUE(ok);
+}
+
 int main(void)
 {
     IVP_REGISTER(arena_history_does_not_change_visible_state);
@@ -1738,5 +1812,6 @@ int main(void)
     IVP_REGISTER(attacher_hash_order_does_not_change_callback_order);
     IVP_REGISTER(attacher_storage_order_does_not_change_destroy_order);
     IVP_REGISTER(forcefield_hash_order_does_not_change_attachment_order);
+    IVP_REGISTER(event_listener_registry_history_does_not_change_callback_order);
     IVP_RUN_ALL();
 }

@@ -9,6 +9,7 @@
 
 typedef struct ivp_event_system {
     ivp_registry_t registry;
+    uint64_t next_registration_sequence;
 } ivp_event_system_t;
 
 typedef struct ivp_event_listener_slot {
@@ -17,6 +18,7 @@ typedef struct ivp_event_listener_slot {
     ivp_event_listener_fn_t fn;
     void *ctx;
     bool enabled;
+    uint64_t registration_sequence;
 } ivp_event_listener_slot_t;
 
 ivp_result_t ivp_event_system_init(ivp_event_system_t *sys,

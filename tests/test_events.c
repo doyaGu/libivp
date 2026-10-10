@@ -330,6 +330,70 @@ IVP_TEST(event_multiple_listeners) {
     ivp_environment_destroy(env);
 }
 
+#define EVENT_ORDER_LISTENER_COUNT 3
+
+typedef struct {
+    int ids[EVENT_ORDER_LISTENER_COUNT];
+    int count;
+} event_order_capture_t;
+
+typedef struct {
+    event_order_capture_t *capture;
+    int id;
+} event_order_listener_t;
+
+static void event_order_listener_fn(void *ctx, ivp_environment_t *env,
+                                    const ivp_event_t *ev) {
+    (void)env;
+    if (ev->type != IVP_EVENT_SIM_UNIT_BEGIN) return;
+
+    event_order_listener_t *listener = (event_order_listener_t *)ctx;
+    if (listener->capture->count < EVENT_ORDER_LISTENER_COUNT) {
+        listener->capture->ids[listener->capture->count++] = listener->id;
+    }
+}
+
+IVP_TEST(event_listener_removal_preserves_reverse_registration_order) {
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    IVP_ASSERT_NOT_NULL(env);
+
+    event_order_capture_t capture;
+    memset(&capture, 0, sizeof(capture));
+    event_order_listener_t listeners[EVENT_ORDER_LISTENER_COUNT];
+    event_order_listener_t removed_listener = {&capture, -1};
+
+    listeners[0].capture = &capture;
+    listeners[0].id = 0;
+    ivp_event_listener_handle_t first =
+        ivp_environment_add_event_listener(env, event_order_listener_fn,
+                                           &listeners[0]);
+    ivp_event_listener_handle_t removed =
+        ivp_environment_add_event_listener(env, event_order_listener_fn,
+                                           &removed_listener);
+    for (int i = 1; i < EVENT_ORDER_LISTENER_COUNT; i++) {
+        listeners[i].capture = &capture;
+        listeners[i].id = i;
+        ivp_event_listener_handle_t handle =
+            ivp_environment_add_event_listener(env, event_order_listener_fn,
+                                               &listeners[i]);
+        IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(handle));
+    }
+    IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(first));
+    IVP_ASSERT_TRUE(ivp_event_listener_handle_is_valid(removed));
+    IVP_ASSERT_TRUE(ivp_environment_remove_event_listener(env, removed));
+
+    ivp_environment_simulate_one_psi(env);
+
+    IVP_ASSERT_EQ(capture.count, EVENT_ORDER_LISTENER_COUNT);
+    IVP_ASSERT_EQ(capture.ids[0], 2);
+    IVP_ASSERT_EQ(capture.ids[1], 1);
+    IVP_ASSERT_EQ(capture.ids[2], 0);
+
+    ivp_environment_destroy(env);
+}
+
 /* ========================================================================
  * Test 7: Invalid Event Listener Handle
  * ======================================================================== */
@@ -739,6 +803,7 @@ int main(void) {
     IVP_REGISTER(event_controller_added);
     IVP_REGISTER(event_controller_removed);
     IVP_REGISTER(event_multiple_listeners);
+    IVP_REGISTER(event_listener_removal_preserves_reverse_registration_order);
     IVP_REGISTER(event_listener_handle_invalid);
     IVP_REGISTER(event_clear_listeners);
     IVP_REGISTER(event_object_create_destroy);

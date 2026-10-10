@@ -133,6 +133,27 @@ static ivp_event_listener_slot_t *env_get_event_listener_by_handle(ivp_event_sys
     return (ivp_event_listener_slot_t *)ivp_registry_get_by_handle(&es->registry, h);
 }
 
+typedef struct env_event_listener_snapshot {
+    ivp_event_listener_handle_t handle;
+    uint64_t registration_sequence;
+} env_event_listener_snapshot_t;
+
+static void env_sort_event_listener_snapshot(
+    env_event_listener_snapshot_t *listeners, int count)
+{
+    for (int i = 1; i < count; i++) {
+        env_event_listener_snapshot_t listener = listeners[i];
+        int position = i;
+        while (position > 0 &&
+               listeners[position - 1].registration_sequence >
+                   listener.registration_sequence) {
+            listeners[position] = listeners[position - 1];
+            position--;
+        }
+        listeners[position] = listener;
+    }
+}
+
 void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_t type, ivp_real_t dt,
                                          int object_index, int controller_id)
 {
@@ -147,31 +168,39 @@ void ivp_environment_emit_event_internal(ivp_environment_t *env, ivp_event_type_
     evt.sim_unit_index = env->current_sim_unit_index;
     evt.object_index = object_index;
     evt.controller_id = controller_id;
-    ivp_event_listener_handle_t local_handles[32];
-    ivp_event_listener_handle_t *handles = local_handles;
+    env_event_listener_snapshot_t local_listeners[32];
+    env_event_listener_snapshot_t *listeners = local_listeners;
     bool allocated = false;
-    if (n > (int)(sizeof(local_handles) / sizeof(local_handles[0]))) {
-        handles = (ivp_event_listener_handle_t *)ivp_alloc(env->allocator, (size_t)n * sizeof(ivp_event_listener_handle_t));
-        if (!handles) return;
+    if (n > (int)(sizeof(local_listeners) /
+                  sizeof(local_listeners[0]))) {
+        listeners = (env_event_listener_snapshot_t *)ivp_alloc(
+            env->allocator, (size_t)n * sizeof(*listeners));
+        if (!listeners) return;
         allocated = true;
     }
-    int handle_count = 0;
+    int listener_count = 0;
     for (int i = 0; i < n; i++) {
         ivp_event_listener_slot_t *slot = ivp_event_system_get_at(es, i);
         if (!slot) continue;
-        ivp_event_listener_handle_t h;
-        h.slot = slot->handle.slot;
-        h.generation = slot->handle.generation;
-        handles[handle_count++] = h;
+        env_event_listener_snapshot_t *snapshot =
+            &listeners[listener_count++];
+        snapshot->handle.slot = slot->handle.slot;
+        snapshot->handle.generation = slot->handle.generation;
+        snapshot->registration_sequence = slot->registration_sequence;
     }
+    env_sort_event_listener_snapshot(listeners, listener_count);
     /* reference listener vectors fire from the last added to the first
      * (e.g. IVP_Environment::fire_event_PSI) */
-    for (int i = handle_count - 1; i >= 0; i--) {
-        ivp_event_listener_slot_t *slot = env_get_event_listener_by_handle(es, handles[i]);
+    for (int i = listener_count - 1; i >= 0; i--) {
+        ivp_event_listener_slot_t *slot =
+            env_get_event_listener_by_handle(es, listeners[i].handle);
         if (!slot || !slot->enabled || !slot->fn) continue;
         slot->fn(slot->ctx, env, &evt);
     }
-    if (allocated) ivp_free(env->allocator, handles, (size_t)n * sizeof(ivp_event_listener_handle_t));
+    if (allocated) {
+        ivp_free(env->allocator, listeners,
+                 (size_t)n * sizeof(*listeners));
+    }
 }
 
 /* ── sim unit transaction memory (IVP_U_Memory) ─────────────────────── */

@@ -16,12 +16,13 @@ ivp_result_t ivp_event_system_init(ivp_event_system_t *sys,
                                    const ivp_allocator_t *alloc,
                                    int initial_capacity)
 {
-    return ivp_registry_init(&sys->registry,
-                             alloc,
-                             initial_capacity,
-                             ivp_event_listener_index_cb,
-                             NULL,
-                             ivp_event_listener_get_index);
+    sys->next_registration_sequence = 0u;
+    ivp_result_t result = ivp_registry_init(
+        &sys->registry, alloc, initial_capacity,
+        ivp_event_listener_index_cb, NULL,
+        ivp_event_listener_get_index);
+    if (result == IVP_OK) sys->next_registration_sequence = 1u;
+    return result;
 }
 
 void ivp_event_system_destroy(ivp_event_system_t *sys,
@@ -29,6 +30,7 @@ void ivp_event_system_destroy(ivp_event_system_t *sys,
 {
     (void)alloc;
     ivp_registry_destroy(&sys->registry, true, sizeof(ivp_event_listener_slot_t));
+    sys->next_registration_sequence = 0u;
 }
 
 ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sys,
@@ -37,7 +39,9 @@ ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sy
                                                           void *ctx)
 {
     ivp_event_listener_handle_t invalid = ivp_event_listener_handle_invalid();
-    if (!sys || !alloc || !fn) return invalid;
+    if (!sys || !alloc || !fn ||
+        sys->next_registration_sequence == 0u ||
+        sys->next_registration_sequence == UINT64_MAX) return invalid;
 
     ivp_event_listener_slot_t *slot =
         (ivp_event_listener_slot_t *)ivp_alloc(alloc, sizeof(ivp_event_listener_slot_t));
@@ -56,6 +60,7 @@ ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sy
 
     slot->handle.slot = h.slot;
     slot->handle.generation = h.generation;
+    slot->registration_sequence = sys->next_registration_sequence++;
 
     ivp_event_listener_handle_t out;
     out.slot = h.slot;
