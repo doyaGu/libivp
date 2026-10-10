@@ -415,25 +415,132 @@ void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
     mgr_add_unit_to_slot(su, slot);
 }
 
+uint64_t ivp_core_stable_order_key(const ivp_core_t *core)
+{
+    uint64_t key = UINT64_MAX;
+    for (int object_index = 0;
+         object_index < ivp_pvec_len(&core->objects);
+         object_index++) {
+        const ivp_object_t *object =
+            (const ivp_object_t *)ivp_pvec_at(&core->objects,
+                                              object_index);
+        uint64_t object_key = ivp_object_order_key(object);
+        if (object_key < key) key = object_key;
+    }
+    IVP_ASSERT(key != UINT64_MAX);
+    return key;
+}
+
 uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
 {
     uint64_t key = UINT64_MAX;
     for (int core_index = 0;
          core_index < ivp_pvec_len(&su->sim_unit_cores);
          core_index++) {
-        const ivp_core_t *core = su_core_at(su, core_index);
-        for (int object_index = 0;
-             object_index < ivp_pvec_len(&core->objects);
-             object_index++) {
-            const ivp_object_t *object =
-                (const ivp_object_t *)ivp_pvec_at(&core->objects,
-                                                  object_index);
-            uint64_t object_key = ivp_object_order_key(object);
-            if (object_key < key) key = object_key;
-        }
+        uint64_t core_key =
+            ivp_core_stable_order_key(su_core_at(su, core_index));
+        if (core_key < key) key = core_key;
     }
     IVP_ASSERT(key != UINT64_MAX);
     return key;
+}
+
+typedef int (*mgr_order_compare_fn)(const void *left,
+                                    const void *right);
+
+static void mgr_sort_vector(ivp_pvec_t *vector,
+                            mgr_order_compare_fn compare)
+{
+    for (int i = 1; i < ivp_pvec_len(vector); i++) {
+        void *value = vector->elems[i];
+        int position = i;
+        while (position > 0 &&
+               compare(vector->elems[position - 1], value) > 0) {
+            vector->elems[position] = vector->elems[position - 1];
+            position--;
+        }
+        vector->elems[position] = value;
+    }
+}
+
+static int mgr_compare_objects(const void *left, const void *right)
+{
+    uint64_t left_key =
+        ivp_object_order_key((const ivp_object_t *)left);
+    uint64_t right_key =
+        ivp_object_order_key((const ivp_object_t *)right);
+    IVP_ASSERT(left_key != right_key || left == right);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static int mgr_compare_cores(const void *left, const void *right)
+{
+    uint64_t left_key =
+        ivp_core_stable_order_key((const ivp_core_t *)left);
+    uint64_t right_key =
+        ivp_core_stable_order_key((const ivp_core_t *)right);
+    IVP_ASSERT(left_key != right_key || left == right);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static int mgr_compare_controllers(const void *left, const void *right)
+{
+    const ivp_sim_ctrl_t *left_controller =
+        (const ivp_sim_ctrl_t *)left;
+    const ivp_sim_ctrl_t *right_controller =
+        (const ivp_sim_ctrl_t *)right;
+    int left_priority =
+        ivp_sim_ctrl_priority((ivp_sim_ctrl_t *)left_controller);
+    int right_priority =
+        ivp_sim_ctrl_priority((ivp_sim_ctrl_t *)right_controller);
+    if (left_priority != right_priority) {
+        return left_priority < right_priority ? -1 : 1;
+    }
+    uint64_t left_key = left_controller->registration_sequence;
+    uint64_t right_key = right_controller->registration_sequence;
+    IVP_ASSERT(left_key != 0u && right_key != 0u);
+    IVP_ASSERT(left_key != right_key || left == right);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static int mgr_compare_controller_lists(const void *left,
+                                        const void *right)
+{
+    const ivp_su_ctrl_list_t *left_list =
+        (const ivp_su_ctrl_list_t *)left;
+    const ivp_su_ctrl_list_t *right_list =
+        (const ivp_su_ctrl_list_t *)right;
+    return mgr_compare_controllers(left_list->l_controller,
+                                   right_list->l_controller);
+}
+
+static void mgr_canonicalize_unit(ivp_sim_units_manager_t *manager,
+                                  ivp_sim_unit_t *unit)
+{
+    for (int i = 0; i < ivp_pvec_len(&unit->sim_unit_cores); i++) {
+        ivp_core_t *core = su_core_at(unit, i);
+        mgr_sort_vector(&core->objects, mgr_compare_objects);
+        for (int j = 0;
+             j < ivp_pvec_len(&core->controllers_of_core);
+             j++) {
+            ivp_env_register_sim_controller(
+                manager->l_environment,
+                (ivp_sim_ctrl_t *)ivp_pvec_at(
+                    &core->controllers_of_core, j));
+        }
+        mgr_sort_vector(&core->controllers_of_core,
+                        mgr_compare_controllers);
+    }
+    mgr_sort_vector(&unit->sim_unit_cores, mgr_compare_cores);
+    for (int i = 0; i < ivp_pvec_len(&unit->controller_cores); i++) {
+        ivp_su_ctrl_list_t *controller = su_cl_at(unit, i);
+        ivp_env_register_sim_controller(manager->l_environment,
+                                        controller->l_controller);
+        mgr_sort_vector(&controller->cores_controlled_by,
+                        mgr_compare_cores);
+    }
+    mgr_sort_vector(&unit->controller_cores,
+                    mgr_compare_controller_lists);
 }
 
 static ivp_sim_unit_t *mgr_merge_canonical_units(ivp_sim_unit_t *left,
@@ -483,13 +590,15 @@ static ivp_sim_unit_t *mgr_sort_canonical_units(ivp_sim_unit_t *head)
         mgr_sort_canonical_units(right));
 }
 
-static void mgr_canonicalize_slot(ivp_sim_unit_t **slot)
+static void mgr_canonicalize_slot(ivp_sim_units_manager_t *manager,
+                                  ivp_sim_unit_t **slot)
 {
     *slot = mgr_sort_canonical_units(*slot);
     ivp_sim_unit_t *previous = NULL;
     for (ivp_sim_unit_t *unit = *slot; unit;
          unit = unit->next_sim_unit) {
         unit->prev_sim_unit = previous;
+        mgr_canonicalize_unit(manager, unit);
         previous = unit;
     }
 }
@@ -500,8 +609,8 @@ static void mgr_canonicalize_slots(ivp_sim_units_manager_t *manager)
             manager->l_environment)) {
         return;
     }
-    mgr_canonicalize_slot(&manager->sim_units_slot0);
-    mgr_canonicalize_slot(&manager->still_slot);
+    mgr_canonicalize_slot(manager, &manager->sim_units_slot0);
+    mgr_canonicalize_slot(manager, &manager->still_slot);
 }
 
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
