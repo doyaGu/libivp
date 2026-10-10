@@ -912,9 +912,36 @@ static void fs_recalc_all_contact_points(ivp_fr_system_t *fs)
     }
 }
 
+#if IVP_CANONICAL_INTERNAL_STATE
+static void fs_record_pair_order(ivp_fr_system_t *fs)
+{
+    /* Preserve the reference vector's append/remove order as the authority;
+     * the physical slots may then be restored after a perturbation. */
+    const int count = ivp_pvec_len(&fs->fr_pairs_of_objs);
+    for (int i = 0; i < count; i++) {
+        pair_at(&fs->fr_pairs_of_objs, i)->pair_order =
+            (uint64_t)i + 1u;
+    }
+    fs->next_pair_order = (uint64_t)count;
+}
+
+static void fs_note_pair_append(ivp_fr_system_t *fs,
+                                ivp_fr_core_pair_t *pair)
+{
+    if (fs->next_pair_order == UINT64_MAX) {
+        fs_record_pair_order(fs);
+        return;
+    }
+    pair->pair_order = ++fs->next_pair_order;
+}
+#endif
+
 static bool fs_add_fr_pair(ivp_fr_system_t *fs, ivp_fr_core_pair_t *pair)
 {
     if (ivp_pvec_add(&fs->fr_pairs_of_objs, pair) < 0) return false;
+#if IVP_CANONICAL_INTERNAL_STATE
+    fs_note_pair_append(fs, pair);
+#endif
     ivp_env_fire_friction_pair_created(ivp_core_env(pair->objs[0]), pair);
     return true;
 }
@@ -984,6 +1011,90 @@ void ivp_fr_system_remove_dist_from_system(ivp_fr_system_t *fs, ivp_contact_pt_t
     fs->friction_dist_number--;
 }
 
+#if IVP_CANONICAL_INTERNAL_STATE
+static void fs_record_friction_order(ivp_fr_system_t *fs)
+{
+    uint64_t count = 0u;
+    for (ivp_contact_pt_t *contact = fs->first_friction_dist;
+         contact; contact = contact->next_dist_in_friction) {
+        count++;
+    }
+    IVP_ASSERT(fs->friction_dist_number >= 0);
+    IVP_ASSERT(count == (uint64_t)fs->friction_dist_number);
+    fs->next_friction_order = count;
+    for (ivp_contact_pt_t *contact = fs->first_friction_dist;
+         contact; contact = contact->next_dist_in_friction) {
+        contact->friction_order = count--;
+    }
+}
+
+static void fs_restore_friction_order(ivp_fr_system_t *fs)
+{
+    /* The reference's stable bubble sort makes the resulting list order
+     * meaningful across controller phases.  Restore that order rather than
+     * deriving a new one from allocation or creation history. */
+    ivp_contact_pt_t *head = fs->first_friction_dist;
+    if (!head) return;
+    if (!head->next_dist_in_friction) {
+        head->prev_dist_in_friction = NULL;
+        return;
+    }
+
+    ivp_contact_pt_t *previous = NULL;
+    uint64_t previous_order = 0u;
+    bool already_ordered = true;
+    for (ivp_contact_pt_t *contact = head; contact;
+         contact = contact->next_dist_in_friction) {
+        uint64_t order = contact->friction_order;
+        if (contact->prev_dist_in_friction != previous || order == 0u ||
+            (previous && previous_order <= order)) {
+            already_ordered = false;
+            break;
+        }
+        previous = contact;
+        previous_order = order;
+    }
+    if (already_ordered) return;
+
+    ivp_contact_pt_t *unsorted = head;
+    ivp_contact_pt_t *sorted = NULL;
+    while (unsorted) {
+        ivp_contact_pt_t *contact = unsorted;
+        unsorted = unsorted->next_dist_in_friction;
+        uint64_t order = contact->friction_order;
+        IVP_ASSERT(order != 0u);
+
+        ivp_contact_pt_t *before = NULL;
+        ivp_contact_pt_t *after = sorted;
+        while (after && after->friction_order > order) {
+            before = after;
+            after = after->next_dist_in_friction;
+        }
+        IVP_ASSERT(!after || after->friction_order != order);
+        contact->prev_dist_in_friction = before;
+        contact->next_dist_in_friction = after;
+        if (before) {
+            before->next_dist_in_friction = contact;
+        } else {
+            sorted = contact;
+        }
+        if (after) after->prev_dist_in_friction = contact;
+    }
+    fs->first_friction_dist = sorted;
+}
+
+static void fs_assign_friction_order(ivp_fr_system_t *fs,
+                                     ivp_contact_pt_t *contact)
+{
+    if (fs->next_friction_order == UINT64_MAX) {
+        fs_restore_friction_order(fs);
+        fs_record_friction_order(fs);
+    }
+    IVP_ASSERT(fs->next_friction_order != UINT64_MAX);
+    contact->friction_order = ++fs->next_friction_order;
+}
+#endif
+
 bool ivp_fr_system_dist_added_update_pair_info(ivp_fr_system_t *fs, ivp_contact_pt_t *new_dist)
 {
     ivp_core_t *core0 = cp_core(new_dist, 0);
@@ -1019,6 +1130,9 @@ void ivp_fr_system_add_dist_to_system(ivp_fr_system_t *fs, ivp_contact_pt_t *new
         fprintf(fr_dm(fs->l_environment)->out_deb_file, "add_dist_to_fs %f %p to %p\n",
                 ivp_env_get_current_time(fs->l_environment), (void *)new_dist, (void *)fs);
     }
+#if IVP_CANONICAL_INTERNAL_STATE
+    fs_assign_friction_order(fs, new_dist);
+#endif
     new_dist->l_friction_system = fs;
     ivp_contact_pt_t *first = fs->first_friction_dist;
     new_dist->prev_dist_in_friction = NULL;
@@ -2259,40 +2373,18 @@ static void fs_exchange_friction_dists(ivp_fr_system_t *fs, ivp_contact_pt_t *fi
 
 static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
 {
-    const bool canonical = ivp_build_uses_canonical_internal_state();
     ivp_contact_pt_t *first_dist = fs->first_friction_dist;
     if (!first_dist) return;
     for (;;) {
         ivp_contact_pt_t *second_dist = first_dist->next_dist_in_friction;
         if (!second_dist) break;
-        bool should_shift =
-            first_dist->has_negative_pull_since >
-                second_dist->has_negative_pull_since;
-        if (canonical &&
-            first_dist->has_negative_pull_since ==
-                second_dist->has_negative_pull_since) {
-            IVP_ASSERT(first_dist->creation_sequence !=
-                       second_dist->creation_sequence);
-            should_shift = first_dist->creation_sequence >
-                           second_dist->creation_sequence;
-        }
-        if (should_shift) {
+        if (first_dist->has_negative_pull_since >
+            second_dist->has_negative_pull_since) {
             fs_exchange_friction_dists(fs, first_dist, second_dist);
             ivp_contact_pt_t *test_dist;
-            while ((test_dist = second_dist->prev_dist_in_friction) != NULL) {
-                bool test_should_shift =
-                    test_dist->has_negative_pull_since >
-                        second_dist->has_negative_pull_since;
-                if (canonical &&
-                    test_dist->has_negative_pull_since ==
-                        second_dist->has_negative_pull_since) {
-                    IVP_ASSERT(test_dist->creation_sequence !=
-                               second_dist->creation_sequence);
-                    test_should_shift =
-                        test_dist->creation_sequence >
-                        second_dist->creation_sequence;
-                }
-                if (!test_should_shift) break;
+            while ((test_dist = second_dist->prev_dist_in_friction) != NULL &&
+                   test_dist->has_negative_pull_since >
+                       second_dist->has_negative_pull_since) {
                 fs_exchange_friction_dists(fs, test_dist, second_dist);
             }
             second_dist = first_dist;
@@ -2305,17 +2397,15 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
             ivp_contact_pt_t *second_dist = first_dist->next_dist_in_friction;
             if (second_dist) {
                 IVP_ASSERT(!(first_dist->has_negative_pull_since > second_dist->has_negative_pull_since));
-                if (canonical &&
-                    first_dist->has_negative_pull_since ==
-                        second_dist->has_negative_pull_since) {
-                    IVP_ASSERT(first_dist->creation_sequence <
-                               second_dist->creation_sequence);
-                }
             }
         }
     }
+#if IVP_CANONICAL_INTERNAL_STATE
+    fs_record_friction_order(fs);
+#endif
 }
 
+#if IVP_CANONICAL_INTERNAL_STATE
 typedef int (*fs_order_compare_fn)(const void *left,
                                    const void *right);
 
@@ -2356,40 +2446,22 @@ static int fs_compare_contacts(const void *left, const void *right)
     return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
 }
 
-static void fs_pair_order_key(const ivp_fr_core_pair_t *pair,
-                              uint64_t *first, uint64_t *second)
-{
-    uint64_t key0 = ivp_core_stable_order_key(pair->objs[0]);
-    uint64_t key1 = ivp_core_stable_order_key(pair->objs[1]);
-    if (key0 <= key1) {
-        *first = key0;
-        *second = key1;
-    } else {
-        *first = key1;
-        *second = key0;
-    }
-}
-
 static int fs_compare_pairs(const void *left, const void *right)
 {
-    uint64_t left_first, left_second;
-    uint64_t right_first, right_second;
-    fs_pair_order_key((const ivp_fr_core_pair_t *)left,
-                      &left_first, &left_second);
-    fs_pair_order_key((const ivp_fr_core_pair_t *)right,
-                      &right_first, &right_second);
-    if (left_first != right_first) {
-        return left_first < right_first ? -1 : 1;
-    }
-    IVP_ASSERT(left_second != right_second || left == right);
-    return left_second < right_second
+    uint64_t left_order = ((const ivp_fr_core_pair_t *)left)->pair_order;
+    uint64_t right_order = ((const ivp_fr_core_pair_t *)right)->pair_order;
+    IVP_ASSERT(left_order != 0u && right_order != 0u);
+    IVP_ASSERT(left_order != right_order || left == right);
+    return left_order < right_order
                ? -1
-               : left_second > right_second ? 1 : 0;
+               : left_order > right_order ? 1 : 0;
 }
+#endif
 
 static void fs_restore_internal_order(ivp_fr_system_t *fs)
 {
-    fs_bubble_sort_dists_importance(fs);
+#if IVP_CANONICAL_INTERNAL_STATE
+    fs_restore_friction_order(fs);
     fs_sort_vector(&fs->cores_of_friction_system, fs_compare_cores);
     fs_sort_vector(&fs->moveable_cores_of_friction_system,
                    fs_compare_cores);
@@ -2413,6 +2485,9 @@ static void fs_restore_internal_order(ivp_fr_system_t *fs)
                            fs_compare_contacts);
         }
     }
+#else
+    (void)fs;
+#endif
 }
 
 static void fs_reorder_mindists_for_complex(ivp_fr_system_t *fs)
@@ -2491,9 +2566,8 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
     }
     if (ivp_build_uses_canonical_internal_state()) {
         fs_restore_internal_order(fs);
-    } else {
-        fs_bubble_sort_dists_importance(fs);
     }
+    fs_bubble_sort_dists_importance(fs);
     fs_reorder_mindists_for_complex(fs);
     if ((fs->friction_dist_number - fs->complex_not_necessary_number) > IVP_FR_MAX_FRICTION_MATRIX) {
         fs_static_fr_oversized_matrix_panic(fs);

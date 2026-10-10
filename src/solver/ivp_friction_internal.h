@@ -97,6 +97,10 @@ typedef struct ivp_contact_pt {
     struct ivp_contact_pt *next_dist_in_friction;
     struct ivp_contact_pt *prev_dist_in_friction;
     uint64_t                creation_sequence;
+#if IVP_CANONICAL_INTERNAL_STATE
+    /* Logical list position, independent of the physical link order. */
+    uint64_t                friction_order;
+#endif
     ivp_fr_synapse_t       synapse[2];
     float                  inv_virt_mass_mindist_no_dir;
     bool                   two_friction_values;
@@ -135,6 +139,10 @@ static inline float ivp_cp_get_gap_length(const ivp_contact_pt_t *cp) { return c
 typedef struct ivp_fr_core_pair {
     const ivp_allocator_t *allocator;
     ivp_pvec_t  fr_dists;            /* ivp_contact_pt_t* */
+#if IVP_CANONICAL_INTERNAL_STATE
+    /* Logical append position in ivp_fr_system::fr_pairs_of_objs. */
+    uint64_t    pair_order;
+#endif
     int         next_ease_nr_psi;
     ivp_time_t  last_impact_time_pair;
     float       integrated_anti_energy;
@@ -162,6 +170,11 @@ typedef struct ivp_fr_system {
     short                  friction_obj_number;
     short                  friction_dist_number;
     short                  complex_not_necessary_number;
+#if IVP_CANONICAL_INTERNAL_STATE
+    /* Sources for new logical list/vector positions. */
+    uint64_t               next_friction_order;
+    uint64_t               next_pair_order;
+#endif
     bool                   union_find_necessary;
     bool                   fr_sys_simulated;
     double                 sum_energy_destroyed;
