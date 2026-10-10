@@ -7,6 +7,7 @@
 
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/collision/ivp_collision_core.h>
+#include <ivp/controllers/ivp_attacher_to_cores.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
 #include <ivp/dynamics/ivp_object.h>
@@ -29,6 +30,7 @@
 #define STRONG_CLUSTER_OBJECT_COUNT 6
 #define STRONG_CLUSTER_VISIT_CAPACITY 128
 #define STRONG_PHANTOM_CORE_COUNT 8
+#define STRONG_ATTACHER_CORE_COUNT 8
 
 enum strong_perturbation {
     STRONG_PERTURB_CLIENT_POINTERS = 1u << 0,
@@ -145,22 +147,23 @@ static void reverse_cluster_tree(ivp_cluster_t *cluster)
     cluster->first_child = new_head;
 }
 
-static void set_phantom_hash_order(
+static void set_core_set_iteration_order(
     ivp_set_t *set,
-    ivp_object_t *const objects[STRONG_PHANTOM_CORE_COUNT],
+    ivp_object_t *const *objects,
+    int object_count,
     bool reverse)
 {
     ivp_vhash_t *hash = &set->hash;
     int capacity = ivp_vhash_capacity(hash);
     memset(hash->elems, 0,
            (size_t)capacity * sizeof(hash->elems[0]));
-    for (int i = 0; i < STRONG_PHANTOM_CORE_COUNT; i++) {
+    for (int i = 0; i < object_count; i++) {
         int object_index = reverse
-                               ? STRONG_PHANTOM_CORE_COUNT - 1 - i
+                               ? object_count - 1 - i
                                : i;
         hash->elems[i].elem = objects[object_index]->physical_core;
     }
-    hash->nelems = STRONG_PHANTOM_CORE_COUNT;
+    hash->nelems = object_count;
 }
 
 static void scramble_sim_unit_contents(ivp_sim_unit_t *unit)
@@ -1440,10 +1443,12 @@ IVP_TEST(phantom_hash_order_does_not_change_callback_order)
     bool ok = strong_phantom_scene_init(&canonical) &&
               strong_phantom_scene_init(&perturbed);
     if (ok) {
-        set_phantom_hash_order(&canonical.phantom->set_of_cores->set,
-                               canonical.objects, false);
-        set_phantom_hash_order(&perturbed.phantom->set_of_cores->set,
-                               perturbed.objects, true);
+        set_core_set_iteration_order(
+            &canonical.phantom->set_of_cores->set,
+            canonical.objects, STRONG_PHANTOM_CORE_COUNT, false);
+        set_core_set_iteration_order(
+            &perturbed.phantom->set_of_cores->set,
+            perturbed.objects, STRONG_PHANTOM_CORE_COUNT, true);
         ivp_controller_phantom_destroy(canonical.phantom);
         canonical.phantom = NULL;
         ivp_controller_phantom_destroy(perturbed.phantom);
@@ -1455,6 +1460,176 @@ IVP_TEST(phantom_hash_order_does_not_change_callback_order)
     }
     ivp_environment_destroy(perturbed.environment);
     ivp_environment_destroy(canonical.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
+typedef struct strong_attacher_capture {
+    uint64_t created[STRONG_ATTACHER_CORE_COUNT];
+    uint64_t deleted[STRONG_ATTACHER_CORE_COUNT];
+    int created_count;
+    int deleted_count;
+} strong_attacher_capture_t;
+
+typedef struct strong_attacher_scene {
+    ivp_environment_t *environment;
+    ivp_object_t *objects[STRONG_ATTACHER_CORE_COUNT];
+    ivp_set_active_t cores;
+    ivp_attacher_to_cores_t attacher;
+    strong_attacher_capture_t capture;
+} strong_attacher_scene_t;
+
+static void *strong_attacher_create(ivp_attacher_to_cores_t *attacher,
+                                    ivp_core_t *core)
+{
+    strong_attacher_capture_t *capture =
+        (strong_attacher_capture_t *)attacher->user_data;
+    IVP_ASSERT(capture->created_count < STRONG_ATTACHER_CORE_COUNT);
+    if (capture->created_count < STRONG_ATTACHER_CORE_COUNT) {
+        capture->created[capture->created_count++] =
+            ivp_core_stable_order_key(core);
+    }
+    return core;
+}
+
+static void strong_attacher_delete(ivp_attacher_to_cores_t *attacher,
+                                   ivp_core_t *core,
+                                   void *attachment)
+{
+    strong_attacher_capture_t *capture =
+        (strong_attacher_capture_t *)attacher->user_data;
+    IVP_ASSERT(attachment == core);
+    IVP_ASSERT(capture->deleted_count < STRONG_ATTACHER_CORE_COUNT);
+    if (capture->deleted_count < STRONG_ATTACHER_CORE_COUNT) {
+        capture->deleted[capture->deleted_count++] =
+            ivp_core_stable_order_key(core);
+    }
+}
+
+static const ivp_attacher_to_cores_class_t strong_attacher_class = {
+    strong_attacher_create,
+    strong_attacher_delete,
+    NULL
+};
+
+static bool strong_attacher_scene_init(strong_attacher_scene_t *scene,
+                                       bool reverse_set_order)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = strong_environment_create(1);
+    if (!scene->environment) return false;
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.25);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.start_in_simulation = false;
+    object_template.enable_collision_detection = false;
+    ivp_set_active_init(&scene->cores, scene->environment->allocator, 16);
+    for (int i = 0; i < STRONG_ATTACHER_CORE_COUNT; i++) {
+        ivp_vec3r_set(&object_template.position,
+                      (ivp_real_t)(4.0 * (double)(i + 1)),
+                      IVP_REAL(0.0), IVP_REAL(0.0));
+        scene->objects[i] = ivp_environment_create_object(
+            scene->environment, &object_template, NULL);
+        if (!scene->objects[i]) return false;
+        ivp_set_active_add(&scene->cores,
+                           scene->objects[i]->physical_core);
+    }
+    set_core_set_iteration_order(&scene->cores.set, scene->objects,
+                                 STRONG_ATTACHER_CORE_COUNT,
+                                 reverse_set_order);
+    return ivp_attacher_to_cores_init(
+        &scene->attacher, scene->environment, &scene->cores,
+        &strong_attacher_class, &scene->capture);
+}
+
+IVP_TEST(attacher_hash_order_does_not_change_callback_order)
+{
+    strong_attacher_scene_t canonical;
+    strong_attacher_scene_t perturbed;
+    bool ok = strong_attacher_scene_init(&canonical, false) &&
+              strong_attacher_scene_init(&perturbed, true);
+    if (ok) {
+        ok = canonical.capture.created_count ==
+                 STRONG_ATTACHER_CORE_COUNT &&
+             perturbed.capture.created_count ==
+                 STRONG_ATTACHER_CORE_COUNT &&
+             memcmp(canonical.capture.created,
+                    perturbed.capture.created,
+                    sizeof(canonical.capture.created)) == 0;
+    }
+    if (ok) {
+        ivp_set_active_destroy(&canonical.cores);
+        ivp_set_active_destroy(&perturbed.cores);
+        ok = canonical.capture.deleted_count ==
+                 STRONG_ATTACHER_CORE_COUNT &&
+             perturbed.capture.deleted_count ==
+                 STRONG_ATTACHER_CORE_COUNT &&
+             memcmp(canonical.capture.deleted,
+                    perturbed.capture.deleted,
+                    sizeof(canonical.capture.deleted)) == 0;
+    }
+    ivp_environment_destroy(perturbed.environment);
+    ivp_environment_destroy(canonical.environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
+static bool strong_attacher_prepare_out_of_order_hash(
+    strong_attacher_scene_t *scene)
+{
+    uint64_t first_key = ivp_core_stable_order_key(
+        scene->objects[0]->physical_core);
+    for (int capacity = 16; capacity <= 4096; capacity *= 2) {
+        ivp_vhash_store_destroy(
+            &scene->attacher.core_to_attachment_hash);
+        ivp_vhash_store_init(
+            &scene->attacher.core_to_attachment_hash,
+            &scene->attacher.allocator, capacity);
+        for (int i = 0; i < STRONG_ATTACHER_CORE_COUNT; i++) {
+            ivp_core_t *core = scene->objects[i]->physical_core;
+            ivp_vhash_store_add(
+                &scene->attacher.core_to_attachment_hash,
+                core, core);
+        }
+        if (ivp_vhash_store_count(
+                &scene->attacher.core_to_attachment_hash) !=
+            STRONG_ATTACHER_CORE_COUNT) {
+            return false;
+        }
+        for (int i = ivp_vhash_store_capacity(
+                         &scene->attacher.core_to_attachment_hash) - 1;
+             i >= 0; i--) {
+            ivp_core_t *core = (ivp_core_t *)
+                scene->attacher.core_to_attachment_hash.elems[i].key_elem;
+            if (core) {
+                if (ivp_core_stable_order_key(core) != first_key) {
+                    return true;
+                }
+                break;
+            }
+        }
+    }
+    return false;
+}
+
+IVP_TEST(attacher_storage_order_does_not_change_destroy_order)
+{
+    strong_attacher_scene_t scene;
+    bool ok = strong_attacher_scene_init(&scene, false) &&
+              strong_attacher_prepare_out_of_order_hash(&scene);
+    if (ok) {
+        scene.capture.deleted_count = 0;
+        ivp_attacher_to_cores_destroy(&scene.attacher);
+        ok = scene.capture.deleted_count ==
+             STRONG_ATTACHER_CORE_COUNT;
+        for (int i = 1; ok && i < scene.capture.deleted_count; i++) {
+            ok = scene.capture.deleted[i - 1] <
+                 scene.capture.deleted[i];
+        }
+    }
+    ivp_set_active_destroy(&scene.cores);
+    ivp_environment_destroy(scene.environment);
     IVP_ASSERT_TRUE(ok);
 }
 
@@ -1478,5 +1653,7 @@ int main(void)
     IVP_REGISTER(cluster_link_order_does_not_change_observable_order);
     IVP_REGISTER(cluster_identity_blocks_sequence_reuse);
     IVP_REGISTER(phantom_hash_order_does_not_change_callback_order);
+    IVP_REGISTER(attacher_hash_order_does_not_change_callback_order);
+    IVP_REGISTER(attacher_storage_order_does_not_change_destroy_order);
     IVP_RUN_ALL();
 }

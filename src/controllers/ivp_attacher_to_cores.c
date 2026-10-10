@@ -6,6 +6,11 @@
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_assert.h>
 
+#include "dynamics/ivp_env_internal.h"
+#include "dynamics/ivp_sim_internal.h"
+
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define ATTACHER_HASH_INIT_SIZE 16 /* core_to_attachment_hash(16) */
@@ -65,10 +70,137 @@ static void attacher_element_removed(void *ctx, ivp_set_active_t *set, void *ele
     attacher_remove_element(attacher_of_set_ctx(ctx), (ivp_core_t *)elem);
 }
 
+typedef void (*attacher_core_action_fn)(ivp_attacher_to_cores_t *attacher,
+                                        ivp_core_t *core);
+
+static int attacher_compare_core_identity(const void *left,
+                                          const void *right)
+{
+    const ivp_core_t *left_core = *(ivp_core_t *const *)left;
+    const ivp_core_t *right_core = *(ivp_core_t *const *)right;
+    uint64_t left_key = ivp_core_stable_order_key(left_core);
+    uint64_t right_key = ivp_core_stable_order_key(right_core);
+    IVP_ASSERT(left_key != right_key || left_core == right_core);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static void attacher_add_core(ivp_attacher_to_cores_t *a,
+                              ivp_core_t *core)
+{
+    attacher_element_added(a, NULL, core);
+}
+
+static void attacher_apply_set_order(ivp_attacher_to_cores_t *a,
+                                     const ivp_set_t *set,
+                                     bool attached_only,
+                                     attacher_core_action_fn action)
+{
+    int count = ivp_set_count(set);
+    if (count <= 0) return;
+
+    ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
+        &a->allocator, (size_t)count * sizeof(*cores));
+    if (cores) {
+        int actual_count = 0;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            if (attached_only &&
+                !ivp_vhash_store_find(&a->core_to_attachment_hash,
+                                      core)) {
+                continue;
+            }
+            cores[actual_count++] = core;
+        }
+        qsort(cores, (size_t)actual_count, sizeof(*cores),
+              attacher_compare_core_identity);
+        for (int i = 0; i < actual_count; i++) {
+            action(a, cores[i]);
+        }
+        ivp_free(&a->allocator, cores,
+                 (size_t)count * sizeof(*cores));
+        return;
+    }
+
+    /* Keep callback order independent of hash slots even if the temporary
+     * snapshot cannot be allocated. */
+    bool have_previous = false;
+    uint64_t previous_key = 0u;
+    for (int emitted = 0; emitted < count; emitted++) {
+        ivp_core_t *selected = NULL;
+        uint64_t selected_key = UINT64_MAX;
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, set)) != NULL) {
+            if (attached_only &&
+                !ivp_vhash_store_find(&a->core_to_attachment_hash,
+                                      core)) {
+                continue;
+            }
+            uint64_t key = ivp_core_stable_order_key(core);
+            if ((!have_previous || key > previous_key) &&
+                (!selected || key < selected_key)) {
+                selected = core;
+                selected_key = key;
+            }
+        }
+        if (!selected) break;
+        action(a, selected);
+        previous_key = selected_key;
+        have_previous = true;
+    }
+}
+
 /* delete every attachment (hash order) */
 static void attacher_delete_all(ivp_attacher_to_cores_t *a)
 {
     ivp_vhash_store_t *h = &a->core_to_attachment_hash;
+    if (ivp_build_uses_canonical_internal_state()) {
+        int count = ivp_vhash_store_count(h);
+        if (count <= 0) return;
+        ivp_core_t **cores = (ivp_core_t **)ivp_alloc(
+            &a->allocator, (size_t)count * sizeof(*cores));
+        if (cores) {
+            int actual_count = 0;
+            for (int i = 0; i < ivp_vhash_store_capacity(h); i++) {
+                if (h->elems[i].key_elem) {
+                    cores[actual_count++] =
+                        (ivp_core_t *)h->elems[i].key_elem;
+                }
+            }
+            qsort(cores, (size_t)actual_count, sizeof(*cores),
+                  attacher_compare_core_identity);
+            for (int i = 0; i < actual_count; i++) {
+                attacher_delete_core(a, cores[i]);
+            }
+            ivp_free(&a->allocator, cores,
+                     (size_t)count * sizeof(*cores));
+            return;
+        }
+
+        while (ivp_vhash_store_count(h) > 0) {
+            ivp_core_t *selected = NULL;
+            uint64_t selected_key = UINT64_MAX;
+            for (int i = 0; i < ivp_vhash_store_capacity(h); i++) {
+                ivp_core_t *core =
+                    (ivp_core_t *)h->elems[i].key_elem;
+                if (!core) continue;
+                uint64_t key = ivp_core_stable_order_key(core);
+                if (!selected || key < selected_key) {
+                    selected = core;
+                    selected_key = key;
+                }
+            }
+            if (!selected) break;
+            attacher_delete_core(a, selected);
+        }
+        return;
+    }
+
     while (ivp_vhash_store_count(h) > 0) {
         void *key = NULL;
         for (int i = ivp_vhash_store_capacity(h) - 1; i >= 0; i--) {
@@ -100,11 +232,29 @@ static void attacher_stop_listening(ivp_attacher_to_cores_t *a)
 static void attacher_pset_is_going_to_be_deleted(void *ctx, ivp_set_active_t *set)
 {
     ivp_attacher_to_cores_t *a = attacher_of_set_ctx(ctx);
-    ivp_set_enumerator_t e;
-    ivp_set_enumerator_init(&e, &set->set);
-    void *core;
-    while ((core = ivp_set_enumerator_next(&e, &set->set)) != NULL) {
-        attacher_remove_element(a, (ivp_core_t *)core);
+    if (ivp_build_uses_canonical_internal_state()) {
+        /* A set can retain a pointer after its core deleted its own
+         * attachment.  Preserve the reference assertion for those missing
+         * entries without dereferencing the stale pointer for ordering. */
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, &set->set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, &set->set)) != NULL) {
+            if (!ivp_vhash_store_find(&a->core_to_attachment_hash, core)) {
+                attacher_remove_element(a, core);
+            }
+        }
+        attacher_apply_set_order(a, &set->set, true,
+                                 attacher_remove_element);
+    } else {
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, &set->set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, &set->set)) != NULL) {
+            attacher_remove_element(a, core);
+        }
     }
     IVP_ASSERT(ivp_vhash_store_count(&a->core_to_attachment_hash) == 0);
     attacher_delete_all(a);
@@ -177,11 +327,17 @@ bool ivp_attacher_to_cores_init(ivp_attacher_to_cores_t *a, struct ivp_environme
     ivp_environment_add_listener_object_global(env, &a->object_listener);
 
     /* attach to every core already in the set, then listen */
-    ivp_set_enumerator_t e;
-    ivp_set_enumerator_init(&e, &set_of_cores->set);
-    void *core;
-    while ((core = ivp_set_enumerator_next(&e, &set_of_cores->set)) != NULL) {
-        attacher_element_added(a, NULL, core);
+    if (ivp_build_uses_canonical_internal_state()) {
+        attacher_apply_set_order(a, &set_of_cores->set, false,
+                                 attacher_add_core);
+    } else {
+        ivp_set_enumerator_t enumerator;
+        ivp_set_enumerator_init(&enumerator, &set_of_cores->set);
+        ivp_core_t *core;
+        while ((core = (ivp_core_t *)ivp_set_enumerator_next(
+                    &enumerator, &set_of_cores->set)) != NULL) {
+            attacher_element_added(a, NULL, core);
+        }
     }
     if (a->allocation_failed ||
         !ivp_set_active_add_listener(set_of_cores, &a->set_listener)) {
