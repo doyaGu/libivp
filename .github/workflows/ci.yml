@@ -34,9 +34,11 @@ jobs:
           - name: debug-float
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_REAL_DOUBLE=OFF
             test_args: -L unit --parallel 4
+          # Instrumented Debug timings are not a performance signal, and the
+          # benchmark runner's reference diagnostics exceed its 30 s timeout.
           - name: asan-ubsan
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_ASAN=ON -DIVP_ENABLE_UBSAN=ON
-            test_args: -L unit --parallel 2
+            test_args: -L unit -E test_benchmark_runner --parallel 2
           - name: tsan-parallel
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
             test_args: -R "test_(parallel_worlds|internal_parallel|internal_state_stability|replay_equivalence|qhull_(concurrency|overlap))$" --parallel 1
