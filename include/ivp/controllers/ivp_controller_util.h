@@ -279,10 +279,8 @@ static inline void ivp_controller_surface_speed_cs(const ivp_core_t *core,
         ivp_vec3r_set_zero(out_ws);
         return;
     }
-    ivp_vec3f_t p, s_cs;
-    p.k[0] = (float)point_cs->k[0];
-    p.k[1] = (float)point_cs->k[1];
-    p.k[2] = (float)point_cs->k[2];
+    ivp_vec3f_t p = ivp_vec3f_from_r(point_cs);
+    ivp_vec3f_t s_cs;
     ivp_controller_cross_f(&s_cs, &core->rot_speed, &p);
     const ivp_mat3r_t *m = &core->m_world_f_core_last_psi.rot;
     for (int i = 0; i < 3; i++) {

@@ -71,33 +71,24 @@ void ivp_object_recompile(ivp_object_t *obj)
 
 /* ── IVP_Real_Object helpers (public wrappers) ──────────────────────────── */
 
-static ivp_vec3f_t obj_vr_to_f(const ivp_vec3r_t *v)
-{
-    ivp_vec3f_t f;
-    f.k[0] = (float)v->k[0];
-    f.k[1] = (float)v->k[1];
-    f.k[2] = (float)v->k[2];
-    return f;
-}
-
 void ivp_object_async_add_speed_ws(ivp_object_t *obj, const ivp_vec3r_t *speed_ws)
 {
     if (!obj || !speed_ws) return;
-    ivp_vec3f_t f = obj_vr_to_f(speed_ws);
+    ivp_vec3f_t f = ivp_vec3f_from_r(speed_ws);
     ivp_object_async_add_speed_object_ws(obj, &f);
 }
 
 void ivp_object_async_add_rot_speed_cs(ivp_object_t *obj, const ivp_vec3r_t *rot_speed_cs)
 {
     if (!obj || !rot_speed_cs) return;
-    ivp_vec3f_t f = obj_vr_to_f(rot_speed_cs);
+    ivp_vec3f_t f = ivp_vec3f_from_r(rot_speed_cs);
     ivp_object_async_add_rot_speed_object_cs(obj, &f);
 }
 
 void ivp_object_async_push_ws(ivp_object_t *obj, const ivp_vec3r_t *position_ws, const ivp_vec3r_t *impulse_ws)
 {
     if (!obj || !position_ws || !impulse_ws) return;
-    ivp_vec3f_t f = obj_vr_to_f(impulse_ws);
+    ivp_vec3f_t f = ivp_vec3f_from_r(impulse_ws);
     ivp_object_async_push_object_ws(obj, position_ws, &f);
 }
 

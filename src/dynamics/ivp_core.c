@@ -27,15 +27,6 @@ void ivp_core_free_friction_info_hash(ivp_core_t *core);   /* ivp_contact_point.
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
 
-static inline ivp_vec3f_t vr_to_f(const ivp_vec3r_t *v)
-{
-    ivp_vec3f_t r;
-    r.k[0] = (float)v->k[0];
-    r.k[1] = (float)v->k[1];
-    r.k[2] = (float)v->k[2];
-    return r;
-}
-
 /* ── lifecycle / public API ────────────────────────────────────────────── */
 
 void ivp_core_init(ivp_core_t *core, ivp_real_t mass, const ivp_vec3r_t *rot_inertia)
@@ -269,7 +260,7 @@ void ivp_core_async_push_core(ivp_core_t *core, const ivp_vec3f_t *point_cs, con
 {
     ivp_vec3f_t rot_change, center_change;
     ivp_core_test_push_core(core, point_cs, impulse_cs, impulse_ws, &center_change, &rot_change);
-    ivp_vec3f_t rsc = vr_to_f(&core->rot_speed_change), sc = vr_to_f(&core->speed_change);
+    ivp_vec3f_t rsc = ivp_vec3f_from_r(&core->rot_speed_change), sc = ivp_vec3f_from_r(&core->speed_change);
     lvf_add(&rsc, &rot_change);
     lvf_add(&sc, &center_change);
     lvp_set_f(&core->rot_speed_change, &rsc);
@@ -280,7 +271,7 @@ void ivp_core_async_push_core(ivp_core_t *core, const ivp_vec3f_t *point_cs, con
 static void core_push_ws_impl(ivp_core_t *core, const ivp_vec3r_t *world_point, const ivp_vec3r_t *impulse_r, bool async)
 {
     const ivp_transform_r_t *m_world_f_core = &core->m_world_f_core_last_psi;
-    ivp_vec3f_t impulse_in_world = vr_to_f(impulse_r);
+    ivp_vec3f_t impulse_in_world = ivp_vec3f_from_r(impulse_r);
     ivp_vec3f_t point_d_ws;
     lvf_subtract2_p(&point_d_ws, world_point, &m_world_f_core->pos);
     ivp_vec3f_t cross_point_dir;
@@ -290,7 +281,7 @@ static void core_push_ws_impl(ivp_core_t *core, const ivp_vec3r_t *world_point, 
     ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
     lvf_set_pairwise_mult(&cross_point_dir, &tmp, &iri);
     if (async) {
-        ivp_vec3f_t rsc = vr_to_f(&core->rot_speed_change), sc = vr_to_f(&core->speed_change);
+        ivp_vec3f_t rsc = ivp_vec3f_from_r(&core->rot_speed_change), sc = ivp_vec3f_from_r(&core->speed_change);
         lvf_add(&rsc, &cross_point_dir);
         lvf_add_multiple(&sc, &impulse_in_world, (D)ivp_core_get_inv_mass_f(core));
         lvp_set_f(&core->rot_speed_change, &rsc);
@@ -316,14 +307,14 @@ void ivp_core_async_push_ws(ivp_core_t *core, const ivp_vec3r_t *pos_ws, const i
 /* center_push_core_multiple_ws(impulse, 1.0) */
 void ivp_core_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws)
 {
-    ivp_vec3f_t imp = vr_to_f(impulse_ws), sp = ivp_core_speed_f(core);
+    ivp_vec3f_t imp = ivp_vec3f_from_r(impulse_ws), sp = ivp_core_speed_f(core);
     lvf_add_multiple(&sp, &imp, (D)(1.0f * ivp_core_get_inv_mass_f(core)));
     ivp_core_set_speed_f(core, &sp);
 }
 
 void ivp_core_async_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws)
 {
-    ivp_vec3f_t imp = vr_to_f(impulse_ws), sc = vr_to_f(&core->speed_change);
+    ivp_vec3f_t imp = ivp_vec3f_from_r(impulse_ws), sc = ivp_vec3f_from_r(&core->speed_change);
     lvf_add_multiple(&sc, &imp, (D)(1.0f * ivp_core_get_inv_mass_f(core)));
     lvp_set_f(&core->speed_change, &sc);
 }
@@ -331,7 +322,7 @@ void ivp_core_async_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws)
 /* rot_push_core_cs */
 void ivp_core_rot_push_cs(ivp_core_t *core, const ivp_vec3r_t *torque_impulse_cs)
 {
-    ivp_vec3f_t ri = vr_to_f(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core), h;
+    ivp_vec3f_t ri = ivp_vec3f_from_r(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core), h;
     lvf_set_pairwise_mult(&h, &ri, &iri);
     lvf_add(&core->rot_speed, &h);
 }
@@ -339,9 +330,9 @@ void ivp_core_rot_push_cs(ivp_core_t *core, const ivp_vec3r_t *torque_impulse_cs
 /* async_rot_push_core_multiple_cs(impulse, 1.0) */
 void ivp_core_async_rot_push_cs(ivp_core_t *core, const ivp_vec3r_t *torque_impulse_cs)
 {
-    ivp_vec3f_t ri = vr_to_f(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core), h;
+    ivp_vec3f_t ri = ivp_vec3f_from_r(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core), h;
     lvf_set_pairwise_mult(&h, &ri, &iri);
-    ivp_vec3f_t rsc = vr_to_f(&core->rot_speed_change);
+    ivp_vec3f_t rsc = ivp_vec3f_from_r(&core->rot_speed_change);
     lvf_add_multiple(&rsc, &h, 1.0f);
     lvp_set_f(&core->rot_speed_change, &rsc);
 }
@@ -523,7 +514,7 @@ double ivp_core_get_energy_on_test(const ivp_core_t *core, const ivp_vec3f_t *sp
 
 void ivp_core_commit_all_async_pushes_ref(ivp_core_t *core)
 {
-    ivp_vec3f_t rsc = vr_to_f(&core->rot_speed_change), sc = vr_to_f(&core->speed_change);
+    ivp_vec3f_t rsc = ivp_vec3f_from_r(&core->rot_speed_change), sc = ivp_vec3f_from_r(&core->speed_change);
     lvf_add(&core->rot_speed, &rsc);
     ivp_vec3f_t sp = ivp_core_speed_f(core);
     lvf_add(&sp, &sc);
@@ -595,7 +586,7 @@ static void core_damp_object(ivp_core_t *core, double delta_time_, const ivp_vec
 /* IVP_Core::global_damp_core */
 void ivp_core_global_damp_core(ivp_core_t *core, double d_time)
 {
-    ivp_vec3f_t rdf = vr_to_f(&core->rot_speed_damp_factor);
+    ivp_vec3f_t rdf = ivp_vec3f_from_r(&core->rot_speed_damp_factor);
     if (core->movement_state >= IVP_MT_SLOW) {
         float s_add_on = 0.1f;
         ivp_vec3f_t add_on, rot_damp_factor;
