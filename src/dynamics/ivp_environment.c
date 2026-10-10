@@ -1583,12 +1583,12 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
     if (!env || !event_fn) return invalid;
     const int normalized_priority = priority; /* IVP_Controller::get_priority() */
-    ivp_controller_handle_t out = ivp_controller_system_add(env_controller_system(env), env->allocator,
-                                                            normalized_priority, event_fn, ctx);
+    ivp_controller_handle_t out = ivp_controller_system_add(
+        env_controller_system(env), normalized_priority, event_fn, ctx);
     if (!ivp_controller_handle_is_valid(out)) return invalid;
     ivp_controller_slot_t *slot = env_get_controller_slot(env, out);
     if (!slot) {
-        (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+        (void)ivp_controller_system_remove(env_controller_system(env), out);
         return invalid;
     }
     slot->mode = mode;
@@ -1602,18 +1602,18 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     ivp_pvec_init_with_allocator(&sc->controlled_cores, env->allocator);
     if (ivp_pvec_add(&env->pl->slot_ctrls, sc) < 0) {
         slot_ctrl_release_runtime(env, sc);
-        (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+        (void)ivp_controller_system_remove(env_controller_system(env), out);
         return invalid;
     }
     if (sc->mode == IVP_CONTROLLER_DEPENDENT) {
         if (!slot_ctrl_refresh_dependent(env, sc, slot)) {
             slot_ctrl_release_runtime(env, sc);
-            (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+            (void)ivp_controller_system_remove(env_controller_system(env), out);
             return invalid;
         }
     } else if (attach_all_cores && !slot_ctrl_set_all_cores(env, sc)) {
         slot_ctrl_release_runtime(env, sc);
-        (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
+        (void)ivp_controller_system_remove(env_controller_system(env), out);
         return invalid;
     }
     ivp_controller_system_sort(
@@ -1705,7 +1705,7 @@ bool ivp_environment_remove_dependent_controller(ivp_environment_t *env, ivp_con
         slot_ctrl_detach_all(env, sc, silently);
         slot_ctrl_release_runtime(env, sc);
     }
-    if (!ivp_controller_system_remove(env_controller_system(env), controller_handle, env->allocator)) return false;
+    if (!ivp_controller_system_remove(env_controller_system(env), controller_handle)) return false;
     if (!silently) {
         ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_REMOVED, IVP_REAL(0.0), -1, (int)controller_handle.slot);
     }
@@ -1926,19 +1926,19 @@ void ivp_environment_clear_controllers(ivp_environment_t *env)
 ivp_event_listener_handle_t ivp_environment_add_event_listener(ivp_environment_t *env, ivp_event_listener_fn_t fn, void *ctx)
 {
     if (!env || !fn) return ivp_event_listener_handle_invalid();
-    return ivp_event_system_add_listener(env_event_system(env), env->allocator, fn, ctx);
+    return ivp_event_system_add_listener(env_event_system(env), fn, ctx);
 }
 
 bool ivp_environment_remove_event_listener(ivp_environment_t *env, ivp_event_listener_handle_t listener_handle)
 {
     if (!env || !ivp_event_listener_handle_is_valid(listener_handle)) return false;
-    return ivp_event_system_remove_listener(env_event_system(env), listener_handle, env->allocator);
+    return ivp_event_system_remove_listener(env_event_system(env), listener_handle);
 }
 
 void ivp_environment_clear_event_listeners(ivp_environment_t *env)
 {
     if (!env) return;
-    ivp_event_system_clear(env_event_system(env), env->allocator);
+    ivp_event_system_clear(env_event_system(env));
 }
 
 void ivp_environment_set_sim_unit_count(ivp_environment_t *env, int sim_unit_count)
@@ -2647,15 +2647,15 @@ void ivp_environment_destroy(ivp_environment_t *env)
     }
     env->mod_current_time = NULL; /* borrowed from the active value manager */
     if (env->event_system) {
-        ivp_event_system_destroy(env_event_system(env), alloc);
+        ivp_event_system_destroy(env_event_system(env));
         ivp_free(alloc, env->event_system, sizeof(ivp_event_system_t));
     }
     if (env->controller_system) {
-        ivp_controller_system_destroy(env_controller_system(env), alloc);
+        ivp_controller_system_destroy(env_controller_system(env));
         ivp_free(alloc, env->controller_system, sizeof(ivp_controller_system_t));
     }
     if (env->object_system) {
-        ivp_object_system_destroy(env_object_system(env), alloc);
+        ivp_object_system_destroy(env_object_system(env));
         ivp_free(alloc, env->object_system, sizeof(ivp_object_system_t));
     }
     ivp_free(alloc, env, sizeof(ivp_environment_t));
@@ -2693,9 +2693,8 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
      * the reusable scratch here so the simulation hot path never allocates. */
     if (!ivp_pvec_reserve(&env->pl->touched_cores, object_count) ||
         !ivp_pvec_reserve(&env->pl->active_hulls, object_count)) {
-        (void)ivp_object_system_destroy_by_handle(env_object_system(env),
-                                                  ivp_environment_get_object_handle(obj),
-                                                  env->allocator);
+        (void)ivp_object_system_destroy_by_handle(
+            env_object_system(env), ivp_environment_get_object_handle(obj));
         env_reset_object_sequence_if_empty(env);
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
@@ -2703,8 +2702,8 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
     ivp_cluster_add_child(&env->pl->root_cluster, obj); /* IVP_Object(father = root cluster) */
     if (!ivp_object_pipeline_create(env, obj, tmpl)) {
         ivp_cluster_remove_child(&env->pl->root_cluster, obj);
-        (void)ivp_object_system_destroy_by_handle(env_object_system(env), ivp_environment_get_object_handle(obj),
-                                                  env->allocator);
+        (void)ivp_object_system_destroy_by_handle(
+            env_object_system(env), ivp_environment_get_object_handle(obj));
         env_reset_object_sequence_if_empty(env);
         if (out_handle) *out_handle = ivp_object_handle_invalid();
         return NULL;
@@ -2832,8 +2831,7 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
         return;
     }
     (void)ivp_object_system_destroy_by_handle(
-        env_object_system(env), ivp_environment_get_object_handle(obj),
-        env->allocator);
+        env_object_system(env), ivp_environment_get_object_handle(obj));
     env_reset_object_sequence_if_empty(env);
 }
 

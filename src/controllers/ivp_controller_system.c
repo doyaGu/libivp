@@ -60,14 +60,14 @@ static bool ivp_controller_handle_equal(ivp_object_handle_t a, ivp_object_handle
 
 static ivp_controller_handle_t ivp_controller_system_add_internal(
     ivp_controller_system_t *sys,
-    const ivp_allocator_t *alloc,
     int priority,
     ivp_controller_event_fn_t event_fn,
     void *ctx)
 {
     ivp_controller_handle_t invalid = ivp_controller_handle_invalid();
-    if (!sys || !alloc) return invalid;
+    if (!sys || !sys->registry.alloc) return invalid;
     if (!event_fn) return invalid;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
 
     ivp_controller_slot_t *slot =
         (ivp_controller_slot_t *)ivp_alloc(alloc, sizeof(ivp_controller_slot_t));
@@ -105,28 +105,27 @@ ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,
                              ivp_controller_get_index);
 }
 
-void ivp_controller_system_destroy(ivp_controller_system_t *sys,
-                                   const ivp_allocator_t *alloc)
+void ivp_controller_system_destroy(ivp_controller_system_t *sys)
 {
-    if (!sys || !alloc) return;
-    ivp_controller_system_clear(sys, alloc);
+    if (!sys) return;
+    ivp_controller_system_clear(sys);
     ivp_registry_destroy(&sys->registry, false, sizeof(ivp_controller_slot_t));
 }
 
 ivp_controller_handle_t ivp_controller_system_add(ivp_controller_system_t *sys,
-                                                  const ivp_allocator_t *alloc,
                                                   int priority,
                                                   ivp_controller_fn_t fn,
                                                   void *ctx)
 {
-    return ivp_controller_system_add_internal(sys, alloc, priority, fn, ctx);
+    return ivp_controller_system_add_internal(sys, priority, fn, ctx);
 }
 
 bool ivp_controller_system_remove(ivp_controller_system_t *sys,
-                                  ivp_controller_handle_t controller_handle,
-                                  const ivp_allocator_t *alloc)
+                                  ivp_controller_handle_t controller_handle)
 {
-    if (!sys || !alloc || !ivp_controller_handle_is_valid(controller_handle)) return false;
+    if (!sys || !sys->registry.alloc ||
+        !ivp_controller_handle_is_valid(controller_handle)) return false;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
 
     void *removed = NULL;
     if (!ivp_registry_remove_by_handle(&sys->registry, controller_handle, &removed)) {
@@ -138,15 +137,14 @@ bool ivp_controller_system_remove(ivp_controller_system_t *sys,
     return true;
 }
 
-void ivp_controller_system_clear(ivp_controller_system_t *sys,
-                                 const ivp_allocator_t *alloc)
+void ivp_controller_system_clear(ivp_controller_system_t *sys)
 {
-    if (!sys || !alloc) return;
+    if (!sys || !sys->registry.alloc) return;
 
     while (ivp_registry_count(&sys->registry) > 0) {
         ivp_controller_slot_t *slot = (ivp_controller_slot_t *)ivp_registry_get_at(&sys->registry, 0);
         ivp_controller_handle_t h = slot->handle;
-        if (!ivp_controller_system_remove(sys, h, alloc)) {
+        if (!ivp_controller_system_remove(sys, h)) {
             break;
         }
     }

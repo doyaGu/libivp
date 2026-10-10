@@ -12,8 +12,7 @@ ivp_result_t ivp_object_system_init(ivp_object_system_t *sys,
                                     const ivp_allocator_t *alloc,
                                     int initial_capacity);
 
-void ivp_object_system_destroy(ivp_object_system_t *sys,
-                               const ivp_allocator_t *alloc);
+void ivp_object_system_destroy(ivp_object_system_t *sys);
 
 ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
                                        ivp_environment_t *env,
@@ -22,8 +21,7 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
                                        ivp_object_handle_t *out_handle);
 
 bool ivp_object_system_destroy_by_handle(ivp_object_system_t *sys,
-                                         ivp_object_handle_t handle,
-                                         const ivp_allocator_t *alloc);
+                                         ivp_object_handle_t handle);
 
 ivp_object_t *ivp_object_system_get_by_handle(const ivp_object_system_t *sys,
                                               ivp_object_handle_t handle);

@@ -25,20 +25,16 @@ ivp_result_t ivp_event_system_init(ivp_event_system_t *sys,
                                    const ivp_allocator_t *alloc,
                                    int initial_capacity);
 
-void ivp_event_system_destroy(ivp_event_system_t *sys,
-                              const ivp_allocator_t *alloc);
+void ivp_event_system_destroy(ivp_event_system_t *sys);
 
 ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sys,
-                                                          const ivp_allocator_t *alloc,
                                                           ivp_event_listener_fn_t fn,
                                                           void *ctx);
 
 bool ivp_event_system_remove_listener(ivp_event_system_t *sys,
-                                      ivp_event_listener_handle_t listener_handle,
-                                      const ivp_allocator_t *alloc);
+                                      ivp_event_listener_handle_t listener_handle);
 
-void ivp_event_system_clear(ivp_event_system_t *sys,
-                            const ivp_allocator_t *alloc);
+void ivp_event_system_clear(ivp_event_system_t *sys);
 
 int ivp_event_system_count(const ivp_event_system_t *sys);
 ivp_event_listener_slot_t *ivp_event_system_get_at(const ivp_event_system_t *sys, int index);

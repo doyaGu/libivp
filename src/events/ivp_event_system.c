@@ -25,23 +25,22 @@ ivp_result_t ivp_event_system_init(ivp_event_system_t *sys,
     return result;
 }
 
-void ivp_event_system_destroy(ivp_event_system_t *sys,
-                              const ivp_allocator_t *alloc)
+void ivp_event_system_destroy(ivp_event_system_t *sys)
 {
-    (void)alloc;
+    if (!sys) return;
     ivp_registry_destroy(&sys->registry, true, sizeof(ivp_event_listener_slot_t));
     sys->next_registration_sequence = 0u;
 }
 
 ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sys,
-                                                          const ivp_allocator_t *alloc,
                                                           ivp_event_listener_fn_t fn,
                                                           void *ctx)
 {
     ivp_event_listener_handle_t invalid = ivp_event_listener_handle_invalid();
-    if (!sys || !alloc || !fn ||
+    if (!sys || !sys->registry.alloc || !fn ||
         sys->next_registration_sequence == 0u ||
         sys->next_registration_sequence == UINT64_MAX) return invalid;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
 
     ivp_event_listener_slot_t *slot =
         (ivp_event_listener_slot_t *)ivp_alloc(alloc, sizeof(ivp_event_listener_slot_t));
@@ -69,10 +68,11 @@ ivp_event_listener_handle_t ivp_event_system_add_listener(ivp_event_system_t *sy
 }
 
 bool ivp_event_system_remove_listener(ivp_event_system_t *sys,
-                                      ivp_event_listener_handle_t listener_handle,
-                                      const ivp_allocator_t *alloc)
+                                      ivp_event_listener_handle_t listener_handle)
 {
-    if (!sys || !alloc || !ivp_event_listener_handle_is_valid(listener_handle)) return false;
+    if (!sys || !sys->registry.alloc ||
+        !ivp_event_listener_handle_is_valid(listener_handle)) return false;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
 
     void *removed = NULL;
     if (!ivp_registry_remove_by_handle(&sys->registry, listener_handle, &removed)) {
@@ -83,10 +83,9 @@ bool ivp_event_system_remove_listener(ivp_event_system_t *sys,
     return true;
 }
 
-void ivp_event_system_clear(ivp_event_system_t *sys,
-                            const ivp_allocator_t *alloc)
+void ivp_event_system_clear(ivp_event_system_t *sys)
 {
-    if (!sys || !alloc) return;
+    if (!sys || !sys->registry.alloc) return;
 
     while (ivp_registry_count(&sys->registry) > 0) {
         ivp_event_listener_slot_t *slot =
@@ -94,7 +93,7 @@ void ivp_event_system_clear(ivp_event_system_t *sys,
         ivp_event_listener_handle_t h;
         h.slot = slot->handle.slot;
         h.generation = slot->handle.generation;
-        if (!ivp_event_system_remove_listener(sys, h, alloc)) {
+        if (!ivp_event_system_remove_listener(sys, h)) {
             break;
         }
     }

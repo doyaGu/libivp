@@ -61,21 +61,17 @@ ivp_result_t ivp_controller_system_init(ivp_controller_system_t *sys,
                                         const ivp_allocator_t *alloc,
                                         int initial_capacity);
 
-void ivp_controller_system_destroy(ivp_controller_system_t *sys,
-                                   const ivp_allocator_t *alloc);
+void ivp_controller_system_destroy(ivp_controller_system_t *sys);
 
 ivp_controller_handle_t ivp_controller_system_add(ivp_controller_system_t *sys,
-                                                  const ivp_allocator_t *alloc,
                                                   int priority,
                                                   ivp_controller_fn_t fn,
                                                   void *ctx);
 
 bool ivp_controller_system_remove(ivp_controller_system_t *sys,
-                                  ivp_controller_handle_t controller_handle,
-                                  const ivp_allocator_t *alloc);
+                                  ivp_controller_handle_t controller_handle);
 
-void ivp_controller_system_clear(ivp_controller_system_t *sys,
-                                 const ivp_allocator_t *alloc);
+void ivp_controller_system_clear(ivp_controller_system_t *sys);
 
 int ivp_controller_system_count(const ivp_controller_system_t *sys);
 ivp_controller_slot_t *ivp_controller_system_get_at(const ivp_controller_system_t *sys, int index);

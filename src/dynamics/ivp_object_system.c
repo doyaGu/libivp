@@ -26,10 +26,9 @@ ivp_result_t ivp_object_system_init(ivp_object_system_t *sys,
                              ivp_object_get_index);
 }
 
-void ivp_object_system_destroy(ivp_object_system_t *sys,
-                               const ivp_allocator_t *alloc)
+void ivp_object_system_destroy(ivp_object_system_t *sys)
 {
-    (void)alloc;
+    if (!sys) return;
     ivp_registry_destroy(&sys->registry, true, sizeof(ivp_object_t));
 }
 
@@ -39,7 +38,9 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
                                        const ivp_surman_t *surman,
                                        ivp_object_handle_t *out_handle)
 {
-    ivp_object_t *obj = (ivp_object_t *)ivp_alloc(env->allocator, sizeof(ivp_object_t));
+    if (!sys || !sys->registry.alloc || !env || !tmpl) return NULL;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
+    ivp_object_t *obj = (ivp_object_t *)ivp_alloc(alloc, sizeof(ivp_object_t));
     if (!obj) {
         return NULL;
     }
@@ -61,7 +62,7 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
 
     ivp_handle_t h;
     if (ivp_registry_insert(&sys->registry, obj, &h) != IVP_OK) {
-        ivp_free(env->allocator, obj, sizeof(ivp_object_t));
+        ivp_free(alloc, obj, sizeof(ivp_object_t));
         return NULL;
     }
 
@@ -76,9 +77,10 @@ ivp_object_t *ivp_object_system_create(ivp_object_system_t *sys,
 }
 
 bool ivp_object_system_destroy_by_handle(ivp_object_system_t *sys,
-                                         ivp_object_handle_t handle,
-                                         const ivp_allocator_t *alloc)
+                                         ivp_object_handle_t handle)
 {
+    if (!sys || !sys->registry.alloc) return false;
+    const ivp_allocator_t *alloc = sys->registry.alloc;
     void *removed = NULL;
     ivp_object_t *pre = ivp_object_system_get_by_handle(sys, handle);
     const int index_before_removal = pre ? pre->dense_index : -1;
