@@ -205,31 +205,32 @@ bool ivp_env_uses_canonical_internal_state(
     return env && env->pl && env->pl->canonical_internal_state;
 }
 
+static uint64_t env_take_sequence(uint64_t *next_sequence)
+{
+    if (*next_sequence == 0u) *next_sequence = 1u;
+    IVP_ASSERT(*next_sequence != UINT64_MAX);
+    if (*next_sequence == UINT64_MAX) return 0u;
+    return (*next_sequence)++;
+}
+
 void ivp_env_register_sim_controller(
     struct ivp_environment *env, struct ivp_sim_ctrl *controller)
 {
     if (!env || !env->pl || !controller ||
+        !env->pl->canonical_internal_state ||
         controller->registration_sequence != 0u) {
         return;
     }
-    if (env->pl->next_controller_sequence == 0u) {
-        env->pl->next_controller_sequence = 1u;
-    }
-    IVP_ASSERT(env->pl->next_controller_sequence != UINT64_MAX);
-    if (env->pl->next_controller_sequence == UINT64_MAX) return;
     controller->registration_sequence =
-        env->pl->next_controller_sequence++;
+        env_take_sequence(&env->pl->next_controller_sequence);
 }
 
 uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 {
-    if (!env || !env->pl) return 0u;
-    if (env->pl->next_contact_sequence == 0u) {
-        env->pl->next_contact_sequence = 1u;
+    if (!env || !env->pl || !env->pl->canonical_internal_state) {
+        return 0u;
     }
-    IVP_ASSERT(env->pl->next_contact_sequence != UINT64_MAX);
-    if (env->pl->next_contact_sequence == UINT64_MAX) return 0u;
-    return env->pl->next_contact_sequence++;
+    return env_take_sequence(&env->pl->next_contact_sequence);
 }
 
 void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)

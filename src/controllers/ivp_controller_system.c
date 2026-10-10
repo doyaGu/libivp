@@ -177,9 +177,9 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys,
     const int n = ivp_registry_count(&sys->registry);
     void **data = sys->registry.dense.data;
 
-    /* Sort descending by priority (higher priority dispatches first).
-     * Reference executes sorted controllers in reverse index order,
-     * which is equivalent to high-priority-first dispatch. */
+    /* Keep the registry in descending priority order for management
+     * traversals.  Simulation units maintain their own ascending array and
+     * execute it from the last element to the first. */
     for (int i = 1; i < n; i++) {
         ivp_controller_slot_t *key = (ivp_controller_slot_t *)data[i];
         int j = i - 1;

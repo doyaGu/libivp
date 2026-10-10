@@ -320,8 +320,9 @@ static void cp_contact_recalc_diagnostics_record(ivp_contact_pt_t *cp,
 
 void ivp_friction_mgr_restore_object_contact_order(ivp_object_t *obj)
 {
-    if (!obj || !ivp_env_uses_canonical_internal_state(obj->owner) ||
-        !obj->fr_synapses || !obj->fr_synapses->next) {
+    if (!obj || !obj->fr_synapses ||
+        obj->fr_synapses->contact_point->creation_sequence == 0u ||
+        !obj->fr_synapses->next) {
         return;
     }
 
@@ -377,8 +378,7 @@ static void fr_synapse_init(ivp_fr_synapse_t *syn, ivp_contact_pt_t *cp, ivp_obj
     syn->contact_point = cp;
     syn->status = status;
     syn->edge = edge;
-    if (!ivp_env_uses_canonical_internal_state(obj->owner) ||
-        !obj->fr_synapses) {
+    if (cp->creation_sequence == 0u || !obj->fr_synapses) {
         syn->next = obj->fr_synapses;
         syn->prev = NULL;
         if (syn->next) syn->next->prev = syn;
@@ -481,10 +481,12 @@ ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
     ivp_contact_pt_t *cp = (ivp_contact_pt_t *)ivp_alloc(allocator, sizeof(*cp));
     if (!cp) return NULL;
     memset(cp, 0, sizeof(*cp));
-    cp->creation_sequence = ivp_env_next_contact_sequence(md->env);
-    if (cp->creation_sequence == 0u) {
-        ivp_free(allocator, cp, sizeof(*cp));
-        return NULL;
+    if (ivp_env_uses_canonical_internal_state(md->env)) {
+        cp->creation_sequence = ivp_env_next_contact_sequence(md->env);
+        if (cp->creation_sequence == 0u) {
+            ivp_free(allocator, cp, sizeof(*cp));
+            return NULL;
+        }
     }
     ivp_md_synapse_t *syn0 = ivp_mindist_get_sorted_synapse(md, 0);
     fr_synapse_init(&cp->synapse[0], cp, syn0->l_obj, syn0->edge, syn0->status);
