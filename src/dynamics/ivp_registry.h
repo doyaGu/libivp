@@ -4,15 +4,13 @@
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_result.h>
 #include <ivp/containers/ivp_array.h>
-#include <ivp/containers/ivp_hashmap.h>
 #include <ivp/dynamics/ivp_handle.h>
 
 typedef int (*ivp_registry_get_index_fn_t)(const void *elem);
 
 typedef struct ivp_registry_slot_meta {
     uint32_t generation;
-    uint64_t handle_key;
-    bool alive;
+    void    *element;
 } ivp_registry_slot_meta_t;
 
 typedef struct ivp_registry {
@@ -20,7 +18,6 @@ typedef struct ivp_registry {
     ivp_array_t dense;
     ivp_array_t slots;
     ivp_array_t free_slots;
-    ivp_hashmap_t handle_to_elem;
     ivp_registry_get_index_fn_t get_index;
 } ivp_registry_t;
 

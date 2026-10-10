@@ -1,10 +1,5 @@
 #include "ivp_registry.h"
 
-static inline uint64_t ivp_make_handle_key(uint32_t slot, uint32_t generation)
-{
-    return ((uint64_t)generation << 32) | (uint64_t)slot;
-}
-
 static inline ivp_registry_slot_meta_t *ivp_registry_get_slot_meta(const ivp_registry_t *reg,
                                                                    uint32_t slot)
 {
@@ -39,18 +34,6 @@ ivp_result_t ivp_registry_init(ivp_registry_t *reg,
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
-    if (ivp_hashmap_init(&reg->handle_to_elem,
-                         alloc,
-                         initial_capacity > 0 ? initial_capacity * 2 : 16,
-                         ivp_hash_u64,
-                         ivp_eq_memcmp,
-                         sizeof(uint64_t)) != IVP_OK) {
-        ivp_array_destroy(&reg->free_slots);
-        ivp_array_destroy(&reg->slots);
-        ivp_array_destroy(&reg->dense);
-        return IVP_ERR_OUT_OF_MEMORY;
-    }
-
     return IVP_OK;
 }
 
@@ -75,7 +58,6 @@ void ivp_registry_destroy(ivp_registry_t *reg,
         }
     }
 
-    ivp_hashmap_destroy(&reg->handle_to_elem);
     ivp_array_destroy(&reg->free_slots);
     ivp_array_destroy(&reg->slots);
     ivp_array_destroy(&reg->dense);
@@ -96,21 +78,17 @@ void *ivp_registry_get_at(const ivp_registry_t *reg, int dense_index)
 
 static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
                                     uint32_t *out_slot,
-                                    uint32_t *out_generation,
-                                    uint64_t *out_key)
+                                    uint32_t *out_generation)
 {
     if (ivp_array_len(&reg->free_slots) > 0) {
         const uintptr_t packed = (uintptr_t)ivp_array_pop(&reg->free_slots);
         const uint32_t slot = (uint32_t)(packed - 1u);
         ivp_registry_slot_meta_t *meta = ivp_registry_get_slot_meta(reg, slot);
-        meta->alive = true;
         if (meta->generation == 0) {
             meta->generation = 1;
         }
-        meta->handle_key = ivp_make_handle_key(slot, meta->generation);
         *out_slot = slot;
         *out_generation = meta->generation;
-        *out_key = meta->handle_key;
         return true;
     }
 
@@ -121,8 +99,7 @@ static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
     }
 
     meta->generation = 1;
-    meta->alive = true;
-    meta->handle_key = 0;
+    meta->element = NULL;
 
     if (ivp_array_push(&reg->slots, meta) != IVP_OK) {
         ivp_free(reg->alloc, meta, sizeof(ivp_registry_slot_meta_t));
@@ -130,11 +107,9 @@ static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
     }
 
     const uint32_t slot = (uint32_t)(ivp_array_len(&reg->slots) - 1);
-    meta->handle_key = ivp_make_handle_key(slot, meta->generation);
 
     *out_slot = slot;
     *out_generation = meta->generation;
-    *out_key = meta->handle_key;
     return true;
 }
 
@@ -150,23 +125,15 @@ ivp_result_t ivp_registry_insert(ivp_registry_t *reg,
 
     uint32_t slot = 0;
     uint32_t generation = 0;
-    uint64_t key = 0;
-    if (!ivp_registry_alloc_slot(reg, &slot, &generation, &key)) {
+    if (!ivp_registry_alloc_slot(reg, &slot, &generation)) {
         const int idx = reg->get_index(elem);
         (void)ivp_array_remove_swap(&reg->dense, idx);
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
     ivp_registry_slot_meta_t *meta = ivp_registry_get_slot_meta(reg, slot);
-    if (ivp_hashmap_put(&reg->handle_to_elem, &meta->handle_key, elem) != IVP_OK) {
-        meta->alive = false;
-        meta->generation++;
-        if (meta->generation == 0) meta->generation = 1;
-        (void)ivp_array_push(&reg->free_slots, (void *)(uintptr_t)(slot + 1u));
-        const int idx = reg->get_index(elem);
-        (void)ivp_array_remove_swap(&reg->dense, idx);
-        return IVP_ERR_OUT_OF_MEMORY;
-    }
+    IVP_ASSERT(meta->element == NULL);
+    meta->element = elem;
 
     out_handle->slot = slot;
     out_handle->generation = generation;
@@ -178,9 +145,12 @@ void *ivp_registry_get_by_handle(const ivp_registry_t *reg,
 {
     if (!reg) return NULL;
     if (handle.slot == UINT32_MAX || handle.generation == 0) return NULL;
+    if (handle.slot >= (uint32_t)ivp_array_len(&reg->slots)) return NULL;
 
-    const uint64_t key = ivp_make_handle_key(handle.slot, handle.generation);
-    return ivp_hashmap_get(&reg->handle_to_elem, &key);
+    ivp_registry_slot_meta_t *meta =
+        ivp_registry_get_slot_meta(reg, handle.slot);
+    if (!meta || meta->generation != handle.generation) return NULL;
+    return meta->element;
 }
 
 bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
@@ -192,22 +162,20 @@ bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
 
     if (handle.slot == UINT32_MAX || handle.generation == 0) return false;
 
-    const uint64_t key = ivp_make_handle_key(handle.slot, handle.generation);
-    void *elem = ivp_hashmap_get(&reg->handle_to_elem, &key);
-    if (!elem) {
+    if (handle.slot >= (uint32_t)ivp_array_len(&reg->slots)) return false;
+    ivp_registry_slot_meta_t *meta =
+        ivp_registry_get_slot_meta(reg, handle.slot);
+    if (!meta || meta->generation != handle.generation || !meta->element) {
         return false;
     }
-
-    (void)ivp_hashmap_remove(&reg->handle_to_elem, &key);
+    void *elem = meta->element;
 
     const int idx = reg->get_index(elem);
     (void)ivp_array_remove_swap(&reg->dense, idx);
 
-    ivp_registry_slot_meta_t *meta = ivp_registry_get_slot_meta(reg, handle.slot);
-    meta->alive = false;
+    meta->element = NULL;
     meta->generation++;
     if (meta->generation == 0) meta->generation = 1;
-    meta->handle_key = 0;
     (void)ivp_array_push(&reg->free_slots, (void *)(uintptr_t)(handle.slot + 1u));
 
     *out_removed_elem = elem;
