@@ -351,6 +351,10 @@ IVP_TEST(broadphase_preserves_candidate_order)
         BROADPHASE_ELEMENT_COUNT + 1u, sizeof(*serial_elements));
     ivp_ov_element_t *parallel_elements = (ivp_ov_element_t *)calloc(
         BROADPHASE_ELEMENT_COUNT + 1u, sizeof(*parallel_elements));
+    ivp_object_t *serial_objects = (ivp_object_t *)calloc(
+        BROADPHASE_ELEMENT_COUNT, sizeof(*serial_objects));
+    ivp_object_t *parallel_objects = (ivp_object_t *)calloc(
+        BROADPHASE_ELEMENT_COUNT, sizeof(*parallel_objects));
     ivp_pvec_t serial_candidates;
     ivp_pvec_t parallel_candidates;
     ivp_pvec_init(&serial_candidates);
@@ -374,11 +378,14 @@ IVP_TEST(broadphase_preserves_candidate_order)
                                                  NULL)
                                             : NULL;
     bool ok = serial && parallel && trees_initialized && serial_elements &&
-              parallel_elements && serial_owner && parallel_owner;
+              parallel_elements && serial_objects && parallel_objects &&
+              serial_owner && parallel_owner;
 
     for (int i = 0; ok && i < BROADPHASE_ELEMENT_COUNT; i++) {
-        serial_elements[i].real_object = serial_owner;
-        parallel_elements[i].real_object = parallel_owner;
+        serial_objects[i].creation_sequence = (uint64_t)i + 1u;
+        parallel_objects[i].creation_sequence = (uint64_t)i + 1u;
+        serial_elements[i].real_object = &serial_objects[i];
+        parallel_elements[i].real_object = &parallel_objects[i];
         if (ivp_ov_tree_insert_ov_element_ex(
                 &serial_tree, &serial_elements[i], 1.0, 1.0, NULL, NULL) !=
                 IVP_OK ||
@@ -449,6 +456,8 @@ IVP_TEST(broadphase_preserves_candidate_order)
     }
     free(parallel_elements);
     free(serial_elements);
+    free(parallel_objects);
+    free(serial_objects);
     ivp_environment_destroy(parallel);
     ivp_environment_destroy(serial);
     IVP_ASSERT_TRUE(ok);
@@ -1190,36 +1199,51 @@ static bool contact_scenes_equal(const contact_scene_t *a,
 
 IVP_TEST(solver_matrix_is_bit_exact)
 {
-    contact_scene_t serial;
-    contact_scene_t parallel;
-    memset(&serial, 0, sizeof(serial));
-    memset(&parallel, 0, sizeof(parallel));
-    bool ok = contact_scene_init(&serial, 1) &&
-              contact_scene_init(&parallel, INTERNAL_PARALLEL_WORKERS);
-    for (int step = 0; ok && step < 60; step++) {
-        contact_scene_drive_inward(&serial);
-        contact_scene_drive_inward(&parallel);
-        ivp_environment_simulate_one_psi(serial.environment);
-        ivp_environment_simulate_one_psi(parallel.environment);
-        if (!contact_scenes_equal(&serial, &parallel)) ok = false;
-    }
+    fenv_t saved_environment;
+    bool environment_saved = fegetenv(&saved_environment) == 0;
+    bool ok = environment_saved;
+    const int modes[] = {
+        FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO
+    };
+    for (size_t mode = 0;
+         ok && mode < sizeof(modes) / sizeof(modes[0]); mode++) {
+        if (fesetround(modes[mode]) != 0) {
+            ok = false;
+            break;
+        }
+        contact_scene_t serial;
+        contact_scene_t parallel;
+        memset(&serial, 0, sizeof(serial));
+        memset(&parallel, 0, sizeof(parallel));
+        ok = contact_scene_init(&serial, 1) &&
+             contact_scene_init(&parallel, INTERNAL_PARALLEL_WORKERS);
+        for (int step = 0; ok && step < 60; step++) {
+            contact_scene_drive_inward(&serial);
+            contact_scene_drive_inward(&parallel);
+            ivp_environment_simulate_one_psi(serial.environment);
+            ivp_environment_simulate_one_psi(parallel.environment);
+            if (!contact_scenes_equal(&serial, &parallel)) ok = false;
+        }
 
-    ivp_parallel_stats_t stats;
-    ivp_environment_get_parallel_stats(parallel.environment, &stats);
-    ok = ok && stats.solver_dispatches > 0u &&
-         stats.solver_tasks == stats.solver_dispatches *
-                                   ((SOLVER_CONTACT_COUNT + 15u) / 16u) &&
-         stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
-    if (!ok) {
-        fprintf(stderr,
-                "solver: dispatches=%llu tasks=%llu max_workers=%d\n",
-                (unsigned long long)stats.solver_dispatches,
-                (unsigned long long)stats.solver_tasks,
-                stats.max_workers_used);
+        ivp_parallel_stats_t stats = {0};
+        ivp_environment_get_parallel_stats(parallel.environment, &stats);
+        ok = ok && stats.solver_dispatches > 0u &&
+             stats.solver_tasks == stats.solver_dispatches *
+                                       ((SOLVER_CONTACT_COUNT + 15u) / 16u) &&
+             stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
+        if (!ok) {
+            fprintf(stderr,
+                    "solver mode=%d: dispatches=%llu tasks=%llu "
+                    "max_workers=%d\n",
+                    modes[mode],
+                    (unsigned long long)stats.solver_dispatches,
+                    (unsigned long long)stats.solver_tasks,
+                    stats.max_workers_used);
+        }
+        ivp_environment_destroy(parallel.environment);
+        ivp_environment_destroy(serial.environment);
     }
-
-    ivp_environment_destroy(parallel.environment);
-    ivp_environment_destroy(serial.environment);
+    if (environment_saved && fesetenv(&saved_environment) != 0) ok = false;
     IVP_ASSERT_TRUE(ok);
 }
 
