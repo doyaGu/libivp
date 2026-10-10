@@ -694,6 +694,12 @@ if (IVP_BUILD_TESTS)
         add_test(NAME test_profile_benchmark
                  COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_profile_benchmark.py)
         set_tests_properties(test_profile_benchmark PROPERTIES LABELS "unit;perf")
+        if (UNIX)
+            add_test(NAME test_parity_compare
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${IVP_REPO_ROOT}/tests/test_parity_compare.py)
+            set_tests_properties(test_parity_compare PROPERTIES LABELS "unit;tools")
+        endif ()
         if (IVP_ENABLE_SCENARIO_TESTS)
             add_test(NAME test_scenario_counter
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_scenario_counter.py
