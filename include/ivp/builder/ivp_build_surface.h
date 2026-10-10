@@ -22,9 +22,11 @@
  *
  * The convex hull builders (and everything built on them: boxes, point
  * soups, half space soups, convex decomposition pieces, ledge tree hulls)
- * use Qhull 2020.2's reentrant libqhull_r.  Each call owns a separate qhT,
- * so independent builds may run concurrently.  Do not share an allocator
- * between threads unless that allocator is itself thread-safe.
+ * use the selected external Qhull dependency.  The default Qhull 2020.2
+ * backend gives each call a separate qhT, so independent builds may run
+ * concurrently.  The reference-development backend accepts concurrent
+ * callers but serializes their classic process-global Qhull work.  Do not
+ * share an allocator between threads unless that allocator is thread-safe.
  */
 #ifndef IVP_BUILD_SURFACE_H
 #define IVP_BUILD_SURFACE_H

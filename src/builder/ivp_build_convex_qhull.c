@@ -15,11 +15,12 @@
  *   - convert_pointsoup_to_compact_surface wraps the ledge with the ledge
  *     soup, which computes mass center / inertia / radius / deviation.
  *
- * The hull comes from the official reentrant Qhull 2020.2 (8.0.2)
- * libqhull_r sources vendored in deps/qhull.  Each call owns an independent
- * qhT, so convex builders may run concurrently.  Qhull 2020.2 can order
- * facets and facet vertices differently from the reference's qhull 2.6;
- * the ledge layout follows the new order.
+ * The mainline build uses the official reentrant Qhull 2020.2 (8.0.2)
+ * dependency.  Each call owns an independent qhT, so convex builders may run
+ * concurrently.  A reference-development build can select the classic
+ * dependency; its global Qhull state is serialized by the adapter.  Backend
+ * selection and the resulting layout domain are documented in
+ * docs/PARITY_GAP_INVENTORY.md.
  *
  * Not ported: after a successful build the reference copies hesse_val of
  * matching input points into the compact points, matching them by
@@ -37,7 +38,7 @@
 
 #include "ivp_build_polygon_convex_internal.h"
 #include "geometry/ivp_check_ledge_debug.h"
-#include "qhull_api.h"
+#include "ivp_qhull_api.h"
 
 #include <limits.h>
 #include <math.h>
@@ -225,7 +226,7 @@ static void ps_error_output(const ivp_pc_templ_polygon_t *templ)
     ivp_better_debug_manager_dprint(&ivp_debugmanager, IVP_DM_SURBUILD_POINTSOUP, "\n");
 }
 
-static ivp_compact_ledge_t *ps_try_build(qh_api_context_t *qhull,
+static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
                                          const ivp_allocator_t *alloc,
                                          const double *pts, int numpoints,
                                          bool *skip_point,
@@ -242,10 +243,11 @@ static ivp_compact_ledge_t *ps_try_build(qh_api_context_t *qhull,
     /* DEBUG: Print all vertices of convex hull */
     IVP_IF(1) {
         IVP_IFDEBUG(IVP_DM_SURBUILD_POINTSOUP) {
-            qh_api_for_each_vertex(qhull, ps_debug_print_vertex, (void *)(uintptr_t)pts);
+            ivp_qhull_for_each_vertex(qhull, ps_debug_print_vertex,
+                                      (void *)(uintptr_t)pts);
         }
     }
-    int n_facets = qh_api_for_each_facet(qhull, ps_facet, &ctx);
+    int n_facets = ivp_qhull_for_each_facet(qhull, ps_facet, &ctx);
     *skip_point = ctx.skip_point;
 
     ivp_compact_ledge_t *ledge = NULL;
@@ -290,10 +292,10 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     unsigned *skip_list = (unsigned *)ivp_alloc(alloc, (size_t)n_in * sizeof(unsigned));
     unsigned *use_list = (unsigned *)ivp_alloc(alloc, (size_t)n_in * sizeof(unsigned));
     ivp_compact_ledge_t *res = NULL;
-    qh_api_context_t *qhull = NULL;
+    ivp_qhull_context_t *qhull = NULL;
 
     if (!pts || !skip_list || !use_list) goto cleanup;
-    qhull = qh_api_context_create();
+    qhull = ivp_qhull_context_create();
     if (!qhull) goto cleanup;
 
     int numpoints = 0;
@@ -322,9 +324,10 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     for (double random_eps = (double)1e-12f; random_eps < (double)0.02f;) {
         int exitcode = 0;
         if (try_unjumbled) {
-            qh_api_free_hull(qhull);
-            exitcode = qh_api_new_hull(qhull, pts, numpoints,
-                                       "qhull Qs Pp C-0 W1e-14 E1.0e-18");
+            ivp_qhull_free_hull(qhull);
+            exitcode = ivp_qhull_new_hull(
+                qhull, pts, numpoints,
+                "qhull Qs Pp C-0 W1e-14 E1.0e-18");
         }
         if (exitcode || !try_unjumbled) {
             IVP_IFDEBUG(IVP_DM_SURBUILD_POINTSOUP) {
@@ -332,8 +335,8 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
             }
             char flags[250];
             snprintf(flags, sizeof(flags), "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18", random_eps);
-            qh_api_free_hull(qhull);
-            exitcode = qh_api_new_hull(qhull, pts, numpoints, flags);
+            ivp_qhull_free_hull(qhull);
+            exitcode = ivp_qhull_new_hull(qhull, pts, numpoints, flags);
             if (exitcode) {
                 random_eps = (random_eps + (double)1e-12f) * (double)1.2f;
                 try_unjumbled = false;
@@ -367,7 +370,7 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
     }
 
 cleanup:
-    qh_api_context_destroy(qhull);
+    ivp_qhull_context_destroy(qhull);
     if (pts) ivp_free(alloc, pts, pts_sz);
     if (skip_list) ivp_free(alloc, skip_list, (size_t)n_in * sizeof(unsigned));
     if (use_list) ivp_free(alloc, use_list, (size_t)n_in * sizeof(unsigned));

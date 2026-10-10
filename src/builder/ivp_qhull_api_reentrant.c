@@ -1,20 +1,22 @@
-/* qhull_api.c -- see qhull_api.h */
-#include "libqhull_r/qhull_ra.h"
-#include "qhull_api.h"
+/* ivp_qhull_api_reentrant.c -- Qhull libqhull_r adapter. */
+#include "ivp_qhull_api.h"
+
+#include <libqhull_r/qhull_ra.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-struct qh_api_context {
+struct ivp_qhull_context {
     qhT qh;
     bool memory_initialized;
     bool hull_active;
 };
 
-qh_api_context_t *qh_api_context_create(void)
+ivp_qhull_context_t *ivp_qhull_context_create(void)
 {
-    qh_api_context_t *context = (qh_api_context_t *)calloc(1, sizeof(*context));
+    ivp_qhull_context_t *context =
+        (ivp_qhull_context_t *)calloc(1, sizeof(*context));
     if (!context) return NULL;
 
     QHULL_LIB_CHECK
@@ -22,8 +24,8 @@ qh_api_context_t *qh_api_context_create(void)
     return context;
 }
 
-int qh_api_new_hull(qh_api_context_t *context, double *points,
-                    int n_points, const char *flags)
+int ivp_qhull_new_hull(ivp_qhull_context_t *context, double *points,
+                       int n_points, const char *flags)
 {
     char command[256];
     size_t length;
@@ -31,9 +33,8 @@ int qh_api_new_hull(qh_api_context_t *context, double *points,
     if (!context || !points || !flags || context->hull_active)
         return qh_ERRinput;
     length = strlen(flags);
-    if (length >= sizeof(command))
-        return qh_ERRinput;
-    memcpy(command, flags, length + 1);
+    if (length >= sizeof(command)) return qh_ERRinput;
+    memcpy(command, flags, length + 1u);
 
     context->memory_initialized = true;
     context->hull_active = true;
@@ -41,14 +42,14 @@ int qh_api_new_hull(qh_api_context_t *context, double *points,
                         command, NULL, stderr);
 }
 
-int qh_api_for_each_facet(qh_api_context_t *context,
-                          qh_api_facet_fn fn, void *ctx)
+int ivp_qhull_for_each_facet(ivp_qhull_context_t *context,
+                             ivp_qhull_facet_fn fn, void *callback_context)
 {
     qhT *qh;
     facetT *facet;
-    int n_facets = 0;
+    int facet_count = 0;
     int capacity = 0;
-    int *ids = NULL;
+    int *point_ids = NULL;
 
     if (!context || !context->hull_active || !fn) return 0;
     qh = &context->qh;
@@ -61,60 +62,62 @@ int qh_api_for_each_facet(qh_api_context_t *context,
         int index = 0;
 
         if (count > capacity) {
-            int *new_ids = (int *)realloc(ids, (size_t)count * sizeof(*ids));
+            int *new_ids =
+                (int *)realloc(point_ids, (size_t)count * sizeof(*point_ids));
             if (!new_ids) {
                 qh_settempfree(qh, &vertices);
-                free(ids);
+                free(point_ids);
                 return -1;
             }
-            ids = new_ids;
+            point_ids = new_ids;
             capacity = count;
         }
         FOREACHvertex_(vertices) {
-            ids[index++] = qh_pointid(qh, vertex->point);
+            point_ids[index++] = qh_pointid(qh, vertex->point);
         }
         qh_settempfree(qh, &vertices);
         normal[0] = facet->normal[0];
         normal[1] = facet->normal[1];
         normal[2] = facet->normal[2];
-        fn(ctx, normal, ids, index);
-        n_facets++;
+        fn(callback_context, normal, point_ids, index);
+        facet_count++;
     }
-    free(ids);
-    return n_facets;
+    free(point_ids);
+    return facet_count;
 }
 
-int qh_api_for_each_vertex(qh_api_context_t *context,
-                           qh_api_vertex_fn fn, void *ctx)
+int ivp_qhull_for_each_vertex(ivp_qhull_context_t *context,
+                              ivp_qhull_vertex_fn fn,
+                              void *callback_context)
 {
     qhT *qh;
     vertexT *vertex;
-    int n_vertices = 0;
+    int vertex_count = 0;
 
     if (!context || !context->hull_active || !fn) return 0;
     qh = &context->qh;
     FORALLvertices {
-        fn(ctx, qh_pointid(qh, vertex->point));
-        n_vertices++;
+        fn(callback_context, qh_pointid(qh, vertex->point));
+        vertex_count++;
     }
-    return n_vertices;
+    return vertex_count;
 }
 
-void qh_api_free_hull(qh_api_context_t *context)
+void ivp_qhull_free_hull(ivp_qhull_context_t *context)
 {
     if (!context || !context->hull_active) return;
     qh_freeqhull(&context->qh, !qh_ALL);
     context->hull_active = false;
 }
 
-void qh_api_context_destroy(qh_api_context_t *context)
+void ivp_qhull_context_destroy(ivp_qhull_context_t *context)
 {
-    int curlong;
-    int totlong;
+    int current_long;
+    int total_long;
 
     if (!context) return;
-    qh_api_free_hull(context);
+    ivp_qhull_free_hull(context);
     if (context->memory_initialized)
-        qh_memfreeshort(&context->qh, &curlong, &totlong);
+        qh_memfreeshort(&context->qh, &current_long, &total_long);
     free(context);
 }

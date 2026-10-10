@@ -1,4 +1,8 @@
-/* test_qhull_reentrant.c -- concurrent convex builds use independent qhT state. */
+/* test_qhull_reentrant.c -- concurrent callers receive isolated hull results.
+ *
+ * The mainline backend achieves this with independent qhT state.  The
+ * reference backend serializes its classic process-global Qhull state.
+ */
 #include "ivp_test.h"
 
 #include <ivp/builder/ivp_build_surface.h>
