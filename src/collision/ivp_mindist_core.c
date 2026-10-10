@@ -294,6 +294,7 @@ static float syn_insert_lazy_in_hull_manager(ivp_md_synapse_t *s, double rel_hul
 
 static void mindist_hull_limit_exceeded_event(ivp_mindist_t *md, float hull_intrusion_value);
 static void mindist_recursive_rec_hull_limit_exceeded_event(ivp_mindist_t *md);
+static void mindist_recursive_recheck_childs(ivp_mindist_t *md, double dist_intra);
 
 static void synapse_hull_limit_exceeded(ivp_listener_hull_t *lh, ivp_hull_mgr_t *hm, float v)
 {
@@ -918,8 +919,7 @@ void ivp_mindist_exact_mindist_went_invalid(ivp_mindist_t *md, struct ivp_mindis
         ivp_mindist_mgr_insert_lazy_hull_mindist(md, (float)(dist0 + dist1));
         md->mindist_status = IVP_MD_HULL_RECURSIVE;
         /* recheck_recursive_childs */
-        extern void ivp_mindist_recursive_recheck_childs(ivp_mindist_t *md, double dist_intra);
-        ivp_mindist_recursive_recheck_childs(md, dist0 + dist1);
+        mindist_recursive_recheck_childs(md, dist0 + dist1);
         return;
     }
     ivp_mindist_mgr_remove_exact_mindist(mm, md);
@@ -1460,7 +1460,7 @@ static void rec_collision_is_going_to_be_deleted_event(ivp_collision_delegator_t
     rec_change_spawned_mindist_count(d, -1);
 }
 
-void ivp_mindist_recursive_recheck_childs(ivp_mindist_t *md, double dist_intra)
+static void mindist_recursive_recheck_childs(ivp_mindist_t *md, double dist_intra)
 {
     ivp_object_t *obj0 = md->synapse[0].l_obj;
     ivp_object_t *obj1 = md->synapse[1].l_obj;
@@ -1502,7 +1502,7 @@ static void mindist_recursive_rec_hull_limit_exceeded_event(ivp_mindist_t *md)
     double dist0, dist1;
     ivp_env_get_coll_range_intra_objects(md->env, obj0, obj1, &dist0, &dist1);
     ivp_env_get_statistic_manager(md->env)->range_intra_exceeded++;   /* ivp_mindist_recursive.cxx:281 (every build) */
-    ivp_mindist_recursive_recheck_childs(md, dist0 + dist1);
+    mindist_recursive_recheck_childs(md, dist0 + dist1);
     ivp_time_t t_now = ivp_env_get_current_time(md->env);
     ivp_hull_mgr_update_synapse(obj0->hull_manager, &md->synapse[0].lh, t_now, dist0);
     ivp_hull_mgr_update_synapse(obj1->hull_manager, &md->synapse[1].lh, t_now, dist1);
@@ -1581,7 +1581,7 @@ bool ivp_mindist_recursive_do_impact(ivp_mindist_t *md)
     ivp_env_get_coll_range_intra_objects(md->env, syn0->l_obj, syn1->l_obj, &dist0, &dist1);
     ivp_mindist_mgr_insert_lazy_hull_mindist(md, (float)(dist0 + dist1));
     md->mindist_status = IVP_MD_HULL_RECURSIVE;
-    ivp_mindist_recursive_recheck_childs(md, dist0 + dist1);
+    mindist_recursive_recheck_childs(md, dist0 + dist1);
     return true;
 }
 
