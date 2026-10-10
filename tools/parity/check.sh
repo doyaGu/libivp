@@ -37,7 +37,8 @@ build_lib() { # <dir> <build type>
   mkdir -p "$1"
   cmake -B "$1" -S "$PARITY_REPO" -DCMAKE_BUILD_TYPE="$2" \
     -DIVP_ENABLE_SCENARIO_TESTS=ON \
-    -DIVP_CANONICAL_INTERNAL_STATE=OFF > "$1.cmake.log" &&
+    -DIVP_CANONICAL_INTERNAL_STATE=OFF \
+    -DIVP_QHULL_MODE=REFERENCE > "$1.cmake.log" &&
     cmake --build "$1" --target test_scenarios -j"$IVP_JOBS" > "$1.build.log" ||
     parity_die "libivp $2 build failed (see $1.build.log)"
 }
