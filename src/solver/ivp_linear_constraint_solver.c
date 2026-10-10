@@ -533,6 +533,22 @@ static ivp_result_t lcs_setup_l_u_solver(lcs_state_t *s)
     return ivp_incr_lu_decompose(lu);
 }
 
+/* The friction solver overwhelmingly starts with a fully active 16-variable
+ * system.  At startup both permutation arrays are still the identity, so the
+ * indexed gather above is a straight row copy.  Keep the decomposition itself
+ * shared: this shortcut changes only the copy, not a single floating-point
+ * operation. */
+static ivp_result_t lcs_setup_l_u_solver_identity_16(lcs_state_t *s)
+{
+    ivp_incr_lu_t *lu = &s->lu_sub_solver;
+    for (int i = 0; i < 16; i++) {
+        lu->input_vec[i] = s->full_b[i];
+        memcpy(&lu->U_matrix[i * 16], &s->full_A[i * 16],
+               16u * sizeof(double));
+    }
+    return ivp_incr_lu_decompose(lu);
+}
+
 static void lcs_bubble_sort_x_vals(lcs_state_t *s)
 {
     const int *aii = s->actives_inactives_ignored;
@@ -599,7 +615,13 @@ static void lcs_startup_setup(lcs_state_t *s, int try_actives)
     for (i = 0; i < s->aligned_size; i++) {
         s->reset_x[i] = 0.0;
     }
-    if (lcs_setup_l_u_solver(s) == IVP_OK) {
+    ivp_result_t setup_result;
+    if (s->n_variables == 16 && try_actives == 16) {
+        setup_result = lcs_setup_l_u_solver_identity_16(s);
+    } else {
+        setup_result = lcs_setup_l_u_solver(s);
+    }
+    if (setup_result == IVP_OK) {
         s->sub_solver_status = 0;
         /* input vec for lu_sub_solver is filled within setup_l_u_solver */
 
