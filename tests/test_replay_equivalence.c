@@ -13,7 +13,34 @@
 #define REPLAY_OBJECT_COUNT 224
 #define REPLAY_OPERATION_COUNT 56
 #define REPLAY_EVENT_CAPACITY 2048
-#define REPLAY_WORLD_COUNT 5
+#define REPLAY_CONTROLLER_SLOT 0
+
+typedef enum replay_mode {
+    REPLAY_MODE_DIRECT = 0,
+    REPLAY_MODE_SERIAL_SCHEDULER,
+    REPLAY_MODE_PARALLEL_SCHEDULER_A,
+    REPLAY_MODE_PARALLEL_SCHEDULER_B,
+    REPLAY_MODE_INTERNAL_WORKERS,
+    REPLAY_MODE_COUNT
+} replay_mode_t;
+
+typedef struct replay_mode_config {
+    const char *name;
+    int worker_count;
+    int history_count;
+} replay_mode_config_t;
+
+static const replay_mode_config_t replay_modes[] = {
+    { "direct", 1, 0 },
+    { "serial-scheduler", 1, 5 },
+    { "parallel-scheduler-a", 1, 11 },
+    { "parallel-scheduler-b", 1, 19 },
+    { "internal-workers", 4, 27 }
+};
+
+_Static_assert(sizeof(replay_modes) / sizeof(replay_modes[0]) ==
+                   REPLAY_MODE_COUNT,
+               "each replay mode needs one configuration");
 
 typedef enum replay_operation_kind {
     REPLAY_ADD_SPEED = 0,
@@ -114,8 +141,9 @@ static replay_operation_t replay_make_operation(int operation_index,
     replay_operation_t operation;
     operation.kind = (replay_operation_kind_t)(
         operation_index % (int)REPLAY_OPERATION_KIND_COUNT);
-    operation.slot = 1 + (int)(replay_next(random_state) %
-                               (uint32_t)(REPLAY_OBJECT_COUNT - 1));
+    operation.slot = REPLAY_CONTROLLER_SLOT + 1 +
+        (int)(replay_next(random_state) %
+              (uint32_t)(REPLAY_OBJECT_COUNT - REPLAY_CONTROLLER_SLOT - 1));
     operation.a = replay_next(random_state);
     operation.b = replay_next(random_state);
     operation.c = replay_next(random_state);
@@ -124,6 +152,7 @@ static replay_operation_t replay_make_operation(int operation_index,
 
 static void replay_reset_events(replay_world_t *world)
 {
+    /* Keep padding initialized because traces are compared byte for byte. */
     memset(&world->events, 0, sizeof(world->events));
 }
 
@@ -337,7 +366,8 @@ static bool replay_toggle_controller(replay_world_t *world)
         replay_count_controller, &world->controller_context);
     if (!ivp_controller_handle_is_valid(world->controller)) return false;
     if (!ivp_environment_add_controller_to_core(
-            world->environment, world->controller, world->objects[0])) {
+            world->environment, world->controller,
+            world->objects[REPLAY_CONTROLLER_SLOT])) {
         (void)ivp_environment_remove_controller(
             world->environment, world->controller);
         world->controller = ivp_controller_handle_invalid();
@@ -435,6 +465,7 @@ static bool replay_apply_operation(replay_world_t *world,
 static void replay_capture_snapshot(const replay_world_t *world,
                                     replay_snapshot_t *snapshot)
 {
+    /* Keep padding initialized because snapshots are compared byte for byte. */
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->time = ivp_environment_get_time(world->environment);
     snapshot->controller_calls = world->controller_context.calls;
@@ -515,31 +546,27 @@ static bool replay_events_equal(const replay_event_trace_t *expected,
                   expected->count * sizeof(expected->entries[0])) == 0;
 }
 
-static bool replay_compare_worlds(replay_world_t worlds[REPLAY_WORLD_COUNT],
+static bool replay_compare_worlds(replay_world_t worlds[REPLAY_MODE_COUNT],
                                   int operation_index,
                                   const replay_operation_t *operation)
 {
-    static const char *const mode_names[REPLAY_WORLD_COUNT] = {
-        "direct", "serial-scheduler", "parallel-scheduler-a",
-        "parallel-scheduler-b", "internal-workers"
-    };
     replay_snapshot_t expected;
     replay_snapshot_t actual;
-    replay_capture_snapshot(&worlds[0], &expected);
+    replay_capture_snapshot(&worlds[REPLAY_MODE_DIRECT], &expected);
 
-    if (worlds[0].events.overflow) {
+    if (worlds[REPLAY_MODE_DIRECT].events.overflow) {
         fprintf(stderr,
                 "replay event overflow: seed=0x%08" PRIx32 " op=%d\n",
                 REPLAY_SEED, operation_index);
         return false;
     }
-    for (int world_index = 1; world_index < REPLAY_WORLD_COUNT;
-         world_index++) {
+    for (replay_mode_t mode = REPLAY_MODE_SERIAL_SCHEDULER;
+         mode < REPLAY_MODE_COUNT; mode++) {
         int different_slot = -1;
-        replay_capture_snapshot(&worlds[world_index], &actual);
+        replay_capture_snapshot(&worlds[mode], &actual);
         if (!replay_snapshots_equal(&expected, &actual, &different_slot) ||
-            !replay_events_equal(&worlds[0].events,
-                                 &worlds[world_index].events)) {
+            !replay_events_equal(&worlds[REPLAY_MODE_DIRECT].events,
+                                 &worlds[mode].events)) {
             fprintf(stderr,
                     "replay mismatch: seed=0x%08" PRIx32
                     " op=%d kind=%d slot=%d mode=%s state_slot=%d"
@@ -547,30 +574,34 @@ static bool replay_compare_worlds(replay_world_t worlds[REPLAY_WORLD_COUNT],
                     REPLAY_SEED, operation_index,
                     operation ? (int)operation->kind : -1,
                     operation ? operation->slot : -1,
-                    mode_names[world_index], different_slot,
-                    worlds[0].events.count,
-                    worlds[world_index].events.count,
-                    worlds[world_index].events.overflow ? 1 : 0);
+                    replay_modes[mode].name, different_slot,
+                    worlds[REPLAY_MODE_DIRECT].events.count,
+                    worlds[mode].events.count,
+                    worlds[mode].events.overflow ? 1 : 0);
             return false;
         }
     }
     return true;
 }
 
-static bool replay_step_worlds(replay_world_t worlds[REPLAY_WORLD_COUNT],
+static bool replay_step_worlds(replay_world_t worlds[REPLAY_MODE_COUNT],
                                ivp_world_scheduler_t *serial_scheduler,
                                ivp_world_scheduler_t *parallel_scheduler,
                                bool use_elapsed_time)
 {
     ivp_real_t elapsed = ivp_environment_get_delta_psi_time(
-        worlds[0].environment) * IVP_REAL(2.0);
+        worlds[REPLAY_MODE_DIRECT].environment) * IVP_REAL(2.0);
     if (use_elapsed_time) {
-        ivp_environment_simulate_dtime(worlds[0].environment, elapsed);
+        ivp_environment_simulate_dtime(
+            worlds[REPLAY_MODE_DIRECT].environment, elapsed);
     } else {
-        ivp_environment_simulate_one_psi(worlds[0].environment);
+        ivp_environment_simulate_one_psi(
+            worlds[REPLAY_MODE_DIRECT].environment);
     }
 
-    ivp_environment_t *serial_worlds[] = { worlds[1].environment };
+    ivp_environment_t *serial_worlds[] = {
+        worlds[REPLAY_MODE_SERIAL_SCHEDULER].environment
+    };
     ivp_result_t result = use_elapsed_time
         ? ivp_world_scheduler_simulate_dtime(
               serial_scheduler, serial_worlds, 1, elapsed)
@@ -579,7 +610,8 @@ static bool replay_step_worlds(replay_world_t worlds[REPLAY_WORLD_COUNT],
     if (result != IVP_OK) return false;
 
     ivp_environment_t *parallel_worlds[] = {
-        worlds[2].environment, worlds[3].environment
+        worlds[REPLAY_MODE_PARALLEL_SCHEDULER_A].environment,
+        worlds[REPLAY_MODE_PARALLEL_SCHEDULER_B].environment
     };
 #if defined(IVP_HOME_BUILD) || defined(IVP_BENCHMARK_DIAGNOSTICS)
     for (size_t i = 0; i < 2; i++) {
@@ -600,27 +632,29 @@ static bool replay_step_worlds(replay_world_t worlds[REPLAY_WORLD_COUNT],
 #endif
 
     if (use_elapsed_time) {
-        ivp_environment_simulate_dtime(worlds[4].environment, elapsed);
+        ivp_environment_simulate_dtime(
+            worlds[REPLAY_MODE_INTERNAL_WORKERS].environment, elapsed);
     } else {
-        ivp_environment_simulate_one_psi(worlds[4].environment);
+        ivp_environment_simulate_one_psi(
+            worlds[REPLAY_MODE_INTERNAL_WORKERS].environment);
     }
     return true;
 }
 
 IVP_TEST(operation_log_matches_execution_modes)
 {
-    static const int worker_counts[REPLAY_WORLD_COUNT] = { 1, 1, 1, 1, 4 };
-    static const int history_counts[REPLAY_WORLD_COUNT] = { 0, 5, 11, 19, 27 };
-    replay_world_t worlds[REPLAY_WORLD_COUNT];
+    replay_world_t worlds[REPLAY_MODE_COUNT];
     memset(worlds, 0, sizeof(worlds));
     ivp_world_scheduler_t *serial_scheduler = NULL;
     ivp_world_scheduler_t *parallel_scheduler = NULL;
     bool ok = true;
 
-    for (int i = 0; i < REPLAY_WORLD_COUNT; i++) {
-        if (!replay_world_init(&worlds[i], worker_counts[i],
-                               history_counts[i])) {
-            fprintf(stderr, "replay setup failed for world %d\n", i);
+    for (replay_mode_t mode = REPLAY_MODE_DIRECT;
+         mode < REPLAY_MODE_COUNT; mode++) {
+        if (!replay_world_init(&worlds[mode], replay_modes[mode].worker_count,
+                               replay_modes[mode].history_count)) {
+            fprintf(stderr, "replay setup failed for mode %s\n",
+                    replay_modes[mode].name);
             ok = false;
             goto cleanup;
         }
@@ -638,14 +672,15 @@ IVP_TEST(operation_log_matches_execution_modes)
          operation_index < REPLAY_OPERATION_COUNT; operation_index++) {
         replay_operation_t operation = replay_make_operation(
             operation_index, &random_state);
-        for (int i = 0; i < REPLAY_WORLD_COUNT; i++) {
-            replay_reset_events(&worlds[i]);
-            if (!replay_apply_operation(&worlds[i], &operation)) {
+        for (replay_mode_t mode = REPLAY_MODE_DIRECT;
+             mode < REPLAY_MODE_COUNT; mode++) {
+            replay_reset_events(&worlds[mode]);
+            if (!replay_apply_operation(&worlds[mode], &operation)) {
                 fprintf(stderr,
                         "replay operation failed: seed=0x%08" PRIx32
-                        " op=%d kind=%d slot=%d world=%d\n",
+                        " op=%d kind=%d slot=%d mode=%s\n",
                         REPLAY_SEED, operation_index, (int)operation.kind,
-                        operation.slot, i);
+                        operation.slot, replay_modes[mode].name);
                 ok = false;
                 goto cleanup;
             }
@@ -662,7 +697,8 @@ IVP_TEST(operation_log_matches_execution_modes)
 #if !defined(IVP_ENABLE_ASSERTS) && \
     !defined(IVP_HOME_BUILD) && !defined(IVP_BENCHMARK_DIAGNOSTICS)
     ivp_parallel_stats_t stats;
-    ivp_environment_get_parallel_stats(worlds[4].environment, &stats);
+    ivp_environment_get_parallel_stats(
+        worlds[REPLAY_MODE_INTERNAL_WORKERS].environment, &stats);
     if (stats.island_dispatches == 0u || stats.island_tasks == 0u) {
         fprintf(stderr, "replay did not exercise internal island dispatch\n");
         ok = false;
@@ -672,8 +708,9 @@ IVP_TEST(operation_log_matches_execution_modes)
 cleanup:
     ivp_world_scheduler_destroy(parallel_scheduler);
     ivp_world_scheduler_destroy(serial_scheduler);
-    for (int i = 0; i < REPLAY_WORLD_COUNT; i++) {
-        replay_world_destroy(&worlds[i]);
+    for (replay_mode_t mode = REPLAY_MODE_DIRECT;
+         mode < REPLAY_MODE_COUNT; mode++) {
+        replay_world_destroy(&worlds[mode]);
     }
     IVP_ASSERT_TRUE(ok);
 }
