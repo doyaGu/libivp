@@ -678,6 +678,29 @@ static bool collect_collision_partners(ivp_ov_tree_t *t, const ivp_ov_element_t 
     return true;
 }
 
+static int ov_compare_canonical_elements(const void *a_in, const void *b_in)
+{
+    const ivp_ov_element_t *a =
+        *(const ivp_ov_element_t *const *)a_in;
+    const ivp_ov_element_t *b =
+        *(const ivp_ov_element_t *const *)b_in;
+    const ivp_object_t *oa = a->real_object;
+    const ivp_object_t *ob = b->real_object;
+    const uint64_t key_a = ivp_object_order_key(oa);
+    const uint64_t key_b = ivp_object_order_key(ob);
+    IVP_ASSERT(key_a != key_b || a == b);
+    return key_a < key_b ? 1 : key_a > key_b ? -1 : 0;
+}
+
+static void ov_canonicalize_collision_partners(ivp_pvec_t *partners,
+                                               int first)
+{
+    const int count = ivp_pvec_len(partners) - first;
+    if (count < 2) return;
+    qsort(partners->elems + first, (size_t)count,
+          sizeof(*partners->elems), ov_compare_canonical_elements);
+}
+
 /* ── deterministic parallel overlap query ──────────────────────────────── */
 
 #define IVP_OV_QUERY_GRAIN 256
@@ -1055,6 +1078,12 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
             t->collision_partners->n = old_partner_count;
             ivp_ov_tree_remove_ov_element(t, element);
             return IVP_ERR_OUT_OF_MEMORY;
+        }
+        if (element->real_object && element->real_object->owner &&
+            ivp_env_uses_canonical_internal_state(
+                element->real_object->owner)) {
+            ov_canonicalize_collision_partners(t->collision_partners,
+                                               old_partner_count);
         }
     }
     return IVP_OK;

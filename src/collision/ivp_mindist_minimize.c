@@ -360,14 +360,54 @@ static inline void mms_sort_synapses(mms_t *m, ivp_md_synapse_t *a, ivp_md_synap
 /* IVP_LOOP_LIST_SIZE variant of check_loop_hash (the IVP_Hash variant with
  * its IVP_MINDIST_BEHAVIOUR_DEBUG "start loop check" trace,
  * ivp_mindist_minimize.cxx:53, is not compiled by the reference). */
-static bool mms_check_loop_hash(mms_t *m, int s0, const ivp_compact_edge_t *e0, int s1, const ivp_compact_edge_t *e1)
+static intptr_t mms_canonical_feature_key(
+    int status, const ivp_compact_edge_t *edge,
+    const ivp_compact_ledge_t *ledge)
+{
+    if (!edge) return status;
+    IVP_ASSERT(ledge);
+    const ptrdiff_t offset =
+        (const char *)edge - (const char *)ledge;
+    IVP_ASSERT(offset >= 0);
+    IVP_ASSERT((size_t)offset < (size_t)ivp_ledge_get_size(ledge));
+    IVP_ASSERT(((uintptr_t)offset & (uintptr_t)3u) == 0u);
+    return (intptr_t)offset | status;
+}
+
+static bool mms_check_loop_hash(mms_t *m,
+                                int s0, const ivp_compact_edge_t *e0,
+                                const ivp_compact_ledge_t *ledge0,
+                                const ivp_object_t *object0,
+                                int s1, const ivp_compact_edge_t *e1,
+                                const ivp_compact_ledge_t *ledge1,
+                                const ivp_object_t *object1)
 {
     IVP_ASSERT(s0 < 4);   /* ivp_mindist_minimize.cxx:94-95: i_s0 / i_s1 */
     IVP_ASSERT(s1 < 4);
     if (m->loop_hash_size >= IVP_LOOP_LIST_SIZE) return true;
+    const bool canonical = ivp_env_uses_canonical_internal_state(
+        m->mindist->env);
     intptr_t x0 = (intptr_t)e0 | s0;
     intptr_t x1 = (intptr_t)e1 | s1;
-    if (x0 < x1) { intptr_t h = x0; x0 = x1; x1 = h; }
+    if (canonical) {
+        x0 = mms_canonical_feature_key(s0, e0, ledge0);
+        x1 = mms_canonical_feature_key(s1, e1, ledge1);
+    }
+    bool swap;
+    if (canonical) {
+        const uint64_t object_key0 =
+            ivp_object_order_key(object0);
+        const uint64_t object_key1 =
+            ivp_object_order_key(object1);
+        swap = object_key0 < object_key1;
+    } else {
+        swap = x0 < x1;
+    }
+    if (swap) {
+        intptr_t h = x0;
+        x0 = x1;
+        x1 = h;
+    }
     for (int i = m->loop_hash_size - 1; i >= 0; i--) {
         if (m->loop_hash[i].a == x0 && m->loop_hash[i].b == x1) return true;
     }
@@ -581,7 +621,12 @@ static ivp_mrc_type_t p_minimize_Leave_PF(mms_t *m, const ivp_compact_edge_t *P,
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_POINT, P, IVP_ST_TRIANGLE, F)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_POINT, P,
+                                c_P->compact_ledge, c_P->clp_object,
+                                IVP_ST_TRIANGLE, F,
+                                c_F->compact_ledge, c_F->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
     ivp_vec3r_t hesse_vec_Pos;
     D back_side_check_distance = 0.0f;
@@ -739,7 +784,12 @@ static ivp_mrc_type_t p_minimize_Leave_KK(mms_t *m, const ivp_compact_edge_t *K,
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_EDGE, K, IVP_ST_EDGE, L)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_EDGE, K,
+                                c_K->compact_ledge, c_K->clp_object,
+                                IVP_ST_EDGE, L,
+                                c_L->compact_ledge, c_L->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
     ivp_vec3r_t H_Kos, H_Los, H_ws;
     int side;
@@ -880,7 +930,12 @@ static ivp_mrc_type_t p_minimize_BP(mms_t *m, ivp_cache_ball_t *c_ball, const iv
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_BALL, NULL, IVP_ST_POINT, P)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_BALL, NULL, NULL,
+                                c_ball->object,
+                                IVP_ST_POINT, P, c_P->compact_ledge,
+                                c_P->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
     ivp_vec3r_t center_ball_Pmos, p_ws;
     cls_give_world_coords_AT(P, c_P, &p_ws);
@@ -938,7 +993,12 @@ static ivp_mrc_type_t p_minimize_PP(mms_t *m, const ivp_compact_edge_t *A, const
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_POINT, A, IVP_ST_POINT, B)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_POINT, A,
+                                c_A->compact_ledge, c_A->clp_object,
+                                IVP_ST_POINT, B,
+                                c_B->compact_ledge, c_B->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
     IVP_ASSERT(c_A->tmp.synapse == ivp_mindist_get_sorted_synapse(m->mindist, 0));   /* ivp_mindist_mcases.cxx:774 */
 #ifdef IVP_DEBUG_CHECK_LEN
@@ -1041,7 +1101,12 @@ static ivp_mrc_type_t p_minimize_Leave_BK(mms_t *m, ivp_cache_ball_t *c_ball, co
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_BALL, NULL, IVP_ST_EDGE, K)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_BALL, NULL, NULL,
+                                c_ball->object,
+                                IVP_ST_EDGE, K, c_K->compact_ledge,
+                                c_K->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
     ivp_vec3r_t p_ks;
     co_pos_to_object(c_K->clp_cache_object, &c_ball->cache_object->m_world_f_object.pos, &p_ks);
@@ -1114,7 +1179,12 @@ static ivp_mrc_type_t p_minimize_Leave_PK(mms_t *m, const ivp_compact_edge_t *P,
 {
     ivp_mindist_t *md = m->mindist;
     if (--m->P_Finish_Counter < 0) {
-        if (mms_check_loop_hash(m, IVP_ST_POINT, P, IVP_ST_EDGE, K)) return IVP_MRC_ENDLESS_LOOP;
+        if (mms_check_loop_hash(m, IVP_ST_POINT, P,
+                                c_P->compact_ledge, c_P->clp_object,
+                                IVP_ST_EDGE, K,
+                                c_K->compact_ledge, c_K->clp_object)) {
+            return IVP_MRC_ENDLESS_LOOP;
+        }
     }
 #ifdef IVP_DEBUG_CHECK_LEN
     (void)mms_check_len_PK(m, P, K, c_P, c_K);   /* ivp_mindist_mcases.cxx:1070 */
