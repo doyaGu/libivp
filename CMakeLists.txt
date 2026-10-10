@@ -718,9 +718,13 @@ if (IVP_BUILD_TESTS)
     endif ()
 
     # ── CTest labels ──────────────────────────────────────────────────────
-    # unit:       all unit tests
+    # unit:       unit and tool-contract tests
+    # threading:  tests that exercise concurrent execution
     # perf:       performance regression tests
-    # validation: scenario gen + compare tests
+    # stability:  long-horizon physical stability tests
+    # validation: scenario generation and comparison tests
+    # invariants: scenario-specific invariant tests
+    # parity:     bit-exact reference comparison tests
     # smoke:      example smoke tests
 
     set(IVP_UNIT_TESTS
@@ -740,6 +744,23 @@ if (IVP_BUILD_TESTS)
     foreach (T ${IVP_UNIT_TESTS})
         set_tests_properties(${T} PROPERTIES LABELS "unit")
     endforeach ()
+
+    set(IVP_THREADING_TESTS
+            test_qhull_concurrency
+            test_parallel_worlds
+            test_internal_parallel)
+    if (IVP_QHULL_SUPPORTS_PARALLEL_BUILDS)
+        list(APPEND IVP_THREADING_TESTS test_qhull_overlap)
+    endif ()
+    if (NOT IVP_REFERENCE_INTERNAL_STATE)
+        list(APPEND IVP_THREADING_TESTS
+                test_internal_state_stability
+                test_replay_equivalence)
+    endif ()
+    foreach (T ${IVP_THREADING_TESTS})
+        set_property(TEST ${T} APPEND PROPERTY LABELS threading)
+    endforeach ()
+
     # Render module logic that needs no GPU (matrices, rays, frustum, PNG).
     if (IVP_BUILD_RENDER)
         ivp_add_test(test_render_math tests/test_render_math.c)

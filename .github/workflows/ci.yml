@@ -24,7 +24,7 @@ jobs:
         run: ctest --test-dir build -C Release -L unit --output-on-failure --parallel 4
 
   # Continuously enforce configurations that previously ran only as local
-  # release checks. ThreadSanitizer stays scoped to the parallel contract
+  # release checks. ThreadSanitizer stays scoped to the threading contract
   # tests because the full legacy suite is unnecessarily expensive under it.
   verification:
     strategy:
@@ -39,9 +39,9 @@ jobs:
           - name: asan-ubsan
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_ASAN=ON -DIVP_ENABLE_UBSAN=ON
             test_args: -L unit -E test_benchmark_runner --parallel 2
-          - name: tsan-parallel
+          - name: tsan-threading
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
-            test_args: -R "test_(parallel_worlds|internal_parallel|internal_state_stability|replay_equivalence|qhull_(concurrency|overlap))$" --parallel 1
+            test_args: -L threading --parallel 1
     name: verification (${{ matrix.name }})
     runs-on: ubuntu-latest
     env:
