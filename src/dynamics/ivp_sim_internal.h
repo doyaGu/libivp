@@ -73,6 +73,7 @@ typedef struct ivp_sim_ctrl_vt {
 
 struct ivp_sim_ctrl {
     const ivp_sim_ctrl_vt_t *vt;
+    uint64_t registration_sequence;
 };
 
 static inline int ivp_sim_ctrl_priority(ivp_sim_ctrl_t *c) { return c->vt->get_priority(c); }
@@ -121,6 +122,7 @@ void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su);
 void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *m, ivp_pvec_t *touched_cores);
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset);
+uint64_t ivp_core_stable_order_key(const ivp_core_t *core);
 uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su);
 
 bool ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core);

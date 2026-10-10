@@ -318,17 +318,91 @@ static void cp_contact_recalc_diagnostics_record(ivp_contact_pt_t *cp,
 
 /* ── IVP_Synapse_Friction ───────────────────────────────────────────────── */
 
+void ivp_friction_mgr_restore_object_contact_order(ivp_object_t *obj)
+{
+    if (!obj || !ivp_env_uses_canonical_internal_state(obj->owner) ||
+        !obj->fr_synapses || !obj->fr_synapses->next) {
+        return;
+    }
+
+    ivp_fr_synapse_t *previous = NULL;
+    uint64_t previous_key = 0u;
+    bool already_ordered = true;
+    for (ivp_fr_synapse_t *synapse = obj->fr_synapses;
+         synapse; synapse = synapse->next) {
+        uint64_t key = synapse->contact_point->creation_sequence;
+        if (synapse->prev != previous || key == 0u ||
+            (previous && previous_key >= key)) {
+            already_ordered = false;
+            break;
+        }
+        previous = synapse;
+        previous_key = key;
+    }
+    if (already_ordered) return;
+
+    ivp_fr_synapse_t *unsorted = obj->fr_synapses;
+    ivp_fr_synapse_t *sorted = NULL;
+    while (unsorted) {
+        ivp_fr_synapse_t *synapse = unsorted;
+        unsorted = unsorted->next;
+        uint64_t key = synapse->contact_point->creation_sequence;
+        IVP_ASSERT(key != 0u);
+
+        ivp_fr_synapse_t *before = NULL;
+        ivp_fr_synapse_t *after = sorted;
+        while (after &&
+               after->contact_point->creation_sequence < key) {
+            before = after;
+            after = after->next;
+        }
+        IVP_ASSERT(!after ||
+                   after->contact_point->creation_sequence != key);
+        synapse->prev = before;
+        synapse->next = after;
+        if (before) {
+            before->next = synapse;
+        } else {
+            sorted = synapse;
+        }
+        if (after) after->prev = synapse;
+    }
+    obj->fr_synapses = sorted;
+}
+
 static void fr_synapse_init(ivp_fr_synapse_t *syn, ivp_contact_pt_t *cp, ivp_object_t *obj,
                             const ivp_compact_edge_t *edge, short status)
 {
     syn->l_obj = obj;
     syn->contact_point = cp;
-    syn->next = obj->fr_synapses;
-    syn->prev = NULL;
-    if (syn->next) syn->next->prev = syn;
-    obj->fr_synapses = syn;
     syn->status = status;
     syn->edge = edge;
+    if (!ivp_env_uses_canonical_internal_state(obj->owner) ||
+        !obj->fr_synapses) {
+        syn->next = obj->fr_synapses;
+        syn->prev = NULL;
+        if (syn->next) syn->next->prev = syn;
+        obj->fr_synapses = syn;
+        return;
+    }
+
+    uint64_t key = cp->creation_sequence;
+    ivp_fr_synapse_t *before = NULL;
+    ivp_fr_synapse_t *after = obj->fr_synapses;
+    while (after && after->contact_point->creation_sequence < key) {
+        before = after;
+        after = after->next;
+    }
+    IVP_ASSERT(!after ||
+               after->contact_point->creation_sequence != key);
+    syn->prev = before;
+    syn->next = after;
+    if (before) {
+        before->next = syn;
+    } else {
+        obj->fr_synapses = syn;
+    }
+    if (after) after->prev = syn;
 }
 
 static void fr_synapse_remove_from_object(ivp_fr_synapse_t *syn)
@@ -407,6 +481,11 @@ ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
     ivp_contact_pt_t *cp = (ivp_contact_pt_t *)ivp_alloc(allocator, sizeof(*cp));
     if (!cp) return NULL;
     memset(cp, 0, sizeof(*cp));
+    cp->creation_sequence = ivp_env_next_contact_sequence(md->env);
+    if (cp->creation_sequence == 0u) {
+        ivp_free(allocator, cp, sizeof(*cp));
+        return NULL;
+    }
     ivp_md_synapse_t *syn0 = ivp_mindist_get_sorted_synapse(md, 0);
     fr_synapse_init(&cp->synapse[0], cp, syn0->l_obj, syn0->edge, syn0->status);
     /* add reference to the used ledge (released in ivp_contact_pt_destroy) */
@@ -901,6 +980,7 @@ ivp_contact_pt_t *ivp_friction_mgr_get_associated_contact_point(ivp_mindist_t *m
 
 void ivp_friction_mgr_delete_all_contact_points_of_object(ivp_object_t *obj0)
 {
+    ivp_friction_mgr_restore_object_contact_order(obj0);
     ivp_fr_synapse_t *syn0;
     while ((syn0 = obj0->fr_synapses) != NULL) {
         ivp_contact_pt_destroy(syn0->contact_point);

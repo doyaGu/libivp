@@ -30,6 +30,7 @@ struct ivp_impact_solver_lt;
 struct ivp_contact_situation_lt;
 struct ivp_mindist;
 struct ivp_mindist_settings;
+struct ivp_sim_ctrl;
 
 /* IVP_ENV_STATE */
 typedef enum ivp_env_state {
@@ -110,6 +111,9 @@ void  ivp_env_sim_mem_end(struct ivp_environment *env);
 struct ivp_u_memory *ivp_env_get_short_term_mem(struct ivp_environment *env);
 bool ivp_env_uses_canonical_internal_state(
     const struct ivp_environment *env);
+void ivp_env_register_sim_controller(struct ivp_environment *env,
+                                     struct ivp_sim_ctrl *controller);
+uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env);
 
 /* IVP_Environment::get_statistic_manager / get_debug_manager
  * (debug_information) */

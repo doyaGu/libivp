@@ -975,6 +975,7 @@ void ivp_core_revive_adjacent_to_unmoveable(ivp_core_t *core)
     ivp_env_sim_mem_begin(env);
     for (int d = ivp_core_n_objects(core) - 1; d >= 0; d--) {
         ivp_object_t *r_obj = ivp_core_object_at(core, d);
+        ivp_friction_mgr_restore_object_contact_order(r_obj);
         ivp_fr_synapse_t *fr_synapse = r_obj->fr_synapses;
         while (fr_synapse) {
             ivp_fr_synapse_t *next_syn = fr_synapse->next;
@@ -1022,6 +1023,7 @@ void ivp_core_values_changed_recalc_redundants(ivp_core_t *core)
         ivp_env_sim_mem_begin(env);
         for (int d = ivp_core_n_objects(core) - 1; d >= 0; d--) {
             ivp_object_t *r_obj = ivp_core_object_at(core, d);
+            ivp_friction_mgr_restore_object_contact_order(r_obj);
             ivp_fr_synapse_t *fr_synapse = r_obj->fr_synapses;
             ivp_fr_system_t *fs = NULL;
             if (fr_synapse) fs = fr_synapse->contact_point->l_friction_system;
@@ -1062,6 +1064,7 @@ bool ivp_core_add_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
         IVP_ASSERT(0);
         return false;
     }
+    ivp_env_register_sim_controller(core->environment, c);
     int index = ivp_pvec_add(&core->controllers_of_core, c);
     if (index < 0) return false;
     if (!ivp_sim_unit_add_controller_of_core(core->sim_unit, core, c)) {

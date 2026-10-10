@@ -205,6 +205,33 @@ bool ivp_env_uses_canonical_internal_state(
     return env && env->pl && env->pl->canonical_internal_state;
 }
 
+void ivp_env_register_sim_controller(
+    struct ivp_environment *env, struct ivp_sim_ctrl *controller)
+{
+    if (!env || !env->pl || !controller ||
+        controller->registration_sequence != 0u) {
+        return;
+    }
+    if (env->pl->next_controller_sequence == 0u) {
+        env->pl->next_controller_sequence = 1u;
+    }
+    IVP_ASSERT(env->pl->next_controller_sequence != UINT64_MAX);
+    if (env->pl->next_controller_sequence == UINT64_MAX) return;
+    controller->registration_sequence =
+        env->pl->next_controller_sequence++;
+}
+
+uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
+{
+    if (!env || !env->pl) return 0u;
+    if (env->pl->next_contact_sequence == 0u) {
+        env->pl->next_contact_sequence = 1u;
+    }
+    IVP_ASSERT(env->pl->next_contact_sequence != UINT64_MAX);
+    if (env->pl->next_contact_sequence == UINT64_MAX) return 0u;
+    return env->pl->next_contact_sequence++;
+}
+
 void *ivp_env_sim_mem_alloc(struct ivp_environment *env, size_t size)
 {
     /* IVP_U_Memory::get_mem_transaction (ivu_memory.hxx:121) */
@@ -1531,6 +1558,8 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
     }
     memset(sc, 0, sizeof(*sc));
     sc->base.vt = &slot_vt;
+    ivp_env_register_sim_controller(env, &sc->base);
+    slot->registration_sequence = sc->base.registration_sequence;
     sc->env = env;
     sc->handle = out;
     sc->slot = slot;
@@ -1558,7 +1587,9 @@ static ivp_controller_handle_t env_add_controller_internal(ivp_environment_t *en
         (void)ivp_controller_system_remove(env_controller_system(env), out, env->allocator);
         return invalid;
     }
-    ivp_controller_system_sort(env_controller_system(env));
+    ivp_controller_system_sort(
+        env_controller_system(env),
+        ivp_env_uses_canonical_internal_state(env));
     ivp_environment_emit_event_internal(env, IVP_EVENT_CONTROLLER_ADDED, IVP_REAL(0.0), -1, (int)out.slot);
     return out;
 }
@@ -1951,6 +1982,16 @@ void ivp_environment_set_global_collision_tolerance(ivp_environment_t *env, ivp_
 
 /* ── PSI (IVP_Environment::simulate_psi + IVP_Time_Event_PSI) ─────────── */
 
+static void env_restore_contact_order(ivp_environment_t *env)
+{
+    if (!ivp_env_uses_canonical_internal_state(env)) return;
+    ivp_object_system_t *objects = env_object_system(env);
+    for (int i = 0; i < ivp_object_system_count(objects); i++) {
+        ivp_friction_mgr_restore_object_contact_order(
+            ivp_object_system_get_at(objects, i));
+    }
+}
+
 static void env_simulate_psi(ivp_environment_t *env)
 {
     ivp_env_pipeline_t *pl = env->pl;
@@ -1973,6 +2014,7 @@ static void env_simulate_psi(ivp_environment_t *env)
     pl->in_psi = true;
     env->current_sim_unit_index = 0;
     pl->state = IVP_ES_PSI;
+    env_restore_contact_order(env);
     env_emit_phase(env, IVP_PSI_PHASE_PRE_PSI, dt);
     ivp_anomaly_manager_begin_psi(&env->anomaly_manager);
     env_emit_phase(env, IVP_PSI_PHASE_REVIVE, dt);
@@ -2306,6 +2348,7 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     pl->state = IVP_ES_AT;
     /* standard gravity controller + set_gravity */
     pl->gravity_ctrl.vt = &gravity_vt;
+    ivp_env_register_sim_controller(env, &pl->gravity_ctrl);
     ivp_environment_set_gravity(env, &cfg.gravity);
     /* set_delta_PSI_time */
     double dt = (double)cfg.delta_psi_time;
@@ -2589,6 +2632,7 @@ static void env_reset_object_sequence_if_empty(ivp_environment_t *env)
          * objects remain, a new scene can start from the same canonical
          * order even if registry slots and allocator pools are still warm. */
         env->pl->next_object_sequence = 1u;
+        env->pl->next_contact_sequence = 1u;
     }
 }
 

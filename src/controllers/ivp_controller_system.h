@@ -23,6 +23,7 @@ typedef enum ivp_controller_mode {
 
 typedef struct ivp_controller_slot {
     ivp_handle_t handle;
+    uint64_t registration_sequence;
     int dense_index;
     int priority;
     ivp_controller_event_fn_t event_fn;
@@ -68,7 +69,8 @@ int ivp_controller_system_count(const ivp_controller_system_t *sys);
 ivp_controller_slot_t *ivp_controller_system_get_at(const ivp_controller_system_t *sys, int index);
 ivp_controller_slot_t *ivp_controller_system_get_by_handle(const ivp_controller_system_t *sys,
                                                             ivp_controller_handle_t handle);
-void ivp_controller_system_sort(ivp_controller_system_t *sys);
+void ivp_controller_system_sort(ivp_controller_system_t *sys,
+                                bool canonical_order);
 
 bool ivp_controller_slot_set_mode(ivp_controller_slot_t *slot,
                                   ivp_controller_mode_t mode);

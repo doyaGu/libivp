@@ -69,6 +69,8 @@ typedef struct ivp_env_pipeline {
     int                      parallel_worker_count;
     bool                     canonical_internal_state;
     uint64_t                 next_object_sequence;
+    uint64_t                 next_controller_sequence;
+    uint64_t                 next_contact_sequence;
     ivp_parallel_stats_t     parallel_stats;
 
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */

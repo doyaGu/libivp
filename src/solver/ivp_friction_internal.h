@@ -96,6 +96,7 @@ typedef struct ivp_contact_pt {
     /* IVP_Contact_Point_Fast_Static */
     struct ivp_contact_pt *next_dist_in_friction;
     struct ivp_contact_pt *prev_dist_in_friction;
+    uint64_t                creation_sequence;
     ivp_fr_synapse_t       synapse[2];
     float                  inv_virt_mass_mindist_no_dir;
     bool                   two_friction_values;
@@ -228,6 +229,7 @@ bool ivp_contact_pt_is_same_as(const ivp_contact_pt_t *cp, struct ivp_mindist *m
 ivp_contact_pt_t *ivp_friction_mgr_generate_contact_point(struct ivp_mindist *md, bool *was_success);
 ivp_contact_pt_t *ivp_friction_mgr_get_associated_contact_point(struct ivp_mindist *md);
 void ivp_friction_mgr_delete_all_contact_points_of_object(struct ivp_object *obj);
+void ivp_friction_mgr_restore_object_contact_order(struct ivp_object *obj);
 
 /* ── Friction solver statics (ivp_friction_solver.hxx) ───────────────── */
 

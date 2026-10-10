@@ -313,6 +313,7 @@ void ivp_object_async_push_object_ws(ivp_object_t *obj, const ivp_vec3r_t *posit
 /* IVP_Real_Object::unlink_contact_points */
 void ivp_object_unlink_contact_points(ivp_object_t *obj, bool silent)
 {
+    ivp_friction_mgr_restore_object_contact_order(obj);
     /* then delete static friction datas @@@OS, loop only once + flag */
     int debug_once = 0;
     ivp_fr_synapse_t *fr_synapse;
