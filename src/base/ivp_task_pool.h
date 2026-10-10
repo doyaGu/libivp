@@ -24,9 +24,10 @@ void ivp_task_pool_destroy(ivp_task_pool_t *pool);
 int ivp_task_pool_worker_count(const ivp_task_pool_t *pool);
 
 /* Run every indexed task exactly once using dynamically claimed contiguous
- * chunks.  The call blocks until every task is complete.  Calls on a pool are
- * serialized by its owner.  Returns false without running a task if the
- * caller's floating-point environment cannot be propagated to every worker. */
+ * chunks.  The call blocks until every task is complete.  A nested or
+ * concurrent dispatch on the same pool returns false without disturbing the
+ * active job.  The same rule applies when the caller's floating-point
+ * environment cannot be propagated to every worker. */
 bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
                                 ivp_task_pool_fn function, void *context);
 

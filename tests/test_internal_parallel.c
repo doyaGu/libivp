@@ -127,6 +127,58 @@ static void task_count_call(void *opaque, size_t task_index)
     atomic_fetch_add_explicit(&probe->calls, 1, memory_order_relaxed);
 }
 
+typedef struct task_reentry_probe {
+    ivp_task_pool_t *pool;
+    task_call_probe_t nested;
+    atomic_int attempts;
+    atomic_bool nested_result;
+    atomic_int hits[TASK_EXACT_COUNT];
+} task_reentry_probe_t;
+
+static void task_try_reentry(void *opaque, size_t task_index)
+{
+    task_reentry_probe_t *probe = (task_reentry_probe_t *)opaque;
+    if (atomic_fetch_add_explicit(&probe->attempts, 1,
+                                  memory_order_relaxed) == 0) {
+        bool nested = ivp_task_pool_parallel_for(
+            probe->pool, 1u, task_count_call, &probe->nested);
+        atomic_store_explicit(&probe->nested_result, nested,
+                              memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&probe->hits[task_index], 1,
+                              memory_order_relaxed);
+}
+
+IVP_TEST(task_pool_rejects_reentry_without_corrupting_active_job)
+{
+    ivp_task_pool_t *pool =
+        ivp_task_pool_create(INTERNAL_PARALLEL_WORKERS, NULL);
+    task_reentry_probe_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.pool = pool;
+    atomic_init(&probe.nested.calls, 0);
+    atomic_init(&probe.attempts, 0);
+    atomic_init(&probe.nested_result, true);
+    for (int i = 0; i < TASK_EXACT_COUNT; i++) {
+        atomic_init(&probe.hits[i], 0);
+    }
+
+    bool ok = pool && ivp_task_pool_parallel_for(
+                          pool, TASK_EXACT_COUNT, task_try_reentry, &probe) &&
+              !atomic_load_explicit(&probe.nested_result,
+                                    memory_order_relaxed) &&
+              atomic_load_explicit(&probe.nested.calls,
+                                   memory_order_relaxed) == 0;
+    for (int i = 0; ok && i < TASK_EXACT_COUNT; i++) {
+        if (atomic_load_explicit(&probe.hits[i],
+                                 memory_order_relaxed) != 1) {
+            ok = false;
+        }
+    }
+    ivp_task_pool_destroy(pool);
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(task_pool_setup_failures_run_no_tasks)
 {
     enum { TASK_COUNT = 37, APPLY_FAILURE_ROUNDS = 8 };
@@ -1262,6 +1314,7 @@ int main(void)
 {
     IVP_REGISTER(task_pool_runs_concurrently);
     IVP_REGISTER(task_pool_cleans_partial_thread_start);
+    IVP_REGISTER(task_pool_rejects_reentry_without_corrupting_active_job);
     IVP_REGISTER(task_pool_setup_failures_run_no_tasks);
     IVP_REGISTER(task_pool_claims_every_task_exactly_once);
     IVP_REGISTER(task_pool_propagates_dispatch_fenv);
