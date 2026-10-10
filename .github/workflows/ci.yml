@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   # Library and unit tests; no reference engine, so no parity tests.
@@ -51,6 +52,45 @@ jobs:
         run: cmake --build build --parallel
       - name: Tests
         run: ctest --test-dir build ${{ matrix.test_args }} --output-on-failure
+
+  # Exercise every physics scenario without requiring the external reference
+  # checkout.  These checks validate finite state and scenario-specific
+  # invariants on pull requests as well as main.
+  scenarios:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          -DIVP_ENABLE_SCENARIO_TESTS=ON
+      - name: Build scenario runner
+        run: cmake --build build --target test_scenarios --parallel
+      - name: Scenario invariants
+        run: ctest --test-dir build -L invariants --output-on-failure --parallel 4
+
+  # Bit-exact parity is a macOS arm64 reproducibility-domain check.  Keep the
+  # reference runner pinned and run both libivp policies after changes land on
+  # main (or when requested manually).
+  parity:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out reference engine
+        uses: actions/checkout@v4
+        with:
+          repository: doyaGu/ivp
+          ref: c82356f249b3bb0299cc2a135ecc563616ef3746
+          path: reference/ivp
+      - name: Release and Debug parity
+        env:
+          IVP_REF_SRC: ${{ github.workspace }}/reference/ivp
+          IVP_JOBS: 3
+        run: tools/parity/check.sh
 
   # Examples: build with SDL3 and run every one headless (no window, no GPU).
   examples:
