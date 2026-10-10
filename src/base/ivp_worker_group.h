@@ -17,6 +17,7 @@ ivp_worker_group_t *ivp_worker_group_create(
     int background_thread_count, const ivp_allocator_t *allocator,
     const ivp_worker_runtime_t *runtime);
 void ivp_worker_group_destroy(ivp_worker_group_t *group);
+int ivp_worker_group_background_thread_count(const ivp_worker_group_t *group);
 
 /* Run one generation and block until every background lane is complete.
  * When caller_participates is true, the caller runs one additional lane after

@@ -10,7 +10,6 @@
 struct ivp_task_pool {
     ivp_allocator_t allocator;
     ivp_worker_group_t *workers;
-    int worker_count;
 
     ivp_task_pool_fn function;
     void *context;
@@ -81,7 +80,6 @@ ivp_task_pool_t *ivp_task_pool_create_with_runtime(
     memset(pool, 0, sizeof(*pool));
     atomic_init(&pool->next_task, 0u);
     pool->allocator = *allocator;
-    pool->worker_count = worker_count;
     pool->workers = ivp_worker_group_create(
         worker_count - 1, &pool->allocator, runtime);
     if (!pool->workers) {
@@ -100,7 +98,9 @@ void ivp_task_pool_destroy(ivp_task_pool_t *pool)
 
 int ivp_task_pool_worker_count(const ivp_task_pool_t *pool)
 {
-    return pool ? pool->worker_count : 0;
+    return pool
+               ? ivp_worker_group_background_thread_count(pool->workers) + 1
+               : 0;
 }
 
 bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
@@ -110,7 +110,7 @@ bool ivp_task_pool_parallel_for(ivp_task_pool_t *pool, size_t task_count,
     pool->function = function;
     pool->context = context;
     pool->task_count = task_count;
-    size_t lane_count = (size_t)pool->worker_count;
+    size_t lane_count = (size_t)ivp_task_pool_worker_count(pool);
     size_t target_chunks = lane_count <= SIZE_MAX / 8u
                                ? lane_count * 8u
                                : SIZE_MAX;

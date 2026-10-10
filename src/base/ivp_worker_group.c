@@ -282,6 +282,11 @@ void ivp_worker_group_destroy(ivp_worker_group_t *group)
     ivp_free(&group->allocator, group, sizeof(*group));
 }
 
+int ivp_worker_group_background_thread_count(const ivp_worker_group_t *group)
+{
+    return group ? group->thread_count : 0;
+}
+
 bool ivp_worker_group_dispatch(ivp_worker_group_t *group,
                                bool caller_participates,
                                ivp_worker_group_fn function, void *context)

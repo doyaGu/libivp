@@ -18,7 +18,6 @@ typedef enum ivp_world_job_kind {
 struct ivp_world_scheduler {
     ivp_allocator_t allocator;
     ivp_worker_group_t *workers;
-    int worker_count;
     atomic_bool dispatching;
 
     /* Reused open-addressing table for duplicate detection. */
@@ -79,7 +78,6 @@ ivp_world_scheduler_t *ivp_world_scheduler_create_with_runtime(
     if (!s) return NULL;
     memset(s, 0, sizeof(*s));
     s->allocator = *allocator;
-    s->worker_count = worker_count;
     atomic_init(&s->dispatching, false);
     s->workers = ivp_worker_group_create(
         worker_count == 1 ? 0 : worker_count, &s->allocator, runtime);
@@ -206,7 +204,8 @@ static ivp_result_t scheduler_dispatch(
     };
     atomic_init(&job.next_environment, 0u);
     if (!ivp_worker_group_dispatch(
-            s->workers, s->worker_count == 1,
+            s->workers,
+            ivp_worker_group_background_thread_count(s->workers) == 0,
             scheduler_worker_run, &job)) {
         result = IVP_ERR_INVALID_STATE;
     }
