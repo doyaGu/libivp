@@ -70,7 +70,8 @@ static ivp_object_system_t *env_object_system(const ivp_environment_t *env) { re
 
 int ivp_env_parallel_worker_count(const ivp_environment_t *env)
 {
-    return (env && env->pl) ? env->pl->parallel_worker_count : 1;
+    if (!env || !env->pl || !env->pl->task_pool) return 1;
+    return ivp_task_pool_worker_count(env->pl->task_pool);
 }
 
 bool ivp_env_parallel_for(ivp_environment_t *env,
@@ -99,7 +100,7 @@ bool ivp_env_parallel_for(ivp_environment_t *env,
         stats->solver_dispatches++;
         stats->solver_tasks += (uint64_t)task_count;
     }
-    int workers_used = env->pl->parallel_worker_count;
+    int workers_used = ivp_task_pool_worker_count(env->pl->task_pool);
     if ((size_t)workers_used > task_count) workers_used = (int)task_count;
     if (workers_used > stats->max_workers_used) {
         stats->max_workers_used = workers_used;
@@ -2322,11 +2323,8 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_env_pipeline_t *pl = env->pl;
     ivp_mindist_settings_init(&pl->mindist_settings);
     atomic_init(&pl->simulation_running, false);
-    pl->parallel_worker_count = cfg.parallel_worker_count > 1
-                                    ? cfg.parallel_worker_count
-                                    : 1;
-    if (pl->parallel_worker_count > 1) {
-        pl->task_pool = ivp_task_pool_create(pl->parallel_worker_count,
+    if (cfg.parallel_worker_count > 1) {
+        pl->task_pool = ivp_task_pool_create(cfg.parallel_worker_count,
                                              env->allocator);
         if (!pl->task_pool) {
             ivp_environment_destroy(env);

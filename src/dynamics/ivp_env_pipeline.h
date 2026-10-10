@@ -62,7 +62,6 @@ typedef struct ivp_env_pipeline {
 
     /* Optional persistent pool for deterministic intra-world kernels. */
     struct ivp_task_pool    *task_pool;
-    int                      parallel_worker_count;
     uint64_t                 next_object_sequence;
     uint64_t                 next_controller_sequence;
     uint64_t                 next_contact_sequence;

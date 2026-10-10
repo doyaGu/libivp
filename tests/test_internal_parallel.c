@@ -327,6 +327,17 @@ IVP_TEST(environment_serial_worker_values_normalize)
     IVP_ASSERT_TRUE(ok);
 }
 
+IVP_TEST(environment_reports_parallel_execution_width)
+{
+    ivp_environment_t *environment = create_zero_gravity_environment(
+        INTERNAL_PARALLEL_WORKERS, ivp_collision_filter_allow_all());
+    bool ok = environment != NULL &&
+              ivp_environment_get_parallel_worker_count(environment) ==
+                  INTERNAL_PARALLEL_WORKERS;
+    ivp_environment_destroy(environment);
+    IVP_ASSERT_TRUE(ok);
+}
+
 IVP_TEST(broadphase_preserves_candidate_order)
 {
     ivp_environment_t *serial = create_zero_gravity_environment(
@@ -1255,6 +1266,7 @@ int main(void)
     IVP_REGISTER(task_pool_claims_every_task_exactly_once);
     IVP_REGISTER(task_pool_propagates_dispatch_fenv);
     IVP_REGISTER(environment_serial_worker_values_normalize);
+    IVP_REGISTER(environment_reports_parallel_execution_width);
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
     IVP_REGISTER(independent_constraint_islands_are_bit_exact);
