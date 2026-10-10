@@ -297,13 +297,15 @@ _Static_assert(_Alignof(env_fail_alloc_header_t) >= 16,
 typedef struct env_fail_alloc_state {
     int attempts;
     int fail_at;
+    int fail_from;
     int live_blocks;
 } env_fail_alloc_state_t;
 
 static bool env_fail_alloc_should_fail(env_fail_alloc_state_t *state)
 {
     state->attempts++;
-    return state->fail_at > 0 && state->attempts == state->fail_at;
+    return (state->fail_at > 0 && state->attempts == state->fail_at) ||
+           (state->fail_from > 0 && state->attempts >= state->fail_from);
 }
 
 static void *env_fail_alloc(size_t size, void *ctx)
@@ -1711,6 +1713,125 @@ IVP_TEST(dependent_refresh_failure_preserves_live_association) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(core_attach_failure_preserves_dependent_controller) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_handle_t h_a = ivp_object_handle_invalid();
+    ivp_object_handle_t h_b = ivp_object_handle_invalid();
+    ivp_object_t *obj_a = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_a);
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *obj_b = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_b);
+    IVP_ASSERT_TRUE(obj_a && obj_b);
+
+    dependent_probe_ctx_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.target_a = h_a;
+    probe.target_b = h_b;
+    probe.discovery_handles[0] = h_a;
+    probe.discovery_count = 1;
+    ivp_controller_handle_t ctrl =
+        ivp_test_environment_announce_custom_dependent_controller(
+            env, IVP_CP_CONSTRAINTS, controller_dependent_probe, &probe,
+            dependent_discovery_fn);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+
+    ivp_controller_slot_t *slot = ivp_controller_system_get_by_handle(
+        (ivp_controller_system_t *)env->controller_system, ctrl);
+    IVP_ASSERT_NOT_NULL(slot);
+    IVP_ASSERT_TRUE(ivp_controller_slot_add_associated_handle(
+        slot, h_b, env->allocator));
+
+    state.fail_from = state.attempts + 1;
+    IVP_ASSERT_FALSE(ivp_environment_add_controller_to_core(env, ctrl, obj_b));
+    state.fail_from = 0;
+
+    IVP_ASSERT_TRUE(slot->mode == IVP_CONTROLLER_DEPENDENT);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_a->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_b->physical_core->controllers_of_core,
+                        &slot->base) < 0);
+
+    ivp_pvec_t saved = obj_b->physical_core->controllers_of_core;
+    obj_b->physical_core->controllers_of_core =
+        (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_FALSE(ivp_environment_add_controller_to_core(env, ctrl, obj_b));
+    obj_b->physical_core->controllers_of_core = saved;
+
+    IVP_ASSERT_TRUE(slot->mode == IVP_CONTROLLER_DEPENDENT);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_a->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_b->physical_core->controllers_of_core,
+                        &slot->base) < 0);
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.hits_a, 1);
+    IVP_ASSERT_EQ(probe.hits_b, 0);
+
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, ctrl));
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
+IVP_TEST(core_attach_failure_preserves_all_core_controller) {
+    env_fail_alloc_state_t state = {0};
+    ivp_allocator_t allocator;
+    ivp_environment_t *env = env_create_with_fail_allocator(&state, &allocator);
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_environment_clear_controllers(env);
+
+    ivp_object_template_t tmpl;
+    ivp_object_template_init(&tmpl);
+    ivp_object_handle_t h_a = ivp_object_handle_invalid();
+    ivp_object_handle_t h_b = ivp_object_handle_invalid();
+    ivp_object_t *obj_a = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_a);
+    ivp_vec3r_set(&tmpl.position, IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *obj_b = ivp_environment_create_object_with_handle(
+        env, &tmpl, NULL, &h_b);
+    IVP_ASSERT_TRUE(obj_a && obj_b);
+
+    controller_count_ctx_t count_ctx = {0};
+    ivp_controller_handle_t ctrl = ivp_test_environment_add_custom_controller(
+        env, IVP_CP_MOTION, controller_count_only, &count_ctx);
+    IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(ctrl));
+
+    ivp_controller_slot_t *slot = ivp_controller_system_get_by_handle(
+        (ivp_controller_system_t *)env->controller_system, ctrl);
+    IVP_ASSERT_NOT_NULL(slot);
+    IVP_ASSERT_TRUE(ivp_controller_slot_add_associated_handle(
+        slot, h_b, env->allocator));
+
+    state.fail_from = state.attempts + 1;
+    IVP_ASSERT_FALSE(ivp_environment_add_controller_to_core(env, ctrl, obj_b));
+    state.fail_from = 0;
+
+    IVP_ASSERT_TRUE(slot->mode == IVP_CONTROLLER_INDEPENDENT);
+    IVP_ASSERT_TRUE(slot->run_for_all_cores);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_a->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_b->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(count_ctx.calls, 2);
+
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, ctrl));
+    ivp_environment_destroy(env);
+    IVP_ASSERT_EQ(state.live_blocks, 0);
+}
+
 IVP_TEST(controller_self_remove_does_not_break_iteration) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     ivp_environment_clear_controllers(env);
@@ -2358,6 +2479,8 @@ int main(void) {
     IVP_REGISTER(dependent_controller_allocation_failure_is_atomic);
     IVP_REGISTER(controller_discovery_failure_preserves_all_core_mode);
     IVP_REGISTER(dependent_refresh_failure_preserves_live_association);
+    IVP_REGISTER(core_attach_failure_preserves_dependent_controller);
+    IVP_REGISTER(core_attach_failure_preserves_all_core_controller);
     IVP_REGISTER(controller_priority_sync_async);
     IVP_REGISTER(controller_dependent_rejects_foreign_targets);
     IVP_REGISTER(controller_dependent_zero_targets_invokes_none);

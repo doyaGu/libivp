@@ -1845,37 +1845,60 @@ bool ivp_environment_add_controller_to_core(ivp_environment_t *env, ivp_controll
 
     const bool was_dependent = slot->mode == IVP_CONTROLLER_DEPENDENT;
     const bool was_all_cores = slot->run_for_all_cores;
-    const int old_assoc_core_count = ivp_pvec_len(&slot->controlled_cores);
-    const ivp_controller_mode_t old_mode = slot->mode;
-    const bool old_run_for_all_cores = slot->run_for_all_cores;
-    ivp_controller_discovery_fn_t old_discovery_fn = slot->discovery_fn;
     if (was_dependent || was_all_cores) {
-        slot_ctrl_detach_all(env, slot, true);
+        ivp_pvec_t attached_cores;
+        if (!slot_ctrl_collect_attached_cores(
+                env, slot, &attached_cores)) {
+            if (!handle_was_present) {
+                (void)ivp_controller_slot_remove_associated_handle(
+                    slot, object_handle);
+            }
+            return false;
+        }
+
+        ivp_pvec_t target_core;
+        ivp_pvec_init_with_allocator(&target_core, env->allocator);
+        if (ivp_pvec_add(&target_core, object->physical_core) < 0) {
+            ivp_pvec_clear(&attached_cores);
+            if (!handle_was_present) {
+                (void)ivp_controller_slot_remove_associated_handle(
+                    slot, object_handle);
+            }
+            return false;
+        }
+
+        const ivp_controller_mode_t old_mode = slot->mode;
+        ivp_pvec_t old_controlled_cores = slot->controlled_cores;
+        slot->mode = IVP_CONTROLLER_DEPENDENT;
+        slot->controlled_cores = target_core;
+        if (!ivp_ctrl_mgr_replace_controller_cores(
+                env, &slot->base, &attached_cores)) {
+            ivp_pvec_clear(&slot->controlled_cores);
+            slot->controlled_cores = old_controlled_cores;
+            slot->mode = old_mode;
+            ivp_pvec_clear(&attached_cores);
+            if (!handle_was_present) {
+                (void)ivp_controller_slot_remove_associated_handle(
+                    slot, object_handle);
+            }
+            return false;
+        }
+
+        ivp_pvec_clear(&attached_cores);
+        ivp_pvec_clear(&old_controlled_cores);
+        (void)ivp_pvec_remove_if_present(
+            &env->pl->all_core_ctrls, &slot->base);
+        slot->mode = IVP_CONTROLLER_INDEPENDENT;
+        slot->run_for_all_cores = false;
+        slot->discovery_fn = NULL;
+        ivp_pvec_remove_all(&slot->controlled_cores);
+        return true;
     }
-    slot->mode = IVP_CONTROLLER_INDEPENDENT;
-    slot->run_for_all_cores = false;
-    slot->discovery_fn = NULL;
+
     if (!ivp_ctrl_mgr_add_controller_to_core(
             &slot->base, object->physical_core)) {
         if (!handle_was_present) {
             (void)ivp_controller_slot_remove_associated_handle(slot, object_handle);
-        }
-        slot->mode = old_mode;
-        slot->run_for_all_cores = old_run_for_all_cores;
-        slot->discovery_fn = old_discovery_fn;
-        if (was_dependent) {
-            slot->controlled_cores.n = old_assoc_core_count;
-            if (old_assoc_core_count > 0) {
-                bool restored = ivp_ctrl_mgr_announce_controller_to_environment(
-                    env, &slot->base);
-                IVP_ASSERT(restored);
-                (void)restored;
-            }
-        } else if (was_all_cores) {
-            slot->run_for_all_cores = false;
-            bool restored = slot_ctrl_set_all_cores(env, slot);
-            IVP_ASSERT(restored);
-            (void)restored;
         }
         return false;
     }
