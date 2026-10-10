@@ -32,6 +32,9 @@ static void internal_parallel_yield(void) { (void)sched_yield(); }
 #define BROADPHASE_ELEMENT_COUNT 8192
 #define SOLVER_CONTACT_COUNT 128
 #define INDEPENDENT_CONSTRAINT_COUNT 512
+#define HEAVY_ISLAND_COUNT 32
+#define HEAVY_ISLAND_SIZE 18
+#define HEAVY_ISLAND_OBJECT_COUNT (HEAVY_ISLAND_COUNT * HEAVY_ISLAND_SIZE)
 
 typedef struct pool_overlap_probe {
     atomic_int entered;
@@ -935,6 +938,166 @@ IVP_TEST(independent_constraint_islands_are_bit_exact)
     IVP_ASSERT_TRUE(ok);
 }
 
+typedef struct heavy_island_scene {
+    ivp_environment_t *environment;
+    ivp_object_t **objects;
+    ivp_constraint_state_t *constraints;
+} heavy_island_scene_t;
+
+static bool heavy_island_scene_init(heavy_island_scene_t *scene,
+                                    int worker_count)
+{
+    memset(scene, 0, sizeof(*scene));
+    scene->environment = create_zero_gravity_environment(
+        worker_count, ivp_collision_filter_allow_all());
+    scene->objects = (ivp_object_t **)calloc(
+        HEAVY_ISLAND_OBJECT_COUNT, sizeof(*scene->objects));
+    scene->constraints = (ivp_constraint_state_t *)calloc(
+        HEAVY_ISLAND_OBJECT_COUNT, sizeof(*scene->constraints));
+    if (!scene->environment || !scene->objects || !scene->constraints) {
+        return false;
+    }
+
+    ivp_object_template_t object_template;
+    ivp_object_template_init(&object_template);
+    object_template.type = IVP_OBJECT_BALL;
+    object_template.ball_radius = IVP_REAL(0.2);
+    object_template.mass = IVP_REAL(1.0);
+    object_template.speed_damp_factor = IVP_REAL(0.0);
+    object_template.enable_collision_detection = false;
+    ivp_vec3r_set_zero(&object_template.rot_speed_damp_factor);
+
+    int object_index = 0;
+    for (int island = 0; island < HEAVY_ISLAND_COUNT; island++) {
+        ivp_object_t *previous = NULL;
+        ivp_vec3r_t previous_position = ivp_vec3r(
+            IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+        for (int local = 0; local < HEAVY_ISLAND_SIZE; local++) {
+            ivp_vec3r_set(
+                &object_template.position,
+                (ivp_real_t)(island % 8) * IVP_REAL(24.0) +
+                    (ivp_real_t)local * IVP_REAL(0.5),
+                (ivp_real_t)(island / 8) * IVP_REAL(4.0),
+                IVP_REAL(0.0));
+            ivp_object_t *object = ivp_environment_create_object(
+                scene->environment, &object_template, NULL);
+            if (!object) return false;
+            scene->objects[object_index] = object;
+
+            ivp_vec3r_t anchor = object_template.position;
+            if (previous) {
+                anchor.k[0] = (anchor.k[0] + previous_position.k[0]) *
+                              IVP_REAL(0.5);
+                anchor.k[1] = (anchor.k[1] + previous_position.k[1]) *
+                              IVP_REAL(0.5);
+                anchor.k[2] = (anchor.k[2] + previous_position.k[2]) *
+                              IVP_REAL(0.5);
+            }
+            ivp_constraint_init_ball_socket_ws(
+                &scene->constraints[object_index], previous, &anchor,
+                object);
+            ivp_controller_handle_t handle =
+                ivp_environment_announce_dependent_controller(
+                    scene->environment, IVP_CP_CONSTRAINTS,
+                    ivp_controller_constraint,
+                    &scene->constraints[object_index],
+                    ivp_constraint_discovery);
+            if (!ivp_controller_handle_is_valid(handle)) return false;
+            previous = object;
+            previous_position = object_template.position;
+            object_index++;
+        }
+    }
+    return object_index == HEAVY_ISLAND_OBJECT_COUNT;
+}
+
+static void heavy_island_scene_drive(heavy_island_scene_t *scene)
+{
+    for (int i = 0; i < HEAVY_ISLAND_OBJECT_COUNT; i++) {
+        ivp_vec3r_set(&scene->objects[i]->physical_core->speed,
+                      (ivp_real_t)(float)(0.20f + (float)(i & 7) * 0.01f),
+                      IVP_REAL(-0.125), IVP_REAL(0.0625));
+    }
+}
+
+static bool heavy_island_scenes_equal(const heavy_island_scene_t *a,
+                                      const heavy_island_scene_t *b)
+{
+    if (ivp_environment_get_time(a->environment) !=
+        ivp_environment_get_time(b->environment)) {
+        return false;
+    }
+    for (int i = 0; i < HEAVY_ISLAND_OBJECT_COUNT; i++) {
+        if (!exact_core_state_equal(a->objects[i]->physical_core,
+                                    b->objects[i]->physical_core) ||
+            a->objects[i]->object_movement_state !=
+                b->objects[i]->object_movement_state ||
+            !scalar_bits_equal(
+                &a->constraints[i].accumulated_impulse,
+                &b->constraints[i].accumulated_impulse,
+                sizeof(a->constraints[i].accumulated_impulse)) ||
+            a->constraints[i].active != b->constraints[i].active ||
+            a->constraints[i].is_broken != b->constraints[i].is_broken) {
+            return false;
+        }
+        for (int axis = 0; axis < 6; axis++) {
+            if (!scalar_bits_equal(
+                    &a->constraints[i].core.last_impulse[axis],
+                    &b->constraints[i].core.last_impulse[axis],
+                    sizeof(a->constraints[i].core.last_impulse[axis]))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void heavy_island_scene_destroy(heavy_island_scene_t *scene)
+{
+    ivp_environment_destroy(scene->environment);
+    free(scene->constraints);
+    free(scene->objects);
+}
+
+IVP_TEST(cost_weighted_constraint_islands_are_bit_exact)
+{
+    heavy_island_scene_t serial;
+    heavy_island_scene_t parallel;
+    memset(&serial, 0, sizeof(serial));
+    memset(&parallel, 0, sizeof(parallel));
+    bool ok = heavy_island_scene_init(&serial, 1) &&
+              heavy_island_scene_init(&parallel,
+                                      INTERNAL_PARALLEL_WORKERS);
+    for (int step = 0; ok && step < 8; step++) {
+        heavy_island_scene_drive(&serial);
+        heavy_island_scene_drive(&parallel);
+        ivp_environment_simulate_one_psi(serial.environment);
+        ivp_environment_simulate_one_psi(parallel.environment);
+        if (!heavy_island_scenes_equal(&serial, &parallel)) ok = false;
+    }
+
+    ivp_parallel_stats_t stats;
+    ivp_environment_get_parallel_stats(parallel.environment, &stats);
+#ifdef IVP_DEBUG_BUILD
+    ok = ok && stats.island_dispatches == 0u && stats.island_tasks == 0u;
+#else
+    ok = ok && stats.island_dispatches >= 8u &&
+         stats.island_tasks >= 8u * HEAVY_ISLAND_COUNT &&
+         stats.max_workers_used == INTERNAL_PARALLEL_WORKERS;
+#endif
+    if (!ok) {
+        fprintf(stderr,
+                "weighted islands: dispatches=%llu tasks=%llu "
+                "max_workers=%d\n",
+                (unsigned long long)stats.island_dispatches,
+                (unsigned long long)stats.island_tasks,
+                stats.max_workers_used);
+    }
+    heavy_island_scene_destroy(&parallel);
+    heavy_island_scene_destroy(&serial);
+    IVP_ASSERT_TRUE(ok);
+}
+
 typedef struct contact_scene {
     ivp_environment_t *environment;
     ivp_object_t *center;
@@ -1071,6 +1234,7 @@ int main(void)
     IVP_REGISTER(broadphase_preserves_candidate_order);
     IVP_REGISTER(core_preparation_is_bit_exact);
     IVP_REGISTER(independent_constraint_islands_are_bit_exact);
+    IVP_REGISTER(cost_weighted_constraint_islands_are_bit_exact);
     IVP_REGISTER(solver_matrix_is_bit_exact);
     IVP_RUN_ALL();
 }

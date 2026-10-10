@@ -14,6 +14,10 @@
 #include "dynamics/ivp_env_pipeline.h"
 #include "solver/ivp_friction_internal.h"
 
+#define IVP_SU_PARALLEL_MIN_ISLANDS 32u
+#define IVP_SU_PARALLEL_LIGHT_ISLANDS 192u
+#define IVP_SU_PARALLEL_MIN_WORK_UNITS 576u
+
 static inline ivp_core_t *su_core_at(const ivp_sim_unit_t *su, int i) {
     return (ivp_core_t *)ivp_pvec_at(&su->sim_unit_cores, i);
 }
@@ -839,8 +843,39 @@ static bool su_try_parallel_island_run(struct ivp_environment *env,
                                        ivp_pvec_t *touched_cores)
 {
     const int unit_count = ivp_pvec_len(units);
-    const size_t minimum_tasks = 256u;
+    const size_t minimum_tasks = IVP_SU_PARALLEL_MIN_ISLANDS;
     if ((size_t)unit_count < minimum_tasks) return false;
+
+    /* A few connected islands can contain much more work than hundreds of
+     * one-core islands.  Below the conservative count-only threshold, use
+     * the core references traversed by the preparation/controller loops as
+     * a deterministic, topology-only cost estimate. */
+    if ((size_t)unit_count < IVP_SU_PARALLEL_LIGHT_ISLANDS) {
+        size_t work_units = 0u;
+        for (int i = 0;
+             i < unit_count && work_units < IVP_SU_PARALLEL_MIN_WORK_UNITS;
+             i++) {
+            ivp_sim_unit_t *su =
+                (ivp_sim_unit_t *)ivp_pvec_at(units, i);
+            size_t core_count =
+                (size_t)ivp_pvec_len(&su->sim_unit_cores);
+            size_t remaining = IVP_SU_PARALLEL_MIN_WORK_UNITS - work_units;
+            work_units += core_count < remaining ? core_count : remaining;
+            for (int j = 0;
+                 j < ivp_pvec_len(&su->controller_cores) &&
+                 work_units < IVP_SU_PARALLEL_MIN_WORK_UNITS;
+                 j++) {
+                ivp_su_ctrl_list_t *cl = su_cl_at(su, j);
+                size_t controlled_count =
+                    (size_t)ivp_pvec_len(&cl->cores_controlled_by);
+                remaining = IVP_SU_PARALLEL_MIN_WORK_UNITS - work_units;
+                work_units += controlled_count < remaining
+                                  ? controlled_count
+                                  : remaining;
+            }
+        }
+        if (work_units < IVP_SU_PARALLEL_MIN_WORK_UNITS) return false;
+    }
 
     int touched_count = ivp_pvec_len(touched_cores);
     for (int i = 0; i < unit_count; i++) {
