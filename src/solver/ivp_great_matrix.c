@@ -1043,6 +1043,80 @@ static void gmmz_add_two_multiple_lines(ivp_gmmz_t *m, int first,
         GM_FMA(desired[first], factor1, desired[second + 1]);
 }
 
+/* Four target rows are independent once the pivot row is fixed.  Reuse the
+ * two source vectors across all four rows without changing the multiply/add
+ * sequence of any target element. */
+static void gmmz_add_four_multiple_lines(ivp_gmmz_t *m, int first,
+                                         int second, double factor0,
+                                         double factor1, double factor2,
+                                         double factor3)
+{
+    int arl = m->aligned_row_len;
+    int source_off = first * arl + first;
+    int target_off = second * arl + first;
+    int size = m->columns - first;
+    int shift = gm_misalign(source_off);
+    target_off -= gm_misalign(target_off);
+    size += GM_SIZE_ADJUST(shift);
+    source_off -= shift;
+
+    const double *source = m->matrix_values + source_off;
+    double *target0 = m->matrix_values + target_off;
+    double *target1 = target0 + arl;
+    double *target2 = target1 + arl;
+    double *target3 = target2 + arl;
+    const float64x2_t factors0 = vdupq_n_f64(factor0);
+    const float64x2_t factors1 = vdupq_n_f64(factor1);
+    const float64x2_t factors2 = vdupq_n_f64(factor2);
+    const float64x2_t factors3 = vdupq_n_f64(factor3);
+    for (int remaining = size; remaining > 0; remaining -= GM_BLOCK) {
+        float64x2_t source0 = vld1q_f64(source);
+        float64x2_t source1 = vld1q_f64(source + 2);
+
+        float64x2_t value00 = vmulq_f64(source0, factors0);
+        float64x2_t value01 = vmulq_f64(source1, factors0);
+        value00 = vaddq_f64(value00, vld1q_f64(target0));
+        value01 = vaddq_f64(value01, vld1q_f64(target0 + 2));
+        vst1q_f64(target0, value00);
+        vst1q_f64(target0 + 2, value01);
+
+        float64x2_t value10 = vmulq_f64(source0, factors1);
+        float64x2_t value11 = vmulq_f64(source1, factors1);
+        value10 = vaddq_f64(value10, vld1q_f64(target1));
+        value11 = vaddq_f64(value11, vld1q_f64(target1 + 2));
+        vst1q_f64(target1, value10);
+        vst1q_f64(target1 + 2, value11);
+
+        float64x2_t value20 = vmulq_f64(source0, factors2);
+        float64x2_t value21 = vmulq_f64(source1, factors2);
+        value20 = vaddq_f64(value20, vld1q_f64(target2));
+        value21 = vaddq_f64(value21, vld1q_f64(target2 + 2));
+        vst1q_f64(target2, value20);
+        vst1q_f64(target2 + 2, value21);
+
+        float64x2_t value30 = vmulq_f64(source0, factors3);
+        float64x2_t value31 = vmulq_f64(source1, factors3);
+        value30 = vaddq_f64(value30, vld1q_f64(target3));
+        value31 = vaddq_f64(value31, vld1q_f64(target3 + 2));
+        vst1q_f64(target3, value30);
+        vst1q_f64(target3 + 2, value31);
+
+        source += GM_BLOCK;
+        target0 += GM_BLOCK;
+        target1 += GM_BLOCK;
+        target2 += GM_BLOCK;
+        target3 += GM_BLOCK;
+    }
+    double *desired = m->desired_vector;
+    desired[second] = GM_FMA(desired[first], factor0, desired[second]);
+    desired[second + 1] =
+        GM_FMA(desired[first], factor1, desired[second + 1]);
+    desired[second + 2] =
+        GM_FMA(desired[first], factor2, desired[second + 2]);
+    desired[second + 3] =
+        GM_FMA(desired[first], factor3, desired[second + 3]);
+}
+
 /* Keep the common small-matrix reference loop compact.  This separate large
  * path pays for its extra branching only where source-row reuse is material. */
 __attribute__((noinline))
@@ -1055,6 +1129,32 @@ static void gmmz_transform_batched_rows(ivp_gmmz_t *m)
         if (fabs(diagonal_elem) < m->matrix_eps) continue;
         double negativ_inv_diagonal = -1.0 / diagonal_elem;
         int i = j + 1;
+        for (; j >= IVP_GM_VECFPU_SIZE && i + 3 < m->columns;
+             i += 4) {
+            double value0 = m->matrix_values[i * arl + j];
+            double value1 = m->matrix_values[(i + 1) * arl + j];
+            double value2 = m->matrix_values[(i + 2) * arl + j];
+            double value3 = m->matrix_values[(i + 3) * arl + j];
+            if (fabs(value0) > m->matrix_eps &&
+                fabs(value1) > m->matrix_eps &&
+                fabs(value2) > m->matrix_eps &&
+                fabs(value3) > m->matrix_eps) {
+                gmmz_add_four_multiple_lines(
+                    m, j, i,
+                    value0 * negativ_inv_diagonal,
+                    value1 * negativ_inv_diagonal,
+                    value2 * negativ_inv_diagonal,
+                    value3 * negativ_inv_diagonal);
+                continue;
+            }
+            for (int row = i; row < i + 4; row++) {
+                double value = m->matrix_values[row * arl + j];
+                if (fabs(value) > m->matrix_eps) {
+                    ivp_gmmz_add_multiple_line(
+                        m, j, row, value * negativ_inv_diagonal);
+                }
+            }
+        }
         for (; j >= IVP_GM_VECFPU_SIZE && i + 1 < m->columns;
              i += 2) {
             double value0 = m->matrix_values[i * arl + j];
