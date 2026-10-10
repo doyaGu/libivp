@@ -2259,16 +2259,41 @@ static void fs_exchange_friction_dists(ivp_fr_system_t *fs, ivp_contact_pt_t *fi
 
 static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
 {
+    const bool canonical = ivp_env_uses_canonical_internal_state(
+        fs->l_environment);
     ivp_contact_pt_t *first_dist = fs->first_friction_dist;
     if (!first_dist) return;
     for (;;) {
         ivp_contact_pt_t *second_dist = first_dist->next_dist_in_friction;
         if (!second_dist) break;
-        if (first_dist->has_negative_pull_since > second_dist->has_negative_pull_since) {
+        bool should_shift =
+            first_dist->has_negative_pull_since >
+                second_dist->has_negative_pull_since;
+        if (canonical &&
+            first_dist->has_negative_pull_since ==
+                second_dist->has_negative_pull_since) {
+            IVP_ASSERT(first_dist->creation_sequence !=
+                       second_dist->creation_sequence);
+            should_shift = first_dist->creation_sequence >
+                           second_dist->creation_sequence;
+        }
+        if (should_shift) {
             fs_exchange_friction_dists(fs, first_dist, second_dist);
             ivp_contact_pt_t *test_dist;
-            while ((test_dist = second_dist->prev_dist_in_friction) != NULL &&
-                   (test_dist->has_negative_pull_since > second_dist->has_negative_pull_since)) {
+            while ((test_dist = second_dist->prev_dist_in_friction) != NULL) {
+                bool test_should_shift =
+                    test_dist->has_negative_pull_since >
+                        second_dist->has_negative_pull_since;
+                if (canonical &&
+                    test_dist->has_negative_pull_since ==
+                        second_dist->has_negative_pull_since) {
+                    IVP_ASSERT(test_dist->creation_sequence !=
+                               second_dist->creation_sequence);
+                    test_should_shift =
+                        test_dist->creation_sequence >
+                        second_dist->creation_sequence;
+                }
+                if (!test_should_shift) break;
                 fs_exchange_friction_dists(fs, test_dist, second_dist);
             }
             second_dist = first_dist;
@@ -2281,7 +2306,112 @@ static void fs_bubble_sort_dists_importance(ivp_fr_system_t *fs)
             ivp_contact_pt_t *second_dist = first_dist->next_dist_in_friction;
             if (second_dist) {
                 IVP_ASSERT(!(first_dist->has_negative_pull_since > second_dist->has_negative_pull_since));
+                if (canonical &&
+                    first_dist->has_negative_pull_since ==
+                        second_dist->has_negative_pull_since) {
+                    IVP_ASSERT(first_dist->creation_sequence <
+                               second_dist->creation_sequence);
+                }
             }
+        }
+    }
+}
+
+typedef int (*fs_order_compare_fn)(const void *left,
+                                   const void *right);
+
+static void fs_sort_vector(ivp_pvec_t *vector,
+                           fs_order_compare_fn compare)
+{
+    for (int i = 1; i < ivp_pvec_len(vector); i++) {
+        void *value = vector->elems[i];
+        int position = i;
+        while (position > 0 &&
+               compare(vector->elems[position - 1], value) > 0) {
+            vector->elems[position] = vector->elems[position - 1];
+            position--;
+        }
+        vector->elems[position] = value;
+    }
+}
+
+static int fs_compare_cores(const void *left, const void *right)
+{
+    uint64_t left_key =
+        ivp_core_stable_order_key((const ivp_core_t *)left);
+    uint64_t right_key =
+        ivp_core_stable_order_key((const ivp_core_t *)right);
+    IVP_ASSERT(left_key != right_key || left == right);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static int fs_compare_contacts(const void *left, const void *right)
+{
+    const ivp_contact_pt_t *left_contact =
+        (const ivp_contact_pt_t *)left;
+    const ivp_contact_pt_t *right_contact =
+        (const ivp_contact_pt_t *)right;
+    uint64_t left_key = left_contact->creation_sequence;
+    uint64_t right_key = right_contact->creation_sequence;
+    IVP_ASSERT(left_key != right_key || left == right);
+    return left_key < right_key ? -1 : left_key > right_key ? 1 : 0;
+}
+
+static void fs_pair_order_key(const ivp_fr_core_pair_t *pair,
+                              uint64_t *first, uint64_t *second)
+{
+    uint64_t key0 = ivp_core_stable_order_key(pair->objs[0]);
+    uint64_t key1 = ivp_core_stable_order_key(pair->objs[1]);
+    if (key0 <= key1) {
+        *first = key0;
+        *second = key1;
+    } else {
+        *first = key1;
+        *second = key0;
+    }
+}
+
+static int fs_compare_pairs(const void *left, const void *right)
+{
+    uint64_t left_first, left_second;
+    uint64_t right_first, right_second;
+    fs_pair_order_key((const ivp_fr_core_pair_t *)left,
+                      &left_first, &left_second);
+    fs_pair_order_key((const ivp_fr_core_pair_t *)right,
+                      &right_first, &right_second);
+    if (left_first != right_first) {
+        return left_first < right_first ? -1 : 1;
+    }
+    IVP_ASSERT(left_second != right_second || left == right);
+    return left_second < right_second
+               ? -1
+               : left_second > right_second ? 1 : 0;
+}
+
+static void fs_restore_internal_order(ivp_fr_system_t *fs)
+{
+    fs_bubble_sort_dists_importance(fs);
+    fs_sort_vector(&fs->cores_of_friction_system, fs_compare_cores);
+    fs_sort_vector(&fs->moveable_cores_of_friction_system,
+                   fs_compare_cores);
+    for (int i = 0; i < ivp_pvec_len(&fs->fr_pairs_of_objs); i++) {
+        ivp_fr_core_pair_t *pair = pair_at(&fs->fr_pairs_of_objs, i);
+        fs_sort_vector(&pair->fr_dists, fs_compare_contacts);
+    }
+    fs_sort_vector(&fs->fr_pairs_of_objs, fs_compare_pairs);
+    for (int i = 0;
+         i < ivp_pvec_len(&fs->cores_of_friction_system);
+         i++) {
+        ivp_core_t *core = core_at(&fs->cores_of_friction_system, i);
+        for (int j = 0; j < ivp_pvec_len(&core->objects); j++) {
+            ivp_friction_mgr_restore_object_contact_order(
+                (ivp_object_t *)ivp_pvec_at(&core->objects, j));
+        }
+        ivp_fr_info_for_core_t *info =
+            ivp_core_get_friction_info(core, fs);
+        if (info) {
+            fs_sort_vector(&info->friction_springs,
+                           fs_compare_contacts);
         }
     }
 }
@@ -2360,7 +2490,11 @@ static void fs_do_friction_system(ivp_fr_system_t *fs, const ivp_sim_es_t *es_in
         }
         ivp_debug_printf("friction_system_simulating %d distances\n", (int)fs->friction_dist_number);
     }
-    fs_bubble_sort_dists_importance(fs);
+    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+        fs_restore_internal_order(fs);
+    } else {
+        fs_bubble_sort_dists_importance(fs);
+    }
     fs_reorder_mindists_for_complex(fs);
     if ((fs->friction_dist_number - fs->complex_not_necessary_number) > IVP_FR_MAX_FRICTION_MATRIX) {
         fs_static_fr_oversized_matrix_panic(fs);
@@ -2401,6 +2535,9 @@ static void fs_energy_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pve
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, energy_ctrl);
+    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+        fs_restore_internal_order(fs);
+    }
     if (fs->friction_dist_number <= 1) {
         ivp_contact_pt_t *cp = fs->first_friction_dist;
         if (cp) ivp_contact_pt_recalc_friction_s_vals(cp);
@@ -2420,6 +2557,9 @@ static void fs_dyn_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t
 {
     (void)cores;
     ivp_fr_system_t *fs = FS_FROM(c, dyn_ctrl);
+    if (ivp_env_uses_canonical_internal_state(fs->l_environment)) {
+        fs_restore_internal_order(fs);
+    }
     if (fs->friction_dist_number <= 1) {
         ivp_contact_pt_t *cp = fs->first_friction_dist;
         if (!cp) return;
