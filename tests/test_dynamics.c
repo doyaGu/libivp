@@ -1614,6 +1614,31 @@ IVP_TEST(controller_discovery_failure_preserves_all_core_mode) {
 
     ivp_environment_simulate_one_psi(env);
     IVP_ASSERT_EQ(probe.calls, 4);
+
+    probe.discovery_handles[0] = h_a;
+    probe.discovery_handles[1] = h_b;
+    probe.discovery_count = 2;
+    ivp_pvec_t saved_unit_cores = obj_b->physical_core->sim_unit->sim_unit_cores;
+    obj_b->physical_core->sim_unit->sim_unit_cores =
+        (ivp_pvec_t){ NULL, 0, -1 };
+    IVP_ASSERT_FALSE(ivp_environment_set_controller_discovery(
+        env, ctrl, dependent_discovery_fn));
+    obj_b->physical_core->sim_unit->sim_unit_cores = saved_unit_cores;
+
+    ivp_controller_slot_t *slot = ivp_controller_system_get_by_handle(
+        (ivp_controller_system_t *)env->controller_system, ctrl);
+    IVP_ASSERT_NOT_NULL(slot);
+    IVP_ASSERT_TRUE(slot->mode == IVP_CONTROLLER_INDEPENDENT);
+    IVP_ASSERT_TRUE(slot->run_for_all_cores);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_a->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(
+                        &obj_b->physical_core->controllers_of_core,
+                        &slot->base) >= 0);
+
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_EQ(probe.calls, 6);
     state.fail_at = 0;
     IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, ctrl));
     ivp_environment_destroy(env);
