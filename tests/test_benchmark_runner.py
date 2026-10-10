@@ -147,6 +147,24 @@ class BenchmarkRunnerTests(unittest.TestCase):
                         self.assertEqual(parallel["parallel_lifetime_max_workers_used"],
                                          workers)
 
+    def test_dense_contact_groups_are_worker_count_invariant(self):
+        listed = subprocess.check_output(
+            [RUNNER, "--profile", "large", "--list"], text=True).splitlines()
+        self.assertIn("dense_contact_groups", listed)
+        common = [RUNNER, "--profile", "large", "--case",
+                  "dense_contact_groups", "--scale", "2", "--samples", "1",
+                  "--min-sample-ms", "1", "--format", "jsonl"]
+        serial = json.loads(subprocess.check_output(
+            common + ["--workers", "1"], text=True).splitlines()[-1])
+        parallel = json.loads(subprocess.check_output(
+            common + ["--workers", "4"], text=True).splitlines()[-1])
+        self.assertEqual(serial["state_hash"], parallel["state_hash"])
+        self.assertEqual(serial["trajectory_hash"], parallel["trajectory_hash"])
+        self.assertEqual(serial["parallel"]["solver_dispatches"], 0)
+        self.assertGreater(parallel["parallel"]["solver_dispatches"], 0)
+        self.assertGreater(parallel["parallel"]["solver_tasks"], 0)
+        self.assertEqual(parallel["parallel_lifetime_max_workers_used"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()

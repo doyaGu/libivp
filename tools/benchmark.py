@@ -538,7 +538,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.scale:
         native_command += ["--scale", str(args.scale)]
     native_filters = [case for case in (args.cases or []) if case in {
-        "active_bodies", "contact_pile", "dense_contacts", "constraint_chain",
+        "active_bodies", "contact_pile", "dense_contacts", "dense_contact_groups",
+        "constraint_chain",
         "fast_impacts", "constraint_islands", "mixed_constraint_islands",
         "heterogeneous_constraint_islands", "object_churn", "sleeping_world",
         "convex_build",

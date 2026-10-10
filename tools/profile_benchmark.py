@@ -527,7 +527,9 @@ def main(argv=None) -> int:
     all_scenes = benchmark.scenarios(root / "tools" / "scenarios.txt")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("quick", "standard", "large"), default="large")
-    parser.add_argument("--case", action="append", choices=DEFAULT_CASES, dest="cases")
+    parser.add_argument("--case", action="append",
+                        choices=(*DEFAULT_CASES, "dense_contact_groups"),
+                        dest="cases")
     parser.add_argument("--scale", type=int)
     parser.add_argument("--seconds", type=int, default=5)
     parser.add_argument("--backend", choices=("auto", "sample", "perf"), default="auto")
