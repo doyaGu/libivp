@@ -21,27 +21,9 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
 
-#include <ivp/base/ivp_assert.h>
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Reference IVP_ASSERTs that the tests trigger on purpose (the reference
- * debug build asserts on the same input): count the reports instead of
- * trapping.  Release builds compile the asserts out. */
-static int g_assert_reports;
-static void count_assert_report(const char *expr, const char *file, int line, const char *func,
-                                const char *msg, void *userdata)
-{
-    (void)expr; (void)file; (void)line; (void)func; (void)msg; (void)userdata;
-    g_assert_reports++;
-}
-#ifdef IVP_DEBUG_BUILD
-#define EXPECTED_ASSERT_REPORTS(n) (n)
-#else
-#define EXPECTED_ASSERT_REPORTS(n) 0
-#endif
 
 #ifdef IVP_REAL_DOUBLE
   #define LTOL 1e-6
@@ -148,20 +130,18 @@ IVP_TEST(attacher_follows_set) {
     IVP_ASSERT_EQ(g_deleted, 1);
     IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&at), 2);
 
-    /* core deletion deletes the attachment; the set keeps the core */
+    /* Core deletion deletes the attachment and removes the invalid set
+     * entry in the strong-state build. */
     ivp_core_t *dead = o3->physical_core;
     ivp_environment_destroy_object(env, o3);
     IVP_ASSERT_EQ(g_deleted, 2);
     IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&at), 1);
+#if IVP_CANONICAL_INTERNAL_STATE
+    IVP_ASSERT_NULL(ivp_set_find(&set.set, dead));
+#else
     IVP_ASSERT_TRUE(ivp_set_find(&set.set, dead) == dead);
-    /* no attachment any more: the reference element_removed asserts
-     * IVP_ASSERT(con) (ivp_attacher_to_cores.hxx:49) */
-    g_assert_reports = 0;
-    ivp_set_assert_handler(count_assert_report, NULL);
-    ivp_set_active_remove(&set, dead);
-    ivp_set_assert_handler(NULL, NULL);
-    IVP_ASSERT_EQ(g_assert_reports, EXPECTED_ASSERT_REPORTS(1));
-    IVP_ASSERT_EQ(g_deleted, 2);
+    ivp_set_remove(&set.set, dead);
+#endif
 
     /* deleting the set deletes the attachments and the attacher */
     ivp_set_active_destroy(&set);
@@ -189,20 +169,57 @@ IVP_TEST(attacher_destroy_and_environment_deletion) {
     /* environment deleted first: attachments go with it */
     IVP_ASSERT_TRUE(ivp_attacher_to_cores_init(&at, env, &set, &cnt_class, NULL));
     IVP_ASSERT_EQ(g_created, 2);
+    ivp_core_t *dead = o1->physical_core;
     ivp_environment_destroy(env);
     IVP_ASSERT_EQ(g_deleted, 2);
     IVP_ASSERT_TRUE(at.environment_deleted);
-    /* attacher deletes itself, nothing left; the set still holds the dead
-     * core, whose attachment is gone: the reference asserts IVP_ASSERT(con)
-     * (ivp_attacher_to_cores.hxx:49) */
-    g_assert_reports = 0;
-    ivp_set_assert_handler(count_assert_report, NULL);
+#if IVP_CANONICAL_INTERNAL_STATE
+    IVP_ASSERT_EQ(ivp_set_count(&set.set), 0);
+#else
+    IVP_ASSERT_EQ(ivp_set_count(&set.set), 1);
+    ivp_set_remove(&set.set, dead);
+#endif
     ivp_set_active_destroy(&set);
-    ivp_set_assert_handler(NULL, NULL);
-    IVP_ASSERT_EQ(g_assert_reports, EXPECTED_ASSERT_REPORTS(1));
     IVP_ASSERT_EQ(g_attacher_deleted, 1);
     IVP_ASSERT_EQ(g_deleted, 2);
 }
+
+#if IVP_CANONICAL_INTERNAL_STATE
+static void *no_attachment_create(ivp_attacher_to_cores_t *a,
+                                  ivp_core_t *core)
+{
+    (void)a;
+    (void)core;
+    g_created++;
+    return NULL;
+}
+
+static const ivp_attacher_to_cores_class_t no_attachment_class = {
+    no_attachment_create,
+    cnt_delete,
+    cnt_attacher_deleted
+};
+
+IVP_TEST(attacher_allows_core_without_attachment) {
+    g_created = g_deleted = g_attacher_deleted = 0;
+    ivp_environment_t *env = make_env(false);
+    ivp_object_t *object = make_ball(
+        env, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_set_active_t set;
+    ivp_set_active_init(&set, NULL, 16);
+    ivp_set_active_add(&set, object->physical_core);
+
+    ivp_attacher_to_cores_t attacher;
+    IVP_ASSERT_TRUE(ivp_attacher_to_cores_init(
+        &attacher, env, &set, &no_attachment_class, NULL));
+    IVP_ASSERT_EQ(g_created, 1);
+    IVP_ASSERT_EQ(ivp_attacher_to_cores_count(&attacher), 0);
+    ivp_set_active_destroy(&set);
+    IVP_ASSERT_EQ(g_deleted, 0);
+    IVP_ASSERT_EQ(g_attacher_deleted, 1);
+    ivp_environment_destroy(env);
+}
+#endif
 
 static bool far_x_filter(void *ctx, ivp_object_t *obj)
 {
@@ -516,6 +533,9 @@ IVP_TEST(buoyancy_attacher_more_than_64_cores) {
 int main(void) {
     IVP_REGISTER(attacher_follows_set);
     IVP_REGISTER(attacher_destroy_and_environment_deletion);
+#if IVP_CANONICAL_INTERNAL_STATE
+    IVP_REGISTER(attacher_allows_core_without_attachment);
+#endif
     IVP_REGISTER(attacher_object_filter_installs_created_objects);
     IVP_REGISTER(forcefield_set_driven_acts_on_set_cores_only);
     IVP_REGISTER(forcefield_empty_set_attaches_nothing);
