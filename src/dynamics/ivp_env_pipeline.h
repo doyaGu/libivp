@@ -96,6 +96,11 @@ typedef struct ivp_env_pipeline {
     /* all slot adapters (for association refresh) */
     ivp_pvec_t               slot_ctrls;
 
+    /* Factory-created controller states are owned by this environment.
+     * The registry also observes object deletion, but this pointer is the
+     * authoritative identity and lookup path. */
+    struct ivp_controller_factory_registry *controller_factory_registry;
+
     /* IVP_Listener_Object: global list + per object tables
      * (IVP_Cluster_Manager::obj_callback_hash) */
     ivp_pvec_t               global_object_listeners; /* ivp_listener_object_t* */

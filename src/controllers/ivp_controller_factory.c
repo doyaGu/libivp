@@ -8,9 +8,9 @@
  * ivp_controller_motion.cxx) and the actuator constructors' anchor setup
  * (IVP_Anchor::init_anchor, IVP_Actuator_Two_Point / _Four_Point).
  *
- * Ownership: the factory keeps the created states of an environment in a
- * registry attached to it through a global object listener.  The listener
- * deletes a factory controller when one of its objects is deleted (the
+ * Ownership: the factory keeps the created states in an environment-owned
+ * registry.  Its global object listener deletes a factory controller when
+ * one of its objects is deleted (the
  * reference IVP_Actuator::anchor_will_be_deleted_event,
  * IVP_Anchor_Check_Dist::hull_manager_is_going_to_be_deleted_event,
  * IVP_Controller_Motion / IVP_Constraint_Local::core_is_going_to_be_deleted_event)
@@ -129,8 +129,8 @@ typedef struct fac_entry {
     int                     n_objects;
 } fac_entry_t;
 
-typedef struct fac_registry {
-    ivp_listener_object_t listener;      /* first member */
+typedef struct ivp_controller_factory_registry {
+    ivp_listener_object_t listener;
     ivp_environment_t    *env;
     fac_entry_t          *entries;
     int                   n, cap;
@@ -142,12 +142,7 @@ static void fac_environment_deleted(ivp_listener_object_t *self, struct ivp_envi
 static fac_registry_t *fac_find_registry(ivp_environment_t *env)
 {
     if (!env || !env->pl) return NULL;
-    ivp_pvec_t *v = &env->pl->global_object_listeners;
-    for (int i = 0; i < ivp_pvec_len(v); i++) {
-        ivp_listener_object_t *l = (ivp_listener_object_t *)ivp_pvec_at(v, i);
-        if (l && l->event_object_deleted == fac_object_deleted) return (fac_registry_t *)l;
-    }
-    return NULL;
+    return (fac_registry_t *)env->pl->controller_factory_registry;
 }
 
 static fac_registry_t *fac_registry(ivp_environment_t *env)
@@ -161,6 +156,7 @@ static fac_registry_t *fac_registry(ivp_environment_t *env)
     r->listener.event_environment_deleted = fac_environment_deleted;
     r->listener.user_data = r;
     r->env = env;
+    env->pl->controller_factory_registry = r;
     ivp_environment_add_listener_object_global(env, &r->listener);
     return r;
 }
@@ -250,7 +246,7 @@ static void fac_abort(ivp_environment_t *env, void *state)
 
 static void fac_object_deleted(ivp_listener_object_t *self, ivp_event_object_t *event)
 {
-    fac_registry_t *r = (fac_registry_t *)self;
+    fac_registry_t *r = (fac_registry_t *)self->user_data;
     ivp_object_t *obj = event->real_object;
     for (int i = r->n - 1; i >= 0; i--) {
         if (i >= r->n) continue;
@@ -263,9 +259,12 @@ static void fac_object_deleted(ivp_listener_object_t *self, ivp_event_object_t *
 
 static void fac_environment_deleted(ivp_listener_object_t *self, struct ivp_environment *env)
 {
-    fac_registry_t *r = (fac_registry_t *)self;
+    fac_registry_t *r = (fac_registry_t *)self->user_data;
     while (r->n > 0) fac_destroy_entry(r, r->n - 1);
     ivp_environment_remove_listener_object_global(env, &r->listener);
+    if (env->pl && env->pl->controller_factory_registry == r) {
+        env->pl->controller_factory_registry = NULL;
+    }
     if (r->entries) ivp_free(env->allocator, r->entries, (size_t)r->cap * sizeof(*r->entries));
     ivp_free(env->allocator, r, sizeof(*r));
 }
