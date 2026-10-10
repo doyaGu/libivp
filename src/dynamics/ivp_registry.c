@@ -3,34 +3,61 @@
 static inline ivp_registry_slot_meta_t *ivp_registry_get_slot_meta(const ivp_registry_t *reg,
                                                                    uint32_t slot)
 {
-    return (ivp_registry_slot_meta_t *)ivp_array_get(&reg->slots, (int)slot);
+    return (ivp_registry_slot_meta_t *)ivp_pvec_at(&reg->slots, (int)slot);
+}
+
+static bool ivp_registry_vector_init(ivp_pvec_t *vector,
+                                     const ivp_allocator_t *alloc,
+                                     int initial_capacity)
+{
+    ivp_pvec_init_with_allocator(vector, alloc);
+    return initial_capacity <= 0 ||
+           ivp_pvec_reserve(vector, initial_capacity);
+}
+
+static void *ivp_registry_dense_remove(ivp_registry_t *reg, int index)
+{
+    IVP_ASSERT(index >= 0 && index < reg->dense.n);
+    if (index < 0 || index >= reg->dense.n) return NULL;
+    void *removed = reg->dense.elems[index];
+    const int last = reg->dense.n - 1;
+    ivp_pvec_remove_at_allow_resort(&reg->dense, index);
+    if (index != last && reg->set_index) {
+        reg->set_index(reg->dense.elems[index], index, reg->index_userdata);
+    }
+    return removed;
 }
 
 ivp_result_t ivp_registry_init(ivp_registry_t *reg,
                                const ivp_allocator_t *alloc,
                                int initial_capacity,
-                               ivp_array_index_cb_t index_cb,
+                               ivp_registry_set_index_fn_t index_cb,
                                void *index_userdata,
                                ivp_registry_get_index_fn_t get_index)
 {
-    if (!reg) return IVP_ERR_INVALID_ARG;
+    if (!reg || initial_capacity < 0 || !index_cb || !get_index) {
+        return IVP_ERR_INVALID_ARG;
+    }
     if (!alloc) alloc = ivp_default_allocator();
 
     reg->alloc = alloc;
+    reg->set_index = index_cb;
+    reg->index_userdata = index_userdata;
     reg->get_index = get_index;
 
-    if (ivp_array_init_indexed(&reg->dense, alloc, initial_capacity, index_cb, index_userdata) != IVP_OK) {
+    if (!ivp_registry_vector_init(&reg->dense, alloc, initial_capacity)) {
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
-    if (ivp_array_init(&reg->slots, alloc, initial_capacity) != IVP_OK) {
-        ivp_array_destroy(&reg->dense);
+    if (!ivp_registry_vector_init(&reg->slots, alloc, initial_capacity)) {
+        ivp_pvec_clear(&reg->dense);
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
-    if (ivp_array_init(&reg->free_slots, alloc, initial_capacity) != IVP_OK) {
-        ivp_array_destroy(&reg->slots);
-        ivp_array_destroy(&reg->dense);
+    if (!ivp_registry_vector_init(&reg->free_slots, alloc,
+                                  initial_capacity)) {
+        ivp_pvec_clear(&reg->slots);
+        ivp_pvec_clear(&reg->dense);
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
@@ -44,44 +71,47 @@ void ivp_registry_destroy(ivp_registry_t *reg,
     if (!reg) return;
 
     if (free_elements) {
-        for (int i = ivp_array_len(&reg->dense) - 1; i >= 0; i--) {
+        for (int i = ivp_pvec_len(&reg->dense) - 1; i >= 0; i--) {
             void *elem = ivp_registry_get_at(reg, i);
             ivp_free(reg->alloc, elem, element_size);
         }
     }
 
-    for (int i = 0; i < ivp_array_len(&reg->slots); i++) {
+    for (int i = 0; i < ivp_pvec_len(&reg->slots); i++) {
         ivp_registry_slot_meta_t *meta =
-            (ivp_registry_slot_meta_t *)ivp_array_get(&reg->slots, i);
+            (ivp_registry_slot_meta_t *)ivp_pvec_at(&reg->slots, i);
         if (meta) {
             ivp_free(reg->alloc, meta, sizeof(ivp_registry_slot_meta_t));
         }
     }
 
-    ivp_array_destroy(&reg->free_slots);
-    ivp_array_destroy(&reg->slots);
-    ivp_array_destroy(&reg->dense);
+    ivp_pvec_clear(&reg->free_slots);
+    ivp_pvec_clear(&reg->slots);
+    ivp_pvec_clear(&reg->dense);
 
     reg->alloc = NULL;
+    reg->set_index = NULL;
+    reg->index_userdata = NULL;
     reg->get_index = NULL;
 }
 
 int ivp_registry_count(const ivp_registry_t *reg)
 {
-    return ivp_array_len(&reg->dense);
+    return ivp_pvec_len(&reg->dense);
 }
 
 void *ivp_registry_get_at(const ivp_registry_t *reg, int dense_index)
 {
-    return ivp_array_get(&reg->dense, dense_index);
+    return ivp_pvec_at(&reg->dense, dense_index);
 }
 
 static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
                                     uint32_t *out_slot,
                                     uint32_t *out_generation)
 {
-    if (ivp_array_len(&reg->free_slots) > 0) {
-        const uintptr_t packed = (uintptr_t)ivp_array_pop(&reg->free_slots);
+    if (ivp_pvec_len(&reg->free_slots) > 0) {
+        const uintptr_t packed =
+            (uintptr_t)reg->free_slots.elems[--reg->free_slots.n];
         const uint32_t slot = (uint32_t)(packed - 1u);
         ivp_registry_slot_meta_t *meta = ivp_registry_get_slot_meta(reg, slot);
         if (meta->generation == 0) {
@@ -101,12 +131,12 @@ static bool ivp_registry_alloc_slot(ivp_registry_t *reg,
     meta->generation = 1;
     meta->element = NULL;
 
-    if (ivp_array_push(&reg->slots, meta) != IVP_OK) {
+    if (ivp_pvec_add(&reg->slots, meta) < 0) {
         ivp_free(reg->alloc, meta, sizeof(ivp_registry_slot_meta_t));
         return false;
     }
 
-    const uint32_t slot = (uint32_t)(ivp_array_len(&reg->slots) - 1);
+    const uint32_t slot = (uint32_t)(ivp_pvec_len(&reg->slots) - 1);
 
     *out_slot = slot;
     *out_generation = meta->generation;
@@ -119,15 +149,17 @@ ivp_result_t ivp_registry_insert(ivp_registry_t *reg,
 {
     if (!reg || !elem || !out_handle) return IVP_ERR_INVALID_ARG;
 
-    if (ivp_array_push(&reg->dense, elem) != IVP_OK) {
+    const int dense_index = ivp_pvec_add(&reg->dense, elem);
+    if (dense_index < 0) {
         return IVP_ERR_OUT_OF_MEMORY;
     }
+    reg->set_index(elem, dense_index, reg->index_userdata);
 
     uint32_t slot = 0;
     uint32_t generation = 0;
     if (!ivp_registry_alloc_slot(reg, &slot, &generation)) {
         const int idx = reg->get_index(elem);
-        (void)ivp_array_remove_swap(&reg->dense, idx);
+        (void)ivp_registry_dense_remove(reg, idx);
         return IVP_ERR_OUT_OF_MEMORY;
     }
 
@@ -145,7 +177,7 @@ void *ivp_registry_get_by_handle(const ivp_registry_t *reg,
 {
     if (!reg) return NULL;
     if (handle.slot == UINT32_MAX || handle.generation == 0) return NULL;
-    if (handle.slot >= (uint32_t)ivp_array_len(&reg->slots)) return NULL;
+    if (handle.slot >= (uint32_t)ivp_pvec_len(&reg->slots)) return NULL;
 
     ivp_registry_slot_meta_t *meta =
         ivp_registry_get_slot_meta(reg, handle.slot);
@@ -162,7 +194,7 @@ bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
 
     if (handle.slot == UINT32_MAX || handle.generation == 0) return false;
 
-    if (handle.slot >= (uint32_t)ivp_array_len(&reg->slots)) return false;
+    if (handle.slot >= (uint32_t)ivp_pvec_len(&reg->slots)) return false;
     ivp_registry_slot_meta_t *meta =
         ivp_registry_get_slot_meta(reg, handle.slot);
     if (!meta || meta->generation != handle.generation || !meta->element) {
@@ -171,12 +203,13 @@ bool ivp_registry_remove_by_handle(ivp_registry_t *reg,
     void *elem = meta->element;
 
     const int idx = reg->get_index(elem);
-    (void)ivp_array_remove_swap(&reg->dense, idx);
+    (void)ivp_registry_dense_remove(reg, idx);
 
     meta->element = NULL;
     meta->generation++;
     if (meta->generation == 0) meta->generation = 1;
-    (void)ivp_array_push(&reg->free_slots, (void *)(uintptr_t)(handle.slot + 1u));
+    (void)ivp_pvec_add(&reg->free_slots,
+                       (void *)(uintptr_t)(handle.slot + 1u));
 
     *out_removed_elem = elem;
     return true;

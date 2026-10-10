@@ -175,7 +175,7 @@ void ivp_controller_system_sort(ivp_controller_system_t *sys,
                                 bool use_reference_tiebreak)
 {
     const int n = ivp_registry_count(&sys->registry);
-    void **data = sys->registry.dense.data;
+    void **data = sys->registry.dense.elems;
 
     /* Keep the registry in descending priority order for management
      * traversals.  Simulation units maintain their own ascending array and
