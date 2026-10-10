@@ -433,6 +433,101 @@ IVP_TEST(vecfpu_reduction_bitwise_scalar)
     IVP_ASSERT_TRUE(equal);
 }
 
+static void gmmz_transform_serial_oracle(ivp_gmmz_t *m)
+{
+    int arl = m->aligned_row_len;
+    for (int column = 0; column < m->columns; column++) {
+        ivp_gmmz_find_pivot_in_column(m, column);
+        double diagonal = m->matrix_values[column * arl + column];
+        if (fabs(diagonal) < m->matrix_eps) continue;
+        double negative_inverse = -1.0 / diagonal;
+        for (int row = column + 1; row < m->columns; row++) {
+            double value = m->matrix_values[row * arl + column];
+            if (fabs(value) > m->matrix_eps) {
+                ivp_gmmz_add_multiple_line(
+                    m, column, row, value * negative_inverse);
+            }
+        }
+    }
+}
+
+static double gmmz_dense_value(int row, int column, int seed)
+{
+    unsigned int bits = (unsigned int)(row + 1) * 2654435761u;
+    bits ^= (unsigned int)(column + seed + 1) * 2246822519u;
+    int centered = (int)(bits % 2047u) - 1023;
+    double value = (double)centered / 2048.0;
+    if (row == column) value += 4.0;
+    if (column % 11 == 0 && row == column + 1) value += 8.0;
+    return value;
+}
+
+IVP_TEST(gmmz_large_transform_matches_serial_oracle)
+{
+    static const int sizes[] = {63, 64, 65, 96, 127, 128, 149, 150};
+    fp_rounding_fixture_t rounding;
+    IVP_ASSERT_TRUE(fp_rounding_fixture_begin(&rounding));
+    bool equal = true;
+    for (size_t mode = 0;
+         mode < sizeof(k_rounding_modes) / sizeof(k_rounding_modes[0]);
+         mode++) {
+        equal &= fp_rounding_fixture_select(mode);
+        for (size_t case_index = 0;
+             equal && case_index < sizeof(sizes) / sizeof(sizes[0]);
+             case_index++) {
+            ivp_gmmz_t expected, actual;
+            int n = sizes[case_index];
+            memset(&expected, 0, sizeof(expected));
+            memset(&actual, 0, sizeof(actual));
+            bool initialized =
+                ivp_gmmz_init(&expected, n, NULL) == IVP_OK &&
+                ivp_gmmz_init(&actual, n, NULL) == IVP_OK;
+            if (!initialized) {
+                if (expected.storage) ivp_gmmz_destroy(&expected, NULL);
+                if (actual.storage) ivp_gmmz_destroy(&actual, NULL);
+                equal = false;
+                break;
+            }
+            for (int row = 0; row < n; row++) {
+                for (int column = 0; column < expected.aligned_row_len;
+                     column++) {
+                    double value = gmmz_dense_value(
+                        row, column, (int)case_index + 3);
+                    if ((case_index & 1u) != 0u && column < n &&
+                        (column < row - 2 || column > row + 2)) {
+                        value = 0.0;
+                    }
+                    expected.matrix_values[
+                        row * expected.aligned_row_len + column] = value;
+                    actual.matrix_values[
+                        row * actual.aligned_row_len + column] = value;
+                }
+            }
+            for (int row = 0; row < expected.aligned_row_len; row++) {
+                double value = gmmz_dense_value(
+                    row, n + 1, (int)case_index + 17);
+                expected.desired_vector[row] = value;
+                actual.desired_vector[row] = value;
+            }
+
+            feclearexcept(FE_ALL_EXCEPT);
+            gmmz_transform_serial_oracle(&expected);
+            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
+            feclearexcept(FE_ALL_EXCEPT);
+            ivp_gmmz_transform_to_lower_null_triangle(&actual);
+            int actual_flags = fetestexcept(FE_ALL_EXCEPT);
+            equal &= expected_flags == actual_flags;
+            equal &= expected.storage_size == actual.storage_size;
+            equal &= memcmp(expected.storage, actual.storage,
+                            expected.storage_size) == 0;
+            ivp_gmmz_destroy(&actual, NULL);
+            ivp_gmmz_destroy(&expected, NULL);
+        }
+    }
+    IVP_ASSERT_TRUE(fp_rounding_fixture_end(&rounding));
+    IVP_ASSERT_TRUE(equal);
+}
+
 IVP_TEST(incr_lu_solve_bitwise_scalar)
 {
     enum { stride = 40, max_n = 33 };
@@ -666,6 +761,7 @@ int main(void)
     IVP_REGISTER(vecfpu_unaligned_window);
     IVP_REGISTER(vecfpu_add_multiple_row_matches_scalar_rounding);
     IVP_REGISTER(vecfpu_reduction_bitwise_scalar);
+    IVP_REGISTER(gmmz_large_transform_matches_serial_oracle);
     IVP_REGISTER(incr_lu_solve_bitwise_scalar);
     IVP_REGISTER(incr_lu_decompose_increment_decrement);
     IVP_REGISTER(incr_lu_singular_faults);

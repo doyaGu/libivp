@@ -989,9 +989,111 @@ void ivp_gmmz_exchange_rows(ivp_gmmz_t *m, int a, int b)
     m->desired_vector[b] = h;
 }
 
+#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
+#define GMMZ_BATCHED_ROWS_MIN_COLUMNS 64
+
+/* Apply the same pivot row to two target rows while loading each source
+ * block once.  This is only used from column four onward: the reference
+ * VecFPU window can write into columns 0..3 of the following row, but those
+ * entries are already dead by then and never overlap another target window.
+ * Each live element keeps the original rounded multiply followed by add. */
+static void gmmz_add_two_multiple_lines(ivp_gmmz_t *m, int first,
+                                        int second, double factor0,
+                                        double factor1)
+{
+    int arl = m->aligned_row_len;
+    int source_off = first * arl + first;
+    int target_off = second * arl + first;
+    int size = m->columns - first;
+    int shift = gm_misalign(source_off);
+    target_off -= gm_misalign(target_off);
+    size += GM_SIZE_ADJUST(shift);
+    source_off -= shift;
+
+    const double *source = m->matrix_values + source_off;
+    double *target0 = m->matrix_values + target_off;
+    double *target1 = target0 + arl;
+    const float64x2_t factors0 = vdupq_n_f64(factor0);
+    const float64x2_t factors1 = vdupq_n_f64(factor1);
+    for (int remaining = size; remaining > 0; remaining -= GM_BLOCK) {
+        float64x2_t source0 = vld1q_f64(source);
+        float64x2_t source1 = vld1q_f64(source + 2);
+
+        float64x2_t value00 = vmulq_f64(source0, factors0);
+        float64x2_t value01 = vmulq_f64(source1, factors0);
+        value00 = vaddq_f64(value00, vld1q_f64(target0));
+        value01 = vaddq_f64(value01, vld1q_f64(target0 + 2));
+        vst1q_f64(target0, value00);
+        vst1q_f64(target0 + 2, value01);
+
+        float64x2_t value10 = vmulq_f64(source0, factors1);
+        float64x2_t value11 = vmulq_f64(source1, factors1);
+        value10 = vaddq_f64(value10, vld1q_f64(target1));
+        value11 = vaddq_f64(value11, vld1q_f64(target1 + 2));
+        vst1q_f64(target1, value10);
+        vst1q_f64(target1 + 2, value11);
+
+        source += GM_BLOCK;
+        target0 += GM_BLOCK;
+        target1 += GM_BLOCK;
+    }
+    double *desired = m->desired_vector;
+    desired[second] = GM_FMA(desired[first], factor0, desired[second]);
+    desired[second + 1] =
+        GM_FMA(desired[first], factor1, desired[second + 1]);
+}
+
+/* Keep the common small-matrix reference loop compact.  This separate large
+ * path pays for its extra branching only where source-row reuse is material. */
+__attribute__((noinline))
+static void gmmz_transform_batched_rows(ivp_gmmz_t *m)
+{
+    int arl = m->aligned_row_len;
+    for (int j = 0; j < m->columns; j++) {
+        ivp_gmmz_find_pivot_in_column(m, j);
+        double diagonal_elem = m->matrix_values[j * arl + j];
+        if (fabs(diagonal_elem) < m->matrix_eps) continue;
+        double negativ_inv_diagonal = -1.0 / diagonal_elem;
+        int i = j + 1;
+        for (; j >= IVP_GM_VECFPU_SIZE && i + 1 < m->columns;
+             i += 2) {
+            double value0 = m->matrix_values[i * arl + j];
+            double value1 = m->matrix_values[(i + 1) * arl + j];
+            if (fabs(value0) > m->matrix_eps &&
+                fabs(value1) > m->matrix_eps) {
+                double factor0 = value0 * negativ_inv_diagonal;
+                double factor1 = value1 * negativ_inv_diagonal;
+                gmmz_add_two_multiple_lines(m, j, i, factor0, factor1);
+                continue;
+            }
+            for (int row = i; row < i + 2; row++) {
+                double value = m->matrix_values[row * arl + j];
+                if (fabs(value) > m->matrix_eps) {
+                    ivp_gmmz_add_multiple_line(
+                        m, j, row, value * negativ_inv_diagonal);
+                }
+            }
+        }
+        for (; i < m->columns; i++) {
+            double value = m->matrix_values[i * arl + j];
+            if (fabs(value) > m->matrix_eps) {
+                ivp_gmmz_add_multiple_line(
+                    m, j, i, value * negativ_inv_diagonal);
+            }
+        }
+    }
+}
+#endif
+
 /* Gauss: upper triangle with zeros in the lower part (always pivots) */
 void ivp_gmmz_transform_to_lower_null_triangle(ivp_gmmz_t *m)
 {
+#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
+    if (m->columns >= GMMZ_BATCHED_ROWS_MIN_COLUMNS) {
+        gmmz_transform_batched_rows(m);
+        return;
+    }
+#endif
     int arl = m->aligned_row_len;
     for (int j = 0; j < m->columns; j++) {
         ivp_gmmz_find_pivot_in_column(m, j);
