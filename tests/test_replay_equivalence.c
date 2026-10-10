@@ -6,6 +6,7 @@
 #include <ivp/dynamics/ivp_world_scheduler.h>
 
 #include <inttypes.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -128,6 +129,51 @@ typedef struct replay_snapshot {
     bool controller_active;
     replay_object_state_t objects[REPLAY_OBJECT_COUNT];
 } replay_snapshot_t;
+
+typedef struct replay_field {
+    const char *name;
+    size_t offset;
+    size_t size;
+} replay_field_t;
+
+#define REPLAY_FIELD(type, member)                                         \
+    { #member, offsetof(type, member), sizeof(((type *)0)->member) }
+
+static const replay_field_t replay_snapshot_fields[] = {
+    REPLAY_FIELD(replay_snapshot_t, time),
+    REPLAY_FIELD(replay_snapshot_t, controller_calls),
+    REPLAY_FIELD(replay_snapshot_t, controller_active)
+};
+
+static const replay_field_t replay_object_fields[] = {
+    REPLAY_FIELD(replay_object_state_t, present),
+    REPLAY_FIELD(replay_object_state_t, pinned),
+    REPLAY_FIELD(replay_object_state_t, collision_enabled),
+    REPLAY_FIELD(replay_object_state_t, movement_state),
+    REPLAY_FIELD(replay_object_state_t, collision_group),
+    REPLAY_FIELD(replay_object_state_t, layer_mask),
+    REPLAY_FIELD(replay_object_state_t, generation),
+    REPLAY_FIELD(replay_object_state_t, mass),
+    REPLAY_FIELD(replay_object_state_t, time_of_last_psi),
+    REPLAY_FIELD(replay_object_state_t, position),
+    REPLAY_FIELD(replay_object_state_t, speed),
+    REPLAY_FIELD(replay_object_state_t, speed_change),
+    REPLAY_FIELD(replay_object_state_t, rot_speed_change),
+    REPLAY_FIELD(replay_object_state_t, rot_speed),
+    REPLAY_FIELD(replay_object_state_t, orientation),
+    REPLAY_FIELD(replay_object_state_t, next_orientation),
+    REPLAY_FIELD(replay_object_state_t, energy)
+};
+
+static const replay_field_t replay_event_fields[] = {
+    REPLAY_FIELD(replay_event_entry_t, type),
+    REPLAY_FIELD(replay_event_entry_t, time),
+    REPLAY_FIELD(replay_event_entry_t, dt),
+    REPLAY_FIELD(replay_event_entry_t, sim_unit_index),
+    REPLAY_FIELD(replay_event_entry_t, object_index)
+};
+
+#undef REPLAY_FIELD
 
 static uint32_t replay_next(uint32_t *state)
 {
@@ -525,61 +571,44 @@ static void replay_capture_snapshot(const replay_world_t *world,
     }
 }
 
+static const char *replay_first_different_field(
+    const void *expected, const void *actual,
+    const replay_field_t *fields, size_t field_count)
+{
+    const unsigned char *expected_bytes = (const unsigned char *)expected;
+    const unsigned char *actual_bytes = (const unsigned char *)actual;
+    for (size_t index = 0; index < field_count; index++) {
+        const replay_field_t *field = &fields[index];
+        if (memcmp(expected_bytes + field->offset,
+                   actual_bytes + field->offset, field->size) != 0) {
+            return field->name;
+        }
+    }
+    return NULL;
+}
+
 static bool replay_snapshots_equal(const replay_snapshot_t *expected,
                                    const replay_snapshot_t *actual,
                                    int *different_slot,
                                    const char **different_field)
 {
     *different_slot = -1;
-    *different_field = NULL;
-
-#define REPLAY_COMPARE_SNAPSHOT_FIELD(member)                              \
-    do {                                                                   \
-        if (memcmp(&expected->member, &actual->member,                      \
-                   sizeof(expected->member)) != 0) {                       \
-            *different_field = #member;                                    \
-            return false;                                                  \
-        }                                                                  \
-    } while (0)
-
-    REPLAY_COMPARE_SNAPSHOT_FIELD(time);
-    REPLAY_COMPARE_SNAPSHOT_FIELD(controller_calls);
-    REPLAY_COMPARE_SNAPSHOT_FIELD(controller_active);
-#undef REPLAY_COMPARE_SNAPSHOT_FIELD
+    *different_field = replay_first_different_field(
+        expected, actual, replay_snapshot_fields,
+        sizeof(replay_snapshot_fields) / sizeof(replay_snapshot_fields[0]));
+    if (*different_field) return false;
 
     for (int slot = 0; slot < REPLAY_OBJECT_COUNT; slot++) {
         const replay_object_state_t *expected_state =
             &expected->objects[slot];
         const replay_object_state_t *actual_state = &actual->objects[slot];
-
-#define REPLAY_COMPARE_OBJECT_FIELD(member)                                \
-        do {                                                               \
-            if (memcmp(&expected_state->member, &actual_state->member,      \
-                       sizeof(expected_state->member)) != 0) {             \
-                *different_slot = slot;                                    \
-                *different_field = #member;                                \
-                return false;                                              \
-            }                                                              \
-        } while (0)
-
-        REPLAY_COMPARE_OBJECT_FIELD(present);
-        REPLAY_COMPARE_OBJECT_FIELD(pinned);
-        REPLAY_COMPARE_OBJECT_FIELD(collision_enabled);
-        REPLAY_COMPARE_OBJECT_FIELD(movement_state);
-        REPLAY_COMPARE_OBJECT_FIELD(collision_group);
-        REPLAY_COMPARE_OBJECT_FIELD(layer_mask);
-        REPLAY_COMPARE_OBJECT_FIELD(generation);
-        REPLAY_COMPARE_OBJECT_FIELD(mass);
-        REPLAY_COMPARE_OBJECT_FIELD(time_of_last_psi);
-        REPLAY_COMPARE_OBJECT_FIELD(position);
-        REPLAY_COMPARE_OBJECT_FIELD(speed);
-        REPLAY_COMPARE_OBJECT_FIELD(speed_change);
-        REPLAY_COMPARE_OBJECT_FIELD(rot_speed_change);
-        REPLAY_COMPARE_OBJECT_FIELD(rot_speed);
-        REPLAY_COMPARE_OBJECT_FIELD(orientation);
-        REPLAY_COMPARE_OBJECT_FIELD(next_orientation);
-        REPLAY_COMPARE_OBJECT_FIELD(energy);
-#undef REPLAY_COMPARE_OBJECT_FIELD
+        *different_field = replay_first_different_field(
+            expected_state, actual_state, replay_object_fields,
+            sizeof(replay_object_fields) / sizeof(replay_object_fields[0]));
+        if (*different_field) {
+            *different_slot = slot;
+            return false;
+        }
     }
     return true;
 }
@@ -600,26 +629,14 @@ static bool replay_events_equal(const replay_event_trace_t *expected,
         return false;
     }
     for (size_t index = 0; index < expected->count; index++) {
-        const replay_event_entry_t *expected_event =
-            &expected->entries[index];
-        const replay_event_entry_t *actual_event = &actual->entries[index];
-
-#define REPLAY_COMPARE_EVENT_FIELD(member)                                 \
-        do {                                                               \
-            if (memcmp(&expected_event->member, &actual_event->member,      \
-                       sizeof(expected_event->member)) != 0) {             \
-                *different_event = (int)index;                             \
-                *different_field = #member;                                \
-                return false;                                              \
-            }                                                              \
-        } while (0)
-
-        REPLAY_COMPARE_EVENT_FIELD(type);
-        REPLAY_COMPARE_EVENT_FIELD(time);
-        REPLAY_COMPARE_EVENT_FIELD(dt);
-        REPLAY_COMPARE_EVENT_FIELD(sim_unit_index);
-        REPLAY_COMPARE_EVENT_FIELD(object_index);
-#undef REPLAY_COMPARE_EVENT_FIELD
+        *different_field = replay_first_different_field(
+            &expected->entries[index], &actual->entries[index],
+            replay_event_fields,
+            sizeof(replay_event_fields) / sizeof(replay_event_fields[0]));
+        if (*different_field) {
+            *different_event = (int)index;
+            return false;
+        }
     }
     return true;
 }
