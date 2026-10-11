@@ -124,7 +124,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: doyaGu/ivp
-          ref: c82356f249b3bb0299cc2a135ecc563616ef3746
+          ref: 42b1c08c9d5b89203cbd9b37f8f4942e43a981f9
           path: reference/ivp
       - name: Release and Debug parity
         env:
