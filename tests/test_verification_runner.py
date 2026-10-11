@@ -20,11 +20,11 @@ SPEC.loader.exec_module(verification)
 
 
 class VerificationRunnerTests(unittest.TestCase):
-    def test_repository_manifest_is_valid(self):
+    def test_repository_suite_manifest_is_valid(self):
         data = verification.load_json(
-            ROOT / "tools" / "verification_contracts.json"
+            ROOT / "tools" / "verification_suites.json"
         )
-        test_sets, contracts = verification.validate_manifest(data)
+        test_sets, suites = verification.validate_manifest(data)
         self.assertIn("unit-common", test_sets)
         self.assertEqual(
             {
@@ -36,7 +36,7 @@ class VerificationRunnerTests(unittest.TestCase):
                 "scenario-invariants",
                 "tsan-threading",
             },
-            set(contracts),
+            set(suites),
         )
 
     def test_cache_parser_and_boolean_comparison(self):
@@ -64,7 +64,7 @@ class VerificationRunnerTests(unittest.TestCase):
         cache = {"CMAKE_CONFIGURATION_TYPES": "Debug;Release"}
         result = verification.validate_configuration(cache, "Release")
         self.assertEqual("multi-config", result["generator"])
-        with self.assertRaises(verification.ContractError):
+        with self.assertRaises(verification.VerificationError):
             verification.validate_configuration(cache, "RelWithDebInfo")
 
     def test_label_selection_must_equal_expected_inventory(self):
@@ -87,7 +87,7 @@ class VerificationRunnerTests(unittest.TestCase):
             platform.system()
         )
         verification.require_exact_test_set(selected, expected)
-        with self.assertRaises(verification.ContractError):
+        with self.assertRaises(verification.VerificationError):
             verification.require_exact_test_set(selected, {"test_alpha"})
 
     def test_scenario_set_uses_every_non_comment_entry(self):
@@ -116,21 +116,21 @@ class VerificationRunnerTests(unittest.TestCase):
             [{"count": 2, "text": "PASS"}, {"count": 1, "text": "DONE"}],
         )
         self.assertEqual(2, checks[0]["actual"])
-        with self.assertRaises(verification.ContractError):
+        with self.assertRaises(verification.VerificationError):
             verification.check_output_assertions(
                 "PASS\n", [{"count": 2, "text": "PASS"}]
             )
 
-    def test_command_contract_writes_passing_evidence(self):
+    def test_command_suite_writes_passing_result(self):
         manifest = {
             "schema_version": 1,
             "test_sets": {"placeholder": ["unused"]},
-            "contracts": [
+            "suites": [
                 {
                     "id": "probe",
                     "description": "Probe the command runner.",
                     "type": "command",
-                    "oracle": "The child command emits its completion marker.",
+                    "expected_result": "The child command emits its completion marker.",
                     "command": [sys.executable, "-c", "print('PROBE OK')"],
                     "output_assertions": [{"count": 1, "text": "PROBE OK"}],
                     "platforms": [platform.system()],
@@ -141,31 +141,33 @@ class VerificationRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory_path = Path(directory)
             manifest_path = directory_path / "manifest.json"
-            evidence_path = directory_path / "evidence.json"
+            result_path = directory_path / "result.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 result = verification.main(
                     [
-                        "--contract", "probe",
+                        "--suite", "probe",
                         "--manifest", str(manifest_path),
-                        "--evidence", str(evidence_path),
+                        "--result-file", str(result_path),
                     ]
                 )
-            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            run_result = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertEqual(0, result)
-        self.assertEqual("passed", evidence["result"])
-        self.assertEqual(1, evidence["checks"]["output_assertions"][0]["actual"])
+        self.assertEqual(2, run_result["schema_version"])
+        self.assertEqual("passed", run_result["result"])
+        self.assertEqual("probe", run_result["suite"]["id"])
+        self.assertEqual(1, run_result["checks"]["output_assertions"][0]["actual"])
 
-    def test_command_contract_preserves_failure_evidence(self):
+    def test_command_suite_preserves_failure_result(self):
         manifest = {
             "schema_version": 1,
             "test_sets": {"placeholder": ["unused"]},
-            "contracts": [
+            "suites": [
                 {
                     "id": "probe",
                     "description": "Probe failed output validation.",
                     "type": "command",
-                    "oracle": "The child command must emit the required marker.",
+                    "expected_result": "The child command must emit the required marker.",
                     "command": [sys.executable, "-c", "print('WRONG')"],
                     "output_assertions": [{"count": 1, "text": "EXPECTED"}],
                     "platforms": [platform.system()],
@@ -176,20 +178,22 @@ class VerificationRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory_path = Path(directory)
             manifest_path = directory_path / "manifest.json"
-            evidence_path = directory_path / "evidence.json"
+            result_path = directory_path / "result.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 result = verification.main(
                     [
-                        "--contract", "probe",
+                        "--suite", "probe",
                         "--manifest", str(manifest_path),
-                        "--evidence", str(evidence_path),
+                        "--result-file", str(result_path),
                     ]
                 )
-            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            run_result = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertEqual(1, result)
-        self.assertEqual("failed", evidence["result"])
-        self.assertIn("expected 1 occurrence", evidence["error"])
+        self.assertEqual(2, run_result["schema_version"])
+        self.assertEqual("failed", run_result["result"])
+        self.assertEqual("probe", run_result["suite"]["id"])
+        self.assertIn("expected 1 occurrence", run_result["error"])
 
 
 if __name__ == "__main__":

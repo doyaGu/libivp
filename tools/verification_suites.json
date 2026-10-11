@@ -59,12 +59,12 @@
       "test_verification_runner"
     ]
   },
-  "contracts": [
+  "suites": [
     {
       "id": "asan-ubsan-unit",
       "description": "Focused tests under AddressSanitizer and UndefinedBehaviorSanitizer.",
       "type": "ctest",
-      "oracle": "Every configured unit and tool-contract test except the timing-oriented benchmark runner completes under both sanitizers without failure or skip.",
+      "expected_result": "Every configured focused test except the timing-oriented benchmark runner completes under both sanitizers without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -99,7 +99,7 @@
       "id": "debug-float-unit",
       "description": "Focused tests in the Debug float-precision mainline build.",
       "type": "ctest",
-      "oracle": "Every configured unit and tool-contract test except the timing-oriented benchmark runner completes in the float Debug domain without failure or skip.",
+      "expected_result": "Every configured focused test except the timing-oriented benchmark runner completes in the float Debug configuration without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -134,7 +134,7 @@
       "id": "examples-headless",
       "description": "Render helpers and every graphical example in headless mode.",
       "type": "ctest",
-      "oracle": "All three render/example helper tests, the generated coverage table check, and the all-examples headless smoke test complete without failure or skip.",
+      "expected_result": "All three render/example helper tests, the generated coverage table check, and the all-examples headless smoke test complete without failure or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_EXAMPLES": "ON",
@@ -171,7 +171,7 @@
       "id": "parity",
       "description": "Release and Debug comparison with the pinned C++ reference engine.",
       "type": "command",
-      "oracle": "Both reference-development builds reproduce all 48 scenarios and both mainline builds produce exactly the 22 registered Qhull differences.",
+      "expected_result": "Both reference-development builds reproduce all 48 scenarios and both mainline builds produce exactly the 22 registered Qhull differences.",
       "command": ["tools/parity/check.sh"],
       "output_assertions": [
         {"count": 2, "text": "=== 26/48 identical; 22/22 expected differences ==="},
@@ -183,9 +183,9 @@
     },
     {
       "id": "release-unit",
-      "description": "Complete focused-test gate for the default Release build.",
+      "description": "Complete focused-test suite for the default Release build.",
       "type": "ctest",
-      "oracle": "The complete platform-specific unit and tool-contract inventory executes in the default mainline domain without failure, disablement, or skip.",
+      "expected_result": "The complete platform-specific focused-test inventory executes in the default Release configuration without failure, disablement, or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -220,7 +220,7 @@
       "id": "scenario-invariants",
       "description": "Every registered physics scenario with its in-process invariant checks.",
       "type": "ctest",
-      "oracle": "The configured invariants label contains exactly one test per scenarios.txt entry and all of those tests complete without failure or skip.",
+      "expected_result": "The configured invariants label contains exactly one test per scenarios.txt entry and all of those tests complete without failure or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",
@@ -251,9 +251,9 @@
     },
     {
       "id": "tsan-threading",
-      "description": "All concurrency contract tests under ThreadSanitizer.",
+      "description": "All concurrent-execution tests under ThreadSanitizer.",
       "type": "ctest",
-      "oracle": "The threading label resolves to exactly the six required concurrency tests and every test completes under ThreadSanitizer without failure or skip.",
+      "expected_result": "The threading label resolves to exactly the six required concurrency tests and every test completes under ThreadSanitizer without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",

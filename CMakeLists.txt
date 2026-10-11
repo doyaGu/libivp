@@ -724,7 +724,7 @@ if (IVP_BUILD_TESTS)
     endif ()
 
     # ── CTest labels ──────────────────────────────────────────────────────
-    # unit:       unit and tool-contract tests
+    # unit:       focused unit and verification-tool tests
     # threading:  tests that exercise concurrent execution
     # perf:       performance regression tests
     # stability:  long-horizon physical stability tests
