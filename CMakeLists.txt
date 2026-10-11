@@ -632,7 +632,15 @@ if (IVP_BUILD_TESTS)
     target_include_directories(test_matrix_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_deferred_deletion tests/test_deferred_deletion.c)
     target_include_directories(test_deferred_deletion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
+    # These generated cases include libm results and their stored output bits
+    # come from the reference platform.  Keep this golden-data comparison on
+    # the platform documented in AGENTS.md and PORT_WORK_REPORT.md; portable
+    # solver behavior is covered by test_great_matrix_port on every platform.
+    if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+        ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
+        ivp_apply_strict_fp(test_lcs_parity)
+        set(IVP_HAS_LCS_PARITY_TEST ON)
+    endif ()
 
     # P1 controller tests (stabilizer, suspension, constraint API)
     ivp_add_test(test_p1_controllers tests/test_p1_controllers.c)
@@ -760,14 +768,19 @@ if (IVP_BUILD_TESTS)
             test_active_value_ext test_collision_filter test_bvh_bottomup
             test_polygon_collision_debug test_fake_jetski
             test_great_matrix_port test_matrix_cache test_deferred_deletion
-            test_lcs_parity
             test_p1_controllers test_controller_parity test_car_system
             test_controller_active test_controller_sets test_controller_factory
             test_content_pipeline
     )
+    if (IVP_HAS_LCS_PARITY_TEST)
+        list(APPEND IVP_UNIT_TESTS test_lcs_parity)
+    endif ()
     foreach (T ${IVP_UNIT_TESTS})
         set_tests_properties(${T} PROPERTIES LABELS "unit")
     endforeach ()
+    if (IVP_HAS_LCS_PARITY_TEST)
+        set_tests_properties(test_lcs_parity PROPERTIES LABELS "unit;parity")
+    endif ()
 
     set(IVP_THREADING_TESTS
             test_qhull_concurrency
