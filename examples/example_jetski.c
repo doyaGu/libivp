@@ -58,13 +58,13 @@ typedef struct jetski_demo {
 
 static double sea_y(const jetski_demo_t *s, double x, double t)
 {
-    const double k = 2.0 * M_PI / WAVE_LEN;
+    const double k = 2.0 * IVP_PI_D / WAVE_LEN;
     return -(double)s->amp * sin(k * x - k * 2.5 * t);          /* mean level y = 0, up is -Y */
 }
 
 static double sea_slope(const jetski_demo_t *s, double x, double t)
 {
-    const double k = 2.0 * M_PI / WAVE_LEN;
+    const double k = 2.0 * IVP_PI_D / WAVE_LEN;
     return -(double)s->amp * k * cos(k * x - k * 2.5 * t);
 }
 

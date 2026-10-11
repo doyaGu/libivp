@@ -73,13 +73,13 @@ typedef struct waves_demo {
 /* surface height (Y) of the wave at x, and its slope along x */
 static double wave_y(const wave_ctx_t *w, double x, double t)
 {
-    const double k = 2.0 * M_PI / WAVE_LEN;
+    const double k = 2.0 * IVP_PI_D / WAVE_LEN;
     return WATER_Y - w->amp * sin(k * x - k * w->speed * t);
 }
 
 static double wave_slope(const wave_ctx_t *w, double x, double t)
 {
-    const double k = 2.0 * M_PI / WAVE_LEN;
+    const double k = 2.0 * IVP_PI_D / WAVE_LEN;
     return -w->amp * k * cos(k * x - k * w->speed * t);
 }
 
@@ -96,7 +96,7 @@ static bool wave_eval(void *ctx, const ivp_vec3r_t *pos, ivp_vec3r_t *normal, iv
     *normal = n;
     *height = (ivp_real_t)(n.k[0] * x + n.k[1] * ys + n.k[2] * (double)pos->k[2]);
     /* the water at the surface moves with the wave: a horizontal swing in phase with the height */
-    const double k = 2.0 * M_PI / WAVE_LEN;
+    const double k = 2.0 * IVP_PI_D / WAVE_LEN;
     *velocity = ivp_vec3r((ivp_real_t)(w->amp * k * w->speed * sin(k * x - k * w->speed * t)), IVP_REAL(0.0), IVP_REAL(0.0));
     return true;
 }
