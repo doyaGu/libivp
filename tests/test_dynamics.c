@@ -15,6 +15,7 @@
 #include "dynamics/ivp_registry.h"
 #include "controllers/ivp_controller_system.h"
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
