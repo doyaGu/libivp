@@ -10,6 +10,10 @@
  * CTest invokes this, pipes output to a file, then compares via compare_jsonl.py.
  */
 
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L /* clock_gettime with -std=c17 */
+#endif
+
 #include <ivp/base/ivp_types.h>
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_allocator.h>

@@ -24,7 +24,7 @@
 #endif
 
 static const double kScaleFactorForReducingPrecisionLoss = 1e6;
-static const double kInvertedScaleFactorForReducingPrecisionLoss = 1.0 / 1e6;
+static const double kInvertedScaleFactorForReducingPrecisionLoss = 1e-6;
 
 /* ── clock ─────────────────────────────────────────────────────────────── */
 

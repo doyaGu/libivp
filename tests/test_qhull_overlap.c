@@ -184,7 +184,7 @@ static void *qhull_overlap_thread_main(void *opaque)
 IVP_TEST(reentrant_builds_enter_backend_together)
 {
     qhull_overlap_gate_t gate;
-    qhull_overlap_worker_t workers[QHULL_OVERLAP_THREADS] = {{0}};
+    qhull_overlap_worker_t workers[QHULL_OVERLAP_THREADS] = {0};
 #ifdef _WIN32
     HANDLE threads[QHULL_OVERLAP_THREADS] = {0};
 #else

@@ -6,6 +6,11 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+if (CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    # MSVC exposes the C17 <stdatomic.h> implementation behind this switch.
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+endif ()
+
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
 option(IVP_REFERENCE_INTERNAL_STATE
@@ -48,7 +53,12 @@ endfunction()
 
 function(ivp_apply_project_warnings TARGET_NAME)
     if (MSVC)
-        target_compile_options(${TARGET_NAME} PRIVATE /W4 /WX)
+        target_compile_options(${TARGET_NAME} PRIVATE
+                /W4 /WX
+                # Aligned engine types deliberately contain tail padding.
+                /wd4324
+                # Match the non-MSVC policy for callback-shaped interfaces.
+                /wd4100)
     else ()
         target_compile_options(${TARGET_NAME} PRIVATE
                 -Wall -Wextra -Wpedantic -Werror

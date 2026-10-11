@@ -250,7 +250,7 @@ const ivp_compact_surface_t *ivp_surman_get_polygon_surface(const ivp_surman_t *
 static _Alignas(16) const struct {
     ivp_compact_ledge_t ledge;
     ivp_compact_triangle_t tri;
-} s_ball_dummy_ledge;
+} s_ball_dummy_ledge = {0};
 
 const ivp_compact_ledge_t *ivp_surman_ball_dummy_ledge(void)
 {
