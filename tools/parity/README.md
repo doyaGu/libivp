@@ -18,8 +18,8 @@
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照基线包含 Qhull 8.0.2 可重入迁移。需要克隆到与本仓库同级的
-`../ivp`：
+对照引擎固定为 `2b4965e`，包含 Qhull 8.0.2 可重入迁移。需要克隆到与
+本仓库同级的 `../ivp`：
 
 ```bash
 git clone https://github.com/doyaGu/ivp.git ../ivp
