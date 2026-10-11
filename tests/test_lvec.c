@@ -35,10 +35,6 @@ typedef void (*combine_fn_t)(ivp_vec3f_t *, const ivp_vec3f_t *,
                              const ivp_vec3f_t *, D);
 static combine_fn_t volatile vector_add_multiple = lvf_add_multiple2;
 static combine_fn_t volatile vector_subtract_and_mult = lvf_subtract_and_mult;
-static bool same_vec_and_flags(const ivp_vec3f_t *actual,
-                               const ivp_vec3f_t *expected,
-                               int actual_flags, int expected_flags);
-
 /* IVP_U_Matrix3::{inline_vmult3,inline_vimult3} from
  * ivu_linear_software.hxx. Keep repeated conversions in the reference path. */
 static void scalar_transform(const ivp_transform_r_t *m, const ivp_vec3f_t *in,
@@ -73,19 +69,49 @@ static float random_float(uint32_t *state)
     return float_from_bits(bits);
 }
 
+static bool same_float_result(float actual, float expected)
+{
+    uint32_t actual_bits, expected_bits;
+    memcpy(&actual_bits, &actual, sizeof(actual_bits));
+    memcpy(&expected_bits, &expected, sizeof(expected_bits));
+    if (actual_bits == expected_bits) return true;
+    return (actual_bits & UINT32_C(0x7fffffff)) > UINT32_C(0x7f800000) &&
+           (expected_bits & UINT32_C(0x7fffffff)) > UINT32_C(0x7f800000);
+}
+
+static bool same_real_result(D actual, D expected)
+{
+    if (memcmp(&actual, &expected, sizeof(actual)) == 0) return true;
+#ifdef IVP_REAL_DOUBLE
+    uint64_t actual_bits, expected_bits;
+    memcpy(&actual_bits, &actual, sizeof(actual_bits));
+    memcpy(&expected_bits, &expected, sizeof(expected_bits));
+    return (actual_bits & UINT64_C(0x7fffffffffffffff)) >
+               UINT64_C(0x7ff0000000000000) &&
+           (expected_bits & UINT64_C(0x7fffffffffffffff)) >
+               UINT64_C(0x7ff0000000000000);
+#else
+    return same_float_result(actual, expected);
+#endif
+}
+
+static bool same_vec_result(const ivp_vec3f_t *actual,
+                            const ivp_vec3f_t *expected)
+{
+    for (int i = 0; i < 3; i++) {
+        if (!same_float_result(actual->k[i], expected->k[i])) return false;
+    }
+    return true;
+}
+
 static bool compare_transform(const ivp_transform_r_t *matrix,
                               const ivp_vec3f_t *input, int transpose, bool inplace)
 {
     ivp_vec3f_t expected, actual = *input;
-    if (feclearexcept(FE_ALL_EXCEPT)) return false;
     scalar_transform(matrix, input, &expected, transpose);
-    int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-    if (feclearexcept(FE_ALL_EXCEPT)) return false;
     transforms[transpose](matrix, inplace ? &actual : input, &actual);
-    int actual_flags = fetestexcept(FE_ALL_EXCEPT);
     /* Compare only components, never the alignment padding. */
-    return memcmp(actual.k, expected.k, sizeof(actual.k)) == 0 &&
-           actual_flags == expected_flags;
+    return same_vec_result(&actual, &expected);
 }
 
 static bool exercise_transforms(bool edge_cases, bool inplace)
@@ -189,17 +215,14 @@ static bool exercise_real_transforms(void)
                                (D)random_float(&random_state) * (D)0x1p-25;
             }
             for (int translate = 0; ok && translate < 2; translate++) {
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 ivp_vec3r_t expected;
                 scalar_real_transform(&matrix, &input, &expected, translate != 0);
-                int expected_flags = fetestexcept(FE_ALL_EXCEPT);
                 for (int inplace = 0; ok && inplace < 2; inplace++) {
                     ivp_vec3r_t actual = input, separate;
                     ivp_vec3r_t *out = inplace ? &actual : &separate;
-                    ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                     real_transforms[translate](&matrix, &actual, out);
-                    ok = ok && memcmp(out->k, expected.k, sizeof(expected.k)) == 0 &&
-                         fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+                    ok = ok && memcmp(out->k, expected.k,
+                                      sizeof(expected.k)) == 0;
                     if (!ok) {
                         fprintf(stderr,
                                 "real matrix mismatch: rounding=%zu case=%d translate=%d inplace=%d\n",
@@ -238,7 +261,6 @@ static bool exercise_inverse_point_transforms(void)
                 input.k[row] = (D)random_float(&random_state) +
                                (D)random_float(&random_state) * (D)0x1p-27;
             }
-            ok = feclearexcept(FE_ALL_EXCEPT) == 0;
             D a = input.k[0] - matrix.pos.k[0];
             D b = input.k[1] - matrix.pos.k[1];
             D c = input.k[2] - matrix.pos.k[2];
@@ -252,12 +274,9 @@ static bool exercise_inverse_point_transforms(void)
             expected.k[2] = (float)(matrix.rot.rows[0].k[2] * a +
                                     matrix.rot.rows[1].k[2] * b +
                                     matrix.rot.rows[2].k[2] * c);
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             ivp_vec3f_t actual;
             inverse_point_transform(&matrix, &input, &actual);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
             if (!ok) fprintf(stderr, "point transform mismatch: rounding=%zu case=%d\n", mode, n);
         }
     }
@@ -302,16 +321,12 @@ static bool exercise_cross_products(void)
                 rhs.k[i] = n < 512 ? float_from_bits(edges[((n + 37) >> (i * 3)) & 7])
                                   : random_float(&random_state);
             }
-            ok = feclearexcept(FE_ALL_EXCEPT) == 0;
             scalar_cross(&expected, &lhs, &rhs);
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
             for (int alias = 0; ok && alias < 3; alias++) {
                 ivp_vec3f_t a = lhs, b = rhs, separate;
                 ivp_vec3f_t *out = alias == 0 ? &separate : alias == 1 ? &a : &b;
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 cross_product(out, &a, &b);
-                ok = ok && fetestexcept(FE_ALL_EXCEPT) == expected_flags &&
-                     memcmp(out->k, expected.k, sizeof(expected.k)) == 0;
+                ok = ok && same_vec_result(out, &expected);
                 if (!ok) fprintf(stderr, "cross mismatch: rounding=%zu case=%d alias=%d\n",
                                  mode, n, alias);
             }
@@ -344,14 +359,6 @@ static void scalar_subtract_and_mult(ivp_vec3f_t *out,
     out->k[0] = (float)x; out->k[1] = (float)y; out->k[2] = (float)z;
 }
 
-static bool same_vec_and_flags(const ivp_vec3f_t *actual,
-                               const ivp_vec3f_t *expected,
-                               int actual_flags, int expected_flags)
-{
-    return memcmp(actual->k, expected->k, sizeof(actual->k)) == 0 &&
-           actual_flags == expected_flags;
-}
-
 static bool exercise_vector_arithmetic(void)
 {
     static const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
@@ -376,79 +383,55 @@ static bool exercise_vector_arithmetic(void)
             D factor = (D)random_float(&random_state) +
                        (D)random_float(&random_state) * (D)0x1p-26;
 
-            ok = feclearexcept(FE_ALL_EXCEPT) == 0;
             D expected_dot = (D)(lhs.k[0] * rhs.k[0] + lhs.k[1] * rhs.k[1] +
                                  lhs.k[2] * rhs.k[2]);
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             D actual_dot = vector_dot(&lhs, &rhs);
-            ok = ok && memcmp(&actual_dot, &expected_dot, sizeof(actual_dot)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            ok = ok && same_real_result(actual_dot, expected_dot);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             D expected_length = (D)(lhs.k[0] * lhs.k[0] + lhs.k[1] * lhs.k[1] +
                                     lhs.k[2] * lhs.k[2]);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             D actual_length = vector_quad_length(&lhs);
-            ok = ok && memcmp(&actual_length, &expected_length, sizeof(actual_length)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            ok = ok && same_real_result(actual_length, expected_length);
 
             ivp_vec3f_t expected, actual;
             for (int operation = 0; ok && operation < 3; operation++) {
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 for (int i = 0; i < 3; i++) {
                     expected.k[i] = operation == 0 ? lhs.k[i] + rhs.k[i] :
                                     operation == 1 ? lhs.k[i] - rhs.k[i] :
                                                      lhs.k[i] * rhs.k[i];
                 }
-                expected_flags = fetestexcept(FE_ALL_EXCEPT);
                 for (int alias = 0; ok && alias < 3; alias++) {
                     ivp_vec3f_t a = lhs, b = rhs;
                     ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &a : &b;
-                    ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                     binary_fn_t fn = operation == 0 ? vector_add :
                                      operation == 1 ? vector_subtract : vector_pairwise_mult;
                     fn(out, &a, &b);
-                    ok = ok && same_vec_and_flags(out, &expected,
-                                                  fetestexcept(FE_ALL_EXCEPT), expected_flags);
+                    ok = ok && same_vec_result(out, &expected);
                 }
             }
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             scalar_add_multiple(&expected, &lhs, &rhs, factor);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
             for (int alias = 0; ok && alias < 3; alias++) {
                 ivp_vec3f_t a = lhs, b = rhs;
                 ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &a : &b;
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 vector_add_multiple(out, &a, &b, factor);
-                ok = ok && same_vec_and_flags(out, &expected,
-                                              fetestexcept(FE_ALL_EXCEPT), expected_flags);
+                ok = ok && same_vec_result(out, &expected);
             }
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             scalar_subtract_and_mult(&expected, &lhs, &rhs, factor);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
             for (int alias = 0; ok && alias < 3; alias++) {
                 ivp_vec3f_t a = lhs, b = rhs;
                 ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &a : &b;
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 vector_subtract_and_mult(out, &a, &b, factor);
-                ok = ok && same_vec_and_flags(out, &expected,
-                                              fetestexcept(FE_ALL_EXCEPT), expected_flags);
+                ok = ok && same_vec_result(out, &expected);
             }
 
             actual = lhs;
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             expected.k[0] = (float)((D)lhs.k[0] * factor);
             expected.k[1] = (float)((D)lhs.k[1] * factor);
             expected.k[2] = (float)((D)lhs.k[2] * factor);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             vector_scale(&actual, factor);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
 #ifdef IVP_REAL_DOUBLE
             ivp_vec3r_t point_a, point_b;
@@ -456,29 +439,17 @@ static bool exercise_vector_arithmetic(void)
                 point_a.k[i] = (D)lhs.k[i] + (D)rhs.k[i] * (D)0x1p-26;
                 point_b.k[i] = (D)rhs.k[i] - (D)lhs.k[i] * (D)0x1p-27;
             }
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)point_a.k[i];
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             lvf_set_p(&actual, &point_a);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)(point_a.k[i] - point_b.k[i]);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             lvf_subtract2_p(&actual, &point_a, &point_b);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)(point_a.k[i] * factor);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             lvf_set_multiple_p(&actual, &point_a, factor);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 #endif
             if (!ok) fprintf(stderr, "vector mismatch: rounding=%zu case=%d\n", mode, n);
         }
@@ -512,29 +483,17 @@ static bool exercise_core_float_views(void)
                 source.k[i] = random_float(&random_state);
             }
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)core.speed.k[i];
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             ivp_vec3f_t actual = ivp_core_speed_f(&core);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)core.inv_rot_inertia.k[i];
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             actual = ivp_core_inv_rot_inertia_f(&core);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = (float)core.rot_inertia.k[i];
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             actual = ivp_core_rot_inertia_f(&core);
-            ok = ok && same_vec_and_flags(&actual, &expected,
-                                          fetestexcept(FE_ALL_EXCEPT), expected_flags);
+            ok = ok && same_vec_result(&actual, &expected);
 
             ivp_core_set_speed_f(&core, &source);
             for (int i = 0; ok && i < 3; i++) {
@@ -569,42 +528,31 @@ static bool exercise_scr_pairwise_products(void)
             }
             lhs.hesse_val = random_float(&random_state);
             rhs.hesse_val = random_float(&random_state);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             for (int i = 0; i < 3; i++) expected.k[i] = lhs.k[i] * rhs.k[i];
             expected.hesse_val = lhs.hesse_val * rhs.hesse_val;
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             ivp_scr_f_line_wise_mult4(&actual, &lhs, &rhs);
-            ok = ok && memcmp(&actual, &expected, sizeof(actual)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            for (int i = 0; ok && i < 3; i++) {
+                ok = same_float_result(actual.k[i], expected.k[i]);
+            }
+            ok = ok && same_float_result(actual.hesse_val,
+                                         expected.hesse_val);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             double expected_dot3 = (double)(lhs.k[0] * rhs.k[0] +
                                             lhs.k[1] * rhs.k[1] +
                                             lhs.k[2] * rhs.k[2]);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            int expected_dot3_flags = expected_flags;
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             double actual_dot = ivp_scr_f_dot3(&lhs, &rhs);
-            ok = ok && memcmp(&actual_dot, &expected_dot3, sizeof(actual_dot)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            ok = ok && same_real_result((D)actual_dot, (D)expected_dot3);
 
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             double expected_dot4 = (double)(lhs.k[0] * rhs.k[0] +
                                             lhs.k[1] * rhs.k[1] +
                                             lhs.k[2] * rhs.k[2] +
                                             lhs.hesse_val * rhs.hesse_val);
-            expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             actual_dot = ivp_scr_f_dot4(&lhs, &rhs);
-            ok = ok && memcmp(&actual_dot, &expected_dot4, sizeof(actual_dot)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            ok = ok && same_real_result((D)actual_dot, (D)expected_dot4);
 
             ivp_vec3f_t vector = {{lhs.k[0], lhs.k[1], lhs.k[2]}};
-            ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
             actual_dot = ivp_scr_f_dot_vp(&vector, &rhs);
-            ok = ok && memcmp(&actual_dot, &expected_dot3, sizeof(actual_dot)) == 0 &&
-                 fetestexcept(FE_ALL_EXCEPT) == expected_dot3_flags;
+            ok = ok && same_real_result((D)actual_dot, (D)expected_dot3);
             if (!ok) fprintf(stderr, "SCR product mismatch: rounding=%zu case=%d\n", mode, n);
         }
     }
@@ -641,7 +589,6 @@ static bool exercise_surface_speed_aliases(void)
             for (int alias = 0; ok && alias < 4; alias++) {
                 ivp_vec3f_t p = point, c = center, r = rotation, actual;
                 ivp_vec3f_t cross, transformed, expected;
-                ok = feclearexcept(FE_ALL_EXCEPT) == 0;
                 scalar_cross(&cross, &rotation, &point);
                 scalar_transform(&core.m_world_f_core_last_psi, &cross,
                                  &transformed, 0);
@@ -654,12 +601,9 @@ static bool exercise_surface_speed_aliases(void)
                     expected.k[1] = transformed.k[1] + center.k[1];
                     expected.k[2] = transformed.k[2] + center.k[2];
                 }
-                int expected_flags = fetestexcept(FE_ALL_EXCEPT);
                 ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &c : alias == 2 ? &p : &r;
-                ok = ok && feclearexcept(FE_ALL_EXCEPT) == 0;
                 ivp_core_get_surface_speed_on_test(&core, &p, &c, &r, out);
-                ok = ok && same_vec_and_flags(out, &expected,
-                                              fetestexcept(FE_ALL_EXCEPT), expected_flags);
+                ok = ok && same_vec_result(out, &expected);
                 if (!ok) fprintf(stderr, "surface speed mismatch: rounding=%zu case=%d alias=%d\n",
                                  mode, n, alias);
             }

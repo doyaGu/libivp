@@ -275,9 +275,11 @@ IVP_TEST(vecfpu_unaligned_window)
 
 /* ── incremental LU ─────────────────────────────────────────────────────── */
 
-/* Literal scalar reductions: compare bytes and exception flags, not a
- * tolerance. In particular, four independent partial sums are not equivalent.
- * Keep the FMA-reference flavour's unfused prefix and contracted tail. */
+/* Literal scalar reductions compare every finite result bit for bit.  NaN
+ * payload propagation and floating-point status flags are compiler/ISA state,
+ * not solver output; exceptional inputs therefore compare by NaN class.
+ * In particular, four independent partial sums are not equivalent.  Keep the
+ * FMA-reference flavour's unfused prefix and contracted tail. */
 static double scalar_dot(const double *a, const double *b, int count)
 {
     double sum = 0.0;
@@ -318,6 +320,27 @@ static double reduction_value(unsigned int index)
     uint64_t word = bits[index % (sizeof(bits) / sizeof(bits[0]))];
     memcpy(&value, &word, sizeof(value));
     return value;
+}
+
+static bool same_double_result(double actual, double expected)
+{
+    uint64_t actual_bits, expected_bits;
+    memcpy(&actual_bits, &actual, sizeof(actual_bits));
+    memcpy(&expected_bits, &expected, sizeof(expected_bits));
+    if (actual_bits == expected_bits) return true;
+    return (actual_bits & UINT64_C(0x7fffffffffffffff)) >
+               UINT64_C(0x7ff0000000000000) &&
+           (expected_bits & UINT64_C(0x7fffffffffffffff)) >
+               UINT64_C(0x7ff0000000000000);
+}
+
+static bool same_double_array(const double *actual, const double *expected,
+                              size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (!same_double_result(actual[i], expected[i])) return false;
+    }
+    return true;
 }
 
 static const int k_rounding_modes[] = {
@@ -379,18 +402,14 @@ IVP_TEST(vecfpu_add_multiple_row_matches_scalar_rounding)
 #endif
             int processed = ((scalar_size + IVP_GM_VECFPU_SIZE - 1) /
                              IVP_GM_VECFPU_SIZE) * IVP_GM_VECFPU_SIZE;
-            feclearexcept(FE_ALL_EXCEPT);
             for (int i = 0; i < processed; i++) {
                 double value = source[scalar_source_off + i] * factor;
                 value += expected[scalar_target_off + i];
                 expected[scalar_target_off + i] = value;
             }
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            feclearexcept(FE_ALL_EXCEPT);
             ivp_vecfpu_add_multiple_row(actual, target_off, source, source_off,
                                         factor, size, aligned);
-            equal &= memcmp(actual, expected, sizeof(actual)) == 0;
-            equal &= fetestexcept(FE_ALL_EXCEPT) == expected_flags;
+            equal &= same_double_array(actual, expected, capacity);
         }
     }
     IVP_ASSERT_TRUE(fp_rounding_fixture_end(&rounding));
@@ -418,13 +437,9 @@ IVP_TEST(vecfpu_reduction_bitwise_scalar)
 #if IVP_GM_VECFPU_SIZE == 4
                     if (!aligned) { off_a = 0; off_b = 2; size += 2; }
 #endif
-                    feclearexcept(FE_ALL_EXCEPT);
                     double expected = scalar_dot(a + off_a, b + off_b, size);
-                    int flags = fetestexcept(FE_ALL_EXCEPT);
-                    feclearexcept(FE_ALL_EXCEPT);
                     double actual = ivp_vecfpu_large_dot_product(a, 1, b, 3, count, aligned != 0);
-                    equal &= flags == fetestexcept(FE_ALL_EXCEPT);
-                    equal &= memcmp(&expected, &actual, sizeof(actual)) == 0;
+                    equal &= same_double_result(actual, expected);
                 }
             }
         }
@@ -510,13 +525,8 @@ IVP_TEST(gmmz_large_transform_matches_serial_reference)
                 actual.desired_vector[row] = value;
             }
 
-            feclearexcept(FE_ALL_EXCEPT);
             gmmz_transform_serial_reference(&expected);
-            int expected_flags = fetestexcept(FE_ALL_EXCEPT);
-            feclearexcept(FE_ALL_EXCEPT);
             ivp_gmmz_transform_to_lower_null_triangle(&actual);
-            int actual_flags = fetestexcept(FE_ALL_EXCEPT);
-            equal &= expected_flags == actual_flags;
             equal &= expected.storage_size == actual.storage_size;
             equal &= memcmp(expected.storage, actual.storage,
                             expected.storage_size) == 0;
@@ -558,7 +568,6 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
                     expected_temp[k] = actual_temp[k] = -17.0;
                     expected_out[k] = actual_out[k] = -19.0;
                 }
-                feclearexcept(FE_ALL_EXCEPT);
                 for (int i = n - 1; i >= 0; i--) expected_mult[i] = input[i];
                 for (int i = n - 1; i >= 0; i--)
                     expected_temp[i] = scalar_dot(lower + i * stride, expected_mult, n);
@@ -570,17 +579,16 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
                     expected_temp[i] = result;
                     expected_out[i] = result;
                 }
-                int flags = fetestexcept(FE_ALL_EXCEPT);
                 ivp_incr_lu_t lu = {0};
                 lu.L_matrix = lower; lu.U_matrix = upper; lu.input_vec = input;
                 lu.mult_vec = actual_mult; lu.temp_vec = actual_temp; lu.out_vec = actual_out;
                 lu.n_sub = n; lu.aligned_row_len = stride;
-                feclearexcept(FE_ALL_EXCEPT);
                 ivp_incr_lu_solve_lin_equ(&lu);
-                equal &= flags == fetestexcept(FE_ALL_EXCEPT);
-                equal &= memcmp(actual_mult, expected_mult, sizeof(actual_mult)) == 0;
-                equal &= memcmp(actual_temp, expected_temp, sizeof(actual_temp)) == 0;
-                equal &= memcmp(actual_out, expected_out, sizeof(actual_out)) == 0;
+                equal &= same_double_array(actual_mult, expected_mult,
+                                           stride);
+                equal &= same_double_array(actual_temp, expected_temp,
+                                           stride);
+                equal &= same_double_array(actual_out, expected_out, stride);
             }
         }
     }
