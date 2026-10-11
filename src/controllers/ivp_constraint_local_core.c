@@ -1248,10 +1248,6 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
                         c->enabled = false;
                         c->broken = true;
                         return true;
-                        /* unreachable in the reference too (after its return) */
-                        IVP_IF(1)
-                            ivp_debug_printf("Translationsachse %d ist gebrochen!\n", i);
-                        break;
                     case IVP_CFE_BEND: /* reference: not implemented */
                     case IVP_CFE_NONE:
                     default:
@@ -1264,10 +1260,6 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
                         c->enabled = false;
                         c->broken = true;
                         return true;
-                        /* unreachable in the reference too (after its return) */
-                        IVP_IF(1)
-                            ivp_debug_printf("Rotationsachse %d ist gebrochen!\n", i);
-                        break;
                     case IVP_CFE_CLIP: /* reference: no effect on rotation */
                     case IVP_CFE_BEND:
                     case IVP_CFE_NONE:
