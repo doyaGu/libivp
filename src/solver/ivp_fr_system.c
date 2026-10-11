@@ -2881,24 +2881,11 @@ void ivp_fr_system_ivp_debug_fs_pointers(ivp_fr_system_t *fs)
     }
 }
 
-/* out_friction_info_obj (ivp_friction_gaps.cxx:927): returns at once in the
- * reference ("absturz"), the IVP_IF(1) block behind the return is unreachable */
+/* out_friction_info_obj (ivp_friction_gaps.cxx:927) returns at once in the
+ * reference ("absturz").  Its dead diagnostic block is intentionally omitted. */
 void ivp_fr_out_friction_info_obj(ivp_core_t *obj)
 {
-    return; /* absturz */
-    IVP_IF(1)
-    {
-        ivp_fr_info_for_core_t *fr_info = ivp_core_moveable_core_has_friction_info(obj);
-        while (fr_info) {
-            ivp_debug_printf("obj %u fs %u obj_ma %d", fr_p16(obj), fr_p16(fr_info->l_friction_system),
-                             (int)obj->physical_unmoveable);
-            for (int i = ivp_pvec_len(&fr_info->friction_springs) - 1; i >= 0; i--) {
-                ivp_debug_printf("  md %u", fr_p16(cp_at(&fr_info->friction_springs, i)));
-            }
-            fr_info = NULL;
-            ivp_debug_printf("\n");
-        }
-    }
+    (void)obj;
 }
 
 /* debug_out_friction_system (ivp_friction_gaps.cxx:1084) is not ported: an
