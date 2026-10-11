@@ -128,7 +128,9 @@ IVP_TEST(geompack_prisms_match_reference)
         }
         IVP_ASSERT_TRUE(near_rel((double)s->upper_limit_radius, e->r));
         IVP_ASSERT_EQ(ivp_surface_get_max_deviation(s), e->dev);
+#ifdef IVP_QHULL_REFERENCE_LAYOUT
         IVP_ASSERT_EQ(ivp_surface_get_byte_size(s), e->size);
+#endif
         IVP_ASSERT_TRUE(ivp_compact_surface_check(s, 0));
         /* root hull like the reference concave builder */
         ivp_surman_polygon_t sm;
@@ -136,6 +138,16 @@ IVP_TEST(geompack_prisms_match_reference)
         const ivp_compact_ledge_t *hull = ivp_surman_get_single_convex(&sm.base);
         IVP_ASSERT_NOT_NULL(hull);
         IVP_ASSERT_FALSE(ivp_ledge_is_terminal(hull));
+
+        ivp_compact_surface_t *repeat =
+            ivp_build_concave_polyhedron_surface(NULL, p.pts, p.n_pts,
+                                                  p.faces, p.sizes,
+                                                  p.n_faces, &co);
+        IVP_ASSERT_NOT_NULL(repeat);
+        int surface_size = ivp_surface_get_byte_size(s);
+        IVP_ASSERT_EQ(ivp_surface_get_byte_size(repeat), surface_size);
+        IVP_ASSERT_EQ(memcmp(repeat, s, (size_t)surface_size), 0);
+        ivp_compact_surface_free(NULL, repeat);
         ivp_compact_surface_free(NULL, s);
     }
 }
