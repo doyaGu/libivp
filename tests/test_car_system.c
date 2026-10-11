@@ -160,21 +160,44 @@ static void reverse_pointer_vector(ivp_pvec_t *vector)
     }
 }
 
+static bool vec3r_bits_equal(const ivp_vec3r_t *a,
+                             const ivp_vec3r_t *b)
+{
+    for (int i = 0; i < 3; i++) {
+        if (memcmp(&a->k[i], &b->k[i], sizeof(a->k[i])) != 0) return false;
+    }
+    return true;
+}
+
+static bool vec3f_bits_equal(const ivp_vec3f_t *a,
+                             const ivp_vec3f_t *b)
+{
+    for (int i = 0; i < 3; i++) {
+        if (memcmp(&a->k[i], &b->k[i], sizeof(a->k[i])) != 0) return false;
+    }
+    return true;
+}
+
+static bool quatr_bits_equal(const ivp_quatr_t *a,
+                             const ivp_quatr_t *b)
+{
+    return memcmp(&a->x, &b->x, sizeof(a->x)) == 0 &&
+           memcmp(&a->y, &b->y, sizeof(a->y)) == 0 &&
+           memcmp(&a->z, &b->z, sizeof(a->z)) == 0 &&
+           memcmp(&a->w, &b->w, sizeof(a->w)) == 0;
+}
+
 static bool car_core_state_equal(const ivp_core_t *a,
                                  const ivp_core_t *b)
 {
-    return memcmp(&a->pos_world_f_core_last_psi,
-                  &b->pos_world_f_core_last_psi,
-                  sizeof(a->pos_world_f_core_last_psi)) == 0 &&
-           memcmp(&a->q_world_f_core_last_psi,
-                  &b->q_world_f_core_last_psi,
-                  sizeof(a->q_world_f_core_last_psi)) == 0 &&
-           memcmp(&a->q_world_f_core_next_psi,
-                  &b->q_world_f_core_next_psi,
-                  sizeof(a->q_world_f_core_next_psi)) == 0 &&
-           memcmp(&a->speed, &b->speed, sizeof(a->speed)) == 0 &&
-           memcmp(&a->rot_speed, &b->rot_speed,
-                  sizeof(a->rot_speed)) == 0 &&
+    return vec3r_bits_equal(&a->pos_world_f_core_last_psi,
+                            &b->pos_world_f_core_last_psi) &&
+           quatr_bits_equal(&a->q_world_f_core_last_psi,
+                            &b->q_world_f_core_last_psi) &&
+           quatr_bits_equal(&a->q_world_f_core_next_psi,
+                            &b->q_world_f_core_next_psi) &&
+           vec3r_bits_equal(&a->speed, &b->speed) &&
+           vec3f_bits_equal(&a->rot_speed, &b->rot_speed) &&
            a->movement_state == b->movement_state;
 }
 
