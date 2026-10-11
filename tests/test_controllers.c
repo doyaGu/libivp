@@ -1108,6 +1108,7 @@ IVP_TEST(buoyancy_init_default) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1128,6 +1129,7 @@ IVP_TEST(buoyancy_init_plane) {
 
     ivp_environment_add_controller(env, 0, ivp_controller_buoyancy, &state);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1150,6 +1152,7 @@ IVP_TEST(buoyancy_impulse_opposes_gravity_not_surface_normal) {
     IVP_ASSERT_TRUE(vel.k[1] < IVP_REAL(0.0));
     IVP_ASSERT_NEAR(vel.k[0], IVP_REAL(0.0), LTOL);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1179,6 +1182,7 @@ IVP_TEST(buoyancy_submerged_rises) {
     /* Y-down: object below surface should experience buoyancy force. Verify position changed. */
     IVP_ASSERT_TRUE(ivp_fabs(pos_after.k[1] - pos_before.k[1]) > TOL);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1201,6 +1205,7 @@ IVP_TEST(buoyancy_above_no_force) {
 
     IVP_ASSERT_NEAR(speed, IVP_REAL(0.0), TOL);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1234,6 +1239,7 @@ IVP_TEST(buoyancy_drag_slows) {
 
     IVP_ASSERT_TRUE(speed_after < speed_before);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
@@ -1263,6 +1269,7 @@ IVP_TEST(buoyancy_flow_velocity) {
     /* Object should drift in +X direction */
     IVP_ASSERT_TRUE(pos_after.k[0] > pos_before.k[0]);
 
+    ivp_buoyancy_state_destroy(&state);
     ivp_environment_destroy(env);
 }
 
