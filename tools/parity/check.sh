@@ -15,8 +15,9 @@
 #
 # Builds go to $IVP_PARITY_DIR (default build/parity); the reference sources
 # are taken from $IVP_REF_SRC (default ../ivp).  Exit code 1 if any
-# comparison violates its policy.  The reference-development build must be
-# 48/48 identical.  The mainline build must differ in exactly the scenarios
+# comparison violates its policy.  The reference-development build uses the
+# same reentrant Qhull release as the reference and must be 48/48 identical.
+# The mainline build must differ in exactly the scenarios
 # listed by mainline_expected_differences.txt.  The scenario list is
 # tools/scenarios.txt ($SCENARIOS restricts it).
 set -uo pipefail
@@ -56,7 +57,7 @@ report_comparison() { # <result file> <compare exit code>
 
 if [ $DO_REL = 1 ]; then
   "$HERE/build_reference.sh" release > /dev/null || parity_die "reference release build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release ON REFERENCE
+  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release ON REENTRANT
   build_lib "$IVP_PARITY_DIR/lib_mainline_release" Release OFF REENTRANT
   REF_RUNNER="$(parity_ref_dir release)/runner/legacy_runner"
   echo "=== release: reference-development policy ==="
@@ -105,7 +106,7 @@ fi
 
 if [ $DO_DBG = 1 ]; then
   "$HERE/build_reference.sh" debug > /dev/null || parity_die "reference debug build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug ON REFERENCE
+  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug ON REENTRANT
   build_lib "$IVP_PARITY_DIR/lib_mainline_debug" Debug OFF REENTRANT
   echo "=== debug: reference-development policy ==="
   rm -rf "$IVP_PARITY_DIR/out/ref_debug" \

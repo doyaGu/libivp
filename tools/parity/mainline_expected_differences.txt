@@ -1,8 +1,7 @@
-# Default engine behavior versus the reference engine.  With reference
-# internals enabled, the reentrant Qhull upgrade alone differs only in
-# convex_hulls, hull_pile, and galton.  With normal internals, both Qhull
-# backends produce this same 22-scenario difference set; the Qhull version
-# further changes the three geometry scenarios without adding another one.
+# Default engine behavior versus the reference engine.  Both sides use
+# reentrant Qhull 8.0.2.  With reference internals enabled all 48 scenarios
+# match; this exact 22-scenario set comes from the mainline internal-state
+# rules rather than from a Qhull version difference.
 springs
 rope
 cubes

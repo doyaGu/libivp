@@ -30,6 +30,7 @@ mkdir -p "$OUT"
 echo "=== reference $FLAVOR libraries ($LIBDIR) ==="
 cmake -B "$LIBDIR" -S "$IVP_REF_SRC" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="$CXXFLAGS" -DCMAKE_CXX_FLAGS_RELEASE="$CXXFLAGS_RELEASE" \
+  -DIVP_QHULL_MODE=REENTRANT \
   -DIVP_BUILD_EXAMPLES=OFF -DIVP_BUILD_TESTS=OFF > "$OUT.cmake.log" 2>&1
 cmake --build "$LIBDIR" -j"$IVP_JOBS" > "$OUT.build.log"
 

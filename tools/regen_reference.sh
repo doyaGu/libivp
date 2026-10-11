@@ -30,6 +30,7 @@ REF_CXX_FLAGS="-ffp-contract=off"
 if [ "${IVP_REF_FMA:-0}" = "1" ]; then REF_CXX_FLAGS=""; fi
 cmake -B "$LEGACY_BUILD" -S "$REF_SRC" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="$REF_CXX_FLAGS" \
+  -DIVP_QHULL_MODE=REENTRANT \
   -DIVP_BUILD_EXAMPLES=OFF -DIVP_BUILD_TESTS=OFF > /dev/null
 cmake --build "$LEGACY_BUILD" -j8 > /dev/null
 

@@ -17,7 +17,7 @@ option(IVP_REFERENCE_INTERNAL_STATE
        "Preserve address/history-sensitive reference internals for parity work"
        OFF)
 set(IVP_QHULL_MODE "REENTRANT" CACHE STRING
-    "Qhull backend: REENTRANT (mainline) or REFERENCE (parity work)")
+    "Qhull backend: REENTRANT (mainline and parity) or REFERENCE (historical comparison)")
 set_property(CACHE IVP_QHULL_MODE PROPERTY STRINGS REENTRANT REFERENCE)
 option(IVP_ENABLE_ASSERTS "Enable IVP_ASSERT in Release builds" OFF)
 option(IVP_CONTAINER_DEBUG "Enable container debug checks (iterator, bounds, canaries)" OFF)
