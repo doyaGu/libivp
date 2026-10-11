@@ -4,7 +4,7 @@
 
 Which public headers the examples use. A header counts as used by an example when the example's own source mentions a function, type, macro or enum constant the header declares. `used/names` is the share of the header's names that appear in any example.
 
-Feature modules: 71 of 88 headers are used by at least one example; the 17 others are internals (see the notes).
+Feature modules: 71 of 89 headers are used by at least one example; the 18 others are internals (see the notes).
 
 ## builder
 
@@ -85,15 +85,16 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 | `ivp_cache_object.h` | 0/3 | - (cached object transforms) |
 | `ivp_cluster.h` | 4/12 | `zones` |
 | `ivp_core.h` | 3/49 | `black_hole`, `boat`, `buoyancy`, `collision_filter`, `forcefield`, `onthefly`, `psi_listener`, `waves`, `zones` |
-| `ivp_environment.h` | 22/87 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `constraints`, `contacts`, `cubes`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `rolling_ball`, `rope`, `sensors`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
+| `ivp_environment.h` | 22/91 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `constraints`, `contacts`, `cubes`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `rolling_ball`, `rope`, `sensors`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
 | `ivp_handle.h` | 2/12 | `black_hole`, `boat`, `factory`, `friction`, `hover`, `platform`, `rolling_ball`, `zones` |
 | `ivp_merge_core.h` | 0/3 | `compound` (behind ivp_object_attach_object) |
-| `ivp_object.h` | 11/47 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `concave`, `constraints`, `contacts`, `cubes`, `cut`, `domino`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `raycasting`, `ring`, `rolling_ball`, `rope`, `sensors`, `shapes`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
+| `ivp_object.h` | 11/48 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `concave`, `constraints`, `contacts`, `cubes`, `cut`, `domino`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `raycasting`, `ring`, `rolling_ball`, `rope`, `sensors`, `shapes`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
 | `ivp_object_attach.h` | 3/4 | `compound` |
 | `ivp_phantom.h` | 7/16 | `zones` |
 | `ivp_sim_unit.h` | 0/2 | - (simulation units, merged by the controllers' discovery) |
 | `ivp_time_manager.h` | 0/14 | - (the event queue behind the PSI loop) |
 | `ivp_universe_manager.h` | 3/9 | `universe` |
+| `ivp_world_scheduler.h` | 0/5 | - |
 
 ## events
 
@@ -123,16 +124,16 @@ Feature modules: 71 of 88 headers are used by at least one example; the 17 other
 
 | header | used/names | examples |
 |---|---|---|
-| `ivp_active_value.h` | 12/77 | `active_value`, `factory` |
-| `ivp_hash.h` | 0/12 | - (hash helpers) |
+| `ivp_active_value.h` | 12/78 | `active_value`, `factory` |
+| `ivp_hash.h` | 0/13 | - (hash helpers) |
 | `ivp_multidimensional_interp.h` | 0/21 | - (buoyancy interpolation (compiled out like the reference)) |
 | `ivp_string.h` | 0/21 | - (string helpers) |
 | `ivp_union_find.h` | 0/6 | - (a helper of the builders) |
 
 ## Not shown by an example, on purpose
 
-- `base` (10 headers, 3 touched): allocator, arena, assert and message plumbing
-- `containers` (12 headers, 1 touched): arrays, hashes, sets and heaps
+- `base` (9 headers, 3 touched): allocator, arena, assert and message plumbing
+- `containers` (8 headers, 1 touched): arrays, hashes, sets and heaps
 - `solver` (4 headers, 0 touched): impact, contact and friction solvers (reached through any collision)
 - `math` (7 headers, 5 touched): vectors, matrices, quaternions
 - `diagnostics` (5 headers, 0 touched): statistics and debug managers
