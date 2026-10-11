@@ -20,8 +20,20 @@ jobs:
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Unit tests
-        run: ctest --test-dir build -C Release -L unit --output-on-failure --parallel 4
+      - name: Release unit contract
+        run: >-
+          python tools/run_verification.py
+          --contract release-unit
+          --build-dir build
+          --parallel 4
+          --evidence build/verification/release-unit-${{ runner.os }}.json
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-release-unit-${{ runner.os }}
+          path: build/verification/*.json
+          if-no-files-found: warn
 
   # Continuously enforce configurations that previously ran only as local
   # release checks. ThreadSanitizer stays scoped to the threading contract
@@ -31,17 +43,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: debug-float
-            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_REAL_DOUBLE=OFF
-            test_args: -L unit --parallel 4
           # Instrumented Debug timings are not a performance signal, and the
           # benchmark runner's reference diagnostics exceed its 30 s timeout.
+          - name: debug-float
+            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_REAL_DOUBLE=OFF
+            contract: debug-float-unit
+            parallel: 4
           - name: asan-ubsan
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_ASAN=ON -DIVP_ENABLE_UBSAN=ON
-            test_args: -L unit -E test_benchmark_runner --parallel 2
+            contract: asan-ubsan-unit
+            parallel: 2
           - name: tsan-threading
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
-            test_args: -L threading --parallel 1
+            contract: tsan-threading
+            parallel: 1
     name: verification (${{ matrix.name }})
     runs-on: ubuntu-latest
     env:
@@ -52,8 +67,20 @@ jobs:
         run: cmake -B build -S . ${{ matrix.cmake_args }}
       - name: Build
         run: cmake --build build --parallel
-      - name: Tests
-        run: ctest --test-dir build ${{ matrix.test_args }} --output-on-failure
+      - name: Verification contract
+        run: >-
+          python tools/run_verification.py
+          --contract ${{ matrix.contract }}
+          --build-dir build
+          --parallel ${{ matrix.parallel }}
+          --evidence build/verification/${{ matrix.name }}.json
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-${{ matrix.name }}
+          path: build/verification/*.json
+          if-no-files-found: warn
 
   # Exercise every physics scenario without requiring the external reference
   # checkout.  These checks validate finite state and scenario-specific
@@ -70,8 +97,20 @@ jobs:
           -DIVP_ENABLE_SCENARIO_TESTS=ON
       - name: Build scenario runner
         run: cmake --build build --target test_scenarios --parallel
-      - name: Scenario invariants
-        run: ctest --test-dir build -L invariants --output-on-failure --parallel 4
+      - name: Scenario invariant contract
+        run: >-
+          python tools/run_verification.py
+          --contract scenario-invariants
+          --build-dir build
+          --parallel 4
+          --evidence build/verification/scenario-invariants.json
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-scenario-invariants
+          path: build/verification/*.json
+          if-no-files-found: warn
 
   # Bit-exact parity is a macOS arm64 reproducibility-domain check.  Keep the
   # reference runner pinned and require both libivp policies on pull requests,
@@ -91,7 +130,17 @@ jobs:
         env:
           IVP_REF_SRC: ${{ github.workspace }}/reference/ivp
           IVP_JOBS: 3
-        run: tools/parity/check.sh
+        run: >-
+          python tools/run_verification.py
+          --contract parity
+          --evidence build/verification/parity.json
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-parity
+          path: build/verification/*.json
+          if-no-files-found: warn
 
   # Examples: build with SDL3 and run every one headless (no window, no GPU).
   examples:
@@ -116,7 +165,17 @@ jobs:
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
       - name: Build
         run: cmake --build build --parallel
-      - name: Render and panel tests
-        run: ctest --test-dir build -R "test_render_math|test_demo_panel" --output-on-failure
-      - name: Run every example headless
-        run: ctest --test-dir build -L smoke --output-on-failure
+      - name: Headless example contract
+        run: >-
+          python tools/run_verification.py
+          --contract examples-headless
+          --build-dir build
+          --parallel 2
+          --evidence build/verification/examples-${{ runner.os }}.json
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-examples-${{ runner.os }}
+          path: build/verification/*.json
+          if-no-files-found: warn
