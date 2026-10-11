@@ -286,7 +286,6 @@ IVP_TEST(env_create_with_config) {
 }
 
 typedef union IVP_ALIGN16 env_fail_alloc_header {
-    max_align_t alignment;
     unsigned char ivp_alignment[16];
     struct {
         size_t size;
