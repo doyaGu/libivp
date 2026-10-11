@@ -3,21 +3,23 @@
 本工具同时检查 libivp 的两个复现域：
 
 - **reference-development：**显式使用
-  `IVP_REFERENCE_INTERNAL_STATE=ON` 和 `IVP_QHULL_MODE=REFERENCE`，
+  `IVP_REFERENCE_INTERNAL_STATE=ON` 和 `IVP_QHULL_MODE=REENTRANT`，
   Release/Debug 必须 48/48 逐位一致。
 - **mainline：**使用默认内部行为和可重入 Qhull 2020.2，必须恰好只有
   `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
 
 两个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
-主线差异及 Qhull 单变量的三个几何差异见
-`docs/PARITY_GAP_INVENTORY.md`。
+22 个主线差异见 `docs/PARITY_GAP_INVENTORY.md`；Qhull 已不再是两端的
+差异变量。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
 ## 准备
 
-原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上（对照的引擎版本为 `8b81109`，其后只有 runner 的提交），需要克隆到与本仓库同级的 `../ivp`：
+原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
+对照基线包含 Qhull 8.0.2 可重入迁移。需要克隆到与本仓库同级的
+`../ivp`：
 
 ```bash
 git clone https://github.com/doyaGu/ivp.git ../ivp
@@ -34,7 +36,7 @@ tools/parity/check.sh --debug
 tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加步长扫描（release）
 ```
 
-退出码为 0 表示两个域都满足各自契约。结果写在
+退出码为 0 表示两个域都满足各自要求。结果写在
 `build/parity/out/{release,debug}_{reference,mainline}.txt`；步长扫描写入
 `build/parity/out/sweep_*/{reference,mainline}.txt`。
 
