@@ -36,6 +36,8 @@
 #define PHASE_COUNT IVP_PE_MAX
 #define MAX_STEPS 600
 #define WINDOW_COUNT 12
+#define BENCH_DT_180 0.0055555555555555556
+#define BENCH_DT_60 0.0166666666666666667
 #include "bench_verify.h"
 #include "bench_scene.h"
 #ifdef _MSC_VER
@@ -1475,54 +1477,54 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
 }
 
 static const bench_config_t quick_configs[] = {
-    {"active_bodies", BENCH_ACTIVE, 256, 240, 1.0 / 180.0},
-    {"contact_pile", BENCH_CONTACT, 64, 360, 1.0 / 180.0},
-    {"constraint_chain", BENCH_CONSTRAINT, 64, 360, 1.0 / 180.0},
-    {"fast_impacts", BENCH_IMPACTS, 32, 180, 1.0 / 180.0},
-    {"object_churn", BENCH_CHURN, 32, 16, 1.0 / 180.0},
-    {"sleeping_world", BENCH_SLEEPING, 1024, 600, 1.0 / 60.0},
+    {"active_bodies", BENCH_ACTIVE, 256, 240, BENCH_DT_180},
+    {"contact_pile", BENCH_CONTACT, 64, 360, BENCH_DT_180},
+    {"constraint_chain", BENCH_CONSTRAINT, 64, 360, BENCH_DT_180},
+    {"fast_impacts", BENCH_IMPACTS, 32, 180, BENCH_DT_180},
+    {"object_churn", BENCH_CHURN, 32, 16, BENCH_DT_180},
+    {"sleeping_world", BENCH_SLEEPING, 1024, 600, BENCH_DT_60},
     {"convex_build", BENCH_CONVEX, 128, 1, 0.0}
 };
 
 static const bench_config_t standard_configs[] = {
-    {"active_bodies", BENCH_ACTIVE, 64, 240, 1.0 / 180.0},
-    {"active_bodies", BENCH_ACTIVE, 256, 240, 1.0 / 180.0},
-    {"active_bodies", BENCH_ACTIVE, 1024, 240, 1.0 / 180.0},
-    {"contact_pile", BENCH_CONTACT, 16, 360, 1.0 / 180.0},
-    {"contact_pile", BENCH_CONTACT, 64, 360, 1.0 / 180.0},
-    {"contact_pile", BENCH_CONTACT, 256, 360, 1.0 / 180.0},
-    {"constraint_chain", BENCH_CONSTRAINT, 16, 360, 1.0 / 180.0},
-    {"constraint_chain", BENCH_CONSTRAINT, 64, 360, 1.0 / 180.0},
-    {"constraint_chain", BENCH_CONSTRAINT, 256, 360, 1.0 / 180.0},
-    {"fast_impacts", BENCH_IMPACTS, 8, 180, 1.0 / 180.0},
-    {"fast_impacts", BENCH_IMPACTS, 32, 180, 1.0 / 180.0},
-    {"fast_impacts", BENCH_IMPACTS, 128, 180, 1.0 / 180.0},
-    {"object_churn", BENCH_CHURN, 16, 16, 1.0 / 180.0},
-    {"object_churn", BENCH_CHURN, 64, 16, 1.0 / 180.0},
-    {"object_churn", BENCH_CHURN, 256, 16, 1.0 / 180.0},
-    {"sleeping_world", BENCH_SLEEPING, 256, 600, 1.0 / 60.0},
-    {"sleeping_world", BENCH_SLEEPING, 1024, 600, 1.0 / 60.0},
-    {"sleeping_world", BENCH_SLEEPING, 4096, 600, 1.0 / 60.0},
+    {"active_bodies", BENCH_ACTIVE, 64, 240, BENCH_DT_180},
+    {"active_bodies", BENCH_ACTIVE, 256, 240, BENCH_DT_180},
+    {"active_bodies", BENCH_ACTIVE, 1024, 240, BENCH_DT_180},
+    {"contact_pile", BENCH_CONTACT, 16, 360, BENCH_DT_180},
+    {"contact_pile", BENCH_CONTACT, 64, 360, BENCH_DT_180},
+    {"contact_pile", BENCH_CONTACT, 256, 360, BENCH_DT_180},
+    {"constraint_chain", BENCH_CONSTRAINT, 16, 360, BENCH_DT_180},
+    {"constraint_chain", BENCH_CONSTRAINT, 64, 360, BENCH_DT_180},
+    {"constraint_chain", BENCH_CONSTRAINT, 256, 360, BENCH_DT_180},
+    {"fast_impacts", BENCH_IMPACTS, 8, 180, BENCH_DT_180},
+    {"fast_impacts", BENCH_IMPACTS, 32, 180, BENCH_DT_180},
+    {"fast_impacts", BENCH_IMPACTS, 128, 180, BENCH_DT_180},
+    {"object_churn", BENCH_CHURN, 16, 16, BENCH_DT_180},
+    {"object_churn", BENCH_CHURN, 64, 16, BENCH_DT_180},
+    {"object_churn", BENCH_CHURN, 256, 16, BENCH_DT_180},
+    {"sleeping_world", BENCH_SLEEPING, 256, 600, BENCH_DT_60},
+    {"sleeping_world", BENCH_SLEEPING, 1024, 600, BENCH_DT_60},
+    {"sleeping_world", BENCH_SLEEPING, 4096, 600, BENCH_DT_60},
     {"convex_build", BENCH_CONVEX, 32, 1, 0.0},
     {"convex_build", BENCH_CONVEX, 128, 1, 0.0},
     {"convex_build", BENCH_CONVEX, 512, 1, 0.0}
 };
 
 static const bench_config_t large_configs[] = {
-    {"active_bodies", BENCH_ACTIVE, 4096, 240, 1.0 / 180.0},
-    {"contact_pile", BENCH_CONTACT, 1024, 360, 1.0 / 180.0},
-    {"dense_contacts", BENCH_DENSE_CONTACTS, 128, 60, 1.0 / 180.0},
+    {"active_bodies", BENCH_ACTIVE, 4096, 240, BENCH_DT_180},
+    {"contact_pile", BENCH_CONTACT, 1024, 360, BENCH_DT_180},
+    {"dense_contacts", BENCH_DENSE_CONTACTS, 128, 60, BENCH_DT_180},
     {"dense_contact_groups", BENCH_DENSE_CONTACT_GROUPS, 8, 60,
-     1.0 / 180.0},
-    {"constraint_chain", BENCH_CONSTRAINT, 1024, 360, 1.0 / 180.0},
-    {"constraint_islands", BENCH_ISLAND_CONSTRAINTS, 4096, 32, 1.0 / 180.0},
+     BENCH_DT_180},
+    {"constraint_chain", BENCH_CONSTRAINT, 1024, 360, BENCH_DT_180},
+    {"constraint_islands", BENCH_ISLAND_CONSTRAINTS, 4096, 32, BENCH_DT_180},
     {"mixed_constraint_islands", BENCH_MIXED_ISLAND_CONSTRAINTS, 4096, 32,
-     1.0 / 180.0},
+     BENCH_DT_180},
     {"heterogeneous_constraint_islands", BENCH_HETEROGENEOUS_ISLANDS, 4096,
-     32, 1.0 / 180.0},
-    {"fast_impacts", BENCH_IMPACTS, 512, 180, 1.0 / 180.0},
-    {"object_churn", BENCH_CHURN, 1024, 16, 1.0 / 180.0},
-    {"sleeping_world", BENCH_SLEEPING, 16384, 600, 1.0 / 60.0},
+     32, BENCH_DT_180},
+    {"fast_impacts", BENCH_IMPACTS, 512, 180, BENCH_DT_180},
+    {"object_churn", BENCH_CHURN, 1024, 16, BENCH_DT_180},
+    {"sleeping_world", BENCH_SLEEPING, 16384, 600, BENCH_DT_60},
     {"convex_build", BENCH_CONVEX, 2048, 1, 0.0}
 };
 
