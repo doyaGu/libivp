@@ -156,8 +156,8 @@ def validate_manifest(data):
         raise VerificationError("manifest.schema_version must be 1")
 
     test_sets = data["test_sets"]
-    if not isinstance(test_sets, dict) or not test_sets:
-        raise VerificationError("manifest.test_sets must be a non-empty object")
+    if not isinstance(test_sets, dict):
+        raise VerificationError("manifest.test_sets must be an object")
     for name, tests in test_sets.items():
         if not SUITE_ID.fullmatch(name):
             raise VerificationError("invalid test set name: {}".format(name))
@@ -167,11 +167,10 @@ def validate_manifest(data):
     if not isinstance(suites, list) or not suites:
         raise VerificationError("manifest.suites must be a non-empty list")
     result = {}
-    common = {"description", "id", "expected_result", "type"}
+    common = {"id", "type"}
     ctest_keys = common | {
         "configuration",
         "expected",
-        "reject_skips",
         "required_cache",
         "selection",
     }
@@ -195,9 +194,6 @@ def validate_manifest(data):
             raise VerificationError("invalid suite id: {}".format(suite_id))
         if suite_id in result:
             raise VerificationError("duplicate suite id: {}".format(suite_id))
-        require_text(suite["description"], label + ".description")
-        require_text(suite["expected_result"], label + ".expected_result")
-
         if suite_type == "ctest":
             require_text(suite["configuration"], label + ".configuration")
             cache = suite["required_cache"]
@@ -208,8 +204,6 @@ def validate_manifest(data):
                 require_text(value, "{}.required_cache.{}".format(label, key))
             validate_selection(suite["selection"], label + ".selection")
             validate_expected(suite["expected"], label + ".expected", test_sets)
-            if suite["reject_skips"] is not True:
-                raise VerificationError("{}.reject_skips must be true".format(label))
         else:
             require_string_list(
                 suite["command"], label + ".command", allow_empty=False,
@@ -625,7 +619,7 @@ def main(argv=None):
         },
         "repository": repository_state(),
         "result": "failed",
-        "schema_version": 2,
+        "schema_version": 3,
         "started_at": started,
     }
     exit_code = 1
@@ -641,12 +635,7 @@ def main(argv=None):
                 )
             )
         suite = suites[args.suite]
-        run_result["suite"] = {
-            "description": suite["description"],
-            "id": suite["id"],
-            "expected_result": suite["expected_result"],
-            "type": suite["type"],
-        }
+        run_result["suite"] = {"id": suite["id"], "type": suite["type"]}
         if suite["type"] == "ctest":
             execute_ctest_suite(suite, test_sets, args, run_result)
         else:

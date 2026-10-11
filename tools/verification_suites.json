@@ -62,9 +62,7 @@
   "suites": [
     {
       "id": "asan-ubsan-unit",
-      "description": "Focused tests under AddressSanitizer and UndefinedBehaviorSanitizer.",
       "type": "ctest",
-      "expected_result": "Every configured focused test except the timing-oriented benchmark runner completes under both sanitizers without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -92,14 +90,11 @@
         "scenario_set": null,
         "test_sets": ["unit-common"],
         "tests": []
-      },
-      "reject_skips": true
+      }
     },
     {
       "id": "debug-float-unit",
-      "description": "Focused tests in the Debug float-precision mainline build.",
       "type": "ctest",
-      "expected_result": "Every configured focused test except the timing-oriented benchmark runner completes in the float Debug configuration without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -127,14 +122,11 @@
         "scenario_set": null,
         "test_sets": ["unit-common"],
         "tests": []
-      },
-      "reject_skips": true
+      }
     },
     {
       "id": "examples-headless",
-      "description": "Render helpers and every graphical example in headless mode.",
       "type": "ctest",
-      "expected_result": "All three render/example helper tests, the generated coverage table check, and the all-examples headless smoke test complete without failure or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_EXAMPLES": "ON",
@@ -164,14 +156,11 @@
           "test_render_math",
           "test_smoke_examples"
         ]
-      },
-      "reject_skips": true
+      }
     },
     {
       "id": "parity",
-      "description": "Release and Debug comparison with the pinned C++ reference engine.",
       "type": "command",
-      "expected_result": "Both reference-development builds reproduce all 48 scenarios and both mainline builds produce exactly the 22 registered Qhull differences.",
       "command": ["tools/parity/check.sh"],
       "output_assertions": [
         {"count": 2, "text": "=== 26/48 identical; 22/22 expected differences ==="},
@@ -183,9 +172,7 @@
     },
     {
       "id": "release-unit",
-      "description": "Complete focused-test suite for the default Release build.",
       "type": "ctest",
-      "expected_result": "The complete platform-specific focused-test inventory executes in the default Release configuration without failure, disablement, or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_BENCHMARKS": "ON",
@@ -213,14 +200,11 @@
         "scenario_set": null,
         "test_sets": ["unit-common"],
         "tests": []
-      },
-      "reject_skips": true
+      }
     },
     {
       "id": "scenario-invariants",
-      "description": "Every registered physics scenario with its in-process invariant checks.",
       "type": "ctest",
-      "expected_result": "The configured invariants label contains exactly one test per scenarios.txt entry and all of those tests complete without failure or skip.",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",
@@ -246,14 +230,11 @@
         },
         "test_sets": [],
         "tests": []
-      },
-      "reject_skips": true
+      }
     },
     {
       "id": "tsan-threading",
-      "description": "All concurrent-execution tests under ThreadSanitizer.",
       "type": "ctest",
-      "expected_result": "The threading label resolves to exactly the six required concurrency tests and every test completes under ThreadSanitizer without failure or skip.",
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",
@@ -283,8 +264,7 @@
           "test_qhull_overlap",
           "test_replay_equivalence"
         ]
-      },
-      "reject_skips": true
+      }
     }
   ]
 }

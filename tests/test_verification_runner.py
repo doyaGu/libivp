@@ -124,13 +124,11 @@ class VerificationRunnerTests(unittest.TestCase):
     def test_command_suite_writes_passing_result(self):
         manifest = {
             "schema_version": 1,
-            "test_sets": {"placeholder": ["unused"]},
+            "test_sets": {},
             "suites": [
                 {
                     "id": "probe",
-                    "description": "Probe the command runner.",
                     "type": "command",
-                    "expected_result": "The child command emits its completion marker.",
                     "command": [sys.executable, "-c", "print('PROBE OK')"],
                     "output_assertions": [{"count": 1, "text": "PROBE OK"}],
                     "platforms": [platform.system()],
@@ -153,7 +151,7 @@ class VerificationRunnerTests(unittest.TestCase):
                 )
             run_result = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertEqual(0, result)
-        self.assertEqual(2, run_result["schema_version"])
+        self.assertEqual(3, run_result["schema_version"])
         self.assertEqual("passed", run_result["result"])
         self.assertEqual("probe", run_result["suite"]["id"])
         self.assertEqual(1, run_result["checks"]["output_assertions"][0]["actual"])
@@ -161,13 +159,11 @@ class VerificationRunnerTests(unittest.TestCase):
     def test_command_suite_preserves_failure_result(self):
         manifest = {
             "schema_version": 1,
-            "test_sets": {"placeholder": ["unused"]},
+            "test_sets": {},
             "suites": [
                 {
                     "id": "probe",
-                    "description": "Probe failed output validation.",
                     "type": "command",
-                    "expected_result": "The child command must emit the required marker.",
                     "command": [sys.executable, "-c", "print('WRONG')"],
                     "output_assertions": [{"count": 1, "text": "EXPECTED"}],
                     "platforms": [platform.system()],
@@ -190,7 +186,7 @@ class VerificationRunnerTests(unittest.TestCase):
                 )
             run_result = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertEqual(1, result)
-        self.assertEqual(2, run_result["schema_version"])
+        self.assertEqual(3, run_result["schema_version"])
         self.assertEqual("failed", run_result["result"])
         self.assertEqual("probe", run_result["suite"]["id"])
         self.assertIn("expected 1 occurrence", run_result["error"])
