@@ -49,7 +49,6 @@ typedef struct universe {
     world_box_t   boxes[WORLD_TOTAL];
     int           objects_in_sim;
     int           objects_outside;
-    int           max_in_sim;
     int           n_created;   /* ensure_fn insertions */
     int           n_evicted;   /* evict_fn removals    */
     ball_entry_t  balls[MAX_BALLS];
@@ -83,7 +82,6 @@ static void um_ensure(void *ctx, ivp_object_t *requester, const float *center, d
         u->objects_in_sim++;
         u->objects_outside--;
         u->n_created++;
-        if (u->objects_in_sim > u->max_in_sim) u->max_in_sim = u->objects_in_sim;
     }
 }
 
@@ -213,11 +211,12 @@ static bool universe_check(demo_app_t *app)
     for (int i = 0; i < WORLD_TOTAL; i++)
         if (u->boxes[i].obj) in_table++;
     ok &= demo_check(tag, u->n_created > 0, "ensure_fn streamed boxes in (%d insertions)", u->n_created);
-    ok &= demo_check(tag, u->max_in_sim < WORLD_TOTAL,
-                     "only part of the world was ever in the simulation (max %d/%d)",
-                     u->max_in_sim, WORLD_TOTAL);
+    ok &= demo_check(tag, u->n_evicted > 0 && u->objects_in_sim < WORLD_TOTAL,
+                     "objects stream back out (%d evictions, %d/%d resident)",
+                     u->n_evicted, u->objects_in_sim, WORLD_TOTAL);
     ok &= demo_check(tag, in_table == u->objects_in_sim &&
-                          u->objects_in_sim + u->objects_outside == WORLD_TOTAL,
+                          u->objects_in_sim + u->objects_outside == WORLD_TOTAL &&
+                          u->n_created - u->n_evicted == u->objects_in_sim,
                      "table and counters agree (%d in, %d out)", u->objects_in_sim, u->objects_outside);
     ok &= demo_check(tag, ivp_environment_get_object_count(app->world.env) ==
                           1 + u->objects_in_sim + u->n_balls,

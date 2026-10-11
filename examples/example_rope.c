@@ -34,8 +34,8 @@ typedef struct rope_demo {
     ivp_object_t          *links[CHAIN_LEN];
     ivp_constraint_state_t constraints[CHAIN_LEN + 1];
     int                    n_kicks;
-    float                  max_stretch_ratio;   /* whole run */
-    int                    worst_link;
+    float                  max_joint_gap;       /* whole run */
+    int                    worst_joint;
     float                  peak_swing_x;        /* since the last kick */
     float                  peak_speed;
     float                  swing_early;         /* |x| peak 1..3 s after the kick */
@@ -43,23 +43,24 @@ typedef struct rope_demo {
     double                 kick_time;
 } rope_demo_t;
 
-/* Center distances of consecutive links vs. their expected value; returns
- * the worst ratio (and the index of the worse joint). */
-static float stretch_ratio(const rope_demo_t *s, int *worst)
+/* Largest separation between the two world-space anchors of any joint. */
+static float joint_gap(const rope_demo_t *s, int *worst)
 {
-    const float expected_link = 2.0f * LINK_HY + LINK_GAP;
-    const float expected_weight = LINK_HY + WEIGHT_HS + LINK_GAP;
-    float max_ratio = 0.0f;
-    int w = -1;
-    for (int i = 1; i <= CHAIN_LEN; i++) {
-        const ivp_object_t *b = (i < CHAIN_LEN) ? s->links[i] : s->weight;
-        float d = demo_object_distance(s->links[i - 1], b);
-        float ratio = d / ((i < CHAIN_LEN) ? expected_link : expected_weight);
-        if (!isfinite(ratio)) ratio = 1e9f;
-        if (ratio > max_ratio) { max_ratio = ratio; w = i; }
+    float max_gap = 0.0f;
+    int worst_joint = -1;
+    for (int i = 0; i <= CHAIN_LEN; i++) {
+        const ivp_constraint_state_t *constraint = &s->constraints[i];
+        float a[3], b[3];
+        demo_core_point_ws(constraint->obj_a, &constraint->anchor_a_os, a);
+        demo_core_point_ws(constraint->obj_b, &constraint->anchor_b_os, b);
+        float gap = demo_distance(a, b);
+        if (gap > max_gap) {
+            max_gap = gap;
+            worst_joint = i;
+        }
     }
-    if (worst) *worst = w;
-    return max_ratio;
+    if (worst) *worst = worst_joint;
+    return max_gap;
 }
 
 static void kick(demo_app_t *app)
@@ -82,8 +83,11 @@ static void rope_update(demo_app_t *app, demo_viewer_t *v, int frame)
         if (frame == 60) kick(app);
     }
     int worst = -1;
-    float ratio = stretch_ratio(s, &worst);
-    if (ratio > s->max_stretch_ratio) { s->max_stretch_ratio = ratio; s->worst_link = worst; }
+    float gap = joint_gap(s, &worst);
+    if (gap > s->max_joint_gap) {
+        s->max_joint_gap = gap;
+        s->worst_joint = worst;
+    }
     float wx = fabsf((float)s->weight->physical_core->pos_world_f_core_last_psi.k[0]);
     if (wx > s->peak_swing_x) s->peak_swing_x = wx;
     float sp = demo_object_speed(s->weight);
@@ -98,7 +102,7 @@ static void rope_update(demo_app_t *app, demo_viewer_t *v, int frame)
 static void rope_reset(demo_app_t *app)
 {
     rope_demo_t *s = (rope_demo_t *)app->user;
-    s->max_stretch_ratio = 0.0f;
+    s->max_joint_gap = 0.0f;
     s->peak_swing_x = 0.0f;
     s->peak_speed = 0.0f;
 }
@@ -142,27 +146,27 @@ static void rope_draw(demo_app_t *app, demo_viewer_t *v)
     }
 
     int worst = -1;
-    float ratio = stretch_ratio(s, &worst);
+    float gap = joint_gap(s, &worst);
     demo_hud(v, DEMO_COL_INFO, "Chain: %d links  View: %s (F1)  psi: %.4f s  kicks: %d",
              CHAIN_LEN, wire ? "wire" : "solid",
              (double)ivp_environment_get_delta_psi_time(app->world.env), s->n_kicks);
     demo_hud_object(v, "Weight", s->weight);
-    demo_hud(v, DEMO_COL_INFO, "stretch: %.3f (joint %d)  peak swing x: %.2f m",
-             (double)ratio, worst, (double)s->peak_swing_x);
+    demo_hud(v, DEMO_COL_INFO, "joint gap: %.3f m (joint %d)  peak swing x: %.2f m",
+             (double)gap, worst, (double)s->peak_swing_x);
 }
 
 static void rope_stats(demo_app_t *app, char *buf, size_t size)
 {
     rope_demo_t *s = (rope_demo_t *)app->user;
     int worst = -1;
-    float ratio = stretch_ratio(s, &worst);
+    float gap = joint_gap(s, &worst);
     float wp[3], mean_x = 0.0f;
     demo_object_center(s->weight, wp);
     for (int i = 0; i < CHAIN_LEN; i++)
         mean_x += (float)s->links[i]->physical_core->pos_world_f_core_last_psi.k[0];
-    snprintf(buf, size, "weight (%.2f,%.2f,%.2f) speed=%.3f stretch=%.4f (joint %d, max %.4f) chain_mean_x=%.3f",
+    snprintf(buf, size, "weight (%.2f,%.2f,%.2f) speed=%.3f joint_gap=%.4f (joint %d, max %.4f) chain_mean_x=%.3f",
              (double)wp[0], (double)wp[1], (double)wp[2], (double)demo_object_speed(s->weight),
-             (double)ratio, worst, (double)s->max_stretch_ratio, (double)(mean_x / (float)CHAIN_LEN));
+             (double)gap, worst, (double)s->max_joint_gap, (double)(mean_x / (float)CHAIN_LEN));
 }
 
 static bool rope_check(demo_app_t *app)
@@ -171,10 +175,10 @@ static bool rope_check(demo_app_t *app)
     const char *tag = app->cfg.tag;
     bool ok = true;
     int worst = -1;
-    float ratio = stretch_ratio(s, &worst);
-    ok &= demo_check(tag, s->max_stretch_ratio < 1.15f && ratio < 1.05f,
-                     "chain stays connected (joint stretch %.3f now, max %.3f at joint %d)",
-                     (double)ratio, (double)s->max_stretch_ratio, s->worst_link);
+    float gap = joint_gap(s, &worst);
+    ok &= demo_check(tag, s->max_joint_gap < 0.06f && gap < 0.04f,
+                     "chain stays connected (joint gap %.4f m now, max %.4f m at joint %d)",
+                     (double)gap, (double)s->max_joint_gap, s->worst_joint);
     ok &= demo_check(tag, s->n_kicks == 1 && s->swing_early > 1.0f,
                      "kicked weight swings out (peak |x| %.2f m, peak speed %.2f m/s)",
                      (double)s->swing_early, (double)s->peak_speed);
@@ -239,6 +243,8 @@ int main(int argc, char **argv)
      * The full chain starts at one lateral offset so that the constraints
      * start near rest. */
     ivp_real_t step = 2.0f * LINK_HY + LINK_GAP;
+    ivp_real_t first_link_y = (ivp_real_t)CEILING_Y + IVP_REAL(0.3) +
+                              (ivp_real_t)LINK_HY + (ivp_real_t)LINK_GAP;
     for (int i = 0; i < CHAIN_LEN; i++) {
         ivp_object_template_t lt;
         ivp_object_template_init(&lt);
@@ -249,7 +255,8 @@ int main(int argc, char **argv)
         lt.speed_damp_factor     = IVP_REAL(0.14);
         lt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.18), IVP_REAL(0.18), IVP_REAL(0.18));
         lt.nocoll_group_ident = ROPE_GROUP;
-        lt.position = ivp_vec3r((ivp_real_t)INITIAL_SWING_X, (ivp_real_t)CEILING_Y + step * (ivp_real_t)(i + 1),
+        lt.position = ivp_vec3r((ivp_real_t)INITIAL_SWING_X,
+                                first_link_y + step * (ivp_real_t)i,
                                 IVP_REAL(0.0));
         s->links[i] = demo_create_box_templ(w, &lt, LINK_HX, LINK_HY, LINK_HZ);
     }
@@ -264,7 +271,10 @@ int main(int argc, char **argv)
     wt.speed_damp_factor     = IVP_REAL(0.12);
     wt.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(0.15), IVP_REAL(0.15), IVP_REAL(0.15));
     wt.nocoll_group_ident = ROPE_GROUP;
-    wt.position = ivp_vec3r((ivp_real_t)INITIAL_SWING_X, (ivp_real_t)CEILING_Y + step * (ivp_real_t)(CHAIN_LEN + 1),
+    wt.position = ivp_vec3r((ivp_real_t)INITIAL_SWING_X,
+                            first_link_y + step * (ivp_real_t)(CHAIN_LEN - 1) +
+                                (ivp_real_t)LINK_HY + (ivp_real_t)WEIGHT_HS +
+                                (ivp_real_t)LINK_GAP,
                             IVP_REAL(0.0));
     s->weight = demo_create_box_templ(w, &wt, WEIGHT_HS, WEIGHT_HS, WEIGHT_HS);
 
