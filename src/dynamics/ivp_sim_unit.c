@@ -154,7 +154,7 @@ bool ivp_sim_unit_sim_unit_calc_redundants(ivp_sim_unit_t *su)
     /* Most callers clear the old index first and can reuse its capacity.  A
      * live index is rebuilt beside the old one so OOM leaves it untouched. */
     bool replace_existing = ivp_pvec_len(&su->controller_cores) > 0;
-    ivp_pvec_t rebuilt;
+    ivp_pvec_t rebuilt = {0};
     ivp_pvec_t *target = &su->controller_cores;
     if (replace_existing) {
         ivp_pvec_init_with_allocator(&rebuilt,
