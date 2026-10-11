@@ -685,9 +685,13 @@ bool ivp_object_pipeline_create(ivp_environment_t *env, ivp_object_t *obj, const
         /* IVP_Template_Real_Object::set_nocoll_group_ident: CORE for an id
          * longer than IVP_NO_COLL_GROUP_STRING_LEN - 1 (libivp's template
          * holds the string itself, checked where it is used) */
-        if (strlen(tmpl->nocoll_group_ident) >= sizeof(obj->nocoll_group_ident)) IVP_CORE();
-        strncpy(obj->nocoll_group_ident, tmpl->nocoll_group_ident, sizeof(obj->nocoll_group_ident));
-        obj->nocoll_group_ident[sizeof(obj->nocoll_group_ident) - 1] = '\0';
+        size_t ident_len = strlen(tmpl->nocoll_group_ident);
+        if (ident_len >= sizeof(obj->nocoll_group_ident)) {
+            IVP_CORE();
+            ident_len = sizeof(obj->nocoll_group_ident) - 1;
+        }
+        memcpy(obj->nocoll_group_ident, tmpl->nocoll_group_ident, ident_len);
+        obj->nocoll_group_ident[ident_len] = '\0';
     }
 
     /* physical_core = new IVP_Core(this, q, pos, unmoveable, piling);

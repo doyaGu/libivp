@@ -117,9 +117,14 @@ void ivp_object_detach_object(ivp_object_t *attached_object, const ivp_object_te
     if (t->nocoll_group_ident && t->nocoll_group_ident[0]) {
         /* IVP_Template_Real_Object::set_nocoll_group_ident: CORE for an id
          * that is too long (see ivp_object_pipeline_create) */
-        if (strlen(t->nocoll_group_ident) >= sizeof(attached_object->nocoll_group_ident)) IVP_CORE();
-        strncpy(attached_object->nocoll_group_ident, t->nocoll_group_ident, sizeof(attached_object->nocoll_group_ident));
-        attached_object->nocoll_group_ident[sizeof(attached_object->nocoll_group_ident) - 1] = '\0';
+        size_t ident_len = strlen(t->nocoll_group_ident);
+        if (ident_len >= sizeof(attached_object->nocoll_group_ident)) {
+            IVP_CORE();
+            ident_len = sizeof(attached_object->nocoll_group_ident) - 1;
+        }
+        memcpy(attached_object->nocoll_group_ident, t->nocoll_group_ident,
+               ident_len);
+        attached_object->nocoll_group_ident[ident_len] = '\0';
     }
     {   /* get rid of old core */
         int n_objs = ivp_core_n_objects(old_core);
