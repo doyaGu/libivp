@@ -174,11 +174,10 @@ static bool cls_calc_unscaled_KK_vals(const kk_input_t *in, kk_result_t *result)
         ivp_debug_printf("calc_unscaled_KK_vals: parallel edges\n");
     }
     D min_qdist = P_DOUBLE_MAX;
-#define IVP_KK_CHECK_0 0.001f
-#define IVP_KK_CHECK_1 0.000001f
     static const float check_pos[] = { -1.0f, 0.5f, 2.0f, 0.0f, 1.0f,
-                                       0 - IVP_KK_CHECK_0, 0 + IVP_KK_CHECK_0, 1 - IVP_KK_CHECK_0, 1 + IVP_KK_CHECK_0,
-                                       0 - IVP_KK_CHECK_1, 0 + IVP_KK_CHECK_1, 1 - IVP_KK_CHECK_1, 1 + IVP_KK_CHECK_1 };
+                                       -0.001f, 0.001f, 0.999f, 1.001f,
+                                       -0.000001f, 0.000001f,
+                                       0.999999f, 1.000001f };
     {
         const ivp_compact_ledge_t *ledge_L = in->cache_L->compact_ledge;
         for (int i = 0; i < 11; i++) {
