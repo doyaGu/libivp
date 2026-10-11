@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "libivp-benchmark-v1"
+SCHEMA = "libivp-benchmark-v2"
 QUICK_SCENARIOS = (
     "cubes",
     "hull_pile",
@@ -160,7 +160,7 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     native_diagnostics: dict[tuple[str, str, str, int], list[dict[str, Any]]] = defaultdict(list)
     lifetime_values = defaultdict(list)
     outside_fractions = defaultdict(list)
-    timing_contracts = defaultdict(set)
+    timing_methods = defaultdict(set)
     for record in records:
         if record["kind"] == "native":
             key = ("native", record["implementation"], record["case"], int(record["scale"]))
@@ -176,7 +176,7 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             continue
         groups[key][int(record.get("run", 0))].append(value)
-        timing_contracts[key].add(record.get("timing_contract", "native-v1"))
+        timing_methods[key].add(record.get("timing_method", "native-v1"))
         measured = record["operation_ns"] if record["kind"] == "native" else record["simulate_ns"]
         if "total_ns" in record:
             total = float(record["total_ns"])
@@ -206,9 +206,9 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "p95_scope": "batch-average",
         }
         key = (kind, implementation, name, scale)
-        if len(timing_contracts[key]) != 1:
-            raise BenchmarkError(f"mixed timing contracts: {name}/{scale}")
-        item["timing_contract"] = next(iter(timing_contracts[key]))
+        if len(timing_methods[key]) != 1:
+            raise BenchmarkError(f"mixed timing methods: {name}/{scale}")
+        item["timing_method"] = next(iter(timing_methods[key]))
         if lifetime_values[key]:
             item["median_total_ns_per_op"] = statistics.median(lifetime_values[key])
             item["outside_operation_percent"] = statistics.median(outside_fractions[key]) * 100
@@ -226,8 +226,8 @@ def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if len(worker_counts) != 1:
                 raise BenchmarkError(f"native worker count changed across runs: {name}/{scale}")
             item["parallel_workers"] = next(iter(worker_counts))
-            if any("verification_contract" in r for r in diagnostics):
-                for field in ("verification_contract", "verification_steps", "trajectory_hash", "contact_height"):
+            if any("trajectory_schema" in r for r in diagnostics):
+                for field in ("trajectory_schema", "verification_steps", "trajectory_hash", "contact_height"):
                     observed = {r.get(field) for r in diagnostics}
                     if None in observed or len(observed) != 1:
                         raise BenchmarkError(f"native verification differs across runs: {name}/{scale}/{field}")
@@ -280,12 +280,12 @@ def comparisons(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
         reference = indexed.get(("scenario", "reference", item["name"], 0))
         if not reference:
             continue
-        if item.get("timing_contract", "native-v1") != reference.get("timing_contract", "native-v1"):
-            raise BenchmarkError(f"reference timing contract differs: {item['name']}")
+        if item.get("timing_method", "native-v1") != reference.get("timing_method", "native-v1"):
+            raise BenchmarkError(f"reference timing method differs: {item['name']}")
         ratio = item["median_ns"] / reference["median_ns"] if reference["median_ns"] else None
         output.append({
             "scenario": item["name"],
-            "timing_contract": item.get("timing_contract", "native-v1"),
+            "timing_method": item.get("timing_method", "native-v1"),
             "libivp_median_ns_per_psi": item["median_ns"],
             "reference_median_ns_per_psi": reference["median_ns"],
             "libivp_to_reference_ratio": ratio,
@@ -311,8 +311,8 @@ def baseline_comparison(current: dict[str, Any], baseline_path: Path) -> dict[st
         if int(item.get("parallel_workers", 1)) != int(previous.get("parallel_workers", 1)):
             raise BenchmarkError(
                 f"baseline worker count differs: {item['name']}/{item['scale']}")
-        if item.get("timing_contract", "native-v1") != previous.get("timing_contract", "native-v1"):
-            raise BenchmarkError(f"baseline timing contract differs: {item['name']}/{item['scale']}; regenerate baseline")
+        if item.get("timing_method", "native-v1") != previous.get("timing_method", "native-v1"):
+            raise BenchmarkError(f"baseline timing method differs: {item['name']}/{item['scale']}; regenerate baseline")
         ratio = item["median_ns"] / previous["median_ns"] if previous["median_ns"] else None
         deltas.append({
             "kind": item["kind"], "implementation": item["implementation"],
@@ -368,16 +368,16 @@ def enforce_baseline(current: dict[str, Any], baseline_path: Path, *, require_ta
     speedups: dict[str, float] = {}
     for key, item in now.items():
         previous = before[key]
-        if item.get("timing_contract", "native-v1") != previous.get("timing_contract", "native-v1"):
-            raise BenchmarkError(f"baseline timing contract differs: {key[0]}/{key[1]}")
+        if item.get("timing_method", "native-v1") != previous.get("timing_method", "native-v1"):
+            raise BenchmarkError(f"baseline timing method differs: {key[0]}/{key[1]}")
         if item.get("state_hash") != previous.get("state_hash"):
             raise BenchmarkError(f"state hash differs for {key[0]}/{key[1]}")
-        if item.get("verification_contract") != "native-trajectory-v1":
+        if item.get("trajectory_schema") != "native-trajectory-v1":
             raise BenchmarkError(f"missing trajectory verification for {key[0]}/{key[1]}; regenerate baseline")
         if not isinstance(item.get("trajectory_hash"), str) or not re.fullmatch(r"[0-9a-f]{16}", item["trajectory_hash"]) or \
                 type(item.get("verification_steps")) is not int or item["verification_steps"] < 0:
             raise BenchmarkError(f"invalid trajectory verification for {key[0]}/{key[1]}")
-        for field in ("verification_contract", "verification_steps", "trajectory_hash", "contact_height"):
+        for field in ("trajectory_schema", "verification_steps", "trajectory_hash", "contact_height"):
             if item.get(field) != previous.get(field):
                 raise BenchmarkError(f"verification differs for {key[0]}/{key[1]}/{field}; use a verified baseline")
         if int(item.get("residual_bytes", -1)) != 0 or int(previous.get("residual_bytes", -1)) != 0:
@@ -591,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
                     # or flags are modified to normalize this comparison.
                     if implementation == "reference":
                         record["counter_mode"] = "platform-default"
-                        record["timing_contract"] = f"scenario-{args.scenario_counter}-v1"
+                        record["timing_method"] = f"scenario-{args.scenario_counter}-v1"
                 records.extend(scenario_records)
 
     if not records:

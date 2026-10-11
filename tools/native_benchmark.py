@@ -38,9 +38,9 @@ def validate_samples(records, implementation, name, scale, samples):
     if len(rows) != samples or [r.get("sample") for r in rows] != list(range(samples)):
         raise bench.BenchmarkError("incomplete or reordered timing samples")
     for r in rows:
-        if (r.get("implementation"), r.get("case"), r.get("scale"), r.get("timing_contract")) != (
+        if (r.get("implementation"), r.get("case"), r.get("scale"), r.get("timing_method")) != (
                 implementation, name, scale, "native-noop-v1"):
-            raise bench.BenchmarkError("timing workload or counter contract differs")
+            raise bench.BenchmarkError("timing workload or counter method differs")
         steps = 180 if name == "fast_impacts" else 360
         worlds = r.get("iterations")
         if type(worlds) is not int or worlds < 1 or r.get("operations") != worlds * steps:
@@ -97,7 +97,7 @@ def main(argv=None):
             reference_options[key.split(":", 1)[0]] = value
     result = {"schema": bench.SCHEMA, "kind": "native-comparison", "profile": args.profile,
               "runs": args.runs, "samples": args.samples, "min_sample_ms": args.min_sample_ms,
-              "counter_contract": "native-noop-v1", "workloads": [], "records": [],
+              "counter_method": "native-noop-v1", "workloads": [], "records": [],
               "metadata": {"generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                            "machine": {"system": platform.system(), "release": platform.release(),
                                        "architecture": platform.machine(), "cpu": bench.cpu_name()},

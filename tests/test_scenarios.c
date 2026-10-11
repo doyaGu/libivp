@@ -90,7 +90,7 @@ static int64_t g_benchmark_simulate_ns;
 static int g_benchmark_enabled;
 
 /* Keep the parity runner's default unchanged; benchmark callers can select an
- * explicit instrumentation contract without changing the library defaults. */
+ * explicit instrumentation mode without changing the library defaults. */
 static const char *g_counter_mode = "default";
 static void scenario_counter_noop(ivp_performance_counter_t *pc) { (void)pc; }
 static void scenario_counter_phase(ivp_performance_counter_t *pc, ivp_performance_element_t el)
@@ -6487,9 +6487,9 @@ int main(int argc, char **argv)
 
         if (benchmark && sample >= 0 && rc == 0) {
             fprintf(stdout,
-                    "{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"scenario\","
+                    "{\"schema\":\"libivp-benchmark-v2\",\"kind\":\"scenario\","
                     "\"implementation\":\"libivp\",\"scenario\":\"%s\","
-                    "\"counter_mode\":\"%s\",\"timing_contract\":\"scenario-%s-v1\","
+                    "\"counter_mode\":\"%s\",\"timing_method\":\"scenario-%s-v1\","
                     "\"sample\":%d,\"worlds\":%d,\"steps_per_world\":%d,"
                     "\"dt\":%.17g,\"simulate_ns\":%lld,\"total_ns\":%lld",
                     scenario_name_from_id(scenario), g_counter_mode, g_counter_mode,
@@ -6499,7 +6499,7 @@ int main(int argc, char **argv)
             ivp_recheck_diagnostics_t diagnostics = ivp_recheck_diagnostics_get();
             fprintf(stdout, ",\"contact_recalc_operations\":{"
                     "\"scope\":\"per-simulation-time-v1\","
-                    "\"fingerprint_contract\":\"contact-input-128-v1\",\"calls\":%llu,"
+                    "\"fingerprint_schema\":\"contact-input-128-v1\",\"calls\":%llu,"
                     "\"branch_pp\":%llu,\"branch_pk\":%llu,\"branch_pf\":%llu,\"branch_kk\":%llu,"
                     "\"same_time_calls\":%llu,\"same_geometry_fingerprint\":%llu,"
                     "\"same_kinematic_fingerprint\":%llu,\"same_full_input_fingerprint\":%llu,"

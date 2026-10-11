@@ -65,7 +65,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
         sample, summary = self.records("object_churn")
         self.assertGreater(sample["validation_ns"], 0)
         self.assertGreaterEqual(sample["total_ns"], sample["operation_ns"] + sample["validation_ns"])
-        self.assertEqual(sample["timing_contract"], "churn-excluding-validation-v2")
+        self.assertEqual(sample["timing_method"], "churn-excluding-validation-v2")
         self.assertEqual(summary["psi_latency_ns"]["scope"], "single-world-counter-disabled")
 
     def test_verification_covers_each_psi_and_is_repeatable(self):

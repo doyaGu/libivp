@@ -30,11 +30,11 @@ class BenchmarkToolTests(unittest.TestCase):
 
     def test_native_comparison_requires_complete_compatible_samples(self):
         row = dict(kind="native", implementation="reference", case="fast_impacts", scale=4,
-                   sample=0, timing_contract="native-noop-v1", iterations=2, operations=360,
+                   sample=0, timing_method="native-noop-v1", iterations=2, operations=360,
                    operation_ns=100, total_ns=120)
         native_benchmark.validate_samples([row], "reference", "fast_impacts", 4, 1)
         for invalid in ([row, row], [], [dict(row, operations=359)],
-                        [dict(row, timing_contract="native-v1")], [dict(row, total_ns=10)]):
+                        [dict(row, timing_method="native-v1")], [dict(row, total_ns=10)]):
             with self.assertRaises(benchmark.BenchmarkError):
                 native_benchmark.validate_samples(invalid, "reference", "fast_impacts", 4, 1)
 
@@ -43,7 +43,7 @@ class BenchmarkToolTests(unittest.TestCase):
                     "build_type": "Release", "ivp_real_double": True, "libivp": {"dirty": False}}
         row = dict(kind="native", implementation="libivp", name="fast_impacts", scale=512,
                    median_ns=100, state_hash="a" * 16, peak_bytes=10, residual_bytes=0,
-                   verification_contract=benchmark_trace.CONTRACT, verification_steps=181,
+                   trajectory_schema=benchmark_trace.TRACE_SCHEMA, verification_steps=181,
                    trajectory_hash="b" * 16, contact_height=0)
         current = dict(schema=benchmark.SCHEMA, profile="large", runs=3, metadata=metadata, summary=[row])
         with tempfile.TemporaryDirectory() as directory:
@@ -65,12 +65,12 @@ class BenchmarkToolTests(unittest.TestCase):
         import copy
         step = dict(schema=benchmark.SCHEMA, kind="native-step", implementation="libivp",
                     case="fast_impacts", scale=1, objects=2, event_count=0,
-                    verification_contract=benchmark_trace.CONTRACT)
+                    trajectory_schema=benchmark_trace.TRACE_SCHEMA)
         step.update({field: "0" * 16 for field in benchmark_trace.HASH_FIELDS})
         records = [dict(step, step=i) for i in range(3)]
         records.append(dict(kind="native-verification", implementation="libivp",
                             case="fast_impacts", scale=1, steps_per_world=2, dt=0.01,
-                            verification_contract=benchmark_trace.CONTRACT,
+                            trajectory_schema=benchmark_trace.TRACE_SCHEMA,
                             trajectory_hash="0" * 16))
         self.assertTrue(benchmark_trace.compare(records, records)["passed"])
         for field in ("object_hash", "constraint_hash", "event_hash", "statistics_hash"):
@@ -105,15 +105,15 @@ class BenchmarkToolTests(unittest.TestCase):
         with self.assertRaisesRegex(benchmark.BenchmarkError, "phases exceed"):
             benchmark.summarize(records)
 
-    def test_baseline_rejects_changed_churn_timing_contract(self):
+    def test_baseline_rejects_changed_churn_timing_method(self):
         item = {"kind": "native", "implementation": "libivp", "name": "object_churn",
                 "scale": 1, "median_ns": 10}
         old = {"schema": benchmark.SCHEMA, "summary": [item]}
-        new = {"summary": [dict(item, timing_contract="churn-excluding-validation-v2")]}
+        new = {"summary": [dict(item, timing_method="churn-excluding-validation-v2")]}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "old.json"
             path.write_text(json.dumps(old), encoding="utf-8")
-            with self.assertRaisesRegex(benchmark.BenchmarkError, "timing contract differs"):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "timing method differs"):
                 benchmark.baseline_comparison(new, path)
 
     def test_baseline_rejects_changed_parallel_worker_count(self):
@@ -146,10 +146,10 @@ class BenchmarkToolTests(unittest.TestCase):
     def test_reference_comparison_rejects_mixed_counters(self):
         common = dict(kind="scenario", name="freefall", scale=0, median_ns=100)
         for other in ("scenario-default-v1", "scenario-disabled-v1"):
-            with self.assertRaisesRegex(benchmark.BenchmarkError, "reference timing contract"):
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "reference timing method"):
                 benchmark.comparisons([
-                    dict(common, implementation="libivp", timing_contract="scenario-noop-v1"),
-                    dict(common, implementation="reference", timing_contract=other),
+                    dict(common, implementation="libivp", timing_method="scenario-noop-v1"),
+                    dict(common, implementation="reference", timing_method=other),
                 ])
 
     def test_compiler_metadata_reads_generated_cmake_file_and_actual_options(self):

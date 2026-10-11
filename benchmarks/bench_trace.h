@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define BENCH_TRACE_CONTRACT "native-trajectory-v1"
+#define BENCH_TRACE_SCHEMA "native-trajectory-v1"
 #define BENCH_HASH_INIT UINT64_C(1469598103934665603)
 
 typedef struct bench_step {
@@ -49,13 +49,13 @@ static void bench_print_step(FILE *out, const char *implementation,
                             const char *name, int scale, int index,
                             const bench_step_t *step)
 {
-    fprintf(out, "{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"native-step\","
-            "\"verification_contract\":\"%s\",\"implementation\":\"%s\","
+    fprintf(out, "{\"schema\":\"libivp-benchmark-v2\",\"kind\":\"native-step\","
+            "\"trajectory_schema\":\"%s\",\"implementation\":\"%s\","
             "\"case\":\"%s\",\"scale\":%d,\"step\":%d,\"objects\":%d,"
             "\"object_hash\":\"%016llx\",\"constraint_hash\":\"%016llx\","
             "\"event_hash\":\"%016llx\",\"statistics_hash\":\"%016llx\","
             "\"event_count\":%llu,\"trajectory_hash\":\"%016llx\"}\n",
-            BENCH_TRACE_CONTRACT, implementation, name, scale, index,
+            BENCH_TRACE_SCHEMA, implementation, name, scale, index,
             step->object_count, (unsigned long long)step->objects,
             (unsigned long long)step->constraints, (unsigned long long)step->events,
             (unsigned long long)step->statistics, (unsigned long long)step->event_count,

@@ -31,7 +31,7 @@
 #include <time.h>
 #endif
 
-#define BENCH_SCHEMA "libivp-benchmark-v1"
+#define BENCH_SCHEMA "libivp-benchmark-v2"
 #define MAX_SAMPLES 64
 #define PHASE_COUNT IVP_PE_MAX
 #define MAX_STEPS 600
@@ -1235,7 +1235,7 @@ static void print_diagnostic(FILE *out, const bench_config_t *cfg,
                 (unsigned long long)b->hull_callback_buckets[i]);
     fputs("]}", out);
     fprintf(out, ",\"contact_recalc_operations\":{\"scope\":\"per-simulation-time-v1\","
-            "\"fingerprint_contract\":\"contact-input-128-v1\",\"calls\":%llu,"
+            "\"fingerprint_schema\":\"contact-input-128-v1\",\"calls\":%llu,"
             "\"branch_pp\":%llu,\"branch_pk\":%llu,\"branch_pf\":%llu,\"branch_kk\":%llu,"
             "\"same_time_calls\":%llu,\"same_geometry_fingerprint\":%llu,"
             "\"same_kinematic_fingerprint\":%llu,\"same_full_input_fingerprint\":%llu,"
@@ -1338,7 +1338,7 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
                     "\"parallel_workers\":%d,"
                     "\"operations\":%lld,\"psis\":%lld,\"simulated_seconds\":%.17g,"
                     "\"operation_ns\":%lld,\"total_ns\":%lld,\"validation_ns\":%lld,"
-                    "\"timing_contract\":\"%s\",\"p95_scope\":\"batch-average\"}\n",
+                    "\"timing_method\":\"%s\",\"p95_scope\":\"batch-average\"}\n",
                     BENCH_SCHEMA, cfg->name, cfg->scale, sample, iterations,
                     benchmark_worker_count,
                     (long long)aggregate.operations, (long long)aggregate.psis,
@@ -1459,8 +1459,8 @@ static int benchmark_config(const bench_config_t *cfg, const options_t *opt, FIL
         }
         fprintf(out, "}");
         print_diagnostic(out, cfg, &diagnostic, &latency);
-        fprintf(out, ",\"verification_contract\":\"%s\",\"verification_steps\":%d,"
-                "\"trajectory_hash\":\"%016llx\",\"contact_height\":%d", BENCH_TRACE_CONTRACT,
+        fprintf(out, ",\"trajectory_schema\":\"%s\",\"verification_steps\":%d,"
+                "\"trajectory_hash\":\"%016llx\",\"contact_height\":%d", BENCH_TRACE_SCHEMA,
                 verification.verification.count,
                 (unsigned long long)verification.verification.trajectory, cfg->contact_height);
         fprintf(out, "}\n");
@@ -1628,11 +1628,11 @@ int main(int argc, char **argv)
                     bench_print_step(out, "libivp", cfg.name, cfg.scale, j,
                                      &verification.verification.steps[j]);
                 fprintf(out, "{\"schema\":\"%s\",\"kind\":\"native-verification\","
-                        "\"verification_contract\":\"%s\",\"implementation\":\"libivp\","
+                        "\"trajectory_schema\":\"%s\",\"implementation\":\"libivp\","
                         "\"case\":\"%s\",\"scale\":%d,\"steps_per_world\":%d,\"dt\":%.17g,"
                         "\"parallel_workers\":%d,"
                         "\"state_hash\":\"%016llx\",\"trajectory_hash\":\"%016llx\",\"contact_height\":%d}\n",
-                        BENCH_SCHEMA, BENCH_TRACE_CONTRACT, cfg.name, cfg.scale, cfg.steps,
+                        BENCH_SCHEMA, BENCH_TRACE_SCHEMA, cfg.name, cfg.scale, cfg.steps,
                         cfg.dt, benchmark_worker_count,
                         (unsigned long long)verification.state_hash,
                         (unsigned long long)verification.verification.trajectory, cfg.contact_height);

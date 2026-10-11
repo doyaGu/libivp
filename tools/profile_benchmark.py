@@ -251,7 +251,7 @@ def validate_contact_recalc_counts(counts: dict | None, case: str) -> None:
               "tracking_overflows")
     if (not isinstance(counts, dict) or
             counts.get("scope") != "per-simulation-time-v1" or
-            counts.get("fingerprint_contract") != "contact-input-128-v1" or
+            counts.get("fingerprint_schema") != "contact-input-128-v1" or
             any(type(counts.get(field)) is not int or counts[field] < 0 for field in fields)):
         raise benchmark.BenchmarkError(f"{case}: missing/invalid contact recalc counts")
     if (counts["calls"] != counts["branch_pp"] + counts["branch_pk"] +
@@ -373,7 +373,7 @@ def validate_scenario_record(record: dict, scene: tuple[str, str, int], implemen
             not 0 < record["simulate_ns"] <= record["total_ns"]):
         raise benchmark.BenchmarkError(f"{implementation}:{name}: mismatched scenario profile record")
     if implementation == "libivp" and (record.get("counter_mode") != "noop" or
-                                      record.get("timing_contract") != "scenario-noop-v1"):
+                                      record.get("timing_method") != "scenario-noop-v1"):
         raise benchmark.BenchmarkError(f"{name}: scenario profile requires the noop counter")
 
 
@@ -436,7 +436,7 @@ def capture_scenario(runner: Path, args, scene: tuple[str, str, int], implementa
     report.update({"case": name, "kind": "scenario-profile", "implementation": implementation,
                    "dt": float(delta), "steps": steps, "workload": records[0],
                    "command": command, "raw": str(raw), "snapshot_verification": verification,
-                   "counter_contract": "scenario-noop-v1",
+                   "counter_method": "scenario-noop-v1",
                    "adequate_samples": scoped.get("samples", 0) >= args.min_samples and
                    scoped.get("unresolved_leaf_samples", 0) <= scoped.get("samples", 0) * 0.10})
     if counts_runner:
@@ -552,7 +552,7 @@ def main(argv=None) -> int:
     if args.compare_reference and not args.scenarios:
         parser.error("--compare-reference requires --scenario")
     if args.scenarios and sys.platform == "win32":
-        parser.error("scenario profiling uses the non-Windows noop reference counter contract")
+        parser.error("scenario profiling uses the non-Windows noop reference counter method")
     if not args.scenarios and args.profile == "standard" and not args.scale:
         parser.error("standard profiling requires --case and --scale to isolate one configuration")
     if args.backend == "auto":
@@ -619,7 +619,7 @@ def main(argv=None) -> int:
             label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             for label, path in runners.items()}
         result["metadata"]["build_skipped"] = args.no_build
-        result["metadata"]["counter_contract"] = "scenario-noop-v1"
+        result["metadata"]["counter_method"] = "scenario-noop-v1"
         for index, scene in enumerate(s for s in all_scenes if s[0] in args.scenarios):
             verification = verify_scenario_snapshots(runners, scene)
             order = list(runners.items())

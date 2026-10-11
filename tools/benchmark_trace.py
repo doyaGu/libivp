@@ -6,7 +6,7 @@ import math
 from typing import Any
 from benchmark import BenchmarkError
 
-CONTRACT = "native-trajectory-v1"
+TRACE_SCHEMA = "native-trajectory-v1"
 HASH_FIELDS = ("object_hash", "constraint_hash", "event_hash", "statistics_hash", "trajectory_hash")
 
 
@@ -17,15 +17,15 @@ def validate(records: list[dict[str, Any]]) -> tuple[list[dict], dict]:
     count = end.get("steps_per_world")
     if type(count) is not int or count < 1 or len(steps) != count + 1:
         raise BenchmarkError("verification trace is incomplete")
-    if end.get("verification_contract") != CONTRACT:
-        raise BenchmarkError("unsupported verification contract")
+    if end.get("trajectory_schema") != TRACE_SCHEMA:
+        raise BenchmarkError("unsupported trajectory schema")
     if not isinstance(end.get("dt"), (float, int)) or not math.isfinite(end["dt"]) or end["dt"] <= 0:
         raise BenchmarkError("invalid verification timestep")
     previous_events = 0
     for i, step in enumerate(steps):
         if step.get("kind") != "native-step" or step.get("step") != i:
             raise BenchmarkError("verification steps are missing, duplicated or reordered")
-        for key in ("implementation", "case", "scale", "verification_contract"):
+        for key in ("implementation", "case", "scale", "trajectory_schema"):
             if step.get(key) != end.get(key):
                 raise BenchmarkError(f"verification metadata differs: {key}")
         if any(not isinstance(step.get(key), str) or not re.fullmatch(r"[0-9a-f]{16}", step[key])
@@ -45,7 +45,7 @@ def validate(records: list[dict[str, Any]]) -> tuple[list[dict], dict]:
 def compare(left: list[dict], right: list[dict], *, cross_engine: bool = False) -> dict:
     a, a_end = validate(left)
     b, b_end = validate(right)
-    for key in ("case", "scale", "steps_per_world", "dt", "verification_contract", "contact_height"):
+    for key in ("case", "scale", "steps_per_world", "dt", "trajectory_schema", "contact_height"):
         if a_end.get(key) != b_end.get(key):
             raise BenchmarkError(f"verification workloads differ: {key}")
     fields = ("objects", "object_hash", "event_hash", "event_count", "statistics_hash")

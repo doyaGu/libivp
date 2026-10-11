@@ -23,7 +23,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(report["scopes"]["simulation"]["samples"], 50)
         self.assertEqual(report["scopes"]["lifecycle_or_harness"]["samples"], 10)
 
-    def test_scenario_commands_match_fixture_and_counter_contract(self):
+    def test_scenario_commands_match_fixture_and_counter_method(self):
         scene = ("cubes", "0.005555555555555556", 480)
         c17 = profiler.scenario_command(Path("/tmp/c17"), scene, "libivp", seconds=5)
         ref = profiler.scenario_command(Path("/tmp/ref"), scene, "reference", seconds=5)
@@ -46,7 +46,7 @@ class ProfileTests(unittest.TestCase):
             with self.subTest(broken=broken):
                 with self.assertRaises(benchmark.BenchmarkError):
                     profiler.validate_scenario_record(dict(record, **broken), scene, "reference")
-        c17 = dict(record, implementation="libivp", counter_mode="noop", timing_contract="scenario-noop-v1")
+        c17 = dict(record, implementation="libivp", counter_mode="noop", timing_method="scenario-noop-v1")
         profiler.validate_scenario_record(c17, scene, "libivp")
         with self.assertRaises(benchmark.BenchmarkError):
             profiler.validate_scenario_record(dict(c17, counter_mode="default"), scene, "libivp")
@@ -81,7 +81,7 @@ class ProfileTests(unittest.TestCase):
         record = dict(schema=benchmark.SCHEMA, kind="scenario", implementation="libivp",
                       scenario="motor", sample=0, worlds=1, steps_per_world=480,
                       dt=float(scene[1]), simulate_ns=100, total_ns=120,
-                      counter_mode="noop", timing_contract="scenario-noop-v1")
+                      counter_mode="noop", timing_method="scenario-noop-v1")
         stacks = [(9, ("main", "ivp_time_manager_event_loop", "solver")),
                   (90, ("main", "create_environment"))]
         with patch.object(profiler, "capture_command", return_value=(json.dumps(record), stacks)):
@@ -107,7 +107,7 @@ class ProfileTests(unittest.TestCase):
     def test_contact_recalc_counts_distinguish_exact_and_shared_work(self):
         counts = {
             "scope": "per-simulation-time-v1",
-            "fingerprint_contract": "contact-input-128-v1",
+            "fingerprint_schema": "contact-input-128-v1",
             "calls": 10,
             "branch_pp": 1, "branch_pk": 2, "branch_pf": 3, "branch_kk": 4,
             "same_time_calls": 2, "same_geometry_fingerprint": 3,
@@ -143,7 +143,7 @@ class ProfileTests(unittest.TestCase):
         }
         counts = {
             "scope": "per-simulation-time-v1",
-            "fingerprint_contract": "contact-input-128-v1",
+            "fingerprint_schema": "contact-input-128-v1",
             "calls": 1,
             "branch_pp": 0, "branch_pk": 0, "branch_pf": 1, "branch_kk": 0,
             "same_time_calls": 0, "same_geometry_fingerprint": 0,
@@ -162,7 +162,7 @@ class ProfileTests(unittest.TestCase):
         record = dict(schema=benchmark.SCHEMA, kind="scenario", implementation="libivp",
                       scenario="cubes", sample=0, worlds=1, steps_per_world=480,
                       dt=float(scene[1]), simulate_ns=100, total_ns=120,
-                      counter_mode="noop", timing_contract="scenario-noop-v1",
+                      counter_mode="noop", timing_method="scenario-noop-v1",
                       contact_recalc_operations=counts)
         completed = SimpleNamespace(returncode=0, stdout=snapshot, stderr=b"")
         with patch.object(profiler.subprocess, "run", return_value=completed), \

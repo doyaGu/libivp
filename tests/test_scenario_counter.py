@@ -34,7 +34,7 @@ class ScenarioCounterTests(unittest.TestCase):
                     self.assertEqual((actual.stdout, actual.stderr),
                                      (expected.stdout, expected.stderr), mode)
 
-    def test_benchmark_reports_counter_contract(self):
+    def test_benchmark_emits_counter_method(self):
         for mode in ("default", "noop", "disabled"):
             result = subprocess.check_output(
                 [RUNNER, "--scenario", "freefall", "--benchmark", "--samples", "1",
@@ -44,7 +44,7 @@ class ScenarioCounterTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             row = rows[0]
             self.assertEqual(row["counter_mode"], mode)
-            self.assertEqual(row["timing_contract"], f"scenario-{mode}-v1")
+            self.assertEqual(row["timing_method"], f"scenario-{mode}-v1")
 
     def test_invalid_counter_is_rejected(self):
         for args in (["--counter"], ["--counter", "invalid"]):

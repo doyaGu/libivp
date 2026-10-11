@@ -83,7 +83,7 @@ void bench_work_finish(void)
 {
     running = 0;
     const char *names[] = {"other", "hull", "time"};
-    fprintf(stderr, "{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"native-work\","
+    fprintf(stderr, "{\"schema\":\"libivp-benchmark-v2\",\"kind\":\"native-work\","
                     "\"scope\":\"simulation-only\",\"queues\":{");
     for (int i = 0; i < 3; ++i) {
         queue_counts_t *q = &queues[i];

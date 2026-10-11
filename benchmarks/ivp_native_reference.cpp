@@ -243,11 +243,11 @@ static void run_world(const char *name, int scale, int height, bool verify,
     if (verify) {
         for (size_t i = 0; i < trace.size(); ++i)
             bench_print_step(stdout, "reference", name, scale, (int)i, &trace[i]);
-        std::printf("{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"native-verification\","
-                    "\"verification_contract\":\"%s\",\"implementation\":\"reference\","
+        std::printf("{\"schema\":\"libivp-benchmark-v2\",\"kind\":\"native-verification\","
+                    "\"trajectory_schema\":\"%s\",\"implementation\":\"reference\","
                     "\"case\":\"%s\",\"scale\":%d,\"steps_per_world\":%d,\"dt\":%.17g,"
                     "\"trajectory_hash\":\"%016llx\",\"contact_height\":%d}\n",
-                    BENCH_TRACE_CONTRACT, name, scale, steps, dt,
+                    BENCH_TRACE_SCHEMA, name, scale, steps, dt,
                     (unsigned long long)trace.back().trajectory, height);
     }
 }
@@ -303,10 +303,10 @@ int main(int argc, char **argv)
             run_world(name, scale, height, false, simulate_ns, total_ns);
             ++worlds;
         } while (simulate_ns < min_ms * 1e6);
-        std::printf("{\"schema\":\"libivp-benchmark-v1\",\"kind\":\"native\","
+        std::printf("{\"schema\":\"libivp-benchmark-v2\",\"kind\":\"native\","
                     "\"implementation\":\"reference\",\"case\":\"%s\",\"scale\":%d,"
                     "\"sample\":%d,\"iterations\":%d,\"operations\":%d,\"psis\":%d,"
-                    "\"operation_ns\":%lld,\"total_ns\":%lld,\"timing_contract\":\"native-noop-v1\"}\n",
+                    "\"operation_ns\":%lld,\"total_ns\":%lld,\"timing_method\":\"native-noop-v1\"}\n",
                     name, scale, sample, worlds, worlds * steps, worlds * steps, simulate_ns, total_ns);
     }
 }
