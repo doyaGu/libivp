@@ -14,7 +14,7 @@
  *            state back into the formula).
  *   EXACT    bit-exact in every build (always-double / always-float API).
  *   LIBM_EQ  bit-exact on the macOS arm64 parity platform; elsewhere within
- *            16 ULP for values produced from the system sin/cos functions.
+ *            16 ULP for values produced from system trigonometric functions.
  */
 #include "ivp_test.h"
 #include <ivp/math/ivp_vec3.h>
@@ -103,6 +103,8 @@ static int check_libm_val(double actual, double ref, double ftol,
 
 #define Q_EQ(q, r)  do { REF_EQ((q).x, (r)[0]); REF_EQ((q).y, (r)[1]); REF_EQ((q).z, (r)[2]); REF_EQ((q).w, (r)[3]); } while (0)
 #define Q_NEAR(q, r, t) do { REF_NEAR((q).x, (r)[0], t); REF_NEAR((q).y, (r)[1], t); REF_NEAR((q).z, (r)[2], t); REF_NEAR((q).w, (r)[3], t); } while (0)
+#define Q_LIBM_EQ(q, r) do { LIBM_EQ((q).x, (r)[0]); LIBM_EQ((q).y, (r)[1]); LIBM_EQ((q).z, (r)[2]); LIBM_EQ((q).w, (r)[3]); } while (0)
+#define Q_LIBM_NEAR(q, r, t) do { LIBM_NEAR((q).x, (r)[0], t); LIBM_NEAR((q).y, (r)[1], t); LIBM_NEAR((q).z, (r)[2], t); LIBM_NEAR((q).w, (r)[3], t); } while (0)
 #define V_EQ(v, r)  do { REF_EQ((v).k[0], (r)[0]); REF_EQ((v).k[1], (r)[1]); REF_EQ((v).k[2], (r)[2]); } while (0)
 #define V_NEAR(v, r, t) do { REF_NEAR((v).k[0], (r)[0], t); REF_NEAR((v).k[1], (r)[1], t); REF_NEAR((v).k[2], (r)[2], t); } while (0)
 #define V_EXACT(v, r) do { EXACT((v).k[0], (r)[0]); EXACT((v).k[1], (r)[1]); EXACT((v).k[2], (r)[2]); } while (0)
@@ -213,13 +215,13 @@ IVP_TEST(ref_quat_fast_multiple_with_clip) {
     ivp_quat_set_fast_multiple_with_clip(&q, &w, (ivp_real_t)0.016666668f);
     static const double r1[4] = { 0x1.62facf7e43d54p-7, -0x1.7e4a8aaf5ebdep-8,
                                   0x1.1eb492f6bcd16p-6, 0x1.ffe201d2a58dbp-1 };
-    Q_EQ(q, r1);
+    Q_LIBM_EQ(q, r1);
     /* |sin(angle/2)|^2 > 1: clipped by (1 - P_RES_EPS) */
     ivp_vec3f_t big = {{ 200.0f, -150.0f, 90.0f }};
     ivp_quat_set_fast_multiple_with_clip(&q, &big, (ivp_real_t)0.02f);
     static const double r2[4] = { 0x1.2a53193a6dd58p-1, -0x1.4742bb9a9d603p-1,
                                   0x1.00fef1329d06ap-1, 0x1.289503240a61cp-13 };
-    Q_EQ(q, r2);
+    Q_LIBM_EQ(q, r2);
 }
 
 IVP_TEST(ref_quat_very_fast_multiple) {
@@ -244,15 +246,15 @@ IVP_TEST(ref_quat_set_variants_and_angles) {
     ivp_quat_set_fast_multiple(&q, &wd, 0.25);
     static const double r1[4] = { 0x1.4b565645599abp-3, -0x1.65f15dacf9a55p-4,
                                   0x1.09b93e45d9c32p-2, 0x1.e56a641643c7ep-1 };
-    Q_EQ(q, r1);
+    Q_LIBM_EQ(q, r1);
     ivp_quat_set_rotation(&q, 0.3f, -0.45f, 1.1f);
     static const double r2[4] = { 0x1.320c9f687ee6ep-3, -0x1.c8ebfc3f71f8dp-3,
                                   0x1.0b9da96be2f87p-1, 0x1.9e462a3fdd71bp-1 };
-    Q_EQ(q, r2);
+    Q_LIBM_EQ(q, r2);
     ivp_vec3f_t ang;
     ivp_quat_get_angles(&q, &ang);
     static const double r3[3] = { 0x1.333334p-2, -0x1.ccccccp-2, 0x1.19999ap+0 };
-    V_NEAR(ang, r3, 1e-6);
+    V_LIBM_NEAR(ang, r3, 1e-6);
 }
 
 static const double QA[4] = { 0x1.042e219937314p-3, -0x1.042e219937314p-2,
@@ -300,18 +302,18 @@ IVP_TEST(ref_quat_interpolate_smoothly) {
     ivp_quat_set_interpolate_smoothly(&r, &a, &b, (ivp_real_t)0.3f);
     static const double s03[4] = { -0x1.a92151485df78p-7, 0x1.a92151485df78p-6,
                                    0x1.be246bc4fb237p-2, 0x1.cc9c753c7cf28p-1 };
-    Q_NEAR(r, s03, 2e-6);
+    Q_LIBM_NEAR(r, s03, 2e-6);
     /* t is NOT clamped */
     ivp_quat_set_interpolate_smoothly(&r, &a, &b, (ivp_real_t)1.4f);
     static const double s14[4] = { -0x1.9d8e360e59072p-2, 0x1.9d8e360e59072p-1,
                                    -0x1.09d92f5076773p-3, 0x1.a33eb6d66f0dbp-2 };
-    Q_NEAR(r, s14, 2e-6);
+    Q_LIBM_NEAR(r, s14, 2e-6);
     /* opposite hemisphere: shortest path through sign flip */
     ivp_quatr_t nb = mkq(-QB[0], -QB[1], -QB[2], -QB[3]);
     ivp_quat_set_interpolate_smoothly(&r, &a, &nb, (ivp_real_t)0.6f);
     static const double s06[4] = { -0x1.3660d7534adb1p-3, 0x1.3660d7534adb1p-2,
                                    0x1.428177ebe75a7p-2, 0x1.c5e9b41e2bc1p-1 };
-    Q_NEAR(r, s06, 2e-6);
+    Q_LIBM_NEAR(r, s06, 2e-6);
     ivp_quat_set_interpolate_linear(&r, &a, &nb, (ivp_real_t)0.6f);
     static const double l06[4] = { -0x1.1225054b93e7ap-3, 0x1.1225054b93e7ap-2,
                                    0x1.0f2e258d1862ap-2, 0x1.832446fe12b3ep-1 };
@@ -330,7 +332,7 @@ IVP_TEST(ref_quat_interpolate_smoothly) {
     Q_NEAR(r, cm05, 2e-6);
     /* ivp_quat_slerp uses the same reference algorithm */
     ivp_quat_slerp(&r, &a, &b, (ivp_real_t)0.3f);
-    Q_NEAR(r, s03, 2e-6);
+    Q_LIBM_NEAR(r, s03, 2e-6);
 }
 
 IVP_TEST(ref_quat_fast_normize_and_correct_steps) {
