@@ -38,7 +38,6 @@
       "test_great_matrix_port",
       "test_internal_parallel",
       "test_internal_state_stability",
-      "test_lcs_parity",
       "test_lvec",
       "test_math",
       "test_math_ext",
@@ -84,7 +83,7 @@
       "expected": {
         "exclude": ["test_benchmark_runner"],
         "platform_tests": {
-          "Darwin": ["test_parity_compare"],
+          "Darwin": ["test_lcs_parity", "test_parity_compare"],
           "Linux": ["test_parity_compare"]
         },
         "scenario_set": null,
@@ -116,7 +115,7 @@
       "expected": {
         "exclude": ["test_benchmark_runner"],
         "platform_tests": {
-          "Darwin": ["test_parity_compare"],
+          "Darwin": ["test_lcs_parity", "test_parity_compare"],
           "Linux": ["test_parity_compare"]
         },
         "scenario_set": null,
@@ -194,7 +193,7 @@
       "expected": {
         "exclude": [],
         "platform_tests": {
-          "Darwin": ["test_parity_compare"],
+          "Darwin": ["test_lcs_parity", "test_parity_compare"],
           "Linux": ["test_parity_compare"]
         },
         "scenario_set": null,
