@@ -433,7 +433,7 @@ IVP_TEST(vecfpu_reduction_bitwise_scalar)
     IVP_ASSERT_TRUE(equal);
 }
 
-static void gmmz_transform_serial_oracle(ivp_gmmz_t *m)
+static void gmmz_transform_serial_reference(ivp_gmmz_t *m)
 {
     int arl = m->aligned_row_len;
     for (int column = 0; column < m->columns; column++) {
@@ -462,7 +462,7 @@ static double gmmz_dense_value(int row, int column, int seed)
     return value;
 }
 
-IVP_TEST(gmmz_large_transform_matches_serial_oracle)
+IVP_TEST(gmmz_large_transform_matches_serial_reference)
 {
     static const int sizes[] = {63, 64, 65, 96, 127, 128, 149, 150};
     fp_rounding_fixture_t rounding;
@@ -511,7 +511,7 @@ IVP_TEST(gmmz_large_transform_matches_serial_oracle)
             }
 
             feclearexcept(FE_ALL_EXCEPT);
-            gmmz_transform_serial_oracle(&expected);
+            gmmz_transform_serial_reference(&expected);
             int expected_flags = fetestexcept(FE_ALL_EXCEPT);
             feclearexcept(FE_ALL_EXCEPT);
             ivp_gmmz_transform_to_lower_null_triangle(&actual);
@@ -761,7 +761,7 @@ int main(void)
     IVP_REGISTER(vecfpu_unaligned_window);
     IVP_REGISTER(vecfpu_add_multiple_row_matches_scalar_rounding);
     IVP_REGISTER(vecfpu_reduction_bitwise_scalar);
-    IVP_REGISTER(gmmz_large_transform_matches_serial_oracle);
+    IVP_REGISTER(gmmz_large_transform_matches_serial_reference);
     IVP_REGISTER(incr_lu_solve_bitwise_scalar);
     IVP_REGISTER(incr_lu_decompose_increment_decrement);
     IVP_REGISTER(incr_lu_singular_faults);

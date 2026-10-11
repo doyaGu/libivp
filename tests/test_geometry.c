@@ -356,7 +356,7 @@ IVP_TEST(ledgetree_traversal) {
     ivp_compact_surface_free(NULL, surface);
 }
 
-/* ── T11b: Ledgetree traversal early stop contract ─────────────────────── */
+/* ── T11b: Ledgetree traversal early-stop behavior ────────────────────── */
 
 IVP_TEST(ledgetree_traversal_stop) {
     ivp_compact_ledge_t ledges[2];

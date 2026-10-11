@@ -40,7 +40,7 @@ static bool same_vec_and_flags(const ivp_vec3f_t *actual,
                                int actual_flags, int expected_flags);
 
 /* IVP_U_Matrix3::{inline_vmult3,inline_vimult3} from
- * ivu_linear_software.hxx. Keep repeated conversions in the oracle. */
+ * ivu_linear_software.hxx. Keep repeated conversions in the reference path. */
 static void scalar_transform(const ivp_transform_r_t *m, const ivp_vec3f_t *in,
                              ivp_vec3f_t *out, int transpose)
 {
@@ -270,7 +270,7 @@ IVP_TEST(float_inverse_point_transform_matches_scalar_rounding)
 }
 
 /* The reference multiplies floats, subtracts in D, then rounds to float.
- * Replacing this with an all-float cross product is not the same contract. */
+ * Replacing this with an all-float cross product changes the rounding. */
 static void scalar_cross(ivp_vec3f_t *out, const ivp_vec3f_t *lhs,
                          const ivp_vec3f_t *rhs)
 {

@@ -837,7 +837,7 @@ IVP_TEST(freefall_default_damping) {
         delta_v = vy;
     }
 
-    /* The acceptance criteria says 1e-5 m position error */
+    /* Reference recurrence tolerance: 1e-3 for position and velocity. */
     IVP_ASSERT_NEAR(obj->physical_core->pos_world_f_core_last_psi.k[1], y, 1e-3);
     IVP_ASSERT_NEAR(obj->physical_core->speed.k[1], vy, 1e-3);
 
@@ -845,7 +845,7 @@ IVP_TEST(freefall_default_damping) {
 }
 
 IVP_TEST(freefall_240_frames_position) {
-    /* M4 acceptance: freefall 240 frames position error < 1e-5 m */
+    /* Compare all 240 frames against the same recurrence with 1e-3 tolerance. */
     ivp_environment_t *env = ivp_environment_create(NULL);
 
     ivp_object_template_t tmpl;

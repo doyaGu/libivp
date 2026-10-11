@@ -10,7 +10,7 @@
  * The old cores are deleted.  The objects' physical_core, friction_core and
  * original_core all become the merged core.
  *
- * Input contract (reference 8ad306e; an invalid request is rejected
+ * Preconditions (reference 8ad306e; an invalid request is rejected
  * atomically: false is returned and nothing changes):
  *   - no NULL entry, every object belongs to this environment and has a
  *     core, and no object is listed twice;
@@ -40,7 +40,7 @@ struct ivp_environment;
 
 /* IVP_Environment::merge_objects(objs_to_merge): the merged core is
  * created from objs_to_merge[0] (IVP_Core_Merged(real_obj)).  Returns false
- * (and changes nothing) for inputs outside the contract above. */
+ * (and changes nothing) when a precondition above is not satisfied. */
 bool ivp_environment_merge_objects(struct ivp_environment *env, ivp_object_t *const *objs_to_merge, int n_objs);
 
 /* IVP_Core::set_matrizes_and_speed (splitting): set the matrix, speed and

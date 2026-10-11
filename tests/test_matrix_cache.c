@@ -1,4 +1,4 @@
-/* test_matrix_cache.c — IVP_U_Matrix_Cache index contract
+/* test_matrix_cache.c — IVP_U_Matrix_Cache index behavior
  *
  * Reference 8a9c33e (ivp_3d_solver.hxx): calc_matrix_at clamps the index to
  * [0, IVP_3D_SOLVER_MAX_STEPS_PER_PSI] and checks time and index only for a

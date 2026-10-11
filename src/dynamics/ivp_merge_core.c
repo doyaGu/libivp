@@ -385,7 +385,7 @@ bool ivp_environment_merge_objects(ivp_environment_t *env, ivp_object_t *const *
 {
     if (!env || !objs_to_merge || n_objs <= 0) return false;
     if ((size_t)n_objs > SIZE_MAX / sizeof(ivp_core_t *)) return false;
-    /* input contract (reference 8ad306e, see ivp_merge_core.h) */
+    /* Preconditions from reference 8ad306e; see ivp_merge_core.h. */
     for (int i = 0; i < n_objs; i++) {
         ivp_object_t *obj = objs_to_merge[i];
         if (!obj || obj->owner != env || !obj->physical_core) return false;

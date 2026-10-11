@@ -557,7 +557,7 @@ IVP_TEST(scheduler_propagates_dispatch_fenv)
     IVP_ASSERT_TRUE(ok);
 }
 
-IVP_TEST(scheduler_parallel_contract)
+IVP_TEST(scheduler_parallel_execution)
 {
     test_world_t parallel[PARALLEL_WORLD_COUNT] = {0};
     test_world_t serial[PARALLEL_WORLD_COUNT] = {0};
@@ -716,6 +716,6 @@ int main(void)
     IVP_REGISTER(scheduler_allocation_failure_is_atomic);
     IVP_REGISTER(scheduler_one_worker_is_fully_serial);
     IVP_REGISTER(scheduler_propagates_dispatch_fenv);
-    IVP_REGISTER(scheduler_parallel_contract);
+    IVP_REGISTER(scheduler_parallel_execution);
     IVP_RUN_ALL();
 }

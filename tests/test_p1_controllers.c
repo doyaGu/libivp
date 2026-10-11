@@ -328,7 +328,7 @@ IVP_TEST(suspension_setup_params) {
 }
 
 IVP_TEST(suspension_basic_spring_behavior) {
-    /* Body and wheel 3m apart, rest_length=1m. Should contract. */
+    /* Body and wheel 3m apart, rest_length=1m. Should pull inward. */
     ivp_environment_t *env = make_env(DT60, false);
     IVP_ASSERT_NOT_NULL(env);
 

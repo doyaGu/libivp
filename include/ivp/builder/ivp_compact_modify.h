@@ -2,7 +2,7 @@
  *
  * Post-creation operations on compact surfaces:
  *   - Chop: slice off part of a surface using a halfspace plane
- *   - Shrink: contract surfaces inward by a uniform distance
+ *   - Shrink: move surfaces inward by a uniform distance
  *
  * Ported from ivp_compact_modify.hxx.
  */
@@ -38,7 +38,7 @@ ivp_compact_surface_t *ivp_compact_modify_chop(
     const float chop_normal[3],
     float chop_depth);
 
-/* Shrink a single compact ledge by contracting all faces inward.
+/* Shrink a single compact ledge by moving all faces inward.
  *
  * Each face plane is shifted toward the centroid by shrink_value.
  * Points closer than merge_threshold are merged.
@@ -57,7 +57,7 @@ ivp_compact_surface_t *ivp_compact_modify_shrink_ledge(
     float shrink_value,
     float merge_threshold);
 
-/* Shrink a complete compact surface by contracting all faces inward.
+/* Shrink a complete compact surface by moving all faces inward.
  *
  * For compound surfaces, each component ledge is shrunk individually
  * and then recompiled into a new compound surface.
