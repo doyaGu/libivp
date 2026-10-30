@@ -12,7 +12,7 @@
 
 #include "dynamics/ivp_env_internal.h"
 
-#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 typedef struct rewind_input {
@@ -33,8 +33,8 @@ struct ivp_rewind {
     uint64_t psi;
     uint64_t log_base;
     rewind_input_t *inputs;
-    int input_count;
-    int input_capacity;
+    size_t input_count;
+    size_t input_capacity;
     rewind_keyframe_t *keyframes;   /* keyframe_capacity entries */
     int keyframe_count;
 };
@@ -64,7 +64,8 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
 {
     if (!env || !region || !config || config->keyframe_interval < 1 ||
         config->keyframe_capacity < 1 ||
-        ivp_env_get_allocator(env) != ivp_memory_region_allocator(region)) {
+        ivp_env_get_allocator(env) != ivp_memory_region_allocator(region) ||
+        config->storage == ivp_memory_region_allocator(region)) {
         rewind_set_result(result, IVP_ERR_INVALID_ARG);
         return NULL;
     }
@@ -103,12 +104,12 @@ void ivp_rewind_destroy(ivp_rewind_t *rewind)
     /* a copy: the last free releases the rewinder that holds it */
     const ivp_allocator_t storage = rewind->storage;
     const ivp_allocator_t *allocator = &storage;
-    for (int i = 0; i < rewind->input_count; i++) {
+    for (size_t i = 0; i < rewind->input_count; i++) {
         rewind_free_input(rewind, &rewind->inputs[i]);
     }
     if (rewind->inputs) {
         ivp_free(allocator, rewind->inputs,
-                 sizeof(*rewind->inputs) * (size_t)rewind->input_capacity);
+                 sizeof(*rewind->inputs) * rewind->input_capacity);
     }
     for (int i = 0; i < rewind->keyframe_count; i++) {
         ivp_memory_checkpoint_destroy(rewind->keyframes[i].checkpoint);
@@ -138,21 +139,25 @@ ivp_environment_t *ivp_rewind_environment(const ivp_rewind_t *rewind)
     return rewind ? rewind->env : NULL;
 }
 
-static void rewind_simulate(ivp_rewind_t *rewind, const rewind_input_t *input)
+/* false when the region refused an allocation during the PSI: the engine
+ * then went on with less than it asked for */
+static bool rewind_simulate(ivp_rewind_t *rewind, const rewind_input_t *input)
 {
+    size_t refused = ivp_memory_region_failures(rewind->region);
     if (rewind->config.apply) {
         rewind->config.apply(rewind->config.apply_ctx, rewind->env, rewind->psi,
                              input->size ? input->data : NULL, input->size);
     }
     ivp_environment_simulate_one_psi(rewind->env);
     rewind->psi++;
+    return ivp_memory_region_failures(rewind->region) == refused;
 }
 
 /* drop the recorded future after the current PSI (branching) */
 static void rewind_truncate(ivp_rewind_t *rewind)
 {
-    int keep = (int)(rewind->psi - rewind->log_base);
-    for (int i = keep; i < rewind->input_count; i++) {
+    size_t keep = (size_t)(rewind->psi - rewind->log_base);
+    for (size_t i = keep; i < rewind->input_count; i++) {
         rewind_free_input(rewind, &rewind->inputs[i]);
     }
     if (keep < rewind->input_count) rewind->input_count = keep;
@@ -177,11 +182,13 @@ static void rewind_add_keyframe(ivp_rewind_t *rewind,
     keyframe->psi = rewind->psi;
     keyframe->checkpoint = checkpoint;
 
-    int dropped = (int)(rewind->keyframes[0].psi - rewind->log_base);
+    size_t dropped = (size_t)(rewind->keyframes[0].psi - rewind->log_base);
     if (dropped > 0) {
-        for (int i = 0; i < dropped; i++) rewind_free_input(rewind, &rewind->inputs[i]);
+        for (size_t i = 0; i < dropped; i++) {
+            rewind_free_input(rewind, &rewind->inputs[i]);
+        }
         memmove(rewind->inputs, rewind->inputs + dropped,
-                sizeof(*rewind->inputs) * (size_t)(rewind->input_count - dropped));
+                sizeof(*rewind->inputs) * (rewind->input_count - dropped));
         rewind->input_count -= dropped;
         rewind->log_base += (uint64_t)dropped;
     }
@@ -215,17 +222,18 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
         }
         memcpy(copy.data, input, size);
     }
-    int needed = (int)(rewind->psi - rewind->log_base) + 1;
+    size_t needed = (size_t)(rewind->psi - rewind->log_base) + 1u;
     if (needed > rewind->input_capacity) {
-        int capacity = rewind->input_capacity ? rewind->input_capacity * 2 : 64;
+        size_t capacity = rewind->input_capacity ? rewind->input_capacity * 2u : 64u;
         if (capacity < needed) capacity = needed;
-        rewind_input_t *inputs = rewind->inputs
-            ? (rewind_input_t *)ivp_realloc(
-                  allocator, rewind->inputs,
-                  sizeof(*inputs) * (size_t)rewind->input_capacity,
-                  sizeof(*inputs) * (size_t)capacity)
-            : (rewind_input_t *)ivp_alloc(allocator,
-                                          sizeof(*inputs) * (size_t)capacity);
+        rewind_input_t *inputs =
+            capacity > SIZE_MAX / sizeof(*inputs) ? NULL
+            : rewind->inputs
+                ? (rewind_input_t *)ivp_realloc(
+                      allocator, rewind->inputs,
+                      sizeof(*inputs) * rewind->input_capacity,
+                      sizeof(*inputs) * capacity)
+                : (rewind_input_t *)ivp_alloc(allocator, sizeof(*inputs) * capacity);
         if (!inputs) {
             rewind_free_input(rewind, &copy);
             ivp_memory_checkpoint_destroy(checkpoint);
@@ -238,18 +246,22 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
     rewind_truncate(rewind);
     if (checkpoint) rewind_add_keyframe(rewind, checkpoint);
     rewind->inputs[rewind->input_count++] = copy;
-    rewind_simulate(rewind, &rewind->inputs[rewind->input_count - 1]);
-    return IVP_OK;
+    return rewind_simulate(rewind, &rewind->inputs[rewind->input_count - 1])
+               ? IVP_OK : IVP_ERR_OUT_OF_MEMORY;
 }
 
-static void rewind_replay(ivp_rewind_t *rewind, uint64_t psi)
+/* false when the region refused an allocation on the way */
+static bool rewind_replay(ivp_rewind_t *rewind, uint64_t psi)
 {
+    bool complete = true;
     while (rewind->psi < psi) {
         IVP_ASSERT(rewind->psi >= rewind->log_base &&
                    rewind->psi - rewind->log_base < (uint64_t)rewind->input_count);
-        rewind_simulate(rewind,
-                        &rewind->inputs[rewind->psi - rewind->log_base]);
+        complete = rewind_simulate(
+                       rewind, &rewind->inputs[rewind->psi - rewind->log_base]) &&
+                   complete;
     }
+    return complete;
 }
 
 ivp_result_t ivp_rewind_seek(ivp_rewind_t *rewind, uint64_t psi)
@@ -259,8 +271,7 @@ ivp_result_t ivp_rewind_seek(ivp_rewind_t *rewind, uint64_t psi)
         return IVP_ERR_INVALID_ARG;
     }
     if (psi >= rewind->psi) {
-        rewind_replay(rewind, psi);
-        return IVP_OK;
+        return rewind_replay(rewind, psi) ? IVP_OK : IVP_ERR_OUT_OF_MEMORY;
     }
     const rewind_keyframe_t *keyframe = &rewind->keyframes[0];
     for (int i = 1; i < rewind->keyframe_count; i++) {
@@ -271,6 +282,5 @@ ivp_result_t ivp_rewind_seek(ivp_rewind_t *rewind, uint64_t psi)
         ivp_memory_region_restore(rewind->region, keyframe->checkpoint);
     if (restored != IVP_OK) return restored;
     rewind->psi = keyframe->psi;
-    rewind_replay(rewind, psi);
-    return IVP_OK;
+    return rewind_replay(rewind, psi) ? IVP_OK : IVP_ERR_OUT_OF_MEMORY;
 }

@@ -66,7 +66,7 @@ typedef struct ivp_rewind_config {
  * inside a simulate call, starting with the keyframe of PSI 0.  env and
  * region stay the caller's and must outlive the rewinder.  Returns NULL and
  * sets *result on failure: IVP_ERR_INVALID_ARG when env does not live in
- * region. */
+ * region or config.storage is the region's own allocator. */
 ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
                                 ivp_memory_region_t *region,
                                 const ivp_rewind_config_t *config,
@@ -77,14 +77,18 @@ void ivp_rewind_destroy(ivp_rewind_t *rewind);
 
 /* Apply input (copied into the log) and simulate one PSI, keeping a
  * keyframe first when the PSI count is a multiple of the interval.  After a
- * seek back this discards the recorded future.  On failure nothing
- * changes. */
+ * seek back this discards the recorded future.  When the keyframe or the
+ * input cannot be stored nothing changes.  IVP_ERR_OUT_OF_MEMORY after the
+ * PSI ran means the region refused an allocation during it: the world holds
+ * what the engine made of that, and the PSI is recorded (a replay meets the
+ * same refusal). */
 ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
                              size_t size);
 
 /* Move to the world after `psi` PSIs, which must lie between
  * ivp_rewind_oldest_psi and ivp_rewind_recorded_psi; IVP_ERR_INVALID_ARG
- * otherwise. */
+ * otherwise.  IVP_ERR_OUT_OF_MEMORY means a replayed PSI met a refused
+ * allocation, as recorded; the world has still reached `psi`. */
 ivp_result_t ivp_rewind_seek(ivp_rewind_t *rewind, uint64_t psi);
 
 ivp_environment_t *ivp_rewind_environment(const ivp_rewind_t *rewind);
