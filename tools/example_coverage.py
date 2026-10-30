@@ -28,7 +28,7 @@ OUT = os.path.join(EXAMPLES, "COVERAGE.md")
 # Modules whose headers are building blocks of the engine, not features an
 # example would show.
 INTERNAL = {
-    "base": "allocator, arena, assert and message plumbing",
+    "base": "allocator, arena, memory regions, assert and message plumbing",
     "containers": "arrays, hashes, sets and heaps",
     "solver": "impact, contact and friction solvers (reached through any collision)",
     "math": "vectors, matrices, quaternions",
@@ -52,6 +52,7 @@ NOTES = {
     "controllers/ivp_controller_util.h": "helpers for writing the built-in controllers",
     "dynamics/ivp_anchor.h": "anchors of actuators, reached through the templates",
     "dynamics/ivp_cache_object.h": "cached object transforms",
+    "dynamics/ivp_rewind.h": "rewinding, built only with IVP_ENABLE_CHECKPOINTS, which the examples leave off",
     "dynamics/ivp_sim_unit.h": "simulation units, merged by the controllers' discovery",
     "dynamics/ivp_time_manager.h": "the event queue behind the PSI loop",
     "geometry/ivp_compact_ledge_geom.h": "reading ledge geometry: for tools",
