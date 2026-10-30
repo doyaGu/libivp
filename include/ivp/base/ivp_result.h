@@ -42,6 +42,12 @@ typedef enum ivp_result {
 /* Helper: check if result is OK */
 static inline bool ivp_ok(ivp_result_t r) { return r == IVP_OK; }
 
+/* Helper: store r in an optional out parameter and return it */
+static inline ivp_result_t ivp_result_set(ivp_result_t *out, ivp_result_t r) {
+    if (out) *out = r;
+    return r;
+}
+
 /* Convert result to human-readable string */
 static inline const char *ivp_result_str(ivp_result_t r) {
     switch (r) {

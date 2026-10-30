@@ -51,12 +51,6 @@ static void rewind_free_input(const ivp_rewind_t *rewind, rewind_input_t *input)
     input->size = 0;
 }
 
-static ivp_result_t rewind_set_result(ivp_result_t *result, ivp_result_t value)
-{
-    if (result) *result = value;
-    return value;
-}
-
 ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
                                 ivp_memory_region_t *region,
                                 const ivp_rewind_config_t *config,
@@ -66,7 +60,7 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
         config->keyframe_capacity < 1 ||
         ivp_env_get_allocator(env) != ivp_memory_region_allocator(region) ||
         config->storage == ivp_memory_region_allocator(region)) {
-        rewind_set_result(result, IVP_ERR_INVALID_ARG);
+        ivp_result_set(result, IVP_ERR_INVALID_ARG);
         return NULL;
     }
     const ivp_allocator_t *allocator =
@@ -83,7 +77,7 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
                      sizeof(*keyframes) * (size_t)config->keyframe_capacity);
         }
         if (rewind) ivp_free(allocator, rewind, sizeof(*rewind));
-        rewind_set_result(result, captured);
+        ivp_result_set(result, captured);
         return NULL;
     }
     memset(rewind, 0, sizeof(*rewind));
@@ -95,7 +89,7 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
     rewind->keyframes[0].psi = 0;
     rewind->keyframes[0].checkpoint = first;
     rewind->keyframe_count = 1;
-    rewind_set_result(result, IVP_OK);
+    ivp_result_set(result, IVP_OK);
     return rewind;
 }
 
