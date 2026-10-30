@@ -198,6 +198,7 @@ ivp_core_t *ivp_core_create(struct ivp_object *io, const ivp_quatr_t *q_world_f_
 void ivp_core_delete(ivp_core_t *core);                                     /* ~IVP_Core + free */
 bool ivp_core_core_add_link_to_obj(ivp_core_t *core, struct ivp_object *add_obj);
 void ivp_core_unlink_obj_from_core_and_maybe_destroy(ivp_core_t *core, struct ivp_object *remove_obj);
+void ivp_core_clear_object_links(ivp_core_t *core);
 void ivp_core_fire_event_object_frozen(ivp_core_t *core);
 /* IVP_Core_Merged / IVP_Core_Collision helpers (ivp_merge_core.c) */
 void ivp_core_merged_set_by_merge(ivp_core_merged_t *mcore, ivp_core_t *c0, ivp_core_t *c1);

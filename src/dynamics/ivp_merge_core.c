@@ -274,7 +274,7 @@ static ivp_core_merged_t *core_merged_create_from_object(ivp_object_t *real_obj)
     }
     mc->core.heap_allocation_size = sizeof(*mc);
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
-    ivp_pvec_remove(&mc->core.objects, real_obj);
+    ivp_core_clear_object_links(&mc->core);
     return mc;
 }
 
@@ -309,7 +309,7 @@ ivp_core_merged_t *ivp_core_merged_create_from_cores(ivp_core_t *core0, ivp_core
     mc->core.heap_allocation_size = sizeof(*mc);
     memset(&mc->m_world_f_core_when_created, 0, sizeof(mc->m_world_f_core_when_created));
     /* clear the objects added by the base constructor (set_by_merge does not re-add them) */
-    ivp_pvec_remove_all(&mc->core.objects);
+    ivp_core_clear_object_links(&mc->core);
     mc->core.physical_unmoveable = core0->physical_unmoveable || core1->physical_unmoveable;
     mc->core.environment = core0->environment;
     mc->core.movement_state = IVP_MT_MOVING;

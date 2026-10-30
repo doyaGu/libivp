@@ -249,6 +249,12 @@ void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core)
     ivp_sim_unit_forget_movement_check_salt(su);
 }
 
+static void su_remove_core_at(ivp_sim_unit_t *su, int index)
+{
+    ivp_pvec_remove_at(&su->sim_unit_cores, index);
+    ivp_sim_unit_forget_movement_check_salt(su);
+}
+
 void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *del_core)
 {
     ivp_sim_unit_rem_sim_unit_core(su, del_core);
@@ -871,8 +877,7 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
                 next_split_father = test_core;
             }
         } else {
-            ivp_pvec_remove_at(&su->sim_unit_cores, i);
-            ivp_sim_unit_forget_movement_check_salt(su);
+            su_remove_core_at(su, i);
             i--;
             bool added = ivp_sim_unit_add_sim_unit_core(split_new_unit, my_core);
             IVP_ASSERT(added);
@@ -1584,8 +1589,7 @@ static bool ctrl_commit_controller_cores(
                 int last = ivp_pvec_len(&reference_unit->sim_unit_cores) - 1;
                 ivp_core_t *core = su_core_at(restored, j);
                 IVP_ASSERT(last >= 0 && su_core_at(reference_unit, last) == core);
-                if (last >= 0) ivp_pvec_remove_at(&reference_unit->sim_unit_cores, last);
-                ivp_sim_unit_forget_movement_check_salt(reference_unit);
+                if (last >= 0) su_remove_core_at(reference_unit, last);
                 core->sim_unit = restored;
             }
             ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(env), restored);

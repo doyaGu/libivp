@@ -154,6 +154,14 @@ bool ivp_core_core_add_link_to_obj(ivp_core_t *core, ivp_object_t *add_obj)
     return true;
 }
 
+/* Drop the object link the IVP_Core base constructor made; the merged
+ * core constructors link their objects themselves. */
+void ivp_core_clear_object_links(ivp_core_t *core)
+{
+    ivp_pvec_remove_all(&core->objects);
+    ivp_sim_unit_forget_movement_check_salt(core->sim_unit);
+}
+
 /* IVP_Core::unlink_obj_from_core_and_maybe_destroy */
 void ivp_core_unlink_obj_from_core_and_maybe_destroy(ivp_core_t *core, ivp_object_t *remove_obj)
 {
