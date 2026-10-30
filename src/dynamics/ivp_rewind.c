@@ -1,5 +1,5 @@
-/* ivp_rewind.c -- keyframe ring and input log over world snapshots
- * (libivp extension).
+/* ivp_rewind.c -- keyframe ring and input log over memory-region
+ * checkpoints (libivp extension).
  *
  * The input for the PSI that follows p PSIs is inputs[p - log_base]; the
  * log reaches log_base + input_count.  Keyframes are ascending by PSI and
@@ -9,11 +9,8 @@
 
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_assert.h>
-#include <ivp/dynamics/ivp_object.h>
-#include <ivp/dynamics/ivp_snapshot.h>
 
-#include "controllers/ivp_controller_system.h"
-#include "dynamics/ivp_env_pipeline.h"
+#include "dynamics/ivp_env_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -25,15 +22,14 @@ typedef struct rewind_input {
 
 typedef struct rewind_keyframe {
     uint64_t psi;
-    ivp_world_snapshot_t *snapshot;
+    ivp_memory_checkpoint_t *checkpoint;
 } rewind_keyframe_t;
 
 struct ivp_rewind {
     ivp_rewind_config_t config;
     ivp_environment_t *env;
-    void **states;    /* controller states of a restored world, owned */
-    size_t *state_sizes;
-    int state_count;
+    ivp_memory_region_t *region;
+    ivp_allocator_t storage;
     uint64_t psi;
     uint64_t log_base;
     rewind_input_t *inputs;
@@ -43,24 +39,14 @@ struct ivp_rewind {
     int keyframe_count;
 };
 
-static const ivp_allocator_t *rewind_allocator(void)
+static const ivp_allocator_t *rewind_allocator(const ivp_rewind_t *rewind)
 {
-    return ivp_default_allocator();
+    return &rewind->storage;
 }
 
-static void rewind_free_states(void **states, size_t *sizes, int count)
+static void rewind_free_input(const ivp_rewind_t *rewind, rewind_input_t *input)
 {
-    size_t slots = (size_t)(count > 0 ? count : 1);
-    for (int i = 0; states && sizes && i < count; i++) {
-        if (states[i]) ivp_free(rewind_allocator(), states[i], sizes[i]);
-    }
-    if (states) ivp_free(rewind_allocator(), states, sizeof(*states) * slots);
-    if (sizes) ivp_free(rewind_allocator(), sizes, sizeof(*sizes) * slots);
-}
-
-static void rewind_free_input(rewind_input_t *input)
-{
-    if (input->data) ivp_free(rewind_allocator(), input->data, input->size);
+    if (input->data) ivp_free(rewind_allocator(rewind), input->data, input->size);
     input->data = NULL;
     input->size = 0;
 }
@@ -72,37 +58,40 @@ static ivp_result_t rewind_set_result(ivp_result_t *result, ivp_result_t value)
 }
 
 ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
+                                ivp_memory_region_t *region,
                                 const ivp_rewind_config_t *config,
                                 ivp_result_t *result)
 {
-    if (!env || !config || config->keyframe_interval < 1 ||
-        config->keyframe_capacity < 1) {
+    if (!env || !region || !config || config->keyframe_interval < 1 ||
+        config->keyframe_capacity < 1 ||
+        ivp_env_get_allocator(env) != ivp_memory_region_allocator(region)) {
         rewind_set_result(result, IVP_ERR_INVALID_ARG);
         return NULL;
     }
-    const ivp_allocator_t *allocator = rewind_allocator();
+    const ivp_allocator_t *allocator =
+        config->storage ? config->storage : ivp_default_allocator();
     ivp_rewind_t *rewind = (ivp_rewind_t *)ivp_alloc(allocator, sizeof(*rewind));
     rewind_keyframe_t *keyframes = (rewind_keyframe_t *)ivp_alloc(
         allocator, sizeof(*keyframes) * (size_t)config->keyframe_capacity);
-    ivp_result_t captured = IVP_OK;
-    ivp_world_snapshot_t *first =
-        rewind && keyframes ? ivp_world_snapshot_capture(env, &captured) : NULL;
+    ivp_memory_checkpoint_t *first = rewind && keyframes
+        ? ivp_memory_region_checkpoint(region, allocator) : NULL;
     if (!first) {
         if (keyframes) {
             ivp_free(allocator, keyframes,
                      sizeof(*keyframes) * (size_t)config->keyframe_capacity);
         }
         if (rewind) ivp_free(allocator, rewind, sizeof(*rewind));
-        rewind_set_result(result, rewind && keyframes ? captured
-                                                      : IVP_ERR_OUT_OF_MEMORY);
+        rewind_set_result(result, IVP_ERR_OUT_OF_MEMORY);
         return NULL;
     }
     memset(rewind, 0, sizeof(*rewind));
     rewind->config = *config;
     rewind->env = env;
+    rewind->region = region;
+    rewind->storage = *allocator;
     rewind->keyframes = keyframes;
     rewind->keyframes[0].psi = 0;
-    rewind->keyframes[0].snapshot = first;
+    rewind->keyframes[0].checkpoint = first;
     rewind->keyframe_count = 1;
     rewind_set_result(result, IVP_OK);
     return rewind;
@@ -111,18 +100,18 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
 void ivp_rewind_destroy(ivp_rewind_t *rewind)
 {
     if (!rewind) return;
-    const ivp_allocator_t *allocator = rewind_allocator();
-    ivp_environment_destroy(rewind->env);
-    rewind_free_states(rewind->states, rewind->state_sizes, rewind->state_count);
+    /* a copy: the last free releases the rewinder that holds it */
+    const ivp_allocator_t storage = rewind->storage;
+    const ivp_allocator_t *allocator = &storage;
     for (int i = 0; i < rewind->input_count; i++) {
-        rewind_free_input(&rewind->inputs[i]);
+        rewind_free_input(rewind, &rewind->inputs[i]);
     }
     if (rewind->inputs) {
         ivp_free(allocator, rewind->inputs,
                  sizeof(*rewind->inputs) * (size_t)rewind->input_capacity);
     }
     for (int i = 0; i < rewind->keyframe_count; i++) {
-        ivp_world_snapshot_destroy(rewind->keyframes[i].snapshot);
+        ivp_memory_checkpoint_destroy(rewind->keyframes[i].checkpoint);
     }
     ivp_free(allocator, rewind->keyframes,
              sizeof(*rewind->keyframes) * (size_t)rewind->config.keyframe_capacity);
@@ -164,33 +153,33 @@ static void rewind_truncate(ivp_rewind_t *rewind)
 {
     int keep = (int)(rewind->psi - rewind->log_base);
     for (int i = keep; i < rewind->input_count; i++) {
-        rewind_free_input(&rewind->inputs[i]);
+        rewind_free_input(rewind, &rewind->inputs[i]);
     }
     if (keep < rewind->input_count) rewind->input_count = keep;
     while (rewind->keyframe_count > 1 &&
            rewind->keyframes[rewind->keyframe_count - 1].psi > rewind->psi) {
-        ivp_world_snapshot_destroy(
-            rewind->keyframes[--rewind->keyframe_count].snapshot);
+        ivp_memory_checkpoint_destroy(
+            rewind->keyframes[--rewind->keyframe_count].checkpoint);
     }
 }
 
 /* append a keyframe, dropping the oldest one and its inputs when full */
 static void rewind_add_keyframe(ivp_rewind_t *rewind,
-                                ivp_world_snapshot_t *snapshot)
+                                ivp_memory_checkpoint_t *checkpoint)
 {
     if (rewind->keyframe_count == rewind->config.keyframe_capacity) {
-        ivp_world_snapshot_destroy(rewind->keyframes[0].snapshot);
+        ivp_memory_checkpoint_destroy(rewind->keyframes[0].checkpoint);
         memmove(rewind->keyframes, rewind->keyframes + 1,
                 sizeof(*rewind->keyframes) * (size_t)(rewind->keyframe_count - 1));
         rewind->keyframe_count--;
     }
     rewind_keyframe_t *keyframe = &rewind->keyframes[rewind->keyframe_count++];
     keyframe->psi = rewind->psi;
-    keyframe->snapshot = snapshot;
+    keyframe->checkpoint = checkpoint;
 
     int dropped = (int)(rewind->keyframes[0].psi - rewind->log_base);
     if (dropped > 0) {
-        for (int i = 0; i < dropped; i++) rewind_free_input(&rewind->inputs[i]);
+        for (int i = 0; i < dropped; i++) rewind_free_input(rewind, &rewind->inputs[i]);
         memmove(rewind->inputs, rewind->inputs + dropped,
                 sizeof(*rewind->inputs) * (size_t)(rewind->input_count - dropped));
         rewind->input_count -= dropped;
@@ -202,7 +191,7 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
                              size_t size)
 {
     if (!rewind || (size && !input)) return IVP_ERR_INVALID_ARG;
-    const ivp_allocator_t *allocator = rewind_allocator();
+    const ivp_allocator_t *allocator = rewind_allocator(rewind);
 
     /* everything that can fail comes before the recording changes; after a
      * seek back the keyframe of this PSI may already exist, followed by
@@ -212,17 +201,16 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
     for (int i = 0; keyframe_due && i < rewind->keyframe_count; i++) {
         if (rewind->keyframes[i].psi == rewind->psi) keyframe_due = false;
     }
-    ivp_result_t result = IVP_OK;
-    ivp_world_snapshot_t *snapshot = NULL;
+    ivp_memory_checkpoint_t *checkpoint = NULL;
     if (keyframe_due) {
-        snapshot = ivp_world_snapshot_capture(rewind->env, &result);
-        if (!snapshot) return result;
+        checkpoint = ivp_memory_region_checkpoint(rewind->region, allocator);
+        if (!checkpoint) return IVP_ERR_OUT_OF_MEMORY;
     }
     rewind_input_t copy = { NULL, size };
     if (size) {
         copy.data = ivp_alloc(allocator, size);
         if (!copy.data) {
-            ivp_world_snapshot_destroy(snapshot);
+            ivp_memory_checkpoint_destroy(checkpoint);
             return IVP_ERR_OUT_OF_MEMORY;
         }
         memcpy(copy.data, input, size);
@@ -239,8 +227,8 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
             : (rewind_input_t *)ivp_alloc(allocator,
                                           sizeof(*inputs) * (size_t)capacity);
         if (!inputs) {
-            rewind_free_input(&copy);
-            ivp_world_snapshot_destroy(snapshot);
+            rewind_free_input(rewind, &copy);
+            ivp_memory_checkpoint_destroy(checkpoint);
             return IVP_ERR_OUT_OF_MEMORY;
         }
         rewind->inputs = inputs;
@@ -248,7 +236,7 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
     }
 
     rewind_truncate(rewind);
-    if (snapshot) rewind_add_keyframe(rewind, snapshot);
+    if (checkpoint) rewind_add_keyframe(rewind, checkpoint);
     rewind->inputs[rewind->input_count++] = copy;
     rewind_simulate(rewind, &rewind->inputs[rewind->input_count - 1]);
     return IVP_OK;
@@ -279,86 +267,10 @@ ivp_result_t ivp_rewind_seek(ivp_rewind_t *rewind, uint64_t psi)
         if (rewind->keyframes[i].psi <= psi) keyframe = &rewind->keyframes[i];
     }
 
-    const ivp_allocator_t *allocator = rewind_allocator();
-    int count = ivp_world_snapshot_controller_count(keyframe->snapshot);
-    size_t slots = (size_t)(count > 0 ? count : 1);
-    void **states = (void **)ivp_alloc(allocator, sizeof(*states) * slots);
-    size_t *sizes = (size_t *)ivp_alloc(allocator, sizeof(*sizes) * slots);
-    if (!states || !sizes) {
-        if (states) ivp_free(allocator, states, sizeof(*states) * slots);
-        if (sizes) ivp_free(allocator, sizes, sizeof(*sizes) * slots);
-        return IVP_ERR_OUT_OF_MEMORY;
-    }
-    memset(states, 0, sizeof(*states) * slots);
-    memset(sizes, 0, sizeof(*sizes) * slots);
-    for (int i = 0; i < count; i++) {
-        sizes[i] = ivp_world_snapshot_controller_state_size(keyframe->snapshot, i);
-        states[i] = ivp_alloc(allocator, sizes[i]);
-        if (!states[i]) {
-            rewind_free_states(states, sizes, count);
-            return IVP_ERR_OUT_OF_MEMORY;
-        }
-        memset(states[i], 0, sizes[i]);
-    }
-    ivp_world_snapshot_bindings_t bindings;
-    bindings.controller_states = states;
-    bindings.controller_handles = NULL;
-    bindings.controller_count = count;
-    ivp_result_t result = IVP_OK;
-    ivp_environment_t *env = ivp_world_snapshot_restore(
-        keyframe->snapshot, &rewind->config.environment_config, &bindings,
-        &result);
-    if (!env) {
-        rewind_free_states(states, sizes, count);
-        return result;
-    }
-
-    ivp_environment_destroy(rewind->env);
-    rewind_free_states(rewind->states, rewind->state_sizes, rewind->state_count);
-    rewind->env = env;
-    rewind->states = states;
-    rewind->state_sizes = sizes;
-    rewind->state_count = count;
+    ivp_result_t restored =
+        ivp_memory_region_restore(rewind->region, keyframe->checkpoint);
+    if (restored != IVP_OK) return restored;
     rewind->psi = keyframe->psi;
     rewind_replay(rewind, psi);
     return IVP_OK;
-}
-
-ivp_object_t *ivp_rewind_find_object(const ivp_rewind_t *rewind,
-                                     uint64_t order_key)
-{
-    if (!rewind) return NULL;
-    int count = ivp_environment_get_object_count(rewind->env);
-    for (int i = 0; i < count; i++) {
-        ivp_object_t *object = ivp_environment_get_object(rewind->env, i);
-        if (object && ivp_object_order_key(object) == order_key) return object;
-    }
-    return NULL;
-}
-
-void *ivp_rewind_controller_state(const ivp_rewind_t *rewind, int index)
-{
-    if (!rewind || index < 0) return NULL;
-    const ivp_controller_system_t *cs =
-        (const ivp_controller_system_t *)rewind->env->controller_system;
-    int count = ivp_controller_system_count(cs);
-    if (index >= count) return NULL;
-    /* the index-th smallest registration sequence */
-    const ivp_controller_slot_t *found = NULL;
-    for (int i = 0; i < count; i++) {
-        const ivp_controller_slot_t *slot = ivp_controller_system_get_at(cs, i);
-        int smaller = 0;
-        for (int j = 0; j < count; j++) {
-            const ivp_controller_slot_t *other = ivp_controller_system_get_at(cs, j);
-            if (other->base.registration_sequence <
-                slot->base.registration_sequence) {
-                smaller++;
-            }
-        }
-        if (smaller == index) {
-            found = slot;
-            break;
-        }
-    }
-    return found ? found->ctx : NULL;
 }

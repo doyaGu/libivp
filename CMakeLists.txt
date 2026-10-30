@@ -229,9 +229,7 @@ set(IVP_DYNAMICS_SOURCES
 )
 if (IVP_ENABLE_CHECKPOINTS)
     list(APPEND IVP_BASE_SOURCES src/base/ivp_memory_region.c)
-    list(APPEND IVP_DYNAMICS_SOURCES
-            src/dynamics/ivp_snapshot.c
-            src/dynamics/ivp_rewind.c)
+    list(APPEND IVP_DYNAMICS_SOURCES src/dynamics/ivp_rewind.c)
 endif ()
 
 set(IVP_CONTROLLER_SOURCES
@@ -616,12 +614,6 @@ if (IVP_BUILD_TESTS)
     if (IVP_ENABLE_CHECKPOINTS)
         ivp_add_test(test_memory_region tests/test_memory_region.c)
         set_tests_properties(test_memory_region PROPERTIES LABELS "unit")
-    endif ()
-    if (IVP_ENABLE_CHECKPOINTS AND NOT IVP_REFERENCE_INTERNAL_STATE)
-        ivp_add_test(test_snapshot tests/test_snapshot.c)
-        target_include_directories(test_snapshot PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        set_tests_properties(test_snapshot PROPERTIES LABELS "unit")
         ivp_add_test(test_rewind tests/test_rewind.c)
         set_tests_properties(test_rewind PROPERTIES LABELS "unit")
     endif ()

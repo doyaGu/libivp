@@ -1,13 +1,15 @@
 /* test_rewind.c -- seeking a recorded world must reproduce the recording.
  *
  * A reference run applies the same per-PSI inputs to a plain world and
- * records its state after every PSI.  The rewinder records the scene with
- * those inputs, seeks back and forth inside the recording, branches with
- * different inputs, and drops old keyframes from a small ring; every world
- * it reaches must equal the reference state of that PSI bit for bit. */
+ * records its state after every PSI.  The rewinder records the scene, built
+ * in a memory region, with those inputs, seeks back and forth inside the
+ * recording, branches with different inputs, and drops old keyframes from a
+ * small ring; every world it reaches must equal the reference state of that
+ * PSI bit for bit. */
 #include "ivp_test.h"
 #include "ivp_test_fault_allocator.h"
 
+#include <ivp/base/ivp_memory_region.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
 #include <ivp/controllers/ivp_constraint.h>
@@ -32,7 +34,8 @@ typedef struct rw_assets {
     ivp_surman_polygon_t cube_surman;
 } rw_assets_t;
 
-/* controller states of a built world; they must outlive it */
+/* controller states of a built world; they must outlive it, and a
+ * recorded world keeps them in its region */
 typedef struct rw_controllers {
     ivp_spring_state_t springs[2];
     ivp_constraint_state_t constraints[2];
@@ -262,7 +265,6 @@ static bool rw_matches(const rw_state_t *expected, const ivp_environment_t *env,
 
 typedef struct rw_fixture {
     rw_assets_t assets;
-    rw_controllers_t controllers;   /* of the recorded world */
     rw_state_t reference[RW_PSI_COUNT + 1];          /* after k PSIs */
     rw_state_t branch_reference[RW_PSI_COUNT + 1];
 } rw_fixture_t;
@@ -342,39 +344,64 @@ static void rw_fixture_destroy(rw_fixture_t *fixture)
     free(fixture);
 }
 
-static ivp_rewind_t *rw_rewind_create_with(rw_fixture_t *fixture, int interval,
-                                           int capacity, rw_apply_log_t *log,
-                                           ivp_allocator_t *allocator)
+/* a recorded world: its region, the world and controller states in it,
+ * and the rewinder */
+typedef struct rw_session {
+    ivp_memory_region_t *region;
+    ivp_environment_t *env;
+    rw_controllers_t *controllers;
+    ivp_rewind_t *rewind;
+} rw_session_t;
+
+static void rw_close(rw_session_t *session)
 {
+    ivp_rewind_destroy(session->rewind);
+    if (session->env) ivp_environment_destroy(session->env);
+    ivp_memory_region_destroy(session->region);
+    memset(session, 0, sizeof(*session));
+}
+
+static bool rw_open_with(rw_fixture_t *fixture, int interval, int capacity,
+                         rw_apply_log_t *log, const ivp_allocator_t *storage,
+                         rw_session_t *session)
+{
+    memset(session, 0, sizeof(*session));
+    session->region = ivp_memory_region_create(0);
+    if (!session->region) return false;
+    const ivp_allocator_t *world = ivp_memory_region_allocator(session->region);
     ivp_environment_config_t world_config;
     rw_config(&world_config);
-    world_config.allocator = allocator;
-    ivp_environment_t *env = ivp_environment_create(&world_config);
-    if (env && !rw_build(env, &fixture->assets, &fixture->controllers)) {
-        ivp_environment_destroy(env);
-        env = NULL;
+    world_config.allocator = (ivp_allocator_t *)world;
+    session->env = ivp_environment_create(&world_config);
+    session->controllers =
+        (rw_controllers_t *)ivp_alloc(world, sizeof(*session->controllers));
+    if (!session->env || !session->controllers ||
+        !rw_build(session->env, &fixture->assets, session->controllers)) {
+        rw_close(session);
+        return false;
     }
-    if (!env) return NULL;
     ivp_rewind_config_t config;
     memset(&config, 0, sizeof(config));
-    config.environment_config = world_config;
     config.keyframe_interval = interval;
     config.keyframe_capacity = capacity;
     config.apply = rw_apply;
     config.apply_ctx = log;
+    config.storage = storage;
     ivp_result_t result = IVP_OK;
-    ivp_rewind_t *rewind = ivp_rewind_create(env, &config, &result);
-    if (!rewind) {
+    session->rewind = ivp_rewind_create(session->env, session->region, &config,
+                                        &result);
+    if (!session->rewind) {
         fprintf(stderr, "rewind: create failed: %s\n", ivp_result_str(result));
-        ivp_environment_destroy(env);
+        rw_close(session);
+        return false;
     }
-    return rewind;
+    return true;
 }
 
-static ivp_rewind_t *rw_rewind_create(rw_fixture_t *fixture, int interval,
-                                      int capacity, rw_apply_log_t *log)
+static bool rw_open(rw_fixture_t *fixture, int interval, int capacity,
+                    rw_apply_log_t *log, rw_session_t *session)
 {
-    return rw_rewind_create_with(fixture, interval, capacity, log, NULL);
+    return rw_open_with(fixture, interval, capacity, log, NULL, session);
 }
 
 /* record psi_count PSIs, checking every world against `states` */
@@ -420,8 +447,9 @@ IVP_TEST(recording_and_seeking_reproduce_the_reference)
     rw_fixture_t *fixture = rw_fixture_create();
     IVP_ASSERT_TRUE(fixture != NULL);
     rw_apply_log_t log = { 0 };
-    ivp_rewind_t *rewind = rw_rewind_create(fixture, 25, 64, &log);
-    IVP_ASSERT_TRUE(rewind != NULL);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 25, 64, &log, &session));
+    ivp_rewind_t *rewind = session.rewind;
     IVP_ASSERT_TRUE(rw_record(rewind, false, RW_PSI_COUNT, fixture->reference));
     IVP_ASSERT_EQ(ivp_rewind_recorded_psi(rewind), (uint64_t)RW_PSI_COUNT);
     IVP_ASSERT_EQ(ivp_rewind_oldest_psi(rewind), (uint64_t)0);
@@ -436,7 +464,7 @@ IVP_TEST(recording_and_seeking_reproduce_the_reference)
     /* the input callback ran for every recorded and replayed PSI */
     IVP_ASSERT_TRUE(log.calls > (uint64_t)RW_PSI_COUNT);
     IVP_ASSERT_EQ(ivp_rewind_seek(rewind, RW_PSI_COUNT + 1), IVP_ERR_INVALID_ARG);
-    ivp_rewind_destroy(rewind);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
 }
 
@@ -451,8 +479,9 @@ IVP_TEST(stepping_after_a_seek_branches)
     IVP_ASSERT_TRUE(memcmp(&fixture->reference[200],
                            &fixture->branch_reference[200],
                            sizeof(rw_state_t)) != 0);
-    ivp_rewind_t *rewind = rw_rewind_create(fixture, 20, 64, NULL);
-    IVP_ASSERT_TRUE(rewind != NULL);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 20, 64, NULL, &session));
+    ivp_rewind_t *rewind = session.rewind;
     IVP_ASSERT_TRUE(rw_record(rewind, false, RW_PSI_COUNT, fixture->reference));
 
     /* branch off at RW_BRANCH_PSI with different inputs */
@@ -466,7 +495,7 @@ IVP_TEST(stepping_after_a_seek_branches)
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 200, fixture->branch_reference));
     /* and continues to the end like the branch reference */
     IVP_ASSERT_TRUE(rw_record(rewind, true, RW_PSI_COUNT, fixture->branch_reference));
-    ivp_rewind_destroy(rewind);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
 }
 
@@ -475,8 +504,9 @@ IVP_TEST(the_keyframe_ring_limits_the_oldest_psi)
     rw_fixture_t *fixture = rw_fixture_create();
     IVP_ASSERT_TRUE(fixture != NULL);
     /* keyframes at 0, 10, ..., 90; four are kept */
-    ivp_rewind_t *rewind = rw_rewind_create(fixture, 10, 4, NULL);
-    IVP_ASSERT_TRUE(rewind != NULL);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 10, 4, NULL, &session));
+    ivp_rewind_t *rewind = session.rewind;
     IVP_ASSERT_TRUE(rw_record(rewind, false, 100, fixture->reference));
     IVP_ASSERT_EQ(ivp_rewind_oldest_psi(rewind), (uint64_t)60);
     IVP_ASSERT_EQ(ivp_rewind_recorded_psi(rewind), (uint64_t)100);
@@ -492,7 +522,7 @@ IVP_TEST(the_keyframe_ring_limits_the_oldest_psi)
     IVP_ASSERT_EQ(ivp_rewind_oldest_psi(rewind), (uint64_t)110);
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 110, fixture->reference));
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 135, fixture->reference));
-    ivp_rewind_destroy(rewind);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
 }
 
@@ -503,8 +533,9 @@ IVP_TEST(branching_inside_a_full_ring)
     rw_fixture_t *fixture = rw_fixture_create();
     IVP_ASSERT_TRUE(fixture != NULL);
     /* keyframes 0 ... 140; six are kept: 90 ... 140 */
-    ivp_rewind_t *rewind = rw_rewind_create(fixture, 10, 6, NULL);
-    IVP_ASSERT_TRUE(rewind != NULL);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 10, 6, NULL, &session));
+    ivp_rewind_t *rewind = session.rewind;
     IVP_ASSERT_TRUE(rw_record(rewind, false, 150, fixture->reference));
     IVP_ASSERT_EQ(ivp_rewind_oldest_psi(rewind), (uint64_t)90);
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, RW_BRANCH_PSI, fixture->reference));
@@ -514,77 +545,137 @@ IVP_TEST(branching_inside_a_full_ring)
     /* replays across the branch input of PSI 122 */
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 125, fixture->branch_reference));
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 150, fixture->branch_reference));
-    ivp_rewind_destroy(rewind);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
 }
 
-/* A seek whose restore runs out of memory keeps the current world. */
-IVP_TEST(a_failed_seek_keeps_the_current_world)
+/* A step that cannot store its keyframe or input changes nothing. */
+IVP_TEST(a_failed_step_changes_nothing)
 {
     rw_fixture_t *fixture = rw_fixture_create();
     IVP_ASSERT_TRUE(fixture != NULL);
     ivp_test_fault_allocator_t fault;
     ivp_test_fault_allocator_init_tracked(&fault, NULL);
-    ivp_rewind_t *rewind =
-        rw_rewind_create_with(fixture, 25, 64, NULL, &fault.allocator);
-    IVP_ASSERT_TRUE(rewind != NULL);
-    IVP_ASSERT_TRUE(rw_record(rewind, false, 120, fixture->reference));
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open_with(fixture, 25, 64, NULL, &fault.allocator, &session));
+    ivp_rewind_t *rewind = session.rewind;
+    IVP_ASSERT_TRUE(rw_record(rewind, false, 75, fixture->reference));
 
-    /* the target is a keyframe, so a seek is one restore and no replay */
+    /* the step from PSI 75 takes a keyframe first */
     int failures = 0;
     for (int fail_at = 1;; fail_at++) {
         ivp_test_fault_allocator_reset(&fault, fail_at);
-        ivp_result_t result = ivp_rewind_seek(rewind, 50);
+        rw_input_t input;
+        size_t size = rw_input_for(75, false, &input);
+        ivp_result_t result = ivp_rewind_step(rewind, &input, size);
         bool injected = fault.attempts >= fail_at;
         fault.fail_at = INT_MAX;
-        if (result == IVP_OK) {
-            IVP_ASSERT_TRUE(rw_matches(&fixture->reference[50],
-                                       ivp_rewind_environment(rewind), "seek", 50));
-            if (!injected) break;
-            /* a failure the engine absorbed: go back to the end and retry */
-            IVP_ASSERT_EQ(ivp_rewind_seek(rewind, 120), IVP_OK);
-            continue;
+        if (!injected) {
+            IVP_ASSERT_EQ(result, IVP_OK);
+            IVP_ASSERT_TRUE(rw_matches(&fixture->reference[76],
+                                       session.env, "step", 76));
+            break;
         }
         IVP_ASSERT_EQ(result, IVP_ERR_OUT_OF_MEMORY);
-        IVP_ASSERT_EQ(ivp_rewind_current_psi(rewind), (uint64_t)120);
-        IVP_ASSERT_TRUE(rw_matches(&fixture->reference[120],
-                                   ivp_rewind_environment(rewind),
-                                   "kept world", 120));
+        IVP_ASSERT_EQ(ivp_rewind_current_psi(rewind), (uint64_t)75);
+        IVP_ASSERT_EQ(ivp_rewind_recorded_psi(rewind), (uint64_t)75);
+        IVP_ASSERT_TRUE(rw_matches(&fixture->reference[75], session.env,
+                                   "kept world", 75));
         failures++;
     }
-    fprintf(stderr, "rewind: %d failing seeks kept the world\n", failures);
     IVP_ASSERT_TRUE(failures > 0);
-    /* the kept and restored worlds released everything */
+    /* the recording still seeks and replays */
+    IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 30, fixture->reference));
+    IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 76, fixture->reference));
     ivp_rewind_destroy(rewind);
+    session.rewind = NULL;
     IVP_ASSERT_EQ(fault.live_bytes, (size_t)0);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
 }
 
-IVP_TEST(rewound_worlds_expose_objects_and_controller_states)
+/* A restore keeps the world in place: the environment, objects and
+ * controller states keep their addresses. */
+IVP_TEST(seeking_keeps_objects_and_controller_states_in_place)
 {
     rw_fixture_t *fixture = rw_fixture_create();
     IVP_ASSERT_TRUE(fixture != NULL);
-    ivp_rewind_t *rewind = rw_rewind_create(fixture, 25, 64, NULL);
-    IVP_ASSERT_TRUE(rewind != NULL);
-    /* before any seek, the states are the caller's */
-    IVP_ASSERT_TRUE(ivp_rewind_controller_state(rewind, 0) ==
-                    (void *)&fixture->controllers.springs[0]);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 25, 64, NULL, &session));
+    ivp_rewind_t *rewind = session.rewind;
+    ivp_spring_state_t *spring = &session.controllers->springs[0];
+    ivp_object_t *spring_end = spring->obj_a;
+    int object_count = ivp_environment_get_object_count(session.env);
     IVP_ASSERT_TRUE(rw_record(rewind, false, 80, fixture->reference));
     IVP_ASSERT_TRUE(rw_seek_and_check(rewind, 30, fixture->reference));
-
-    /* the restored spring lives in rewinder storage and points at the
-     * current world's objects */
-    ivp_spring_state_t *spring =
-        (ivp_spring_state_t *)ivp_rewind_controller_state(rewind, 0);
-    IVP_ASSERT_TRUE(spring != NULL);
-    IVP_ASSERT_TRUE(spring != &fixture->controllers.springs[0]);
-    IVP_ASSERT_TRUE(spring->obj_a == ivp_rewind_find_object(
-                                         rewind, ivp_object_order_key(spring->obj_a)));
-    IVP_ASSERT_TRUE(spring->obj_a->owner == ivp_rewind_environment(rewind));
-    IVP_ASSERT_TRUE(ivp_rewind_controller_state(rewind, 4) == NULL);
-    IVP_ASSERT_TRUE(ivp_rewind_find_object(rewind, 1000) == NULL);
-    ivp_rewind_destroy(rewind);
+    IVP_ASSERT_TRUE(ivp_rewind_environment(rewind) == session.env);
+    IVP_ASSERT_TRUE(spring->obj_a == spring_end);
+    IVP_ASSERT_TRUE(spring_end->owner == session.env);
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(session.env), object_count);
+    rw_close(&session);
     rw_fixture_destroy(fixture);
+}
+
+/* the input callback of rw_spawning: a ball dropped in at PSI 40 */
+static void rw_spawn(void *ctx, ivp_environment_t *env, uint64_t psi,
+                     const void *data, size_t size)
+{
+    (void)data;
+    (void)size;
+    if (psi == 40) rw_create(env, (rw_assets_t *)ctx, true, 1.5, -3.0, 0.5);
+}
+
+/* Objects created after a keyframe are gone after seeking back before
+ * them, and come back on replay. */
+IVP_TEST(seeking_back_removes_later_objects)
+{
+    rw_fixture_t *fixture = rw_fixture_create();
+    IVP_ASSERT_TRUE(fixture != NULL);
+    rw_session_t session;
+    IVP_ASSERT_TRUE(rw_open(fixture, 10, 64, NULL, &session));
+    ivp_rewind_destroy(session.rewind);
+    ivp_rewind_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.keyframe_interval = 10;
+    config.keyframe_capacity = 64;
+    config.apply = rw_spawn;
+    config.apply_ctx = &fixture->assets;
+    ivp_result_t result = IVP_OK;
+    session.rewind = ivp_rewind_create(session.env, session.region, &config, &result);
+    IVP_ASSERT_TRUE(session.rewind != NULL);
+    int before = ivp_environment_get_object_count(session.env);
+    for (int psi = 0; psi < 60; psi++) {
+        IVP_ASSERT_EQ(ivp_rewind_step(session.rewind, NULL, 0), IVP_OK);
+    }
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(session.env), before + 1);
+    rw_state_t at_60;
+    rw_capture(session.env, &at_60);
+    IVP_ASSERT_EQ(ivp_rewind_seek(session.rewind, 35), IVP_OK);
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(session.env), before);
+    IVP_ASSERT_EQ(ivp_rewind_seek(session.rewind, 60), IVP_OK);
+    IVP_ASSERT_EQ(ivp_environment_get_object_count(session.env), before + 1);
+    IVP_ASSERT_TRUE(rw_matches(&at_60, session.env, "replayed spawn", 60));
+    rw_close(&session);
+    rw_fixture_destroy(fixture);
+}
+
+/* A world that does not live in the region cannot be recorded. */
+IVP_TEST(create_requires_the_world_in_the_region)
+{
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24);
+    IVP_ASSERT_TRUE(region != NULL);
+    ivp_environment_config_t world_config;
+    rw_config(&world_config);
+    ivp_environment_t *env = ivp_environment_create(&world_config);
+    ivp_rewind_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.keyframe_interval = 10;
+    config.keyframe_capacity = 4;
+    ivp_result_t result = IVP_OK;
+    IVP_ASSERT_TRUE(ivp_rewind_create(env, region, &config, &result) == NULL);
+    IVP_ASSERT_EQ(result, IVP_ERR_INVALID_ARG);
+    ivp_environment_destroy(env);
+    ivp_memory_region_destroy(region);
 }
 
 int main(void)
@@ -593,7 +684,9 @@ int main(void)
     IVP_REGISTER(stepping_after_a_seek_branches);
     IVP_REGISTER(the_keyframe_ring_limits_the_oldest_psi);
     IVP_REGISTER(branching_inside_a_full_ring);
-    IVP_REGISTER(a_failed_seek_keeps_the_current_world);
-    IVP_REGISTER(rewound_worlds_expose_objects_and_controller_states);
+    IVP_REGISTER(a_failed_step_changes_nothing);
+    IVP_REGISTER(seeking_keeps_objects_and_controller_states_in_place);
+    IVP_REGISTER(seeking_back_removes_later_objects);
+    IVP_REGISTER(create_requires_the_world_in_the_region);
     IVP_RUN_ALL();
 }
