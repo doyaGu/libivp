@@ -55,13 +55,19 @@ bool ivp_memory_region_is_allocator(const ivp_allocator_t *allocator);
 /* Bytes a checkpoint copies: the extent of the region in use. */
 size_t ivp_memory_region_used(const ivp_memory_region_t *region);
 
+/* Allocations the region has refused since it was created.  The count
+ * lives outside the region: a restore does not take it back. */
+size_t ivp_memory_region_failures(const ivp_memory_region_t *region);
+
 /* Copy the region in use, outside the region (storage NULL: the default
- * allocator).  NULL when storage cannot be allocated. */
+ * allocator; the region's own allocator is refused, since a restore would
+ * overwrite the copy).  NULL when storage cannot be allocated. */
 ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
     ivp_memory_region_t *region, const ivp_allocator_t *storage);
 
-/* Put the region back to checkpoint, which must be one of its own;
- * IVP_ERR_INVALID_ARG otherwise. */
+/* Put the region back to checkpoint, which must have been taken of this
+ * region (not of an earlier one at the same address); IVP_ERR_INVALID_ARG
+ * otherwise. */
 ivp_result_t ivp_memory_region_restore(ivp_memory_region_t *region,
                                        const ivp_memory_checkpoint_t *checkpoint);
 

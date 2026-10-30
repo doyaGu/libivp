@@ -57,19 +57,24 @@ typedef struct region_state {
 
 struct ivp_memory_region {
     ivp_allocator_t allocator;   /* ctx is the region */
+    uint64_t id;                 /* unique in the process */
     unsigned char *base;
     size_t capacity;
     size_t committed;
     size_t page;
     atomic_flag lock;
+    atomic_size_t failures;      /* outside the region: not restored */
 };
 
 struct ivp_memory_checkpoint {
     const ivp_memory_region_t *region;
+    uint64_t region_id;          /* a later region may reuse the address */
     ivp_allocator_t storage;
     size_t size;
     unsigned char *bytes;
 };
+
+static atomic_uint_least64_t region_next_id = 1;
 
 static size_t region_round(size_t value, size_t granule)
 {
@@ -234,19 +239,26 @@ static void region_give(ivp_memory_region_t *region, void *ptr, size_t block)
     }
 }
 
+static void *region_refuse(ivp_memory_region_t *region)
+{
+    atomic_fetch_add_explicit(&region->failures, 1, memory_order_relaxed);
+    return NULL;
+}
+
 static void *region_alloc(size_t size, void *ctx)
 {
     ivp_memory_region_t *region = (ivp_memory_region_t *)ctx;
+    /* larger requests cannot fit, and rounding them could wrap */
+    if (size > region->capacity) return region_refuse(region);
     size_t block = region_block_size(size);
     region_lock(region);
     void *ptr = region_take(region, block);
     region_unlock(region);
-    if (ptr) {
+    if (!ptr) return region_refuse(region);
 #ifdef IVP_REGION_ASAN
-        ASAN_UNPOISON_MEMORY_REGION(ptr, block);
+    ASAN_UNPOISON_MEMORY_REGION(ptr, block);
 #endif
-        memset(ptr, 0, block);
-    }
+    memset(ptr, 0, block);
     return ptr;
 }
 
@@ -263,6 +275,8 @@ static void *region_realloc(void *ptr, size_t old_size, size_t new_size,
                             void *ctx)
 {
     if (!ptr) return region_alloc(new_size, ctx);
+    ivp_memory_region_t *region = (ivp_memory_region_t *)ctx;
+    if (new_size > region->capacity) return region_refuse(region);
     if (region_block_size(old_size) == region_block_size(new_size)) {
         if (new_size > old_size) {
             memset((unsigned char *)ptr + old_size, 0, new_size - old_size);
@@ -285,6 +299,8 @@ ivp_memory_region_t *ivp_memory_region_create(size_t capacity)
         (ivp_memory_region_t *)ivp_alloc(host, sizeof(*region));
     if (!region) return NULL;
     memset(region, 0, sizeof(*region));
+    region->id = atomic_fetch_add_explicit(&region_next_id, 1, memory_order_relaxed);
+    atomic_init(&region->failures, 0);
     region->page = region_page_size();
     region->capacity = region_round(
         capacity ? capacity : REGION_DEFAULT_CAPACITY, region->page);
@@ -328,6 +344,13 @@ size_t ivp_memory_region_used(const ivp_memory_region_t *region)
     return region ? region_state(region)->top : 0u;
 }
 
+size_t ivp_memory_region_failures(const ivp_memory_region_t *region)
+{
+    return region ? atomic_load_explicit(&((ivp_memory_region_t *)region)->failures,
+                                         memory_order_relaxed)
+                  : 0u;
+}
+
 /* ── checkpoints ─────────────────────────────────────────────────────── */
 
 ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
@@ -335,10 +358,13 @@ ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
 {
     if (!region) return NULL;
     if (!storage) storage = ivp_default_allocator();
+    /* a copy kept in the region itself would be overwritten by a restore */
+    if (storage == &region->allocator) return NULL;
     ivp_memory_checkpoint_t *checkpoint =
         (ivp_memory_checkpoint_t *)ivp_alloc(storage, sizeof(*checkpoint));
     if (!checkpoint) return NULL;
     checkpoint->region = region;
+    checkpoint->region_id = region->id;
     checkpoint->storage = *storage;
     checkpoint->size = region_state(region)->top;
     checkpoint->bytes = (unsigned char *)ivp_alloc(storage, checkpoint->size);
@@ -353,7 +379,8 @@ ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
 ivp_result_t ivp_memory_region_restore(ivp_memory_region_t *region,
                                        const ivp_memory_checkpoint_t *checkpoint)
 {
-    if (!region || !checkpoint || checkpoint->region != region) {
+    if (!region || !checkpoint || checkpoint->region != region ||
+        checkpoint->region_id != region->id) {
         return IVP_ERR_INVALID_ARG;
     }
 #ifdef IVP_REGION_ASAN
