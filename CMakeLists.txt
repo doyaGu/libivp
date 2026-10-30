@@ -19,8 +19,8 @@ option(IVP_REFERENCE_INTERNAL_STATE
 option(IVP_EDIT_LOCALITY
        "Pace movement checks per simulation unit so scene edits stay local (changes trajectories versus the reference)"
        OFF)
-option(IVP_ENABLE_SNAPSHOTS
-       "World snapshots at PSI boundaries and rewinding (ivp_snapshot.h, ivp_rewind.h)"
+option(IVP_ENABLE_CHECKPOINTS
+       "Memory regions with in-place checkpoints and rewinding (ivp_memory_region.h, ivp_rewind.h)"
        OFF)
 if (IVP_REFERENCE_INTERNAL_STATE AND IVP_EDIT_LOCALITY)
     message(STATUS "IVP_REFERENCE_INTERNAL_STATE keeps the reference movement-check countdown; IVP_EDIT_LOCALITY is off")
@@ -227,7 +227,7 @@ set(IVP_DYNAMICS_SOURCES
         src/dynamics/ivp_cluster.c
         src/dynamics/ivp_world_scheduler.c
 )
-if (IVP_ENABLE_SNAPSHOTS)
+if (IVP_ENABLE_CHECKPOINTS)
     list(APPEND IVP_DYNAMICS_SOURCES
             src/dynamics/ivp_snapshot.c
             src/dynamics/ivp_rewind.c)
@@ -330,7 +330,7 @@ target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
         IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>
         IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>
-        IVP_ENABLE_SNAPSHOTS=$<BOOL:${IVP_ENABLE_SNAPSHOTS}>)
+        IVP_ENABLE_CHECKPOINTS=$<BOOL:${IVP_ENABLE_CHECKPOINTS}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
     target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)
@@ -612,7 +612,7 @@ if (IVP_BUILD_TESTS)
         ivp_add_test(test_locality tests/test_locality.c)
         set_tests_properties(test_locality PROPERTIES LABELS "unit")
     endif ()
-    if (IVP_ENABLE_SNAPSHOTS AND NOT IVP_REFERENCE_INTERNAL_STATE)
+    if (IVP_ENABLE_CHECKPOINTS AND NOT IVP_REFERENCE_INTERNAL_STATE)
         ivp_add_test(test_snapshot tests/test_snapshot.c)
         target_include_directories(test_snapshot PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)
