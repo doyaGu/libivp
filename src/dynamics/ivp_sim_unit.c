@@ -452,6 +452,7 @@ uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
     return key;
 }
 
+#if IVP_EDIT_LOCALITY
 static uint64_t su_scan_movement_check_salt(const ivp_sim_unit_t *su)
 {
     const ivp_object_t *first = NULL;
@@ -480,7 +481,6 @@ static uint64_t su_scan_movement_check_salt(const ivp_sim_unit_t *su)
  * the cached value. */
 uint64_t ivp_sim_unit_movement_check_salt(ivp_sim_unit_t *su)
 {
-#if IVP_EDIT_LOCALITY
     if (!su->movement_check_salt_valid) {
         su->movement_check_salt = su_scan_movement_check_salt(su);
         su->movement_check_salt_valid = true;
@@ -489,10 +489,8 @@ uint64_t ivp_sim_unit_movement_check_salt(ivp_sim_unit_t *su)
         IVP_ASSERT(su->movement_check_salt == su_scan_movement_check_salt(su));
     }
     return su->movement_check_salt;
-#else
-    return su_scan_movement_check_salt(su);
-#endif
 }
+#endif
 
 void ivp_sim_unit_forget_movement_check_salt(ivp_sim_unit_t *su)
 {

@@ -131,8 +131,10 @@ void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *m, ivp_pv
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset);
 uint64_t ivp_core_stable_order_key(const ivp_core_t *core);
 uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su);
+#if IVP_EDIT_LOCALITY
 /* movement_check_salt of the unit's first object in stable order */
 uint64_t ivp_sim_unit_movement_check_salt(ivp_sim_unit_t *su);
+#endif
 /* the unit's cores or their objects changed */
 void ivp_sim_unit_forget_movement_check_salt(ivp_sim_unit_t *su);
 void ivp_core_sort_by_identity(ivp_core_t **cores, size_t count);
