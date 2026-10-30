@@ -6,7 +6,6 @@
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
 #include "dynamics/ivp_env_parallel_tasks.h"
-#include "collision/ivp_collision_restore.h"
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #ifdef IVP_HOME_BUILD
@@ -163,11 +162,6 @@ static const ivp_listener_hull_vt_t ov_element_vt = {
     ov_element_hull_manager_deleted,
     NULL
 };
-
-bool ivp_listener_hull_is_ov_element(const ivp_listener_hull_t *lh)
-{
-    return lh && lh->vt == &ov_element_vt;
-}
 
 ivp_ov_element_t *ivp_ov_element_create(struct ivp_object *obj)
 {
@@ -993,90 +987,6 @@ static ivp_ov_parallel_result_t collect_collision_partners_parallel(
     return IVP_OV_PARALLEL_OK;
 }
 
-/* Find or create the node of t->search_node and add element to it
- * (the node half of IVP_OV_Tree_Manager::insert_ov_element).  *became_root
- * reports an element that started an empty tree, for which the reference
- * returns before collecting collision partners. */
-static ivp_result_t ov_link_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
-                                    ivp_ov_node_t **node_out, bool *became_root)
-{
-    *became_root = false;
-    ivp_ov_node_t *new_node = ov_hash_find(t, &t->search_node);
-    if (new_node) {
-        if (ivp_pvec_add(&new_node->elements, element) < 0)
-            return IVP_ERR_OUT_OF_MEMORY;
-        element->node = new_node;
-        *node_out = new_node;
-        return IVP_OK;
-    }
-    new_node = ov_node_create(t);
-    if (!new_node) return IVP_ERR_OUT_OF_MEMORY;
-    new_node->data = t->search_node.data;
-    if (ivp_pvec_add(&new_node->elements, element) < 0) {
-        ov_node_destroy(new_node);
-        return IVP_ERR_OUT_OF_MEMORY;
-    }
-    if (!t->root) {
-        t->root = new_node;
-        element->node = new_node;
-        ov_hash_add(t, new_node);
-        *node_out = new_node;
-        *became_root = true;
-        return IVP_OK;
-    }
-    for (;;) {
-        if (t->root->data.rasterlevel >= new_node->data.rasterlevel) {
-            if (!box_contains_box(&t->root->data, new_node,
-                                  t->root->data.rasterlevel - new_node->data.rasterlevel)) {
-                if (!expand_tree(t, new_node)) {
-                    ov_node_destroy(new_node);
-                    return IVP_ERR_OUT_OF_MEMORY;
-                }
-                continue;
-            }
-        } else {
-            if (!expand_tree(t, new_node)) {
-                ov_node_destroy(new_node);
-                return IVP_ERR_OUT_OF_MEMORY;
-            }
-            continue;
-        }
-        break;
-    }
-    if (t->root->data.rasterlevel == new_node->data.rasterlevel) {
-        if (ivp_pvec_add(&t->root->elements, element) < 0) {
-            ov_node_destroy(new_node);
-            return IVP_ERR_OUT_OF_MEMORY;
-        }
-        element->node = t->root;
-        ivp_pvec_clear(&new_node->children);
-        ivp_pvec_clear(&new_node->elements);
-        ivp_free(t->allocator, new_node, sizeof(*new_node));
-        new_node = t->root;
-    } else {
-        ivp_ov_node_t *smallest_node = find_smallest_box(t->root, new_node);
-        if (!connect_boxes(t, smallest_node, new_node)) {
-            ov_node_destroy(new_node);
-            return IVP_ERR_OUT_OF_MEMORY;
-        }
-        ov_hash_add(t, new_node);
-        element->node = new_node;
-    }
-    *node_out = new_node;
-    return IVP_OK;
-}
-
-ivp_result_t ivp_ov_tree_insert_ov_element_at(ivp_ov_tree_t *t,
-                                              ivp_ov_element_t *element,
-                                              const ivp_ov_node_data_t *data)
-{
-    if (!t || !element || !data) return IVP_ERR_INVALID_ARG;
-    t->search_node.data = *data;
-    ivp_ov_node_t *node = NULL;
-    bool became_root = false;
-    return ov_link_element(t, element, &node, &became_root);
-}
-
 ivp_result_t ivp_ov_tree_insert_ov_element_ex(
     ivp_ov_tree_t *t, ivp_ov_element_t *element,
     double min_radius, double max_radius,
@@ -1094,10 +1004,64 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
                                                    &element->center, (ivp_real_t)used_radius);
 #endif
 
-    ivp_ov_node_t *new_node = NULL;
-    bool became_root = false;
-    ivp_result_t linked = ov_link_element(t, element, &new_node, &became_root);
-    if (linked != IVP_OK || became_root) return linked;
+    ivp_ov_node_t *new_node = ov_hash_find(t, &t->search_node);
+    if (new_node) {
+        if (ivp_pvec_add(&new_node->elements, element) < 0)
+            return IVP_ERR_OUT_OF_MEMORY;
+        element->node = new_node;
+    } else {
+        new_node = ov_node_create(t);
+        if (!new_node) return IVP_ERR_OUT_OF_MEMORY;
+        new_node->data = t->search_node.data;
+        if (ivp_pvec_add(&new_node->elements, element) < 0) {
+            ov_node_destroy(new_node);
+            return IVP_ERR_OUT_OF_MEMORY;
+        }
+        if (!t->root) {
+            t->root = new_node;
+            element->node = new_node;
+            ov_hash_add(t, new_node);
+            return IVP_OK;
+        }
+        for (;;) {
+            if (t->root->data.rasterlevel >= new_node->data.rasterlevel) {
+                if (!box_contains_box(&t->root->data, new_node,
+                                      t->root->data.rasterlevel - new_node->data.rasterlevel)) {
+                    if (!expand_tree(t, new_node)) {
+                        ov_node_destroy(new_node);
+                        return IVP_ERR_OUT_OF_MEMORY;
+                    }
+                    continue;
+                }
+            } else {
+                if (!expand_tree(t, new_node)) {
+                    ov_node_destroy(new_node);
+                    return IVP_ERR_OUT_OF_MEMORY;
+                }
+                continue;
+            }
+            break;
+        }
+        if (t->root->data.rasterlevel == new_node->data.rasterlevel) {
+            if (ivp_pvec_add(&t->root->elements, element) < 0) {
+                ov_node_destroy(new_node);
+                return IVP_ERR_OUT_OF_MEMORY;
+            }
+            element->node = t->root;
+            ivp_pvec_clear(&new_node->children);
+            ivp_pvec_clear(&new_node->elements);
+            ivp_free(t->allocator, new_node, sizeof(*new_node));
+            new_node = t->root;
+        } else {
+            ivp_ov_node_t *smallest_node = find_smallest_box(t->root, new_node);
+            if (!connect_boxes(t, smallest_node, new_node)) {
+                ov_node_destroy(new_node);
+                return IVP_ERR_OUT_OF_MEMORY;
+            }
+            ov_hash_add(t, new_node);
+            element->node = new_node;
+        }
+    }
     t->collision_partners = colliding_balls;
     if (t->collision_partners) {
         const int old_partner_count = ivp_pvec_len(t->collision_partners);

@@ -25,7 +25,6 @@
 #include "collision/ivp_mindist_event_internal.h"
 #include "collision/ivp_recheck_diagnostics.h"
 #include "collision/ivp_collision_diff.h"
-#include "collision/ivp_collision_restore.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
 
@@ -1967,30 +1966,3 @@ void ivp_mindist_mgr_enable_collision_detection_for_object(ivp_mindist_mgr_t *mm
     object->ov_element = ivp_ov_element_create(object);
     ivp_mindist_mgr_recheck_ov_element(mm, object);
 }
-
-/* ── world snapshot support (libivp extension) ──────────────────────────── */
-
-bool ivp_collision_is_mindist(const ivp_collision_t *c)
-{
-    return c && c->cvt == &mindist_collision_vt;
-}
-
-bool ivp_listener_hull_is_md_synapse(const ivp_listener_hull_t *lh)
-{
-    return lh && lh->vt == &synapse_vt;
-}
-
-void ivp_md_synapse_restore(ivp_mindist_t *md, int side, struct ivp_object *obj,
-                            const ivp_compact_edge_t *edge, short status)
-{
-    ivp_md_synapse_t *syn = &md->synapse[side];
-    syn_init(syn, md, obj, edge, (ivp_synapse_polygon_status_t)status);
-    syn->next = syn->prev = NULL;
-    if (!obj_is_ball(obj)) syn_add_reference_to_ledge(syn);
-}
-
-void ivp_mindist_discard_unpublished(ivp_mindist_t *md)
-{
-    mindist_discard_uninitialized(md);
-}
-

@@ -225,22 +225,6 @@ void ivp_contact_pt_reset_time(ivp_contact_pt_t *cp, double offset);
 void ivp_contact_pt_recompute_friction(ivp_contact_pt_t *cp);
 bool ivp_contact_pt_is_same_as(const ivp_contact_pt_t *cp, struct ivp_mindist *md);
 
-/* World snapshots (src/dynamics/ivp_snapshot.c): a contact point with the
- * fields of `values`, its synapses on obj0 / obj1 (edges and statuses from
- * `values`) and their ledge references, outside every friction system. */
-ivp_contact_pt_t *ivp_contact_pt_restore(struct ivp_environment *env,
-                                         const ivp_contact_pt_t *values,
-                                         struct ivp_object *obj0,
-                                         struct ivp_object *obj1);
-/* A core pair of fs with the fields of `values`, appended to the system's
- * pairs without the pair-created event; NULL when out of memory. */
-ivp_fr_core_pair_t *ivp_fr_system_restore_pair(ivp_fr_system_t *fs,
-                                               const ivp_fr_core_pair_t *values,
-                                               ivp_core_t *core0, ivp_core_t *core1);
-/* Free every core pair of fs without the pair-deleted event (undoing a
- * failed snapshot restore). */
-void ivp_fr_system_discard_pairs(ivp_fr_system_t *fs);
-
 /* IVP_Friction_Manager */
 ivp_contact_pt_t *ivp_friction_mgr_generate_contact_point(struct ivp_mindist *md, bool *was_success);
 ivp_contact_pt_t *ivp_friction_mgr_get_associated_contact_point(struct ivp_mindist *md);
