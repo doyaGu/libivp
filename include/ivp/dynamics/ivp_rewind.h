@@ -25,7 +25,9 @@
  * The world may only change through ivp_rewind_step and the input callback,
  * and the callback must depend only on the PSI, its input and memory in the
  * region; otherwise a replay cannot reproduce the recording.  The rewinder
- * keeps its keyframes and log outside the region (config.storage).
+ * keeps its keyframes and log outside the region (config.storage).  Like
+ * the checkpoints it is built on, a recording belongs to its region and
+ * process; it cannot be saved or replayed elsewhere.
  *
  * Built only with IVP_ENABLE_CHECKPOINTS (CMake option, default off).
  */

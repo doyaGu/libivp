@@ -17,6 +17,11 @@
  * Every block comes zero-filled, so what an allocation holds never depends
  * on the history of the region before it.
  *
+ * A checkpoint is raw memory full of addresses inside its region: it can
+ * be restored only into that region, in the process that took it, and
+ * cannot be saved to a file or sent elsewhere.  Taking or restoring one
+ * costs a copy of every byte in use (ivp_memory_region_used).
+ *
  * The allocator is safe to call from several threads; checkpoint and
  * restore must not run while anything else uses the region.
  *
