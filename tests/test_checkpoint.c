@@ -13,6 +13,7 @@
  * a forcefield following a caller's set, and a world whose islands run on
  * a task pool (which must stay outside the region). */
 #include "ivp_test.h"
+#include "ivp_test_scene.h"
 
 #include <ivp/base/ivp_memory_region.h>
 #include <ivp/builder/ivp_build_ledge.h>
@@ -36,15 +37,11 @@
 #include <string.h>
 
 #define CK_PSIS 360
-#define CK_GROUND_TOP 1.5
 
 /* geometry shared by every world, outside the regions */
 typedef struct ck_assets {
-    ivp_compact_surface_t *ground_surface;
-    ivp_compact_surface_t *cube_surface;
+    ivp_test_scene_assets_t scene;
     ivp_compact_surface_t *compound_surface;
-    ivp_surman_polygon_t ground_surman;
-    ivp_surman_polygon_t cube_surman;
     ivp_surman_polygon_t compound_surman;
 } ck_assets_t;
 
@@ -71,21 +68,8 @@ static ivp_object_t *ck_body_ex(ck_world_t *world, const ivp_surman_t *surman,
                                 bool ball, double x, double y, double z,
                                 bool simulated)
 {
-    ivp_object_template_t t;
-    ivp_object_template_init(&t);
-    t.start_in_simulation = simulated;
-    t.material.friction = IVP_REAL(0.6);
-    t.material.elasticity = IVP_REAL(0.3);
-    ivp_vec3r_set(&t.position, (ivp_real_t)x, (ivp_real_t)y, (ivp_real_t)z);
-    if (ball) {
-        t.type = IVP_OBJECT_BALL;
-        t.ball_radius = IVP_REAL(0.4);
-        t.mass = IVP_REAL(0.8);
-        return ivp_environment_create_object(world->env, &t, NULL);
-    }
-    t.type = IVP_OBJECT_POLYGON;
-    t.mass = IVP_REAL(0.6);
-    return ivp_environment_create_object(world->env, &t, surman);
+    return ivp_test_scene_body(world->env, &world->assets->scene,
+                               ball ? NULL : surman, x, y, z, simulated);
 }
 
 static ivp_object_t *ck_body(ck_world_t *world, const ivp_surman_t *surman,
@@ -96,21 +80,12 @@ static ivp_object_t *ck_body(ck_world_t *world, const ivp_surman_t *surman,
 
 static ivp_object_t *ck_ground(ck_world_t *world)
 {
-    ivp_object_template_t t;
-    ivp_object_template_init(&t);
-    t.type = IVP_OBJECT_POLYGON;
-    t.physical_unmoveable = true;
-    t.mass = IVP_REAL(1.0e6);
-    t.material.friction = IVP_REAL(0.6);
-    t.material.elasticity = IVP_REAL(0.3);
-    ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(2.0), IVP_REAL(0.0));
-    return ivp_environment_create_object(world->env, &t,
-                                         &world->assets->ground_surman.base);
+    return ivp_test_scene_ground(world->env, &world->assets->scene);
 }
 
 static const ivp_surman_t *ck_cube(const ck_world_t *world)
 {
-    return &world->assets->cube_surman.base;
+    return &world->assets->scene.cube_surman.base;
 }
 
 static void ck_push(ivp_object_t *object, double vx, double vy, double vz)
@@ -191,7 +166,7 @@ static void ck_cast_rays(void *ctx, const ivp_event_sim_t *es, int n_rays,
         friction[i] = 0.8f;
         double dy = (double)rays[i].ray_normized_direction.k[1];
         if (!(dy > 1e-6)) continue;
-        double t = (CK_GROUND_TOP - (double)rays[i].ray_start_point.k[1]) / dy;
+        double t = (IVP_TEST_GROUND_TOP - (double)rays[i].ray_start_point.k[1]) / dy;
         if (t < 0.0 || t > (double)rays[i].ray_length) continue;
         hits[i].hit_object = s->ground;
         ivp_vec3r_set(&hits[i].hit_normal, IVP_REAL(0.0), IVP_REAL(-1.0),
@@ -444,8 +419,7 @@ static const ck_scene_t *ck_find_scene(const char *name)
 static bool ck_assets_init(ck_assets_t *assets)
 {
     memset(assets, 0, sizeof(*assets));
-    assets->ground_surface = ivp_build_box_surface(NULL, 40.0f, 0.5f, 40.0f);
-    assets->cube_surface = ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
+    if (!ivp_test_scene_assets_init(&assets->scene)) return false;
     ivp_vec3f_t points[2][8];
     ivp_compact_ledge_t *ledges[2];
     for (int l = 0; l < 2; l++) {
@@ -467,12 +441,7 @@ static bool ck_assets_init(ck_assets_t *assets)
     for (int l = 0; l < 2; l++) {
         if (ledges[l]) ivp_compact_ledge_free(NULL, ledges[l]);
     }
-    if (!assets->ground_surface || !assets->cube_surface ||
-        !assets->compound_surface) {
-        return false;
-    }
-    ivp_surman_polygon_init(&assets->ground_surman, assets->ground_surface);
-    ivp_surman_polygon_init(&assets->cube_surman, assets->cube_surface);
+    if (!assets->compound_surface) return false;
     ivp_surman_polygon_init(&assets->compound_surman, assets->compound_surface);
     return true;
 }
@@ -480,8 +449,7 @@ static bool ck_assets_init(ck_assets_t *assets)
 static void ck_assets_destroy(ck_assets_t *assets)
 {
     if (assets->compound_surface) ivp_compact_surface_free(NULL, assets->compound_surface);
-    if (assets->cube_surface) ivp_compact_surface_free(NULL, assets->cube_surface);
-    if (assets->ground_surface) ivp_compact_surface_free(NULL, assets->ground_surface);
+    ivp_test_scene_assets_destroy(&assets->scene);
 }
 
 static void ck_world_destroy(const ck_scene_t *scene, ck_world_t *world)
@@ -644,7 +612,7 @@ IVP_TEST(scenes_exercise_their_features)
     for (int psi = 0; psi < CK_PSIS; psi++) ck_step(scene, &world, psi);
     ivp_object_get_position(body, &end);
     IVP_ASSERT_TRUE(end.k[2] - start.k[2] > 1.0);   /* it drove */
-    IVP_ASSERT_TRUE(end.k[1] < CK_GROUND_TOP);      /* on its wheels, above ground */
+    IVP_ASSERT_TRUE(end.k[1] < IVP_TEST_GROUND_TOP);      /* on its wheels, above ground */
     ck_world_destroy(scene, &world);
 
     scene = ck_find_scene("spawn");

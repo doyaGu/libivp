@@ -8,6 +8,7 @@
  * PSI bit for bit. */
 #include "ivp_test.h"
 #include "ivp_test_fault_allocator.h"
+#include "ivp_test_scene.h"
 
 #include <ivp/base/ivp_memory_region.h>
 #include <ivp/builder/ivp_build_surface.h>
@@ -27,12 +28,7 @@
 #define RW_PSI_COUNT 300
 #define RW_BRANCH_PSI 100
 
-typedef struct rw_assets {
-    ivp_compact_surface_t *ground_surface;
-    ivp_compact_surface_t *cube_surface;
-    ivp_surman_polygon_t ground_surman;
-    ivp_surman_polygon_t cube_surman;
-} rw_assets_t;
+typedef ivp_test_scene_assets_t rw_assets_t;
 
 /* controller states of a built world; they must outlive it, and a
  * recorded world keeps them in its region */
@@ -66,46 +62,13 @@ typedef struct rw_input {
 static ivp_object_t *rw_create(ivp_environment_t *env, rw_assets_t *assets,
                                bool ball, double x, double y, double z)
 {
-    ivp_object_template_t object_template;
-    ivp_object_template_init(&object_template);
-    object_template.material.friction = IVP_REAL(0.6);
-    object_template.material.elasticity = IVP_REAL(0.3);
-    object_template.speed_damp_factor = IVP_REAL(0.02);
-    ivp_vec3r_set(&object_template.rot_speed_damp_factor, IVP_REAL(0.02),
-                  IVP_REAL(0.02), IVP_REAL(0.02));
-    ivp_vec3r_set(&object_template.position, (ivp_real_t)x, (ivp_real_t)y,
-                  (ivp_real_t)z);
-    if (ball) {
-        object_template.type = IVP_OBJECT_BALL;
-        object_template.ball_radius = IVP_REAL(0.4);
-        object_template.mass = IVP_REAL(0.8);
-        return ivp_environment_create_object(env, &object_template, NULL);
-    }
-    object_template.type = IVP_OBJECT_POLYGON;
-    object_template.mass = IVP_REAL(0.6);
-    ivp_vec3r_set(&object_template.rot_inertia, IVP_REAL(0.1), IVP_REAL(0.1),
-                  IVP_REAL(0.1));
-    object_template.rot_inertia_is_factor = false;
-    return ivp_environment_create_object(env, &object_template,
-                                         &assets->cube_surman.base);
+    return ivp_test_scene_body(env, assets, ball ? NULL : &assets->cube_surman.base,
+                               x, y, z, true);
 }
 
 static bool rw_create_ground(ivp_environment_t *env, rw_assets_t *assets)
 {
-    ivp_object_template_t object_template;
-    ivp_object_template_init(&object_template);
-    object_template.type = IVP_OBJECT_POLYGON;
-    object_template.physical_unmoveable = true;
-    object_template.mass = IVP_REAL(1.0e6);
-    ivp_vec3r_set(&object_template.rot_inertia, IVP_REAL(1.0e6),
-                  IVP_REAL(1.0e6), IVP_REAL(1.0e6));
-    object_template.rot_inertia_is_factor = false;
-    object_template.material.friction = IVP_REAL(0.6);
-    object_template.material.elasticity = IVP_REAL(0.3);
-    ivp_vec3r_set(&object_template.position, IVP_REAL(0.0), IVP_REAL(2.0),
-                  IVP_REAL(0.0));
-    return ivp_environment_create_object(env, &object_template,
-                                         &assets->ground_surman.base) != NULL;
+    return ivp_test_scene_ground(env, assets) != NULL;
 }
 
 /* gravity: a pile joined by a spring and a ball-socket constraint, a
@@ -269,23 +232,6 @@ typedef struct rw_fixture {
     rw_state_t branch_reference[RW_PSI_COUNT + 1];
 } rw_fixture_t;
 
-static bool rw_assets_init(rw_assets_t *assets)
-{
-    memset(assets, 0, sizeof(*assets));
-    assets->ground_surface = ivp_build_box_surface(NULL, 40.0f, 0.5f, 40.0f);
-    assets->cube_surface = ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
-    if (!assets->ground_surface || !assets->cube_surface) return false;
-    ivp_surman_polygon_init(&assets->ground_surman, assets->ground_surface);
-    ivp_surman_polygon_init(&assets->cube_surman, assets->cube_surface);
-    return true;
-}
-
-static void rw_assets_destroy(rw_assets_t *assets)
-{
-    if (assets->cube_surface) ivp_compact_surface_free(NULL, assets->cube_surface);
-    if (assets->ground_surface) ivp_compact_surface_free(NULL, assets->ground_surface);
-}
-
 static ivp_environment_t *rw_world(rw_assets_t *assets,
                                    rw_controllers_t *controllers)
 {
@@ -328,10 +274,10 @@ static rw_fixture_t *rw_fixture_create(void)
 {
     rw_fixture_t *fixture = (rw_fixture_t *)calloc(1, sizeof(*fixture));
     if (!fixture) return NULL;
-    if (!rw_assets_init(&fixture->assets) ||
+    if (!ivp_test_scene_assets_init(&fixture->assets) ||
         !rw_reference_run(fixture, false, fixture->reference) ||
         !rw_reference_run(fixture, true, fixture->branch_reference)) {
-        rw_assets_destroy(&fixture->assets);
+        ivp_test_scene_assets_destroy(&fixture->assets);
         free(fixture);
         return NULL;
     }
@@ -340,7 +286,7 @@ static rw_fixture_t *rw_fixture_create(void)
 
 static void rw_fixture_destroy(rw_fixture_t *fixture)
 {
-    rw_assets_destroy(&fixture->assets);
+    ivp_test_scene_assets_destroy(&fixture->assets);
     free(fixture);
 }
 
