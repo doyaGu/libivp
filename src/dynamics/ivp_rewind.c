@@ -29,7 +29,7 @@ struct ivp_rewind {
     ivp_rewind_config_t config;
     ivp_environment_t *env;
     ivp_memory_region_t *region;
-    ivp_allocator_t storage;
+    ivp_allocator_t storage;        /* config.storage points here */
     uint64_t psi;
     uint64_t log_base;
     rewind_input_t *inputs;
@@ -39,14 +39,9 @@ struct ivp_rewind {
     int keyframe_count;
 };
 
-static const ivp_allocator_t *rewind_allocator(const ivp_rewind_t *rewind)
-{
-    return &rewind->storage;
-}
-
 static void rewind_free_input(const ivp_rewind_t *rewind, rewind_input_t *input)
 {
-    if (input->data) ivp_free(rewind_allocator(rewind), input->data, input->size);
+    if (input->data) ivp_free(&rewind->storage, input->data, input->size);
     input->data = NULL;
     input->size = 0;
 }
@@ -85,6 +80,7 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
     rewind->env = env;
     rewind->region = region;
     rewind->storage = *allocator;
+    rewind->config.storage = &rewind->storage;
     rewind->keyframes = keyframes;
     rewind->keyframes[0].psi = 0;
     rewind->keyframes[0].checkpoint = first;
@@ -193,7 +189,7 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
                              size_t size)
 {
     if (!rewind || (size && !input)) return IVP_ERR_INVALID_ARG;
-    const ivp_allocator_t *allocator = rewind_allocator(rewind);
+    const ivp_allocator_t *allocator = &rewind->storage;
 
     /* everything that can fail comes before the recording changes; after a
      * seek back the keyframe of this PSI may already exist, followed by
