@@ -60,6 +60,9 @@
 
 
 #define IVP_MOVEMENT_CHECK_COUNT 10
+/* mean of the reference interval 15 + (short)(ivp_rand() * 5) */
+#define IVP_MOVEMENT_CHECK_PERIOD \
+    (IVP_MOVEMENT_CHECK_COUNT * 3 / 2 + IVP_MOVEMENT_CHECK_COUNT / 4)
 #define IVP_REF_PI 3.14159265358979323846
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
@@ -509,10 +512,54 @@ ivp_debug_manager_t *ivp_env_get_debug_manager(struct ivp_environment *env)
     return env->debug_manager;
 }
 
-/* IVP_Environment::must_perform_movement_check */
-bool ivp_env_must_perform_movement_check(struct ivp_environment *env)
+#if IVP_EDIT_LOCALITY
+/* SplitMix64 finalizer */
+static uint64_t env_mix_salt(uint64_t value)
+{
+    value ^= value >> 30;
+    value *= UINT64_C(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value *= UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31;
+    return value;
+}
+
+/* The creation sequence orders objects but its value shifts whenever an
+ * earlier object is added or removed, so the salt uses only the PSI the
+ * object was created in and its initial position. */
+static uint64_t env_movement_check_salt(const ivp_environment_t *env,
+                                        const ivp_object_template_t *tmpl)
+{
+    uint64_t salt = env_mix_salt(env->pl->psi_index);
+    for (int axis = 0; axis < 3; axis++) {
+        uint64_t bits = 0u;
+        memcpy(&bits, &tmpl->position.k[axis], sizeof(tmpl->position.k[axis]));
+        salt = env_mix_salt(salt ^ bits);
+    }
+    return salt;
+}
+#endif
+
+/* IVP_Environment::must_perform_movement_check
+ *
+ * The reference counts one countdown down across every simulated unit and
+ * draws each interval from the environment RNG, so adding or removing an
+ * object anywhere in the world shifts which units are checked and when they
+ * freeze.  With IVP_EDIT_LOCALITY each unit is checked every
+ * IVP_MOVEMENT_CHECK_PERIOD PSIs at a phase taken from the salt of its first
+ * object in stable order; the unit's membership, and with it the phase,
+ * changes only through its own interactions. */
+bool ivp_env_must_perform_movement_check(struct ivp_environment *env,
+                                         const ivp_sim_unit_t *su)
 {
     ivp_env_pipeline_t *pl = env->pl;
+#if IVP_EDIT_LOCALITY
+    uint64_t phase = ivp_sim_unit_movement_check_salt(su) %
+                     (uint64_t)IVP_MOVEMENT_CHECK_PERIOD;
+    return (pl->psi_index + phase) %
+               (uint64_t)IVP_MOVEMENT_CHECK_PERIOD == 0u;
+#else
+    (void)su;
     pl->next_movement_check--;
     if (pl->next_movement_check == 0) {
         pl->next_movement_check =
@@ -520,6 +567,7 @@ bool ivp_env_must_perform_movement_check(struct ivp_environment *env)
         return true;
     }
     return false;
+#endif
 }
 
 double ivp_env_get_freeze_check_dtime(struct ivp_environment *env)
@@ -2177,6 +2225,9 @@ static void env_simulate_psi(ivp_environment_t *env)
     }
     ivp_env_pcount(env, IVP_PE_PSI_UNIVERSE);
     pl->in_psi = true;
+#if IVP_EDIT_LOCALITY
+    pl->psi_index++;
+#endif
     env->current_sim_unit_index = 0;
     pl->state = IVP_ES_PSI;
     env_restore_contact_order(env);
@@ -2834,6 +2885,9 @@ ivp_object_t *ivp_environment_create_object_with_handle(ivp_environment_t *env, 
         return NULL;
     }
     obj->creation_sequence = env->pl->next_object_sequence++;
+#if IVP_EDIT_LOCALITY
+    obj->movement_check_salt = env_movement_check_salt(env, tmpl);
+#endif
     ivp_cluster_add_child(&env->pl->root_cluster, obj); /* IVP_Object(father = root cluster) */
     fire_object_event_global(env, obj, OBJ_EV_CREATED); /* end of IVP_Polygon / IVP_Ball ctor */
     ivp_environment_emit_event_internal(env, IVP_EVENT_OBJECT_CREATED, IVP_REAL(0.0), obj->dense_index, 0);

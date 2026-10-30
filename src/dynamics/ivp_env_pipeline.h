@@ -68,6 +68,10 @@ typedef struct ivp_env_pipeline {
 #if !IVP_REFERENCE_INTERNAL_STATE
     int                      live_cluster_count;
 #endif
+#if IVP_EDIT_LOCALITY
+    /* PSIs started by this world; paces the per-unit movement checks */
+    uint64_t                 psi_index;
+#endif
     ivp_parallel_stats_t     parallel_stats;
 
     ivp_pvec_t               core_revive_list;       /* ivp_core_t* */

@@ -125,6 +125,8 @@ void ivp_sim_units_mgr_simulate_sim_units_psi(ivp_sim_units_manager_t *m, ivp_pv
 void ivp_sim_units_mgr_reset_time(ivp_sim_units_manager_t *m, double offset);
 uint64_t ivp_core_stable_order_key(const ivp_core_t *core);
 uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su);
+/* movement_check_salt of the unit's first object in stable order */
+uint64_t ivp_sim_unit_movement_check_salt(const ivp_sim_unit_t *su);
 void ivp_core_sort_by_identity(ivp_core_t **cores, size_t count);
 void ivp_core_vector_sort_by_identity(ivp_pvec_t *cores);
 typedef bool (*ivp_core_set_filter_fn_t)(void *context, ivp_core_t *core);
@@ -375,7 +377,8 @@ int   ivp_env_anomaly_get_max_collisions_per_psi(struct ivp_environment *env);
 
 /* freeze manager */
 double ivp_env_get_freeze_check_dtime(struct ivp_environment *env);
-bool   ivp_env_must_perform_movement_check(struct ivp_environment *env);
+bool   ivp_env_must_perform_movement_check(struct ivp_environment *env,
+                                            const ivp_sim_unit_t *su);
 
 /* the environment's standard gravity controller (attached to every core) */
 ivp_sim_ctrl_t *ivp_env_get_standard_gravity_controller(struct ivp_environment *env);

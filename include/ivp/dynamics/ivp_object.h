@@ -116,6 +116,10 @@ typedef struct ivp_object {
     int                  dense_index;   /* index in object system array */
     ivp_handle_t         handle;        /* generational handle */
     uint64_t             creation_sequence; /* engine-owned world-local order */
+    /* Derived only from the object's own creation data, so scene edits
+     * elsewhere cannot change it; paces movement checks with
+     * IVP_EDIT_LOCALITY and stays zero otherwise. */
+    uint64_t             movement_check_salt;
 
     /* flags.collision_listener_exists: per-object collision listeners are
      * kept by the environment (IVP_Cluster_Manager::collision_callback_hash) */

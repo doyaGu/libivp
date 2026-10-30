@@ -16,6 +16,13 @@ option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (
 option(IVP_REFERENCE_INTERNAL_STATE
        "Preserve address/history-sensitive reference internals for parity work"
        OFF)
+option(IVP_EDIT_LOCALITY
+       "Pace movement checks per simulation unit so scene edits stay local (changes trajectories versus the reference)"
+       OFF)
+if (IVP_REFERENCE_INTERNAL_STATE AND IVP_EDIT_LOCALITY)
+    message(STATUS "IVP_REFERENCE_INTERNAL_STATE keeps the reference movement-check countdown; IVP_EDIT_LOCALITY is off")
+    set(IVP_EDIT_LOCALITY OFF)
+endif ()
 set(IVP_QHULL_MODE "REENTRANT" CACHE STRING
     "Qhull backend: REENTRANT (mainline and parity) or REFERENCE (historical comparison)")
 set_property(CACHE IVP_QHULL_MODE PROPERTY STRINGS REENTRANT REFERENCE)
@@ -313,7 +320,8 @@ target_include_directories(ivp
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
-        IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>)
+        IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>
+        IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
     target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)

@@ -446,6 +446,29 @@ uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
     return key;
 }
 
+uint64_t ivp_sim_unit_movement_check_salt(const ivp_sim_unit_t *su)
+{
+    const ivp_object_t *first = NULL;
+    for (int core_index = 0;
+         core_index < ivp_pvec_len(&su->sim_unit_cores);
+         core_index++) {
+        const ivp_core_t *core = su_core_at(su, core_index);
+        for (int object_index = 0;
+             object_index < ivp_pvec_len(&core->objects);
+             object_index++) {
+            const ivp_object_t *object =
+                (const ivp_object_t *)ivp_pvec_at(&core->objects,
+                                                  object_index);
+            if (!first ||
+                ivp_object_order_key(object) < ivp_object_order_key(first)) {
+                first = object;
+            }
+        }
+    }
+    IVP_ASSERT(first);
+    return first ? first->movement_check_salt : 0u;
+}
+
 static int core_identity_compare(const void *left, const void *right)
 {
     const ivp_core_t *left_core = *(ivp_core_t *const *)left;
@@ -1016,7 +1039,7 @@ static bool su_prepare_single_sim_unit_psi(ivp_sim_unit_t *su,
     }
     bool check_movement_state = movement_check_preassigned
                                     ? su->parallel_movement_check
-                                    : ivp_env_must_perform_movement_check(env);
+                                    : ivp_env_must_perform_movement_check(env, su);
     for (int j = controller_num - 1; j >= 0; j--) {
         if (j >= ivp_pvec_len(&su->controller_cores)) continue;
         int debug_contr_prio;
@@ -1171,12 +1194,15 @@ static bool su_try_parallel_island_run(struct ivp_environment *env,
     if (!ivp_pvec_reserve(touched_cores, touched_count)) return false;
 
     /* Safe controllers do not consume the environment RNG, so movement
-     * checks can be assigned now in the exact reference island order. */
+     * checks can be assigned now in the exact reference island order.  The
+     * IVP_EDIT_LOCALITY checks are stateless; the restore below only
+     * matters for the reference countdown. */
     short saved_next_movement_check = env->pl->next_movement_check;
     int saved_rand_seed = env->pl->rand_seed;
     for (int i = 0; i < unit_count; i++) {
         ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
-        su->parallel_movement_check = ivp_env_must_perform_movement_check(env);
+        su->parallel_movement_check =
+            ivp_env_must_perform_movement_check(env, su);
         su->parallel_should_freeze = false;
     }
 
