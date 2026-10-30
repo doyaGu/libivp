@@ -1,16 +1,18 @@
 # tools/parity — 与原版 IVP 的逐位对照
 
-本工具同时检查 libivp 的两个复现域：
+本工具同时检查 libivp 的三个构建域：
 
 - **reference-development：**显式使用
   `IVP_REFERENCE_INTERNAL_STATE=ON` 和 `IVP_QHULL_MODE=REENTRANT`，
   Release/Debug 必须 48/48 逐位一致。
 - **mainline：**使用默认内部行为和可重入 Qhull 2020.2，必须恰好只有
   `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
+- **edit-locality：**默认主线加 `IVP_EDIT_LOCALITY=ON`，必须恰好只有
+  `edit_locality_expected_differences.txt` 登记的 39 个场景不同。
 
-两个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
+三个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
-22 个主线差异见 `docs/PARITY_GAP_INVENTORY.md`；Qhull 已不再是两端的
+两组主线差异见 `docs/PARITY_GAP_INVENTORY.md`；Qhull 已不再是两端的
 差异变量。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
@@ -36,16 +38,16 @@ tools/parity/check.sh --debug
 tools/parity/check.sh --sweep "0.016666666666666666:900 0.0125:1200"   # 另加步长扫描（release）
 ```
 
-退出码为 0 表示两个域都满足各自要求。结果写在
-`build/parity/out/{release,debug}_{reference,mainline}.txt`；步长扫描写入
-`build/parity/out/sweep_*/{reference,mainline}.txt`。
+退出码为 0 表示三个域都满足各自要求。结果写在
+`build/parity/out/{release,debug}_{reference,mainline,locality}.txt`；步长扫描只比较
+reference-development 和默认主线，写入 `build/parity/out/sweep_*/{reference,mainline}.txt`。
 
 各项检查比较的内容：
 
 | 检查 | 比较内容 |
 |---|---|
-| release | 两个构建域各自的 JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行、stderr、退出码 |
-| debug | 两个构建域各自的 JSONL 帧、调试输出文本、stderr 中 `ASSERTION FAILURE: <expr>` 报告序列、退出码 |
+| release | 三个构建域各自的 JSONL 帧（pos、quat、lin_vel、ang_vel 逐位）、stdout 中的非 JSON 行、stderr、退出码 |
+| debug | 三个构建域各自的 JSONL 帧、调试输出文本、stderr 中 `ASSERTION FAILURE: <expr>` 报告序列、退出码 |
 | sweep | 两个构建域中每个场景在给定步长和步数下的 JSONL 帧；主线差异必须是登记集合的子集，因为不同步数可能尚未到达首个分叉 |
 
 ## 环境变量

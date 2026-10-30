@@ -1,0 +1,43 @@
+# Default engine with IVP_EDIT_LOCALITY versus the reference engine.  The
+# 22 scenarios of mainline_expected_differences.txt plus the 17 whose
+# trajectories change because movement checks are paced per simulation unit
+# instead of by the reference's shared countdown.
+springs
+rope
+motor
+buoyancy
+cubes
+force_actuator
+forcefield
+stiff_spring
+check_distance
+motion_controller
+vehicle
+car_real_wheels
+concave_static
+compound_dynamic
+convex_hulls
+grid_terrain
+hull_pile
+galton
+fast_impacts
+spawn_remove
+long_range
+torque
+stabilizer
+world_friction
+golem
+fixed_keyed
+hinge_limits
+cardan_tense
+slider_limits
+constraint_break
+attacher
+actuator_extra
+airboat
+fake_jetski
+raycast_car_drive
+check_dist_events
+golem_beam
+merge_objects
+object_attach
