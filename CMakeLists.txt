@@ -612,6 +612,12 @@ if (IVP_BUILD_TESTS)
         ivp_add_test(test_locality tests/test_locality.c)
         set_tests_properties(test_locality PROPERTIES LABELS "unit")
     endif ()
+    if (IVP_ENABLE_SNAPSHOTS AND NOT IVP_REFERENCE_INTERNAL_STATE)
+        ivp_add_test(test_snapshot tests/test_snapshot.c)
+        target_include_directories(test_snapshot PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        set_tests_properties(test_snapshot PROPERTIES LABELS "unit")
+    endif ()
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
                 IVP_BENCHMARK_DIAGNOSTICS)
