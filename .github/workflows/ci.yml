@@ -53,6 +53,11 @@ jobs:
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_ASAN=ON -DIVP_ENABLE_UBSAN=ON
             suite: asan-ubsan-unit
             parallel: 2
+          # The optional determinism features: edit locality and snapshots.
+          - name: determinism-features
+            cmake_args: -DCMAKE_BUILD_TYPE=Release -DIVP_EDIT_LOCALITY=ON -DIVP_ENABLE_SNAPSHOTS=ON
+            suite: determinism-features-unit
+            parallel: 4
           - name: tsan-threading
             cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
             suite: tsan-threading
