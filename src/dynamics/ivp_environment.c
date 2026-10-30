@@ -63,9 +63,9 @@
 
 
 #define IVP_MOVEMENT_CHECK_COUNT 10
-/* mean of the reference interval 15 + (short)(ivp_rand() * 5) */
-#define IVP_MOVEMENT_CHECK_PERIOD \
-    (IVP_MOVEMENT_CHECK_COUNT * 3 / 2 + IVP_MOVEMENT_CHECK_COUNT / 4)
+/* the mean of the reference interval 15 + (short)(ivp_rand() * 5), which is
+ * 15 to 19 PSIs */
+#define IVP_MOVEMENT_CHECK_PERIOD 17
 #define IVP_REF_PI 3.14159265358979323846
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
