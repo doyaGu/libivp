@@ -617,6 +617,8 @@ if (IVP_BUILD_TESTS)
         target_include_directories(test_snapshot PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)
         set_tests_properties(test_snapshot PROPERTIES LABELS "unit")
+        ivp_add_test(test_rewind tests/test_rewind.c)
+        set_tests_properties(test_rewind PROPERTIES LABELS "unit")
     endif ()
     if (IVP_BUILD_BENCHMARKS AND IVP_BENCHMARK_DIAGNOSTICS)
         target_compile_definitions(test_parallel_worlds PRIVATE
