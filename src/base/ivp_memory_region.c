@@ -352,8 +352,7 @@ size_t ivp_memory_region_used(const ivp_memory_region_t *region)
 
 size_t ivp_memory_region_failures(const ivp_memory_region_t *region)
 {
-    return region ? atomic_load_explicit(&((ivp_memory_region_t *)region)->failures,
-                                         memory_order_relaxed)
+    return region ? atomic_load_explicit(&region->failures, memory_order_relaxed)
                   : 0u;
 }
 
