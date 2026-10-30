@@ -54,6 +54,9 @@
 #include "dynamics/ivp_environment_parallel.h"
 #include "dynamics/ivp_env_parallel_tasks.h"
 #include "base/ivp_task_pool.h"
+#if IVP_ENABLE_CHECKPOINTS
+#include <ivp/base/ivp_memory_region.h>
+#endif
 #include "controllers/ivp_controller_system.h"
 #include "events/ivp_event_system.h"
 #include "solver/ivp_friction_internal.h"
@@ -2505,8 +2508,16 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_mindist_settings_init(&pl->mindist_settings);
     atomic_init(&pl->simulation_running, false);
     if (cfg.parallel_worker_count > 1) {
+        /* threads and their synchronization must stay out of a memory
+         * region, whose checkpoints would write old bytes over them */
+        const ivp_allocator_t *pool_allocator = env->allocator;
+#if IVP_ENABLE_CHECKPOINTS
+        if (ivp_memory_region_is_allocator(pool_allocator)) {
+            pool_allocator = ivp_default_allocator();
+        }
+#endif
         pl->task_pool = ivp_task_pool_create(cfg.parallel_worker_count,
-                                             env->allocator);
+                                             pool_allocator);
         if (!pl->task_pool) {
             ivp_environment_destroy(env);
             return NULL;
