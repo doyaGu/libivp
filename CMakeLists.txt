@@ -19,6 +19,9 @@ option(IVP_REFERENCE_INTERNAL_STATE
 option(IVP_EDIT_LOCALITY
        "Pace movement checks per simulation unit so scene edits stay local (changes trajectories versus the reference)"
        OFF)
+option(IVP_ENABLE_SNAPSHOTS
+       "World snapshots at PSI boundaries and rewinding (ivp_snapshot.h, ivp_rewind.h)"
+       OFF)
 if (IVP_REFERENCE_INTERNAL_STATE AND IVP_EDIT_LOCALITY)
     message(STATUS "IVP_REFERENCE_INTERNAL_STATE keeps the reference movement-check countdown; IVP_EDIT_LOCALITY is off")
     set(IVP_EDIT_LOCALITY OFF)
@@ -224,6 +227,10 @@ set(IVP_DYNAMICS_SOURCES
         src/dynamics/ivp_cluster.c
         src/dynamics/ivp_world_scheduler.c
 )
+if (IVP_ENABLE_SNAPSHOTS)
+    list(APPEND IVP_DYNAMICS_SOURCES
+            src/dynamics/ivp_snapshot.c)
+endif ()
 
 set(IVP_CONTROLLER_SOURCES
         src/controllers/ivp_controller_system.c
@@ -321,7 +328,8 @@ target_include_directories(ivp
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
         IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>
-        IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>)
+        IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>
+        IVP_ENABLE_SNAPSHOTS=$<BOOL:${IVP_ENABLE_SNAPSHOTS}>)
 if (IVP_REAL_DOUBLE)
     # ivp_real_t is part of the public ABI: consumers must see the same type
     target_compile_definitions(ivp PUBLIC IVP_REAL_DOUBLE)
