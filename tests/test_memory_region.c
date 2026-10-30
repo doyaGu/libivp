@@ -162,6 +162,58 @@ IVP_TEST(a_full_region_fails_allocations_until_restored)
     ivp_memory_region_destroy(region);
 }
 
+IVP_TEST(oversized_requests_fail_and_are_counted)
+{
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20);
+    const ivp_allocator_t *a = ivp_memory_region_allocator(region);
+    IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)0);
+    /* rounding SIZE_MAX up to a page must not wrap to a tiny block */
+    IVP_ASSERT_TRUE(ivp_alloc(a, SIZE_MAX) == NULL);
+    IVP_ASSERT_TRUE(ivp_alloc(a, SIZE_MAX - 100) == NULL);
+    void *small = ivp_alloc(a, 64);
+    IVP_ASSERT_TRUE(small != NULL);
+    IVP_ASSERT_TRUE(ivp_realloc(a, small, 64, SIZE_MAX) == NULL);
+    IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)3);
+    /* the count lives outside the region: a restore keeps it */
+    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(region, NULL);
+    IVP_ASSERT_TRUE(ivp_alloc(a, 2u << 20) == NULL);
+    IVP_ASSERT_EQ(ivp_memory_region_restore(region, checkpoint), IVP_OK);
+    IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)4);
+    ivp_memory_checkpoint_destroy(checkpoint);
+    ivp_memory_region_destroy(region);
+}
+
+IVP_TEST(a_checkpoint_is_not_kept_in_its_own_region)
+{
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20);
+    IVP_ASSERT_TRUE(ivp_memory_region_checkpoint(
+                        region, ivp_memory_region_allocator(region)) == NULL);
+    ivp_memory_region_t *other = ivp_memory_region_create(1u << 20);
+    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(
+        region, ivp_memory_region_allocator(other));
+    IVP_ASSERT_TRUE(checkpoint != NULL);
+    IVP_ASSERT_EQ(ivp_memory_region_restore(region, checkpoint), IVP_OK);
+    ivp_memory_checkpoint_destroy(checkpoint);
+    ivp_memory_region_destroy(other);
+    ivp_memory_region_destroy(region);
+}
+
+/* A region created after another was destroyed may get its address; the
+ * old region's checkpoints must still be refused. */
+IVP_TEST(a_new_region_refuses_an_old_regions_checkpoint)
+{
+    for (int attempt = 0; attempt < 8; attempt++) {
+        ivp_memory_region_t *old = ivp_memory_region_create(1u << 20);
+        ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(old, NULL);
+        ivp_memory_region_destroy(old);
+        ivp_memory_region_t *fresh = ivp_memory_region_create(1u << 20);
+        IVP_ASSERT_EQ(ivp_memory_region_restore(fresh, checkpoint),
+                      IVP_ERR_INVALID_ARG);
+        ivp_memory_checkpoint_destroy(checkpoint);
+        ivp_memory_region_destroy(fresh);
+    }
+}
+
 int main(void)
 {
     IVP_REGISTER(blocks_are_aligned_zeroed_and_inside_the_region);
@@ -169,5 +221,8 @@ int main(void)
     IVP_REGISTER(restore_brings_back_blocks_bytes_and_allocator_state);
     IVP_REGISTER(restore_rejects_another_regions_checkpoint);
     IVP_REGISTER(a_full_region_fails_allocations_until_restored);
+    IVP_REGISTER(oversized_requests_fail_and_are_counted);
+    IVP_REGISTER(a_checkpoint_is_not_kept_in_its_own_region);
+    IVP_REGISTER(a_new_region_refuses_an_old_regions_checkpoint);
     IVP_RUN_ALL();
 }

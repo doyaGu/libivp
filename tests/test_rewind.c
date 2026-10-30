@@ -678,6 +678,123 @@ IVP_TEST(create_requires_the_world_in_the_region)
     ivp_memory_region_destroy(region);
 }
 
+/* Creating a rewinder that cannot store its first keyframe fails cleanly,
+ * and its storage may not be the region it checkpoints. */
+IVP_TEST(create_fails_cleanly)
+{
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24);
+    const ivp_allocator_t *world = ivp_memory_region_allocator(region);
+    ivp_environment_config_t world_config;
+    rw_config(&world_config);
+    world_config.allocator = (ivp_allocator_t *)world;
+    ivp_environment_t *env = ivp_environment_create(&world_config);
+    IVP_ASSERT_TRUE(env != NULL);
+    ivp_rewind_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.keyframe_interval = 10;
+    config.keyframe_capacity = 4;
+    ivp_result_t result = IVP_OK;
+
+    config.storage = world;
+    IVP_ASSERT_TRUE(ivp_rewind_create(env, region, &config, &result) == NULL);
+    IVP_ASSERT_EQ(result, IVP_ERR_INVALID_ARG);
+
+    ivp_test_fault_allocator_t fault;
+    ivp_test_fault_allocator_init_tracked(&fault, NULL);
+    config.storage = &fault.allocator;
+    int failures = 0;
+    for (int fail_at = 1;; fail_at++) {
+        ivp_test_fault_allocator_reset(&fault, fail_at);
+        ivp_rewind_t *rewind = ivp_rewind_create(env, region, &config, &result);
+        bool injected = fault.attempts >= fail_at;
+        fault.fail_at = INT_MAX;
+        if (!injected) {
+            IVP_ASSERT_TRUE(rewind != NULL);
+            ivp_rewind_destroy(rewind);
+            break;
+        }
+        IVP_ASSERT_TRUE(rewind == NULL);
+        IVP_ASSERT_EQ(result, IVP_ERR_OUT_OF_MEMORY);
+        IVP_ASSERT_EQ(fault.live_bytes, (size_t)0);
+        failures++;
+    }
+    IVP_ASSERT_TRUE(failures > 0);
+    IVP_ASSERT_EQ(fault.live_bytes, (size_t)0);
+    ivp_environment_destroy(env);
+    ivp_memory_region_destroy(region);
+}
+
+/* caller state in the region that grows by a block every PSI */
+typedef struct rw_hog {
+    const ivp_allocator_t *alloc;
+    int blocks;
+} rw_hog_t;
+
+#define RW_HOG_BLOCK (64u * 1024u)
+
+static void rw_hog_apply(void *ctx, ivp_environment_t *env, uint64_t psi,
+                         const void *data, size_t size)
+{
+    (void)env;
+    (void)psi;
+    (void)data;
+    (void)size;
+    rw_hog_t *hog = (rw_hog_t *)ctx;
+    if (ivp_alloc(hog->alloc, RW_HOG_BLOCK)) hog->blocks++;
+}
+
+/* A region that fills up during a recorded PSI is reported; the PSI stays
+ * recorded, and a replay meets the same refusal and the same world. */
+IVP_TEST(a_full_region_is_reported_and_replayed_alike)
+{
+    rw_fixture_t *fixture = rw_fixture_create();
+    IVP_ASSERT_TRUE(fixture != NULL);
+    rw_session_t session;
+    memset(&session, 0, sizeof(session));
+    session.region = ivp_memory_region_create(4u << 20);
+    const ivp_allocator_t *world = ivp_memory_region_allocator(session.region);
+    ivp_environment_config_t world_config;
+    rw_config(&world_config);
+    world_config.allocator = (ivp_allocator_t *)world;
+    session.env = ivp_environment_create(&world_config);
+    session.controllers = (rw_controllers_t *)ivp_alloc(world, sizeof(*session.controllers));
+    rw_hog_t *hog = (rw_hog_t *)ivp_alloc(world, sizeof(*hog));
+    IVP_ASSERT_TRUE(session.env && session.controllers && hog);
+    hog->alloc = world;
+    IVP_ASSERT_TRUE(rw_build(session.env, &fixture->assets, session.controllers));
+    ivp_rewind_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.keyframe_interval = 10;
+    config.keyframe_capacity = 64;
+    config.apply = rw_hog_apply;
+    config.apply_ctx = hog;
+    ivp_result_t result = IVP_OK;
+    session.rewind = ivp_rewind_create(session.env, session.region, &config, &result);
+    IVP_ASSERT_TRUE(session.rewind != NULL);
+
+    uint64_t full = 0;
+    for (int psi = 0; psi < 200 && !full; psi++) {
+        result = ivp_rewind_step(session.rewind, NULL, 0);
+        if (result != IVP_OK) {
+            IVP_ASSERT_EQ(result, IVP_ERR_OUT_OF_MEMORY);
+            full = ivp_rewind_current_psi(session.rewind);
+        }
+    }
+    IVP_ASSERT_TRUE(full > 10);
+    IVP_ASSERT_EQ(ivp_rewind_recorded_psi(session.rewind), full);
+    int blocks = hog->blocks;
+    rw_state_t at_full;
+    rw_capture(session.env, &at_full);
+
+    IVP_ASSERT_EQ(ivp_rewind_seek(session.rewind, full - 5), IVP_OK);
+    IVP_ASSERT_TRUE(hog->blocks < blocks);
+    IVP_ASSERT_EQ(ivp_rewind_seek(session.rewind, full), IVP_ERR_OUT_OF_MEMORY);
+    IVP_ASSERT_EQ(hog->blocks, blocks);
+    IVP_ASSERT_TRUE(rw_matches(&at_full, session.env, "replayed full region", full));
+    rw_close(&session);
+    rw_fixture_destroy(fixture);
+}
+
 int main(void)
 {
     IVP_REGISTER(recording_and_seeking_reproduce_the_reference);
@@ -688,5 +805,7 @@ int main(void)
     IVP_REGISTER(seeking_keeps_objects_and_controller_states_in_place);
     IVP_REGISTER(seeking_back_removes_later_objects);
     IVP_REGISTER(create_requires_the_world_in_the_region);
+    IVP_REGISTER(create_fails_cleanly);
+    IVP_REGISTER(a_full_region_is_reported_and_replayed_alike);
     IVP_RUN_ALL();
 }

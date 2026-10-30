@@ -9,18 +9,23 @@
  * point, and runs to the end again; it is restored once more and runs part
  * of the way.  The scenes cover what world snapshots could not: vehicles,
  * objects of several convex ledges, merged cores, objects created and
- * destroyed after the checkpoint, and motion controllers. */
+ * destroyed after the checkpoint, motion controllers, a buoyancy pool and
+ * a forcefield following a caller's set, and a world whose islands run on
+ * a task pool (which must stay outside the region). */
 #include "ivp_test.h"
 
 #include <ivp/base/ivp_memory_region.h>
 #include <ivp/builder/ivp_build_ledge.h>
 #include <ivp/builder/ivp_build_ledge_soup.h>
 #include <ivp/builder/ivp_build_surface.h>
+#include <ivp/containers/ivp_set.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
 #include <ivp/controllers/ivp_constraint.h>
+#include <ivp/controllers/ivp_controller_buoyancy.h>
 #include <ivp/controllers/ivp_controller_golem.h>
 #include <ivp/controllers/ivp_controller_motion.h>
 #include <ivp/controllers/ivp_controller_raycast_car.h>
+#include <ivp/controllers/ivp_forcefield.h>
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_merge_core.h>
@@ -53,6 +58,7 @@ typedef struct ck_world {
 
 typedef struct ck_scene {
     const char *name;
+    int workers;   /* parallel_worker_count */
     size_t state_size;
     bool (*build)(ck_world_t *world);
     void (*drive)(ck_world_t *world, int psi);   /* before PSI psi; may be NULL */
@@ -342,16 +348,96 @@ static bool ck_build_driven(ck_world_t *world)
            ivp_environment_add_controller_to_core(world->env, golem, b[4]);
 }
 
+#define CK_POOL_OBJECTS 6
+
+typedef struct ck_pool {
+    ivp_object_t *members[CK_POOL_OBJECTS];
+    ivp_buoyancy_state_t pool;
+    ivp_set_active_t set;   /* the caller's set, in the region */
+    ivp_forcefield_state_t field;
+    bool pool_ready;
+    bool field_ready;
+} ck_pool_t;
+
+/* a buoyancy pool over some objects, and a forcefield following a set of
+ * cores the scene changes during the run */
+static bool ck_build_pool(ck_world_t *world)
+{
+    ck_pool_t *s = (ck_pool_t *)world->scene;
+    if (!ck_ground(world)) return false;
+    for (int i = 0; i < CK_POOL_OBJECTS; i++) {
+        s->members[i] = ck_body(world, i & 1 ? NULL : ck_cube(world), i & 1,
+                                -2.5 + i, -1.0 - 0.3 * i, 0.4 * (i % 3));
+        if (!s->members[i]) return false;
+    }
+    ivp_buoyancy_init(&s->pool, IVP_REAL(0.8), IVP_REAL(1.2));
+    s->pool_ready = true;
+    ivp_buoyancy_set_objects(&s->pool, s->members, 4);
+    if (!ivp_controller_handle_is_valid(ivp_environment_add_controller(
+            world->env, 200, ivp_controller_buoyancy, &s->pool))) {
+        return false;
+    }
+    ivp_set_active_init(&s->set, world->alloc, 8);
+    ivp_set_active_add(&s->set, s->members[4]->physical_core);
+    ivp_vec3r_t push = ivp_vec3r(IVP_REAL(1.5), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_forcefield_state_init(&s->field, IVP_FORCEFIELD_CONSTANT, &push);
+    s->field_ready = ivp_forcefield_attach_set(&s->field, world->env, &s->set, false);
+    return s->field_ready;
+}
+
+static void ck_drive_pool(ck_world_t *world, int psi)
+{
+    ck_pool_t *s = (ck_pool_t *)world->scene;
+    if (psi == 100) ivp_set_active_add(&s->set, s->members[5]->physical_core);
+    if (psi == 220) ivp_set_active_remove(&s->set, s->members[4]->physical_core);
+}
+
+static void ck_teardown_pool(ck_world_t *world)
+{
+    ck_pool_t *s = (ck_pool_t *)world->scene;
+    if (s->field_ready) ivp_forcefield_destroy(&s->field);
+    ivp_set_active_destroy(&s->set);
+    if (s->pool_ready) ivp_buoyancy_state_destroy(&s->pool);
+}
+
+#define CK_ISLANDS 200
+
+/* many separate falling cubes: until they land each is an island of its
+ * own that the parallel kernels take */
+static bool ck_build_islands(ck_world_t *world)
+{
+    if (!ck_ground(world)) return false;
+    for (int i = 0; i < CK_ISLANDS; i++) {
+        double x = -19.0 + 2.0 * (i % 20);
+        double z = -9.0 + 2.0 * (i / 20);
+        ivp_object_t *cube = ck_body(world, ck_cube(world), false, x,
+                                     -3.0 - 0.05 * (i % 7), z);
+        if (!cube) return false;
+        ck_push(cube, 0.1 * (i % 3 - 1), 0.0, 0.05 * (i % 2));
+    }
+    return true;
+}
+
 static const ck_scene_t ck_scenes[] = {
-    { "piles", 1, ck_build_piles, NULL, NULL },
-    { "linked", sizeof(ck_linked_t), ck_build_linked, NULL, NULL },
-    { "vehicle", sizeof(ck_vehicle_t), ck_build_vehicle, ck_drive_vehicle,
+    { "piles", 1, 1, ck_build_piles, NULL, NULL },
+    { "linked", 1, sizeof(ck_linked_t), ck_build_linked, NULL, NULL },
+    { "vehicle", 1, sizeof(ck_vehicle_t), ck_build_vehicle, ck_drive_vehicle,
       ck_teardown_vehicle },
-    { "compound", 1, ck_build_compound, NULL, NULL },
-    { "merged", sizeof(ck_merged_t), ck_build_merged, ck_drive_merged, NULL },
-    { "spawn", sizeof(ck_spawn_t), ck_build_spawn, ck_drive_spawn, NULL },
-    { "driven", sizeof(ck_driven_t), ck_build_driven, NULL, NULL },
+    { "compound", 1, 1, ck_build_compound, NULL, NULL },
+    { "merged", 1, sizeof(ck_merged_t), ck_build_merged, ck_drive_merged, NULL },
+    { "spawn", 1, sizeof(ck_spawn_t), ck_build_spawn, ck_drive_spawn, NULL },
+    { "driven", 1, sizeof(ck_driven_t), ck_build_driven, NULL, NULL },
+    { "pool", 1, sizeof(ck_pool_t), ck_build_pool, ck_drive_pool, ck_teardown_pool },
+    { "islands", 4, 1, ck_build_islands, NULL, NULL },
 };
+
+static const ck_scene_t *ck_find_scene(const char *name)
+{
+    for (size_t i = 0; i < sizeof(ck_scenes) / sizeof(ck_scenes[0]); i++) {
+        if (!strcmp(ck_scenes[i].name, name)) return &ck_scenes[i];
+    }
+    return NULL;
+}
 
 /* ── Worlds ──────────────────────────────────────────────────────────── */
 
@@ -418,6 +504,7 @@ static bool ck_world_build(const ck_scene_t *scene, const ck_assets_t *assets,
     ivp_environment_config_init(&config);
     config.disable_performance_counter = true;
     config.allocator = (ivp_allocator_t *)world->alloc;
+    config.parallel_worker_count = scene->workers;
     world->env = ivp_environment_create(&config);
     world->scene = ivp_alloc(world->alloc, scene->state_size);
     if (!world->env || !world->scene || !scene->build(world)) {
@@ -549,33 +636,61 @@ IVP_TEST(scenes_exercise_their_features)
     IVP_ASSERT_TRUE(ck_assets_init(&assets));
     ck_world_t world;
 
-    IVP_ASSERT_TRUE(ck_world_build(&ck_scenes[2], &assets, &world));   /* vehicle */
+    const ck_scene_t *scene = ck_find_scene("vehicle");
+    IVP_ASSERT_TRUE(ck_world_build(scene, &assets, &world));
     ivp_object_t *body = ((ck_vehicle_t *)world.scene)->car.car_body;
     ivp_vec3r_t start, end;
     ivp_object_get_position(body, &start);
-    for (int psi = 0; psi < CK_PSIS; psi++) ck_step(&ck_scenes[2], &world, psi);
+    for (int psi = 0; psi < CK_PSIS; psi++) ck_step(scene, &world, psi);
     ivp_object_get_position(body, &end);
     IVP_ASSERT_TRUE(end.k[2] - start.k[2] > 1.0);   /* it drove */
     IVP_ASSERT_TRUE(end.k[1] < CK_GROUND_TOP);      /* on its wheels, above ground */
-    ck_world_destroy(&ck_scenes[2], &world);
+    ck_world_destroy(scene, &world);
 
-    IVP_ASSERT_TRUE(ck_world_build(&ck_scenes[5], &assets, &world));   /* spawn */
+    scene = ck_find_scene("spawn");
+    IVP_ASSERT_TRUE(ck_world_build(scene, &assets, &world));
     int count = ivp_environment_get_object_count(world.env);
     int most = count;
     for (int psi = 0; psi < CK_PSIS; psi++) {
-        ck_step(&ck_scenes[5], &world, psi);
+        ck_step(scene, &world, psi);
         int now = ivp_environment_get_object_count(world.env);
         if (now > most) most = now;
     }
     IVP_ASSERT_TRUE(most > count + 1);
-    ck_world_destroy(&ck_scenes[5], &world);
+    ck_world_destroy(scene, &world);
 
-    IVP_ASSERT_TRUE(ck_world_build(&ck_scenes[4], &assets, &world));   /* merged */
+    scene = ck_find_scene("merged");
+    IVP_ASSERT_TRUE(ck_world_build(scene, &assets, &world));
     ck_merged_t *merged = (ck_merged_t *)world.scene;
     IVP_ASSERT_TRUE(merged->later[0]->physical_core != merged->later[1]->physical_core);
-    for (int psi = 0; psi < 200; psi++) ck_step(&ck_scenes[4], &world, psi);
+    for (int psi = 0; psi < 200; psi++) ck_step(scene, &world, psi);
     IVP_ASSERT_TRUE(merged->later[0]->physical_core == merged->later[1]->physical_core);
-    ck_world_destroy(&ck_scenes[4], &world);
+    ck_world_destroy(scene, &world);
+
+    /* the pool floats its members; the field follows the set */
+    scene = ck_find_scene("pool");
+    IVP_ASSERT_TRUE(ck_world_build(scene, &assets, &world));
+    ck_pool_t *pool = (ck_pool_t *)world.scene;
+    ivp_vec3r_t floating, pushed_late;
+    for (int psi = 0; psi < CK_PSIS; psi++) ck_step(scene, &world, psi);
+    ivp_object_get_position(pool->members[0], &floating);
+    ivp_object_get_position(pool->members[5], &pushed_late);
+    IVP_ASSERT_TRUE(floating.k[1] < IVP_REAL(1.0));   /* held above the ground */
+    IVP_ASSERT_TRUE(pushed_late.k[0] > IVP_REAL(2.6));  /* moved +x after joining */
+    ck_world_destroy(scene, &world);
+
+    /* the islands run on the task pool (debug builds run them serially) */
+    scene = ck_find_scene("islands");
+    IVP_ASSERT_TRUE(ck_world_build(scene, &assets, &world));
+    IVP_ASSERT_EQ(ivp_environment_get_parallel_worker_count(world.env), 4);
+    for (int psi = 0; psi < 30; psi++) ck_step(scene, &world, psi);
+#ifndef IVP_DEBUG_BUILD
+    ivp_parallel_stats_t stats;
+    memset(&stats, 0, sizeof(stats));
+    ivp_environment_get_parallel_stats(world.env, &stats);
+    IVP_ASSERT_TRUE(stats.island_dispatches > 0 && stats.max_workers_used > 1);
+#endif
+    ck_world_destroy(scene, &world);
     ck_assets_destroy(&assets);
 }
 
