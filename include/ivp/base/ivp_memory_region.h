@@ -25,6 +25,11 @@
 #ifndef IVP_MEMORY_REGION_H
 #define IVP_MEMORY_REGION_H
 
+/* the library defines IVP_ENABLE_CHECKPOINTS for its users (CMake option) */
+#if !IVP_ENABLE_CHECKPOINTS
+#error "ivp_memory_region.h needs libivp built with IVP_ENABLE_CHECKPOINTS=ON"
+#endif
+
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/base/ivp_result.h>
 
