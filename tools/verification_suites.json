@@ -158,7 +158,7 @@
         },
         "scenario_set": null,
         "test_sets": ["unit-common"],
-        "tests": ["test_locality", "test_memory_region", "test_rewind"]
+        "tests": ["test_checkpoint", "test_locality", "test_memory_region", "test_rewind"]
       }
     },
     {
