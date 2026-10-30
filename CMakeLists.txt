@@ -229,7 +229,8 @@ set(IVP_DYNAMICS_SOURCES
 )
 if (IVP_ENABLE_SNAPSHOTS)
     list(APPEND IVP_DYNAMICS_SOURCES
-            src/dynamics/ivp_snapshot.c)
+            src/dynamics/ivp_snapshot.c
+            src/dynamics/ivp_rewind.c)
 endif ()
 
 set(IVP_CONTROLLER_SOURCES
