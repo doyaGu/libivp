@@ -312,7 +312,7 @@ static bool rw_open_with(rw_fixture_t *fixture, int interval, int capacity,
                          rw_session_t *session)
 {
     memset(session, 0, sizeof(*session));
-    session->region = ivp_memory_region_create(0);
+    session->region = ivp_memory_region_create(0, NULL);
     if (!session->region) return false;
     const ivp_allocator_t *world = ivp_memory_region_allocator(session->region);
     ivp_environment_config_t world_config;
@@ -608,7 +608,7 @@ IVP_TEST(seeking_back_removes_later_objects)
 /* A world that does not live in the region cannot be recorded. */
 IVP_TEST(create_requires_the_world_in_the_region)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24);
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24, NULL);
     IVP_ASSERT_TRUE(region != NULL);
     ivp_environment_config_t world_config;
     rw_config(&world_config);
@@ -628,7 +628,7 @@ IVP_TEST(create_requires_the_world_in_the_region)
  * and its storage may not be the region it checkpoints. */
 IVP_TEST(create_fails_cleanly)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24);
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 24, NULL);
     const ivp_allocator_t *world = ivp_memory_region_allocator(region);
     ivp_environment_config_t world_config;
     rw_config(&world_config);
@@ -697,7 +697,7 @@ IVP_TEST(a_full_region_is_reported_and_replayed_alike)
     IVP_ASSERT_TRUE(fixture != NULL);
     rw_session_t session;
     memset(&session, 0, sizeof(session));
-    session.region = ivp_memory_region_create(4u << 20);
+    session.region = ivp_memory_region_create(4u << 20, NULL);
     const ivp_allocator_t *world = ivp_memory_region_allocator(session.region);
     ivp_environment_config_t world_config;
     rw_config(&world_config);

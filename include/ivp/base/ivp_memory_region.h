@@ -39,8 +39,11 @@ typedef struct ivp_memory_region ivp_memory_region_t;
 typedef struct ivp_memory_checkpoint ivp_memory_checkpoint_t;
 
 /* Reserve `capacity` bytes of address space (0: 1 GiB); memory is committed
- * as the allocator needs it.  NULL on failure. */
-ivp_memory_region_t *ivp_memory_region_create(size_t capacity);
+ * as the allocator needs it.  Returns NULL and sets *result (if non-NULL)
+ * on failure: IVP_ERR_OUT_OF_MEMORY when the address space cannot be
+ * reserved. */
+ivp_memory_region_t *ivp_memory_region_create(size_t capacity,
+                                              ivp_result_t *result);
 
 /* Release the region and everything allocated from it. */
 void ivp_memory_region_destroy(ivp_memory_region_t *region);
@@ -60,10 +63,13 @@ size_t ivp_memory_region_used(const ivp_memory_region_t *region);
 size_t ivp_memory_region_failures(const ivp_memory_region_t *region);
 
 /* Copy the region in use, outside the region (storage NULL: the default
- * allocator; the region's own allocator is refused, since a restore would
- * overwrite the copy).  NULL when storage cannot be allocated. */
+ * allocator).  Returns NULL and sets *result (if non-NULL) on failure:
+ * IVP_ERR_INVALID_ARG without a region or when storage is the region's own
+ * allocator, whose copy a restore would overwrite; IVP_ERR_OUT_OF_MEMORY
+ * when storage cannot hold the copy. */
 ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
-    ivp_memory_region_t *region, const ivp_allocator_t *storage);
+    ivp_memory_region_t *region, const ivp_allocator_t *storage,
+    ivp_result_t *result);
 
 /* Put the region back to checkpoint, which must have been taken of this
  * region (not of an earlier one at the same address); IVP_ERR_INVALID_ARG

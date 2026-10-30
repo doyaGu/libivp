@@ -465,7 +465,7 @@ static bool ck_world_build(const ck_scene_t *scene, const ck_assets_t *assets,
 {
     memset(world, 0, sizeof(*world));
     world->assets = assets;
-    world->region = ivp_memory_region_create(0);
+    world->region = ivp_memory_region_create(0, NULL);
     if (!world->region) return false;
     world->alloc = ivp_memory_region_allocator(world->region);
     ivp_environment_config_t config;
@@ -556,7 +556,7 @@ static bool ck_check_scene(const ck_scene_t *scene, const ck_assets_t *assets,
     if (!ck_world_build(scene, assets, &world)) return false;
     bool ok = ck_run(scene, &world, 0, capture, expected) == capture;
     ivp_memory_checkpoint_t *checkpoint =
-        ivp_memory_region_checkpoint(world.region, NULL);
+        ivp_memory_region_checkpoint(world.region, NULL, NULL);
     ok = ok && checkpoint;
     int reached = ok ? ck_run(scene, &world, capture, CK_PSIS, expected) : -1;
     if (reached != CK_PSIS) {

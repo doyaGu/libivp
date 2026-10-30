@@ -292,12 +292,21 @@ static void *region_realloc(void *ptr, size_t old_size, size_t new_size,
 
 /* ── region ──────────────────────────────────────────────────────────── */
 
-ivp_memory_region_t *ivp_memory_region_create(size_t capacity)
+static void region_set_result(ivp_result_t *result, ivp_result_t value)
+{
+    if (result) *result = value;
+}
+
+ivp_memory_region_t *ivp_memory_region_create(size_t capacity,
+                                              ivp_result_t *result)
 {
     const ivp_allocator_t *host = ivp_default_allocator();
     ivp_memory_region_t *region =
         (ivp_memory_region_t *)ivp_alloc(host, sizeof(*region));
-    if (!region) return NULL;
+    if (!region) {
+        region_set_result(result, IVP_ERR_OUT_OF_MEMORY);
+        return NULL;
+    }
     memset(region, 0, sizeof(*region));
     region->id = atomic_fetch_add_explicit(&region_next_id, 1, memory_order_relaxed);
     atomic_init(&region->failures, 0);
@@ -311,6 +320,7 @@ ivp_memory_region_t *ivp_memory_region_create(size_t capacity)
         !region_commit(region, header)) {
         if (region->base) region_release(region->base, region->capacity);
         ivp_free(host, region, sizeof(*region));
+        region_set_result(result, IVP_ERR_OUT_OF_MEMORY);
         return NULL;
     }
     memset(region->base, 0, header);
@@ -319,6 +329,7 @@ ivp_memory_region_t *ivp_memory_region_create(size_t capacity)
     region->allocator.realloc = region_realloc;
     region->allocator.free = region_free;
     region->allocator.ctx = region;
+    region_set_result(result, IVP_OK);
     return region;
 }
 
@@ -354,15 +365,21 @@ size_t ivp_memory_region_failures(const ivp_memory_region_t *region)
 /* ── checkpoints ─────────────────────────────────────────────────────── */
 
 ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
-    ivp_memory_region_t *region, const ivp_allocator_t *storage)
+    ivp_memory_region_t *region, const ivp_allocator_t *storage,
+    ivp_result_t *result)
 {
-    if (!region) return NULL;
     if (!storage) storage = ivp_default_allocator();
     /* a copy kept in the region itself would be overwritten by a restore */
-    if (storage == &region->allocator) return NULL;
+    if (!region || storage == &region->allocator) {
+        region_set_result(result, IVP_ERR_INVALID_ARG);
+        return NULL;
+    }
     ivp_memory_checkpoint_t *checkpoint =
         (ivp_memory_checkpoint_t *)ivp_alloc(storage, sizeof(*checkpoint));
-    if (!checkpoint) return NULL;
+    if (!checkpoint) {
+        region_set_result(result, IVP_ERR_OUT_OF_MEMORY);
+        return NULL;
+    }
     checkpoint->region = region;
     checkpoint->region_id = region->id;
     checkpoint->storage = *storage;
@@ -370,9 +387,11 @@ ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
     checkpoint->bytes = (unsigned char *)ivp_alloc(storage, checkpoint->size);
     if (!checkpoint->bytes) {
         ivp_free(storage, checkpoint, sizeof(*checkpoint));
+        region_set_result(result, IVP_ERR_OUT_OF_MEMORY);
         return NULL;
     }
     region_copy_out(checkpoint->bytes, region->base, checkpoint->size);
+    region_set_result(result, IVP_OK);
     return checkpoint;
 }
 

@@ -74,15 +74,16 @@ ivp_rewind_t *ivp_rewind_create(ivp_environment_t *env,
     ivp_rewind_t *rewind = (ivp_rewind_t *)ivp_alloc(allocator, sizeof(*rewind));
     rewind_keyframe_t *keyframes = (rewind_keyframe_t *)ivp_alloc(
         allocator, sizeof(*keyframes) * (size_t)config->keyframe_capacity);
+    ivp_result_t captured = IVP_ERR_OUT_OF_MEMORY;
     ivp_memory_checkpoint_t *first = rewind && keyframes
-        ? ivp_memory_region_checkpoint(region, allocator) : NULL;
+        ? ivp_memory_region_checkpoint(region, allocator, &captured) : NULL;
     if (!first) {
         if (keyframes) {
             ivp_free(allocator, keyframes,
                      sizeof(*keyframes) * (size_t)config->keyframe_capacity);
         }
         if (rewind) ivp_free(allocator, rewind, sizeof(*rewind));
-        rewind_set_result(result, IVP_ERR_OUT_OF_MEMORY);
+        rewind_set_result(result, captured);
         return NULL;
     }
     memset(rewind, 0, sizeof(*rewind));
@@ -210,8 +211,10 @@ ivp_result_t ivp_rewind_step(ivp_rewind_t *rewind, const void *input,
     }
     ivp_memory_checkpoint_t *checkpoint = NULL;
     if (keyframe_due) {
-        checkpoint = ivp_memory_region_checkpoint(rewind->region, allocator);
-        if (!checkpoint) return IVP_ERR_OUT_OF_MEMORY;
+        ivp_result_t captured = IVP_OK;
+        checkpoint = ivp_memory_region_checkpoint(rewind->region, allocator,
+                                                  &captured);
+        if (!checkpoint) return captured;
     }
     rewind_input_t copy = { NULL, size };
     if (size) {

@@ -28,7 +28,7 @@ static size_t mr_size(int i)
 
 IVP_TEST(blocks_are_aligned_zeroed_and_inside_the_region)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(0);
+    ivp_memory_region_t *region = ivp_memory_region_create(0, NULL);
     IVP_ASSERT_TRUE(region != NULL);
     const ivp_allocator_t *a = ivp_memory_region_allocator(region);
     IVP_ASSERT_TRUE(ivp_memory_region_is_allocator(a));
@@ -60,7 +60,7 @@ IVP_TEST(blocks_are_aligned_zeroed_and_inside_the_region)
 
 IVP_TEST(realloc_keeps_contents_and_zeroes_growth)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(0);
+    ivp_memory_region_t *region = ivp_memory_region_create(0, NULL);
     const ivp_allocator_t *a = ivp_memory_region_allocator(region);
     unsigned char *p = (unsigned char *)ivp_alloc(a, 10);
     for (int i = 0; i < 10; i++) p[i] = (unsigned char)(i + 1);
@@ -107,14 +107,14 @@ static uint64_t mr_churn(const ivp_allocator_t *a, mr_table_t *t, int rounds)
 
 IVP_TEST(restore_brings_back_blocks_bytes_and_allocator_state)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(0);
+    ivp_memory_region_t *region = ivp_memory_region_create(0, NULL);
     const ivp_allocator_t *a = ivp_memory_region_allocator(region);
     /* the block table lives in the region, like a world's own pointers */
     mr_table_t *table = (mr_table_t *)ivp_alloc(a, sizeof(*table));
     IVP_ASSERT_TRUE(mr_churn(a, table, 7) != 0);
     size_t used = ivp_memory_region_used(region);
     ivp_memory_checkpoint_t *checkpoint =
-        ivp_memory_region_checkpoint(region, NULL);
+        ivp_memory_region_checkpoint(region, NULL, NULL);
     IVP_ASSERT_TRUE(checkpoint != NULL);
     IVP_ASSERT_EQ(ivp_memory_checkpoint_size(checkpoint), used);
 
@@ -135,9 +135,9 @@ IVP_TEST(restore_brings_back_blocks_bytes_and_allocator_state)
 
 IVP_TEST(restore_rejects_another_regions_checkpoint)
 {
-    ivp_memory_region_t *one = ivp_memory_region_create(1u << 20);
-    ivp_memory_region_t *two = ivp_memory_region_create(1u << 20);
-    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(one, NULL);
+    ivp_memory_region_t *one = ivp_memory_region_create(1u << 20, NULL);
+    ivp_memory_region_t *two = ivp_memory_region_create(1u << 20, NULL);
+    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(one, NULL, NULL);
     IVP_ASSERT_EQ(ivp_memory_region_restore(two, checkpoint), IVP_ERR_INVALID_ARG);
     IVP_ASSERT_EQ(ivp_memory_region_restore(two, NULL), IVP_ERR_INVALID_ARG);
     IVP_ASSERT_EQ(ivp_memory_region_restore(one, checkpoint), IVP_OK);
@@ -148,10 +148,10 @@ IVP_TEST(restore_rejects_another_regions_checkpoint)
 
 IVP_TEST(a_full_region_fails_allocations_until_restored)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20);
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20, NULL);
     IVP_ASSERT_TRUE(region != NULL);
     const ivp_allocator_t *a = ivp_memory_region_allocator(region);
-    ivp_memory_checkpoint_t *empty = ivp_memory_region_checkpoint(region, NULL);
+    ivp_memory_checkpoint_t *empty = ivp_memory_region_checkpoint(region, NULL, NULL);
     int count = 0;
     while (ivp_alloc(a, 40000)) count++;
     IVP_ASSERT_TRUE(count > 10 && count < 30);
@@ -164,7 +164,7 @@ IVP_TEST(a_full_region_fails_allocations_until_restored)
 
 IVP_TEST(oversized_requests_fail_and_are_counted)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20);
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20, NULL);
     const ivp_allocator_t *a = ivp_memory_region_allocator(region);
     IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)0);
     /* rounding SIZE_MAX up to a page must not wrap to a tiny block */
@@ -175,7 +175,7 @@ IVP_TEST(oversized_requests_fail_and_are_counted)
     IVP_ASSERT_TRUE(ivp_realloc(a, small, 64, SIZE_MAX) == NULL);
     IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)3);
     /* the count lives outside the region: a restore keeps it */
-    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(region, NULL);
+    ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(region, NULL, NULL);
     IVP_ASSERT_TRUE(ivp_alloc(a, 2u << 20) == NULL);
     IVP_ASSERT_EQ(ivp_memory_region_restore(region, checkpoint), IVP_OK);
     IVP_ASSERT_EQ(ivp_memory_region_failures(region), (size_t)4);
@@ -185,12 +185,18 @@ IVP_TEST(oversized_requests_fail_and_are_counted)
 
 IVP_TEST(a_checkpoint_is_not_kept_in_its_own_region)
 {
-    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20);
+    ivp_result_t result = IVP_OK;
+    ivp_memory_region_t *region = ivp_memory_region_create(1u << 20, &result);
+    IVP_ASSERT_TRUE(region != NULL);
+    IVP_ASSERT_EQ(result, IVP_OK);
     IVP_ASSERT_TRUE(ivp_memory_region_checkpoint(
-                        region, ivp_memory_region_allocator(region)) == NULL);
-    ivp_memory_region_t *other = ivp_memory_region_create(1u << 20);
+                        region, ivp_memory_region_allocator(region), &result) == NULL);
+    IVP_ASSERT_EQ(result, IVP_ERR_INVALID_ARG);
+    IVP_ASSERT_TRUE(ivp_memory_region_checkpoint(NULL, NULL, &result) == NULL);
+    IVP_ASSERT_EQ(result, IVP_ERR_INVALID_ARG);
+    ivp_memory_region_t *other = ivp_memory_region_create(1u << 20, NULL);
     ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(
-        region, ivp_memory_region_allocator(other));
+        region, ivp_memory_region_allocator(other), NULL);
     IVP_ASSERT_TRUE(checkpoint != NULL);
     IVP_ASSERT_EQ(ivp_memory_region_restore(region, checkpoint), IVP_OK);
     ivp_memory_checkpoint_destroy(checkpoint);
@@ -203,10 +209,10 @@ IVP_TEST(a_checkpoint_is_not_kept_in_its_own_region)
 IVP_TEST(a_new_region_refuses_an_old_regions_checkpoint)
 {
     for (int attempt = 0; attempt < 8; attempt++) {
-        ivp_memory_region_t *old = ivp_memory_region_create(1u << 20);
-        ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(old, NULL);
+        ivp_memory_region_t *old = ivp_memory_region_create(1u << 20, NULL);
+        ivp_memory_checkpoint_t *checkpoint = ivp_memory_region_checkpoint(old, NULL, NULL);
         ivp_memory_region_destroy(old);
-        ivp_memory_region_t *fresh = ivp_memory_region_create(1u << 20);
+        ivp_memory_region_t *fresh = ivp_memory_region_create(1u << 20, NULL);
         IVP_ASSERT_EQ(ivp_memory_region_restore(fresh, checkpoint),
                       IVP_ERR_INVALID_ARG);
         ivp_memory_checkpoint_destroy(checkpoint);
