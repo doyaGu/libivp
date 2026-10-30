@@ -553,7 +553,7 @@ static uint64_t env_movement_check_salt(const ivp_environment_t *env,
  * object in stable order; the unit's membership, and with it the phase,
  * changes only through its own interactions. */
 bool ivp_env_must_perform_movement_check(struct ivp_environment *env,
-                                         const ivp_sim_unit_t *su)
+                                         ivp_sim_unit_t *su)
 {
     ivp_env_pipeline_t *pl = env->pl;
 #if IVP_EDIT_LOCALITY

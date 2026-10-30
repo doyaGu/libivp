@@ -149,13 +149,16 @@ bool ivp_core_core_add_link_to_obj(ivp_core_t *core, ivp_object_t *add_obj)
             IVP_ASSERT(ivp_core_object_at(core, j) != add_obj);
         }
     }
-    return ivp_pvec_add(&core->objects, add_obj) >= 0;
+    if (ivp_pvec_add(&core->objects, add_obj) < 0) return false;
+    ivp_sim_unit_forget_movement_check_salt(core->sim_unit);
+    return true;
 }
 
 /* IVP_Core::unlink_obj_from_core_and_maybe_destroy */
 void ivp_core_unlink_obj_from_core_and_maybe_destroy(ivp_core_t *core, ivp_object_t *remove_obj)
 {
     ivp_pvec_remove(&core->objects, remove_obj);
+    ivp_sim_unit_forget_movement_check_salt(core->sim_unit);
     if (ivp_pvec_len(&core->objects) == 0) {
         if (IVP_MTIS_SIMULATED(core->movement_state)) ivp_core_stop_physical_movement(core);
         ivp_core_delete(core);

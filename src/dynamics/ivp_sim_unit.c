@@ -239,9 +239,15 @@ void ivp_sim_unit_remove_controller_of_core(ivp_sim_unit_t *su, ivp_core_t *core
 
 bool ivp_sim_unit_add_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core)
 {
-    return su && core && ivp_pvec_add(&su->sim_unit_cores, core) >= 0;
+    if (!su || !core || ivp_pvec_add(&su->sim_unit_cores, core) < 0) return false;
+    ivp_sim_unit_forget_movement_check_salt(su);
+    return true;
 }
-void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core) { ivp_pvec_remove(&su->sim_unit_cores, core); }
+void ivp_sim_unit_rem_sim_unit_core(ivp_sim_unit_t *su, ivp_core_t *core)
+{
+    ivp_pvec_remove(&su->sim_unit_cores, core);
+    ivp_sim_unit_forget_movement_check_salt(su);
+}
 
 void ivp_sim_unit_sim_unit_remove_core(ivp_sim_unit_t *su, ivp_core_t *del_core)
 {
@@ -446,7 +452,7 @@ uint64_t ivp_sim_unit_stable_order_key(const ivp_sim_unit_t *su)
     return key;
 }
 
-uint64_t ivp_sim_unit_movement_check_salt(const ivp_sim_unit_t *su)
+static uint64_t su_scan_movement_check_salt(const ivp_sim_unit_t *su)
 {
     const ivp_object_t *first = NULL;
     for (int core_index = 0;
@@ -467,6 +473,34 @@ uint64_t ivp_sim_unit_movement_check_salt(const ivp_sim_unit_t *su)
     }
     IVP_ASSERT(first);
     return first ? first->movement_check_salt : 0u;
+}
+
+/* The salt changes only with the unit's cores and their objects, so the
+ * scan runs once per change instead of once per check; debug builds verify
+ * the cached value. */
+uint64_t ivp_sim_unit_movement_check_salt(ivp_sim_unit_t *su)
+{
+#if IVP_EDIT_LOCALITY
+    if (!su->movement_check_salt_valid) {
+        su->movement_check_salt = su_scan_movement_check_salt(su);
+        su->movement_check_salt_valid = true;
+    }
+    IVP_IF(1) {
+        IVP_ASSERT(su->movement_check_salt == su_scan_movement_check_salt(su));
+    }
+    return su->movement_check_salt;
+#else
+    return su_scan_movement_check_salt(su);
+#endif
+}
+
+void ivp_sim_unit_forget_movement_check_salt(ivp_sim_unit_t *su)
+{
+#if IVP_EDIT_LOCALITY
+    if (su) su->movement_check_salt_valid = false;
+#else
+    (void)su;
+#endif
 }
 
 static int core_identity_compare(const void *left, const void *right)
@@ -840,6 +874,7 @@ static void su_split_sim_unit(ivp_sim_unit_t *su, ivp_core_t *split_father)
             }
         } else {
             ivp_pvec_remove_at(&su->sim_unit_cores, i);
+            ivp_sim_unit_forget_movement_check_salt(su);
             i--;
             bool added = ivp_sim_unit_add_sim_unit_core(split_new_unit, my_core);
             IVP_ASSERT(added);
@@ -1552,6 +1587,7 @@ static bool ctrl_commit_controller_cores(
                 ivp_core_t *core = su_core_at(restored, j);
                 IVP_ASSERT(last >= 0 && su_core_at(reference_unit, last) == core);
                 if (last >= 0) ivp_pvec_remove_at(&reference_unit->sim_unit_cores, last);
+                ivp_sim_unit_forget_movement_check_salt(reference_unit);
                 core->sim_unit = restored;
             }
             ivp_sim_units_mgr_add_sim_unit(ivp_env_get_sim_units_manager(env), restored);
