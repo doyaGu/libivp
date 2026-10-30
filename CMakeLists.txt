@@ -609,6 +609,8 @@ if (IVP_BUILD_TESTS)
     endif ()
     if (IVP_EDIT_LOCALITY)
         ivp_add_test(test_locality tests/test_locality.c)
+        target_include_directories(test_locality PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src)
         set_tests_properties(test_locality PROPERTIES LABELS "unit")
     endif ()
     if (IVP_ENABLE_CHECKPOINTS)

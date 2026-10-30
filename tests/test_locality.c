@@ -20,6 +20,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
+#include <ivp/dynamics/ivp_object_attach.h>
 #include <ivp/events/ivp_listener_collision.h>
 #include <ivp/geometry/ivp_surman.h>
 
@@ -28,6 +29,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "dynamics/ivp_sim_internal.h"
 
 #define LOC_ISLAND_COUNT 9
 #define LOC_SPRING_ISLAND 6
@@ -882,11 +885,47 @@ IVP_TEST(nearby_static_object_does_not_change_neighbours)
     IVP_ASSERT_TRUE(loc_run_edit(&edit));
 }
 
+/* The movement-check salt is cached per simulation unit.  Attaching an
+ * object created earlier gives the unit a new first object, so the cache
+ * must follow. */
+IVP_TEST(attaching_an_earlier_object_moves_the_salt)
+{
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    config.disable_performance_counter = true;
+    ivp_vec3r_set_zero(&config.gravity);
+    ivp_environment_t *env = ivp_environment_create(&config);
+    IVP_ASSERT_TRUE(env != NULL);
+    ivp_object_template_t t;
+    ivp_object_template_init(&t);
+    t.type = IVP_OBJECT_BALL;
+    t.ball_radius = IVP_REAL(0.4);
+    t.mass = IVP_REAL(1.0);
+    ivp_vec3r_set(&t.position, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *earlier = ivp_environment_create_object(env, &t, NULL);
+    ivp_vec3r_set(&t.position, IVP_REAL(1.5), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_object_t *later = ivp_environment_create_object(env, &t, NULL);
+    IVP_ASSERT_TRUE(earlier && later);
+    IVP_ASSERT_TRUE(ivp_object_order_key(earlier) < ivp_object_order_key(later));
+    IVP_ASSERT_TRUE(earlier->movement_check_salt != later->movement_check_salt);
+    for (int psi = 0; psi < 5; psi++) ivp_environment_simulate_one_psi(env);
+
+    ivp_sim_unit_t *unit = later->physical_core->sim_unit;
+    IVP_ASSERT_TRUE(ivp_sim_unit_movement_check_salt(unit) == later->movement_check_salt);
+    ivp_object_attach_object(later, earlier, 5.0);
+    IVP_ASSERT_TRUE(earlier->physical_core == later->physical_core);
+    unit = later->physical_core->sim_unit;
+    IVP_ASSERT_TRUE(ivp_sim_unit_movement_check_salt(unit) == earlier->movement_check_salt);
+    for (int psi = 0; psi < 5; psi++) ivp_environment_simulate_one_psi(env);
+    ivp_environment_destroy(env);
+}
+
 int main(void)
 {
     IVP_REGISTER(far_object_edits_leave_other_objects_unchanged);
     IVP_REGISTER(interacting_edits_stay_inside_their_closure);
     IVP_REGISTER(shared_pool_members_stay_independent);
     IVP_REGISTER(nearby_static_object_does_not_change_neighbours);
+    IVP_REGISTER(attaching_an_earlier_object_moves_the_salt);
     IVP_RUN_ALL();
 }
