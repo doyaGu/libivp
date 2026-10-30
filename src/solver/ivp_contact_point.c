@@ -528,6 +528,27 @@ ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
     return cp;
 }
 
+ivp_contact_pt_t *ivp_contact_pt_restore(struct ivp_environment *env,
+                                         const ivp_contact_pt_t *values,
+                                         ivp_object_t *obj0, ivp_object_t *obj1)
+{
+    const ivp_allocator_t *allocator = ivp_env_get_allocator(env);
+    ivp_contact_pt_t *cp = (ivp_contact_pt_t *)ivp_alloc(allocator, sizeof(*cp));
+    if (!cp) return NULL;
+    *cp = *values;
+    cp->next_dist_in_friction = NULL;
+    cp->prev_dist_in_friction = NULL;
+    cp->tmp_contact_info = NULL;
+    cp->l_friction_system = NULL;
+    ivp_object_t *objects[2] = { obj0, obj1 };
+    for (int i = 0; i < 2; i++) {
+        fr_synapse_init(&cp->synapse[i], cp, objects[i], values->synapse[i].edge,
+                        values->synapse[i].status);
+        cp_ledge_reference(objects[i], values->synapse[i].edge, true);
+    }
+    return cp;
+}
+
 void ivp_contact_pt_destroy(ivp_contact_pt_t *cp)
 {
     ivp_object_t *obj0 = cp->synapse[0].l_obj;

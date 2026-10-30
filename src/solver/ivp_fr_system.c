@@ -926,6 +926,33 @@ static void fs_del_fr_pair(ivp_fr_system_t *fs, ivp_fr_core_pair_t *pair)
     ivp_pvec_remove(&fs->fr_pairs_of_objs, pair);
 }
 
+ivp_fr_core_pair_t *ivp_fr_system_restore_pair(ivp_fr_system_t *fs,
+                                               const ivp_fr_core_pair_t *values,
+                                               ivp_core_t *core0, ivp_core_t *core1)
+{
+    ivp_fr_core_pair_t *pair = pair_create(fs);
+    if (!pair) return NULL;
+    pair->next_ease_nr_psi = values->next_ease_nr_psi;
+    pair->last_impact_time_pair = values->last_impact_time_pair;
+    pair->integrated_anti_energy = values->integrated_anti_energy;
+    pair->span_vector_sum = values->span_vector_sum;
+    pair->objs[0] = core0;
+    pair->objs[1] = core1;
+    if (ivp_pvec_add(&fs->fr_pairs_of_objs, pair) < 0) {
+        pair_destroy(pair);
+        return NULL;
+    }
+    return pair;
+}
+
+void ivp_fr_system_discard_pairs(ivp_fr_system_t *fs)
+{
+    for (int i = ivp_pvec_len(&fs->fr_pairs_of_objs) - 1; i >= 0; i--) {
+        pair_destroy(pair_at(&fs->fr_pairs_of_objs, i));
+    }
+    ivp_pvec_remove_all(&fs->fr_pairs_of_objs);
+}
+
 ivp_fr_core_pair_t *ivp_fr_system_get_pair_info_for_objs(ivp_fr_system_t *fs, ivp_core_t *core0, ivp_core_t *core1)
 {
     for (int i = ivp_pvec_len(&fs->fr_pairs_of_objs) - 1; i >= 0; i--) {
