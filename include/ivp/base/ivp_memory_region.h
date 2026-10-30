@@ -1,0 +1,77 @@
+/* ivp_memory_region.h — Memory regions with in-place checkpoints
+ * (libivp extension)
+ *
+ * A region reserves one range of address space and serves an allocator
+ * whose blocks all lie inside it; the allocator's own bookkeeping lies
+ * inside it too.  A checkpoint copies every byte in use, and restoring
+ * writes them back in place: blocks allocated since the checkpoint are free
+ * again, blocks freed since are allocated again with the bytes they had,
+ * and every pointer into the region stays valid.
+ *
+ * A world built entirely from a region's allocator (its environment, and
+ * the controller states, sets and active values the caller gives it) can be
+ * put back to any checkpoint this way, whatever it contains; ivp_rewind.h
+ * builds on that.  Memory outside the region is not touched: geometry,
+ * which does not change once built, may live anywhere.
+ *
+ * Every block comes zero-filled, so what an allocation holds never depends
+ * on the history of the region before it.
+ *
+ * The allocator is safe to call from several threads; checkpoint and
+ * restore must not run while anything else uses the region.
+ *
+ * Built only with IVP_ENABLE_CHECKPOINTS (CMake option, default off).
+ */
+#ifndef IVP_MEMORY_REGION_H
+#define IVP_MEMORY_REGION_H
+
+#include <ivp/base/ivp_allocator.h>
+#include <ivp/base/ivp_result.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct ivp_memory_region ivp_memory_region_t;
+typedef struct ivp_memory_checkpoint ivp_memory_checkpoint_t;
+
+/* Reserve `capacity` bytes of address space (0: 1 GiB); memory is committed
+ * as the allocator needs it.  NULL on failure. */
+ivp_memory_region_t *ivp_memory_region_create(size_t capacity);
+
+/* Release the region and everything allocated from it. */
+void ivp_memory_region_destroy(ivp_memory_region_t *region);
+
+/* The region's allocator, valid as long as the region.  Every block is
+ * 16-byte aligned; allocation fails once the region is full. */
+const ivp_allocator_t *ivp_memory_region_allocator(ivp_memory_region_t *region);
+
+/* Whether allocator is the allocator of a memory region. */
+bool ivp_memory_region_is_allocator(const ivp_allocator_t *allocator);
+
+/* Bytes a checkpoint copies: the extent of the region in use. */
+size_t ivp_memory_region_used(const ivp_memory_region_t *region);
+
+/* Copy the region in use, outside the region (storage NULL: the default
+ * allocator).  NULL when storage cannot be allocated. */
+ivp_memory_checkpoint_t *ivp_memory_region_checkpoint(
+    ivp_memory_region_t *region, const ivp_allocator_t *storage);
+
+/* Put the region back to checkpoint, which must be one of its own;
+ * IVP_ERR_INVALID_ARG otherwise. */
+ivp_result_t ivp_memory_region_restore(ivp_memory_region_t *region,
+                                       const ivp_memory_checkpoint_t *checkpoint);
+
+/* Bytes the checkpoint holds. */
+size_t ivp_memory_checkpoint_size(const ivp_memory_checkpoint_t *checkpoint);
+
+void ivp_memory_checkpoint_destroy(ivp_memory_checkpoint_t *checkpoint);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* IVP_MEMORY_REGION_H */
