@@ -67,8 +67,10 @@
         "IVP_BUILD_BENCHMARKS": "ON",
         "IVP_BUILD_EXAMPLES": "OFF",
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "ON",
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "ON",
         "IVP_QHULL_MODE": "REENTRANT",
@@ -99,8 +101,10 @@
         "IVP_BUILD_BENCHMARKS": "ON",
         "IVP_BUILD_EXAMPLES": "OFF",
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "OFF",
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
@@ -124,14 +128,50 @@
       }
     },
     {
+      "id": "determinism-features-unit",
+      "type": "ctest",
+      "configuration": "Release",
+      "required_cache": {
+        "IVP_BUILD_BENCHMARKS": "ON",
+        "IVP_BUILD_EXAMPLES": "OFF",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "ON",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "ON",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {
+          "Darwin": ["test_lcs_parity", "test_parity_compare"],
+          "Linux": ["test_parity_compare"]
+        },
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": ["test_locality", "test_rewind", "test_snapshot"]
+      }
+    },
+    {
       "id": "examples-headless",
       "type": "ctest",
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_EXAMPLES": "ON",
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "OFF",
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
@@ -163,6 +203,7 @@
       "command": ["tools/parity/check.sh"],
       "output_assertions": [
         {"count": 2, "text": "=== 26/48 identical; 22/22 expected differences ==="},
+        {"count": 2, "text": "=== 9/48 identical; 39/39 expected differences ==="},
         {"count": 2, "text": "=== 48/48 identical ==="},
         {"count": 1, "text": "PARITY OK"}
       ],
@@ -177,8 +218,10 @@
         "IVP_BUILD_BENCHMARKS": "ON",
         "IVP_BUILD_EXAMPLES": "OFF",
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "OFF",
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
@@ -207,8 +250,10 @@
       "configuration": "Release",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "OFF",
         "IVP_ENABLE_SCENARIO_TESTS": "ON",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
@@ -237,8 +282,10 @@
       "configuration": "Debug",
       "required_cache": {
         "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
         "IVP_ENABLE_ASAN": "OFF",
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_SNAPSHOTS": "OFF",
         "IVP_ENABLE_TSAN": "ON",
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",

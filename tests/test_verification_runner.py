@@ -30,6 +30,7 @@ class VerificationRunnerTests(unittest.TestCase):
             {
                 "asan-ubsan-unit",
                 "debug-float-unit",
+                "determinism-features-unit",
                 "examples-headless",
                 "parity",
                 "release-unit",
