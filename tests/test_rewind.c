@@ -59,35 +59,24 @@ typedef struct rw_input {
 
 /* ── Scene ───────────────────────────────────────────────────────────── */
 
-static ivp_object_t *rw_create(ivp_environment_t *env, rw_assets_t *assets,
-                               bool ball, double x, double y, double z)
-{
-    return ivp_test_scene_body(env, assets, ball ? NULL : &assets->cube_surman.base,
-                               x, y, z, true);
-}
-
-static bool rw_create_ground(ivp_environment_t *env, rw_assets_t *assets)
-{
-    return ivp_test_scene_ground(env, assets) != NULL;
-}
-
 /* gravity: a pile joined by a spring and a ball-socket constraint, a
  * spring to a rolling ball, and two bouncing balls */
 static bool rw_build(ivp_environment_t *env, rw_assets_t *assets,
                      rw_controllers_t *controllers)
 {
-    if (!rw_create_ground(env, assets)) return false;
+    if (!ivp_test_scene_ground(env, assets)) return false;
+    const ivp_surman_t *cube = &assets->cube_surman.base;
     ivp_object_t *cubes[5];
     for (int i = 0; i < 4; i++) {
-        cubes[i] = rw_create(env, assets, false, (i & 1) ? 0.55 : -0.55, 0.9,
-                             (i & 2) ? 0.55 : -0.55);
+        cubes[i] = ivp_test_scene_body(env, assets, cube, (i & 1) ? 0.55 : -0.55,
+                                       0.9, (i & 2) ? 0.55 : -0.55, true);
         if (!cubes[i]) return false;
     }
-    cubes[4] = rw_create(env, assets, false, 0.1, -0.4, -0.1);
-    ivp_object_t *ball = rw_create(env, assets, true, 3.0, 1.05, 0.0);
+    cubes[4] = ivp_test_scene_body(env, assets, cube, 0.1, -0.4, -0.1, true);
+    ivp_object_t *ball = ivp_test_scene_body(env, assets, NULL, 3.0, 1.05, 0.0, true);
     ivp_object_t *bouncers[2] = {
-        rw_create(env, assets, true, -6.0, -2.0, 1.0),
-        rw_create(env, assets, true, 6.0, -3.0, -1.0)
+        ivp_test_scene_body(env, assets, NULL, -6.0, -2.0, 1.0, true),
+        ivp_test_scene_body(env, assets, NULL, 6.0, -3.0, -1.0, true)
     };
     if (!cubes[4] || !ball || !bouncers[0] || !bouncers[1]) return false;
 
@@ -568,7 +557,9 @@ static void rw_spawn(void *ctx, ivp_environment_t *env, uint64_t psi,
 {
     (void)data;
     (void)size;
-    if (psi == 40) rw_create(env, (rw_assets_t *)ctx, true, 1.5, -3.0, 0.5);
+    if (psi == 40) {
+        ivp_test_scene_body(env, (rw_assets_t *)ctx, NULL, 1.5, -3.0, 0.5, true);
+    }
 }
 
 /* Objects created after a keyframe are gone after seeking back before

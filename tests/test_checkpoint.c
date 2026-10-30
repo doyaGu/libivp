@@ -64,18 +64,12 @@ typedef struct ck_scene {
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
-static ivp_object_t *ck_body_ex(ck_world_t *world, const ivp_surman_t *surman,
-                                bool ball, double x, double y, double z,
-                                bool simulated)
-{
-    return ivp_test_scene_body(world->env, &world->assets->scene,
-                               ball ? NULL : surman, x, y, z, simulated);
-}
-
+/* a simulated body: a ball when surman is NULL */
 static ivp_object_t *ck_body(ck_world_t *world, const ivp_surman_t *surman,
-                             bool ball, double x, double y, double z)
+                             double x, double y, double z)
 {
-    return ck_body_ex(world, surman, ball, x, y, z, true);
+    return ivp_test_scene_body(world->env, &world->assets->scene, surman,
+                               x, y, z, true);
 }
 
 static ivp_object_t *ck_ground(ck_world_t *world)
@@ -98,13 +92,13 @@ static void ck_push(ivp_object_t *object, double vx, double vy, double vz)
 static bool ck_pile(ck_world_t *world, double x, ivp_object_t *out[6])
 {
     for (int i = 0; i < 4; i++) {
-        out[i] = ck_body(world, ck_cube(world), false,
+        out[i] = ck_body(world, ck_cube(world),
                          x + ((i & 1) ? 0.55 : -0.55), 0.9,
                          (i & 2) ? 0.55 : -0.55);
         if (!out[i]) return false;
     }
-    out[4] = ck_body(world, ck_cube(world), false, x + 0.1, -0.4, -0.1);
-    out[5] = ck_body(world, NULL, true, x + 3.0, 1.05, 0.0);
+    out[4] = ck_body(world, ck_cube(world), x + 0.1, -0.4, -0.1);
+    out[5] = ck_body(world, NULL, x + 3.0, 1.05, 0.0);
     if (!out[4] || !out[5]) return false;
     ck_push(out[5], -1.5, 0.0, 0.25);
     return true;
@@ -219,7 +213,7 @@ static bool ck_build_compound(ck_world_t *world)
     if (!ck_ground(world)) return false;
     const ivp_surman_t *compound = &world->assets->compound_surman.base;
     for (int i = 0; i < 4; i++) {
-        ivp_object_t *body = ck_body(world, compound, false, -1.5 + i, -0.5 - 1.2 * i,
+        ivp_object_t *body = ck_body(world, compound, -1.5 + i, -0.5 - 1.2 * i,
                                      0.3 * (i & 1));
         if (!body) return false;
         ck_push(body, 0.4 * (1 - i), 0.0, 0.2);
@@ -238,12 +232,13 @@ static bool ck_build_merged(ck_world_t *world)
     ck_merged_t *s = (ck_merged_t *)world->scene;
     ivp_object_t *a[6];
     if (!ck_ground(world) || !ck_pile(world, 0.0, a)) return false;
+    const ivp_test_scene_assets_t *scene = &world->assets->scene;
     ivp_object_t *first[2] = {
-        ck_body_ex(world, ck_cube(world), false, -3.0, -1.0, 0.0, false),
-        ck_body_ex(world, ck_cube(world), false, -2.0, -1.0, 0.0, false)
+        ivp_test_scene_body(world->env, scene, ck_cube(world), -3.0, -1.0, 0.0, false),
+        ivp_test_scene_body(world->env, scene, ck_cube(world), -2.0, -1.0, 0.0, false)
     };
-    s->later[0] = ck_body_ex(world, ck_cube(world), false, 3.0, -2.0, 0.0, false);
-    s->later[1] = ck_body_ex(world, ck_cube(world), false, 3.0, -3.0, 0.0, false);
+    s->later[0] = ivp_test_scene_body(world->env, scene, ck_cube(world), 3.0, -2.0, 0.0, false);
+    s->later[1] = ivp_test_scene_body(world->env, scene, ck_cube(world), 3.0, -3.0, 0.0, false);
     if (!first[0] || !first[1] || !s->later[0] || !s->later[1] ||
         !ivp_environment_merge_objects(world->env, first, 2)) {
         return false;
@@ -280,7 +275,7 @@ static void ck_drive_spawn(ck_world_t *world, int psi)
     if (psi % 30 == 10) {
         int slot = s->next++ % CK_SPAWNED;
         if (s->spawned[slot]) ivp_environment_destroy_object(world->env, s->spawned[slot]);
-        s->spawned[slot] = ck_body(world, NULL, true, 0.2 * (psi % 7) - 0.6,
+        s->spawned[slot] = ck_body(world, NULL, 0.2 * (psi % 7) - 0.6,
                                    -2.0, 0.1 * (psi % 5));
     }
     if (psi % 45 == 20) {
@@ -341,7 +336,7 @@ static bool ck_build_pool(ck_world_t *world)
     ck_pool_t *s = (ck_pool_t *)world->scene;
     if (!ck_ground(world)) return false;
     for (int i = 0; i < CK_POOL_OBJECTS; i++) {
-        s->members[i] = ck_body(world, i & 1 ? NULL : ck_cube(world), i & 1,
+        s->members[i] = ck_body(world, i & 1 ? NULL : ck_cube(world),
                                 -2.5 + i, -1.0 - 0.3 * i, 0.4 * (i % 3));
         if (!s->members[i]) return false;
     }
@@ -385,7 +380,7 @@ static bool ck_build_islands(ck_world_t *world)
     for (int i = 0; i < CK_ISLANDS; i++) {
         double x = -19.0 + 2.0 * (i % 20);
         double z = -9.0 + 2.0 * (i / 20);
-        ivp_object_t *cube = ck_body(world, ck_cube(world), false, x,
+        ivp_object_t *cube = ck_body(world, ck_cube(world), x,
                                      -3.0 - 0.05 * (i % 7), z);
         if (!cube) return false;
         ck_push(cube, 0.1 * (i % 3 - 1), 0.0, 0.05 * (i % 2));
