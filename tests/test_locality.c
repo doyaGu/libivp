@@ -12,8 +12,8 @@
  * controller.  Every object outside the closure must keep a bit-identical
  * visible state at every PSI. */
 #include "ivp_test.h"
+#include "ivp_test_scene.h"
 
-#include <ivp/builder/ivp_build_surface.h>
 #include <ivp/controllers/ivp_actuator_spring.h>
 #include <ivp/controllers/ivp_constraint.h>
 #include <ivp/controllers/ivp_controller_buoyancy.h>
@@ -22,7 +22,6 @@
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_object_attach.h>
 #include <ivp/events/ivp_listener_collision.h>
-#include <ivp/geometry/ivp_surman.h>
 
 #include <math.h>
 #include <stddef.h>
@@ -87,13 +86,6 @@ typedef struct loc_recorder {
     size_t capacity;
     bool failed;
 } loc_recorder_t;
-
-typedef struct loc_assets {
-    ivp_compact_surface_t *ground_surface;
-    ivp_compact_surface_t *cube_surface;
-    ivp_surman_polygon_t ground_surman;
-    ivp_surman_polygon_t cube_surman;
-} loc_assets_t;
 
 typedef struct loc_world {
     ivp_environment_t *environment;
@@ -198,28 +190,6 @@ static void loc_base_spec(int id, loc_spec_t *spec)
     }
 }
 
-static bool loc_assets_init(loc_assets_t *assets)
-{
-    memset(assets, 0, sizeof(*assets));
-    assets->ground_surface = ivp_build_box_surface(NULL, 80.0f, 0.5f, 80.0f);
-    assets->cube_surface = ivp_build_box_surface(NULL, 0.5f, 0.5f, 0.5f);
-    if (!assets->ground_surface || !assets->cube_surface) return false;
-    ivp_surman_polygon_init(&assets->ground_surman, assets->ground_surface);
-    ivp_surman_polygon_init(&assets->cube_surman, assets->cube_surface);
-    return true;
-}
-
-static void loc_assets_destroy(loc_assets_t *assets)
-{
-    if (assets->cube_surface) {
-        ivp_compact_surface_free(NULL, assets->cube_surface);
-    }
-    if (assets->ground_surface) {
-        ivp_compact_surface_free(NULL, assets->ground_surface);
-    }
-    memset(assets, 0, sizeof(*assets));
-}
-
 /* ── Interaction recorder ────────────────────────────────────────────── */
 
 static int loc_object_id(const loc_world_t *world, const ivp_object_t *object)
@@ -304,7 +274,7 @@ static void loc_on_contact_deleted(void *context,
 
 /* ── World ───────────────────────────────────────────────────────────── */
 
-static bool loc_create(loc_world_t *world, loc_assets_t *assets, int id,
+static bool loc_create(loc_world_t *world, ivp_test_scene_assets_t *assets, int id,
                        const loc_spec_t *spec)
 {
     ivp_object_template_t object_template;
@@ -457,7 +427,7 @@ static bool loc_world_link(loc_world_t *world, bool pool_includes_edit)
 }
 
 /* edit: NULL builds the base world */
-static bool loc_world_init(loc_world_t *world, loc_assets_t *assets,
+static bool loc_world_init(loc_world_t *world, ivp_test_scene_assets_t *assets,
                            const loc_edit_t *edit)
 {
     memset(world, 0, sizeof(*world));
@@ -504,7 +474,7 @@ static void loc_world_destroy(loc_world_t *world)
     memset(world, 0, sizeof(*world));
 }
 
-static bool loc_apply_late_edit(loc_world_t *world, loc_assets_t *assets,
+static bool loc_apply_late_edit(loc_world_t *world, ivp_test_scene_assets_t *assets,
                                 const loc_edit_t *edit)
 {
     if (edit->kind == LOC_EDIT_ADD) {
@@ -696,7 +666,7 @@ static void loc_alias_to_edit_id(loc_world_t *world, int target)
 
 static bool loc_run_edit(const loc_edit_t *edit)
 {
-    loc_assets_t assets;
+    ivp_test_scene_assets_t assets;
     loc_world_t base;
     loc_world_t edited;
     memset(&base, 0, sizeof(base));
@@ -705,7 +675,7 @@ static bool loc_run_edit(const loc_edit_t *edit)
         LOC_PSI_COUNT, sizeof(*base_snapshots));
     loc_snapshot_t *edited_snapshots = (loc_snapshot_t *)calloc(
         LOC_PSI_COUNT, sizeof(*edited_snapshots));
-    bool ok = base_snapshots && edited_snapshots && loc_assets_init(&assets);
+    bool ok = base_snapshots && edited_snapshots && ivp_test_scene_assets_init(&assets);
     if (!ok) {
         fprintf(stderr, "locality %s: setup allocation failed\n", edit->name);
         goto cleanup;
@@ -754,7 +724,7 @@ static bool loc_run_edit(const loc_edit_t *edit)
 cleanup:
     loc_world_destroy(&edited);
     loc_world_destroy(&base);
-    loc_assets_destroy(&assets);
+    ivp_test_scene_assets_destroy(&assets);
     free(edited_snapshots);
     free(base_snapshots);
     return ok;
