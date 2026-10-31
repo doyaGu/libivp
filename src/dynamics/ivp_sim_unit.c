@@ -661,6 +661,168 @@ static int mgr_compare_controller_lists(const void *left,
                                    right_list->l_controller);
 }
 
+/* Scratch of mgr_restore_controller_order: the cores of the unit grouped
+ * into the reference's simulation units, each a list of cores. */
+typedef struct mgr_replay {
+    ivp_sim_unit_t *unit;
+    int core_count, count;
+    int *group, *next, *head, *tail, *walk; /* per core */
+    int *order, *walked;                    /* per controller entry */
+    uint64_t *key;                          /* per controller entry */
+    uint64_t sequence;
+    int walk_id;
+} mgr_replay_t;
+
+static int mgr_replay_core_index(const mgr_replay_t *r, const ivp_core_t *core)
+{
+    for (int i = 0; i < r->core_count; i++) {
+        if (su_core_at(r->unit, i) == core) return i;
+    }
+    return -1;
+}
+
+static bool mgr_replay_controls(const mgr_replay_t *r, int entry, const ivp_core_t *core)
+{
+    const ivp_pvec_t *cores = &su_cl_at(r->unit, entry)->cores_controlled_by;
+    for (int i = 0; i < ivp_pvec_len(cores); i++) {
+        if (ivp_pvec_at(cores, i) == core) return true;
+    }
+    return false;
+}
+
+/* IVP_Simulation_Unit::throw_cores_into_my_sim_unit */
+static void mgr_replay_fuse(mgr_replay_t *r, int into, int from)
+{
+    for (int i = r->head[from]; i >= 0; i = r->next[i]) r->group[i] = into;
+    r->next[r->tail[into]] = r->head[from];
+    r->tail[into] = r->tail[from];
+    r->head[from] = r->tail[from] = -1;
+}
+
+/* IVP_Simulation_Unit::sim_unit_calc_redundants after the controllers
+ * order[0..last] were announced: the group's controllers in the order a walk
+ * of its cores and of each core's controllers, both from the last one,
+ * meets them. */
+static void mgr_replay_calc_redundants(mgr_replay_t *r, int group, int last)
+{
+    int length = 0;
+    for (int i = r->head[group]; i >= 0; i = r->next[i]) r->walk[length++] = i;
+    r->walk_id++;
+    for (int pos = length - 1; pos >= 0; pos--) {
+        const ivp_core_t *core = su_core_at(r->unit, r->walk[pos]);
+        for (int k = last; k >= 0; k--) {
+            int entry = r->order[k];
+            if (r->walked[entry] == r->walk_id || !mgr_replay_controls(r, entry, core)) continue;
+            r->walked[entry] = r->walk_id;
+            r->key[entry] = ++r->sequence;
+        }
+    }
+}
+
+/* IVP_Controller_Manager::announce_controller_to_environment (dependent
+ * controllers: the units of the cores, from the last one, thrown into the
+ * first one met, the controllers walked again after a fusion) or
+ * add_controller_to_core (independent ones), replayed for order[f]. */
+static void mgr_replay_announce(mgr_replay_t *r, int f)
+{
+    int entry = r->order[f];
+    ivp_sim_ctrl_t *c = su_cl_at(r->unit, entry)->l_controller;
+    ivp_pvec_t *cores = c->vt->get_associated_controlled_cores(c);
+    bool dependent = cores != NULL && ivp_pvec_len(cores) > 0;
+    if (!dependent) cores = &su_cl_at(r->unit, entry)->cores_controlled_by;
+    int reference = -1;
+    bool fused = false;
+    for (int i = ivp_pvec_len(cores) - 1; i >= 0; i--) {
+        const ivp_core_t *core = (const ivp_core_t *)ivp_pvec_at(cores, i);
+        if (!core || core->physical_unmoveable) continue;
+        int index = mgr_replay_core_index(r, core);
+        if (index < 0) continue;
+        int group = r->group[index];
+        if (reference < 0) {
+            reference = group;
+        } else if (group != reference && dependent) {
+            mgr_replay_fuse(r, reference, group);
+            fused = true;
+        }
+    }
+    if (reference < 0) return;
+    if (fused) {
+        mgr_replay_calc_redundants(r, reference, f);
+    } else if (r->key[entry] == 0) {
+        r->key[entry] = ++r->sequence; /* add_controller_unit_sim */
+    }
+}
+
+/* The reference keeps a simulation unit's controllers in the order its
+ * history of announcements and fusions left them, and the PSI loop runs the
+ * list backwards, so equal priorities run in that order.  Replay that
+ * history from the restored state: the controllers announced in
+ * registration order on cores that start in units of their own; units joined
+ * otherwise (contacts) fuse at the end in core order.  Then
+ * sim_unit_sort_controllers.  Without scratch memory the registration order
+ * stays. */
+static void mgr_restore_controller_order(ivp_sim_unit_t *unit)
+{
+    mgr_replay_t r;
+    memset(&r, 0, sizeof(r));
+    r.unit = unit;
+    r.core_count = ivp_pvec_len(&unit->sim_unit_cores);
+    r.count = ivp_pvec_len(&unit->controller_cores);
+    /* one core: nothing fuses, every announcement appends */
+    if (r.count < 2 || r.core_count < 2) return;
+    size_t ints = (size_t)r.core_count * 5u + (size_t)r.count * 2u;
+    size_t size = ints * sizeof(int) + (size_t)r.count * sizeof(uint64_t);
+    const ivp_allocator_t *allocator = ivp_pvec_allocator(&unit->controller_cores);
+    uint64_t *memory = (uint64_t *)ivp_alloc(allocator, size);
+    if (!memory) return;
+    r.key = memory;
+    int *ints_base = (int *)(memory + r.count);
+    r.group = ints_base;
+    r.next = r.group + r.core_count;
+    r.head = r.next + r.core_count;
+    r.tail = r.head + r.core_count;
+    r.walk = r.tail + r.core_count;
+    r.order = r.walk + r.core_count;
+    r.walked = r.order + r.count;
+    for (int i = 0; i < r.core_count; i++) {
+        r.group[i] = r.head[i] = r.tail[i] = i;
+        r.next[i] = -1;
+    }
+    /* registration order: the list is sorted by priority, then registration */
+    for (int i = 0; i < r.count; i++) {
+        int entry = i, pos = i;
+        uint64_t sequence = su_cl_at(unit, entry)->l_controller->registration_sequence;
+        while (pos > 0 &&
+               su_cl_at(unit, r.order[pos - 1])->l_controller->registration_sequence > sequence) {
+            r.order[pos] = r.order[pos - 1];
+            pos--;
+        }
+        r.order[pos] = entry;
+        r.key[i] = 0;
+        r.walked[i] = 0;
+    }
+    for (int f = 0; f < r.count; f++) mgr_replay_announce(&r, f);
+    int first = r.group[0];
+    bool fused = false;
+    for (int i = 1; i < r.core_count; i++) {
+        if (r.group[i] != first) {
+            mgr_replay_fuse(&r, first, r.group[i]);
+            fused = true;
+        }
+    }
+    if (fused) mgr_replay_calc_redundants(&r, first, r.count - 1);
+    for (int i = 1; i < r.count; i++) {
+        for (int j = i; j > 0 && r.key[j - 1] > r.key[j]; j--) {
+            uint64_t key = r.key[j];
+            r.key[j] = r.key[j - 1];
+            r.key[j - 1] = key;
+            ivp_pvec_swap(&unit->controller_cores, j - 1, j);
+        }
+    }
+    ivp_free(allocator, memory, size);
+    su_sort_controllers(unit);
+}
+
 static void mgr_restore_unit_order(ivp_sim_units_manager_t *manager,
                                    ivp_sim_unit_t *unit)
 {
@@ -688,6 +850,7 @@ static void mgr_restore_unit_order(ivp_sim_units_manager_t *manager,
     }
     mgr_sort_vector(&unit->controller_cores,
                     mgr_compare_controller_lists);
+    mgr_restore_controller_order(unit);
 }
 
 static ivp_sim_unit_t *mgr_merge_ordered_units(ivp_sim_unit_t *left,
