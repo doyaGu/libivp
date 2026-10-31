@@ -21,7 +21,9 @@
 # The mainline build must differ in exactly the scenarios
 # listed by mainline_expected_differences.txt, and the mainline build with
 # IVP_EDIT_LOCALITY in exactly those of
-# edit_locality_expected_differences.txt.  The scenario list is
+# edit_locality_expected_differences.txt.  Debug mainline runs may differ
+# in debug text only for the scenarios of
+# mainline_debug_text_differences.txt.  The scenario list is
 # tools/scenarios.txt ($SCENARIOS restricts it).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -40,6 +42,7 @@ parity_check_ref_src
 FAIL=0
 EXPECTED_MAINLINE="$HERE/mainline_expected_differences.txt"
 EXPECTED_LOCALITY="$HERE/edit_locality_expected_differences.txt"
+EXPECTED_MAINLINE_DEBUG_TEXT="$HERE/mainline_debug_text_differences.txt"
 
 build_lib() { # <dir> <build type> <reference internals> <qhull mode> [edit locality]
   mkdir -p "$1"
@@ -140,7 +143,8 @@ if [ $DO_DBG = 1 ]; then
   report_comparison "$IVP_PARITY_DIR/out/debug_reference.txt" "$r"
 
   echo "=== debug: mainline policy ==="
-  run_policy debug mainline "$EXPECTED_MAINLINE" --text --asserts
+  run_policy debug mainline "$EXPECTED_MAINLINE" --text --asserts \
+    --expect-text-differences "$EXPECTED_MAINLINE_DEBUG_TEXT"
   echo "=== debug: edit-locality policy ==="
   run_policy debug locality "$EXPECTED_LOCALITY" --text --asserts
 fi

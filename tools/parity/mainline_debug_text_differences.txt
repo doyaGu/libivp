@@ -1,0 +1,6 @@
+# Debug mainline runs whose JSONL matches the reference but whose debug text
+# does not.  The reference prints "calc_unscaled_KK_vals: parallel edges"
+# for edge pairs met in the order of its address-keyed mindist loop hash; the
+# mainline keys that hash by feature order, so the message count differs while
+# every frame stays bit for bit identical.
+hinge_limits

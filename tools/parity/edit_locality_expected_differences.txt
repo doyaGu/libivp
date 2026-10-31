@@ -1,5 +1,5 @@
 # Default engine with IVP_EDIT_LOCALITY versus the reference engine.  The
-# 22 scenarios of mainline_expected_differences.txt plus the 17 whose
+# 20 scenarios of mainline_expected_differences.txt plus the 19 whose
 # trajectories change because movement checks are paced per simulation unit
 # instead of by the reference's shared countdown.
 springs
