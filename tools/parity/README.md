@@ -6,7 +6,9 @@
   `IVP_REFERENCE_INTERNAL_STATE=ON` 和 `IVP_QHULL_MODE=REENTRANT`，
   Release/Debug 必须 48/48 逐位一致。
 - **mainline：**使用默认内部行为和可重入 Qhull 2020.2，必须恰好只有
-  `mainline_expected_differences.txt` 登记的 22 个场景不同；多一个或少一个都失败。
+  `mainline_expected_differences.txt` 登记的 20 个场景不同；多一个或少一个都失败。
+  Debug 主线另外只允许 `mainline_debug_text_differences.txt` 登记的场景在调试文本上
+  不同（JSONL 仍须逐位一致），同样多一个或少一个都失败。
 - **edit-locality：**默认主线加 `IVP_EDIT_LOCALITY=ON`，必须恰好只有
   `edit_locality_expected_differences.txt` 登记的 39 个场景不同。
 
