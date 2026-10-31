@@ -22,6 +22,22 @@
  * selection and the resulting layout domain are documented in
  * docs/PARITY_GAP_INVENTORY.md.
  *
+ * Mainline construction (not with IVP_REFERENCE_INTERNAL_STATE, which keeps
+ * the reference's options and retry loop):
+ *   - qhull "Qs Pp C-0": Qhull derives its roundoff and outside width from
+ *     the input.  The reference's "W1e-14 E1.0e-18" claim a precision double
+ *     arithmetic does not have at the coordinates' size, so Qhull 2020.2
+ *     rejects valid hulls (a rotated box scaled by 100, or 10^4 from the
+ *     origin) as "wide merges" and the reference falls back to joggling;
+ *   - a hull whose triangles do not fit one ledge (2V - 4 above
+ *     IVP_BUILD_MAX_TRIANGLES_PER_LEDGE) is no precision problem: the build
+ *     stops instead of joggling until the vertex count happens to drop;
+ *   - when Qhull rejects the points, flat ones become a two sided polygon
+ *     ledge (their 2D hull), collinear ones none;
+ *   - joggling remains the last resort, and a joggled hull is kept only when
+ *     its ledge is convex in the real coordinates: the joggled facets are
+ *     applied to unjoggled points.
+ *
  * Not ported: after a successful build the reference copies hesse_val of
  * matching input points into the compact points, matching them by
  * reinterpreting the float compact point as an IVP_U_Point (3 doubles).
@@ -41,12 +57,22 @@
 #include "geometry/ivp_check_ledge_debug.h"
 #include "ivp_qhull_api.h"
 
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PS_MIN_EDGE_LEN 0.01f /* P_MIN_EDGE_LEN */
+
+#if IVP_REFERENCE_INTERNAL_STATE
+#define PS_QHULL_COMMAND "qhull Qs Pp C-0 W1e-14 E1.0e-18"
+#define PS_QHULL_JOGGLE_COMMAND "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18"
+#else
+#define PS_QHULL_COMMAND "qhull Qs Pp C-0"
+#define PS_QHULL_JOGGLE_COMMAND "qhull Qs QJ%G C-0 Pp"
+#endif
 
 /* ── try_to_build_convex_ledge_from_qhull_result ───────────────────────── */
 
@@ -218,7 +244,7 @@ static void ps_error_output(const ivp_pc_templ_polygon_t *templ)
 static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
                                          const ivp_allocator_t *alloc,
                                          const double *pts, int numpoints,
-                                         bool *skip_point,
+                                         bool *skip_point, bool *too_many,
                                          unsigned *skip_list, unsigned *use_list)
 {
     ps_facets_t ctx;
@@ -238,9 +264,20 @@ static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
     }
     int n_facets = ivp_qhull_for_each_facet(qhull, ps_facet, &ctx);
     *skip_point = ctx.skip_point;
+    *too_many = false;
+#if !IVP_REFERENCE_INTERNAL_STATE
+    /* A closed triangulated convex hull of V vertices has 2V - 4 triangles */
+    if (n_facets > 0 && !ctx.oom && !ctx.skip_point) {
+        int vertices = 0;
+        for (int i = 0; i < numpoints; i++) {
+            vertices += use_list[i] ? 1 : 0;
+        }
+        *too_many = 2 * vertices - 4 > IVP_BUILD_MAX_TRIANGLES_PER_LEDGE;
+    }
+#endif
 
     ivp_compact_ledge_t *ledge = NULL;
-    if (n_facets > 0 && !ctx.oom && !ctx.skip_point) {
+    if (n_facets > 0 && !ctx.oom && !ctx.skip_point && !*too_many) {
         /* convert convex points & planes to polygon template */
         int off = 0;
         for (int i = 0; i < ctx.n_planes; i++) {
@@ -263,6 +300,276 @@ static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
     if (ctx.idx) ivp_free(alloc, ctx.idx, (size_t)ctx.cap_idx * sizeof(int));
     return ledge;
 }
+
+#if !IVP_REFERENCE_INTERNAL_STATE
+/* ── Mainline construction ──────────────────────────────────────────────── */
+
+static void ps_sub(double r[3], const double *a, const double *b)
+{
+    r[0] = a[0] - b[0];
+    r[1] = a[1] - b[1];
+    r[2] = a[2] - b[2];
+}
+
+static void ps_cross(double r[3], const double a[3], const double b[3])
+{
+    r[0] = a[1] * b[2] - a[2] * b[1];
+    r[1] = a[2] * b[0] - a[0] * b[2];
+    r[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static double ps_dot(const double a[3], const double b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/* The span of the points (bounding box diagonal) and their largest coordinate */
+static void ps_extent(const double *pts, int n, double *span, double *max_abs)
+{
+    double lo[3] = {pts[0], pts[1], pts[2]}, hi[3] = {pts[0], pts[1], pts[2]};
+    *max_abs = 0.0;
+    for (int i = 0; i < n; i++) {
+        for (int c = 0; c < 3; c++) {
+            double v = pts[3 * i + c];
+            if (v < lo[c]) lo[c] = v;
+            if (v > hi[c]) hi[c] = v;
+            if (fabs(v) > *max_abs) *max_abs = fabs(v);
+        }
+    }
+    double d[3] = {hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]};
+    *span = sqrt(ps_dot(d, d));
+}
+
+/*
+ * The points' dimension once Qhull rejected them: 1 or less when they lie
+ * on a line, 2 when on a plane (within `tolerance` of the plane through
+ * the three spanning points origin, origin + u, and the farthest from that
+ * line; `normal` and `u` are unit vectors), else 3.
+ */
+static int ps_dimension(const double *pts, int n, double tolerance, int *origin,
+                        double u[3], double normal[3])
+{
+    /* the farthest point from point 0, and the farthest from that one */
+    int a = 0, b = 0;
+    double best = -1.0;
+    for (int i = 0; i < n; i++) {
+        double d[3];
+        ps_sub(d, &pts[3 * i], &pts[0]);
+        if (ps_dot(d, d) > best) { best = ps_dot(d, d); a = i; }
+    }
+    best = -1.0;
+    for (int i = 0; i < n; i++) {
+        double d[3];
+        ps_sub(d, &pts[3 * i], &pts[3 * a]);
+        if (ps_dot(d, d) > best) { best = ps_dot(d, d); b = i; }
+    }
+    if (best <= tolerance * tolerance) return 0;
+    ps_sub(u, &pts[3 * b], &pts[3 * a]);
+    double len = sqrt(ps_dot(u, u));
+    u[0] /= len; u[1] /= len; u[2] /= len;
+    /* the farthest point from the line a-b */
+    best = -1.0;
+    double far_cross[3] = {0.0, 0.0, 0.0};
+    for (int i = 0; i < n; i++) {
+        double d[3], c[3];
+        ps_sub(d, &pts[3 * i], &pts[3 * a]);
+        ps_cross(c, u, d);
+        if (ps_dot(c, c) > best) {
+            best = ps_dot(c, c);
+            memcpy(far_cross, c, sizeof(c));
+        }
+    }
+    if (best <= tolerance * tolerance) return 1;
+    len = sqrt(best);
+    normal[0] = far_cross[0] / len; normal[1] = far_cross[1] / len; normal[2] = far_cross[2] / len;
+    for (int i = 0; i < n; i++) {
+        double d[3];
+        ps_sub(d, &pts[3 * i], &pts[3 * a]);
+        if (fabs(ps_dot(d, normal)) > tolerance) return 3;
+    }
+    *origin = a;
+    return 2;
+}
+
+/* A point in the plane of flat points, for the 2D hull */
+typedef struct ps_planar {
+    double u, v;
+    int index;
+} ps_planar_t;
+
+/* By u, then v */
+static int ps_planar_compare(const void *a, const void *b)
+{
+    const ps_planar_t *p = (const ps_planar_t *)a, *q = (const ps_planar_t *)b;
+    if (p->u != q->u) return p->u < q->u ? -1 : 1;
+    if (p->v != q->v) return p->v < q->v ? -1 : 1;
+    return 0;
+}
+
+/* A flat convex polygon as a two sided ledge: the points' 2D hull in the plane, both faces */
+static ivp_compact_ledge_t *ps_flat_ledge(const ivp_allocator_t *alloc, const double *pts, int n,
+                                          int origin, const double u[3], const double normal[3])
+{
+    double v[3];
+    ps_cross(v, normal, u);
+    /* the points in (u, v) coordinates, sorted by u then v (Andrew's monotone chain) */
+    ps_planar_t *planar = (ps_planar_t *)ivp_alloc(alloc, (size_t)n * sizeof(ps_planar_t));
+    int *hull = (int *)ivp_alloc(alloc, (size_t)(2 * n + 1) * sizeof(int));
+    int *fans = (int *)ivp_alloc(alloc, (size_t)6 * (size_t)n * sizeof(int));
+    ivp_compact_ledge_t *ledge = NULL;
+    if (!planar || !hull || !fans) goto done;
+    for (int i = 0; i < n; i++) {
+        double d[3];
+        ps_sub(d, &pts[3 * i], &pts[3 * origin]);
+        planar[i].u = ps_dot(d, u);
+        planar[i].v = ps_dot(d, v);
+        planar[i].index = i;
+    }
+    qsort(planar, (size_t)n, sizeof(ps_planar_t), ps_planar_compare);
+    int m = 0; /* hull holds positions in `planar` until the end */
+    for (int pass = 0; pass < 2; pass++) { /* lower hull, then upper hull */
+        int start = m;
+        for (int s = 0; s < n; s++) {
+            int k = pass == 0 ? s : n - 1 - s;
+            while (m >= start + 2) {
+                const ps_planar_t *o = &planar[hull[m - 2]], *a = &planar[hull[m - 1]], *b = &planar[k];
+                double turn = (a->u - o->u) * (b->v - o->v) - (a->v - o->v) * (b->u - o->u);
+                if (turn > 0.0) break;
+                m--;
+            }
+            hull[m++] = k;
+        }
+        m--; /* the last point starts the other chain */
+    }
+    for (int i = 0; i < m; i++) hull[i] = planar[hull[i]].index;
+    if (m < 3 || 2 * m - 4 > IVP_BUILD_MAX_TRIANGLES_PER_LEDGE) goto done;
+    if (m == 3) {
+        ledge = ivp_build_triangle_ledge(alloc, &pts[3 * hull[0]], &pts[3 * hull[1]], &pts[3 * hull[2]]);
+        goto done;
+    }
+    /* Both faces as triangle fans, counter-clockwise seen from their side: a closed, consistently
+     * oriented mesh the ledge generator links edge by edge.  The rear fan starts one corner on, so
+     * no diagonal belongs to both faces (four triangles on one edge cannot be linked). */
+    for (int t = 0; t < m - 2; t++) {
+        int *front = &fans[6 * t], *rear = &fans[6 * t + 3];
+        front[0] = hull[0]; front[1] = hull[t + 1]; front[2] = hull[t + 2];
+        rear[0] = hull[1]; rear[1] = hull[(t + 3) % m]; rear[2] = hull[t + 2];
+    }
+    ledge = ivp_build_ledge_from_triangles(alloc, pts, n, fans, 2 * (m - 2));
+done:
+    if (planar) ivp_free(alloc, planar, (size_t)n * sizeof(ps_planar_t));
+    if (hull) ivp_free(alloc, hull, (size_t)(2 * n + 1) * sizeof(int));
+    if (fans) ivp_free(alloc, fans, (size_t)6 * (size_t)n * sizeof(int));
+    return ledge;
+}
+
+/*
+ * Whether the ledge is convex within `tolerance`: no point of it in front of
+ * a triangle's plane (front: away from the points' centroid).
+ */
+static bool ps_ledge_is_convex(const ivp_compact_ledge_t *ledge, double tolerance)
+{
+    int n_points = ivp_ledge_get_n_points(ledge), n_triangles = ivp_ledge_get_n_triangles(ledge);
+    const ivp_compact_poly_point_t *points = ivp_ledge_get_point_array(ledge);
+    double centroid[3] = {0.0, 0.0, 0.0};
+    for (int i = 0; i < n_points; i++) {
+        for (int c = 0; c < 3; c++) centroid[c] += (double)points[i].k[c] / n_points;
+    }
+    const ivp_compact_triangle_t *tri = ivp_ledge_get_first_triangle(ledge);
+    for (int t = 0; t < n_triangles; t++, tri++) {
+        double p[3][3];
+        for (int j = 0; j < 3; j++) {
+            const ivp_compact_poly_point_t *q = ivp_edge_get_start_point(&tri->edges[j], ledge);
+            for (int c = 0; c < 3; c++) p[j][c] = (double)q->k[c];
+        }
+        double e1[3], e2[3], nrm[3], to_centroid[3];
+        ps_sub(e1, p[1], p[0]);
+        ps_sub(e2, p[2], p[0]);
+        ps_cross(nrm, e1, e2);
+        double len = sqrt(ps_dot(nrm, nrm));
+        if (len == 0.0) return false;
+        for (int c = 0; c < 3; c++) nrm[c] /= len;
+        ps_sub(to_centroid, centroid, p[0]);
+        double inward = ps_dot(nrm, to_centroid);
+        if (fabs(inward) <= tolerance) continue; /* a flat ledge: no front */
+        double sign = inward > 0.0 ? -1.0 : 1.0;
+        for (int i = 0; i < n_points; i++) {
+            double q[3] = {(double)points[i].k[0], (double)points[i].k[1], (double)points[i].k[2]}, d[3];
+            ps_sub(d, q, p[0]);
+            if (sign * ps_dot(nrm, d) > tolerance) return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * The hull of the points (duplicates removed): Qhull with its own
+ * precision, IVP's degenerate-facet point removal, flat and collinear
+ * points handled without Qhull, joggling only when Qhull rejects points
+ * spanning space, and a joggled result kept only when convex.
+ */
+static ivp_compact_ledge_t *ps_build_mainline(ivp_qhull_context_t *qhull,
+                                              const ivp_allocator_t *alloc,
+                                              double *pts, int numpoints,
+                                              unsigned *skip_list, unsigned *use_list)
+{
+    double random_eps = 0.0; /* 0: no joggle */
+    for (;;) {
+        if (numpoints < 3) return NULL;
+        if (numpoints == 3) return ivp_build_triangle_ledge(alloc, &pts[0], &pts[3], &pts[6]);
+        double span, max_abs;
+        ps_extent(pts, numpoints, &span, &max_abs);
+        /* The compact ledge keeps float coordinates */
+        double tolerance = 16.0 * (double)FLT_EPSILON * (max_abs > span ? max_abs : span);
+        int exitcode;
+        ivp_qhull_free_hull(qhull);
+        if (random_eps == 0.0) {
+            exitcode = ivp_qhull_new_hull(qhull, pts, numpoints, PS_QHULL_COMMAND);
+            if (exitcode) {
+                int origin = 0;
+                double u[3], normal[3];
+                int dimension = ps_dimension(pts, numpoints, tolerance, &origin, u, normal);
+                if (dimension < 2) return NULL;
+                if (dimension == 2) return ps_flat_ledge(alloc, pts, numpoints, origin, u, normal);
+                random_eps = (double)1e-12f;
+                continue;
+            }
+        } else {
+            char flags[250];
+            snprintf(flags, sizeof(flags), PS_QHULL_JOGGLE_COMMAND, random_eps);
+            exitcode = ivp_qhull_new_hull(qhull, pts, numpoints, flags);
+        }
+        bool skip_point = false, too_many = false;
+        if (!exitcode) {
+            memset(use_list, 0, (size_t)numpoints * sizeof(unsigned));
+            memset(skip_list, 0, (size_t)numpoints * sizeof(unsigned));
+            ivp_compact_ledge_t *res = ps_try_build(qhull, alloc, pts, numpoints,
+                                                    &skip_point, &too_many, skip_list, use_list);
+            if (res) {
+                if (random_eps == 0.0 || ps_ledge_is_convex(res, tolerance)) return res;
+                ivp_compact_ledge_free(alloc, res);
+                return NULL;
+            }
+            if (too_many) return NULL;
+            /* drop the interior points and the degenerate facets' points, and build again */
+            int dest = 0;
+            for (int x = 0; x < numpoints; x++) {
+                if (use_list[x] && !skip_list[x]) {
+                    memmove(&pts[3 * dest], &pts[3 * x], 3 * sizeof(double));
+                    dest++;
+                }
+            }
+            if (dest != numpoints) {
+                numpoints = dest;
+                continue;
+            }
+        }
+        /* nothing to drop: joggle (more) */
+        random_eps = (random_eps + (double)1e-12f) * (double)1.2f;
+        if (random_eps >= (double)0.02f) return NULL;
+    }
+}
+#endif
 
 /* ── convert_pointsoup_to_compact_ledge_internal ───────────────────────── */
 
@@ -305,6 +612,9 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         }
         ivp_hashmap_destroy(&map);
     }
+#if !IVP_REFERENCE_INTERNAL_STATE
+    res = ps_build_mainline(qhull, alloc, pts, numpoints, skip_list, use_list);
+#else
     /* first loop, try to randomize point 0 until we get a result.  With
      * fewer than 4 distinct points every qhull call fails ("not enough
      * points"), and the reference retries until random_eps reaches 0.02,
@@ -314,16 +624,14 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         int exitcode = 0;
         if (try_unjumbled) {
             ivp_qhull_free_hull(qhull);
-            exitcode = ivp_qhull_new_hull(
-                qhull, pts, numpoints,
-                "qhull Qs Pp C-0 W1e-14 E1.0e-18");
+            exitcode = ivp_qhull_new_hull(qhull, pts, numpoints, PS_QHULL_COMMAND);
         }
         if (exitcode || !try_unjumbled) {
             IVP_IFDEBUG(IVP_DM_SURBUILD_POINTSOUP) {
                 ivp_better_debug_manager_dprint(&ivp_debugmanager, IVP_DM_SURBUILD_POINTSOUP, "*** Qhull failed. Retrying with different parameters.\n");
             }
             char flags[250];
-            snprintf(flags, sizeof(flags), "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18", random_eps);
+            snprintf(flags, sizeof(flags), PS_QHULL_JOGGLE_COMMAND, random_eps);
             ivp_qhull_free_hull(qhull);
             exitcode = ivp_qhull_new_hull(qhull, pts, numpoints, flags);
             if (exitcode) {
@@ -333,11 +641,11 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
             }
         }
 
-        bool skip_point = false;
+        bool skip_point = false, too_many = false;
         memset(use_list, 0, (size_t)numpoints * sizeof(unsigned));
         memset(skip_list, 0, (size_t)numpoints * sizeof(unsigned));
         res = ps_try_build(qhull, alloc, pts, numpoints,
-                           &skip_point, skip_list, use_list);
+                           &skip_point, &too_many, skip_list, use_list);
         if (res) break;
 
         int dest = 0;
@@ -357,6 +665,7 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         }
         if (numpoints <= 3) break;
     }
+#endif
 
 cleanup:
     ivp_qhull_context_destroy(qhull);
