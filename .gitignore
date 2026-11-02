@@ -110,10 +110,9 @@ lcov.info
 # Valgrind data
 *.vgcore.*
 
-# Documentation build
-docs/_build/
-docs/build/
-docs/doxygen/
+# Internal documents (kept locally, not tracked)
+/AGENTS.md
+/docs/
 
 # Dependency directories
 node_modules/
