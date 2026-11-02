@@ -27,6 +27,7 @@
       "test_controllers",
       "test_convex_decompose",
       "test_convex_layout",
+      "test_convex_robustness",
       "test_deferred_deletion",
       "test_diagnostics",
       "test_dynamics",
@@ -202,7 +203,8 @@
       "type": "command",
       "command": ["tools/parity/check.sh"],
       "output_assertions": [
-        {"count": 2, "text": "=== 26/48 identical; 22/22 expected differences ==="},
+        {"count": 1, "text": "=== 28/48 identical; 20/20 expected differences ==="},
+        {"count": 1, "text": "=== 27/48 identical; 20/20 expected differences ==="},
         {"count": 2, "text": "=== 9/48 identical; 39/39 expected differences ==="},
         {"count": 2, "text": "=== 48/48 identical ==="},
         {"count": 1, "text": "PARITY OK"}
