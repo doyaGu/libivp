@@ -14,8 +14,7 @@
 
 三个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
-两组主线差异见 `docs/PARITY_GAP_INVENTORY.md`；Qhull 已不再是两端的
-差异变量。
+Qhull 已不再是两端的差异变量。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
@@ -87,8 +86,9 @@ reference-development 和默认主线，写入 `build/parity/out/sweep_*/{refere
    （或用 `lib_mainline_release` 检查主线路径）。
 4. **逐值比较：**比较两边的 stderr，找出第一个不同的值。用完后删除所有探针。
 
-最常见的原因是表达式的求值类型（float 还是 double）与原版不一致，规则见
-[docs/PORT_WORK_REPORT.md](../../docs/PORT_WORK_REPORT.md) 第 5.1 节。
+最常见的原因是表达式的求值类型（float 还是 double）与原版不一致：每个表达式
+都要按原版的类型求值，float 与 float 运算仍是 float，`IVP_FLOAT op= IVP_DOUBLE`
+先按 double 计算再舍入一次。
 
 ## 注意
 
