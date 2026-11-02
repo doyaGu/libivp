@@ -667,8 +667,8 @@ if (IVP_BUILD_TESTS)
     target_include_directories(test_deferred_deletion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     # These generated cases include libm results and their stored output bits
     # come from the reference platform.  Keep this golden-data comparison on
-    # the platform documented in AGENTS.md and PORT_WORK_REPORT.md; portable
-    # solver behavior is covered by test_great_matrix_port on every platform.
+    # that platform (macOS arm64); portable solver behavior is covered by
+    # test_great_matrix_port on every platform.
     if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
         ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
         ivp_apply_strict_fp(test_lcs_parity)
