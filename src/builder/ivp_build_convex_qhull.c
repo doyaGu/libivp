@@ -18,9 +18,7 @@
  * The mainline build uses the official reentrant Qhull 2020.2 (8.0.2)
  * dependency.  Each call owns an independent qhT, so convex builders may run
  * concurrently.  A reference-development build can select the classic
- * dependency; its global Qhull state is serialized by the adapter.  Backend
- * selection and the resulting layout domain are documented in
- * docs/PARITY_GAP_INVENTORY.md.
+ * dependency; its global Qhull state is serialized by the adapter.
  *
  * Mainline construction (not with IVP_REFERENCE_INTERNAL_STATE, which keeps
  * the reference's options and retry loop):
