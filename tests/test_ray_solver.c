@@ -544,7 +544,7 @@ typedef struct ov_cast_case {
     double      min_dist;
 } ov_cast_case_t;
 
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
 #define OV_PX_HITS "E M P D B A F K"
 #define OV_PX_NOPH_HITS "E M D B A F K"
 #define OV_PX_NOMOV_HITS "E D B A F K"

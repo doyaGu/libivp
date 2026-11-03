@@ -11,6 +11,7 @@
       "test_builders",
       "test_bvh_bottomup",
       "test_car_system",
+      "test_cmake_options",
       "test_collision",
       "test_collision_diff",
       "test_collision_ext",
@@ -76,7 +77,7 @@
         "IVP_ENABLE_UBSAN": "ON",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": ["test_benchmark_runner"],
@@ -110,7 +111,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "OFF",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": ["test_benchmark_runner"],
@@ -144,7 +145,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": [],
@@ -177,7 +178,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": [],
@@ -213,6 +214,40 @@
       "required_env": ["IVP_REF_SRC"]
     },
     {
+      "id": "reference-unit",
+      "type": "ctest",
+      "configuration": "Release",
+      "required_cache": {
+        "IVP_BUILD_BENCHMARKS": "ON",
+        "IVP_BUILD_EXAMPLES": "OFF",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_CHECKPOINTS": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_QHULL_MODE": "REENTRANT",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_STABLE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": ["test_convex_robustness", "test_internal_state_stability", "test_replay_equivalence"],
+        "platform_tests": {
+          "Darwin": ["test_lcs_parity", "test_parity_compare"],
+          "Linux": ["test_parity_compare"]
+        },
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": []
+      }
+    },
+    {
       "id": "release-unit",
       "type": "ctest",
       "configuration": "Release",
@@ -228,7 +263,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": [],
@@ -260,7 +295,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": [],
@@ -292,7 +327,7 @@
         "IVP_ENABLE_UBSAN": "OFF",
         "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
-        "IVP_REFERENCE_INTERNAL_STATE": "OFF"
+        "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
         "exclude": [],

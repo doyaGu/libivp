@@ -33,6 +33,7 @@ class VerificationRunnerTests(unittest.TestCase):
                 "determinism-features-unit",
                 "examples-headless",
                 "parity",
+                "reference-unit",
                 "release-unit",
                 "scenario-invariants",
                 "tsan-threading",

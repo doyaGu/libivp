@@ -13,19 +13,10 @@ endif ()
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
-option(IVP_REFERENCE_INTERNAL_STATE
-       "Preserve address/history-sensitive reference internals for parity work"
-       OFF)
-option(IVP_EDIT_LOCALITY
-       "Pace movement checks per simulation unit so scene edits stay local (changes trajectories versus the reference)"
-       OFF)
+include(cmake/IVPInternalState.cmake)
 option(IVP_ENABLE_CHECKPOINTS
        "Memory regions with in-place checkpoints and rewinding (ivp_memory_region.h, ivp_rewind.h)"
        OFF)
-if (IVP_REFERENCE_INTERNAL_STATE AND IVP_EDIT_LOCALITY)
-    message(STATUS "IVP_REFERENCE_INTERNAL_STATE keeps the reference movement-check countdown; IVP_EDIT_LOCALITY is off")
-    set(IVP_EDIT_LOCALITY OFF)
-endif ()
 set(IVP_QHULL_MODE "REENTRANT" CACHE STRING
     "Qhull backend: REENTRANT (mainline and parity) or REFERENCE (historical comparison)")
 set_property(CACHE IVP_QHULL_MODE PROPERTY STRINGS REENTRANT REFERENCE)
@@ -327,7 +318,7 @@ target_include_directories(ivp
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
-        IVP_REFERENCE_INTERNAL_STATE=$<BOOL:${IVP_REFERENCE_INTERNAL_STATE}>
+        IVP_STABLE_INTERNAL_STATE=$<BOOL:${IVP_STABLE_INTERNAL_STATE}>
         IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>
         IVP_ENABLE_CHECKPOINTS=$<BOOL:${IVP_ENABLE_CHECKPOINTS}>)
 if (IVP_REAL_DOUBLE)
@@ -598,7 +589,7 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_internal_parallel tests/test_internal_parallel.c)
     target_include_directories(test_internal_parallel PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    if (NOT IVP_REFERENCE_INTERNAL_STATE)
+    if (IVP_STABLE_INTERNAL_STATE)
         ivp_add_test(test_internal_state_stability tests/test_internal_state_stability.c)
         target_include_directories(test_internal_state_stability PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -747,6 +738,10 @@ if (IVP_BUILD_TESTS)
         message(STATUS "Skipping test_compare_jsonl_self (missing Python3 interpreter or JSONL inputs)")
     endif ()
     if (Python3_Interpreter_FOUND)
+        add_test(NAME test_cmake_options
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${IVP_REPO_ROOT}/tests/test_cmake_options.py ${CMAKE_COMMAND})
+        set_tests_properties(test_cmake_options PROPERTIES LABELS "unit;tools")
         add_test(NAME test_verification_runner
                  COMMAND ${Python3_EXECUTABLE}
                          ${IVP_REPO_ROOT}/tests/test_verification_runner.py)
@@ -822,7 +817,7 @@ if (IVP_BUILD_TESTS)
     if (IVP_QHULL_SUPPORTS_PARALLEL_BUILDS)
         list(APPEND IVP_THREADING_TESTS test_qhull_overlap)
     endif ()
-    if (NOT IVP_REFERENCE_INTERNAL_STATE)
+    if (IVP_STABLE_INTERNAL_STATE)
         list(APPEND IVP_THREADING_TESTS
                 test_internal_state_stability
                 test_replay_equivalence)

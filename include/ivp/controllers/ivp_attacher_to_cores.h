@@ -6,7 +6,7 @@
  * reference IVP_U_Set_Active<IVP_Core>) and keeps exactly one attachment
  * per core of the set:
  *   - construction: an attachment is created for every core already in the
- *     set (stable core order in the default build), then the attacher listens
+ *     set (stable core order in the stable-internals build), then the attacher listens
  *     to the set;
  *   - element added: ATTACH_T(attacher, core) -> create_attachment;
  *   - element removed: the attachment is deleted (delete_attachment);

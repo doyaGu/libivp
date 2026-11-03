@@ -171,7 +171,7 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  *    memory.  The friction solver does not use those: like the reference it
  *    takes the arrays from the environment's persistent arena, whose layout
  *    matches IVP_U_Memory.  A reference-internals build preserves the stale
- *    contents read through overruns and unwritten padding; the normal build
+ *    contents read through overruns and unwritten padding; the stable-internals build
  *    clears the complete reserved span.
  *    Define IVP_GM_VECFPU_SIZE=1 to get the 32-bit reference build instead
  *    (plain scalar helpers, no overruns).

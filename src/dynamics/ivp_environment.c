@@ -298,7 +298,7 @@ uint64_t ivp_env_next_contact_sequence(struct ivp_environment *env)
 
 uint64_t ivp_env_register_cluster(struct ivp_environment *env)
 {
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     if (!env || !env->pl) return 0u;
     uint64_t sequence = env_take_sequence(&env->pl->next_object_sequence);
     if (sequence != 0u) env->pl->live_cluster_count++;
@@ -312,7 +312,7 @@ uint64_t ivp_env_register_cluster(struct ivp_environment *env)
 void ivp_env_unregister_cluster(struct ivp_environment *env,
                                 uint64_t creation_sequence)
 {
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     if (!env || !env->pl || creation_sequence == 0u) return;
     IVP_ASSERT(env->pl->live_cluster_count > 0);
     if (env->pl->live_cluster_count > 0) {
@@ -2857,7 +2857,7 @@ void ivp_environment_destroy(ivp_environment_t *env)
 static void env_reset_object_sequence_if_empty(ivp_environment_t *env)
 {
     bool has_live_clusters = false;
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     has_live_clusters = env->pl->live_cluster_count != 0;
 #endif
     if (ivp_object_system_count(env_object_system(env)) == 0 &&

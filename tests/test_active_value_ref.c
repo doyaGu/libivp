@@ -37,7 +37,7 @@ static void log_int(void *ctx, ivp_active_int_t *src, int old_v, int new_v) {
  * process-wide meter-zero construction quirk.  The normal build evaluates
  * the new node independently of earlier graphs. */
 IVP_TEST(construction_update_policy) {
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     if (ivp_active_value_change_meter() != -1) {
         fprintf(stderr, "  (skipped: change meter already used)\n");
         return;

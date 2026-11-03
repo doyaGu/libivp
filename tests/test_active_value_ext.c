@@ -165,7 +165,7 @@ IVP_TEST(sine_propagation_chain) {
     ivp_active_float_remove_ref(time_src);
 }
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
 
 /* Propagation history belongs to one terminal or manager.  Work performed by
  * an unrelated graph must not change either the values or sequence observed
@@ -312,7 +312,7 @@ IVP_TEST(manager_replacement_uses_new_source) {
 
 int main(void) {
     IVP_TEST_LIST
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     IVP_REGISTER(propagation_history_is_local);
     IVP_REGISTER(manager_replacement_uses_new_source);
 #endif

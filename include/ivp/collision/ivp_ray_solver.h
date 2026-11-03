@@ -142,7 +142,7 @@ void ivp_ray_solver_check_object(ivp_ray_solver_t *rs, struct ivp_object *object
 /* IVP_Ray_Solver::check_ray_against_all_objects_in_sim: walks the
  * environment's OV tree from its root with ivp_ray_solver_check_node().
  * Objects without collision detection are not in the tree and are never
- * reported.  The normal build visits broadphase candidates in reverse
+ * reported.  The stable-internals build visits broadphase candidates in reverse
  * world-local object order, independent of OV node storage. */
 void ivp_ray_solver_check_all_objects(ivp_ray_solver_t *rs,
                                       const struct ivp_environment *env);
@@ -230,7 +230,7 @@ ivp_result_t ivp_ray_solver_min_hash_fill_min_hash(const ivp_ray_solver_min_hash
                                                    struct ivp_min_hash *out);
 
 /* Hits in increasing double distance (hit_key); equal distances retain
- * insertion order.  Environment queries in the normal build insert objects
+ * insertion order.  Environment queries in the stable-internals build insert objects
  * in reverse world-local object order.  Writes up to `capacity` pointers and
  * returns the number of hits. */
 int ivp_ray_solver_min_hash_get_sorted(const ivp_ray_solver_min_hash_t *rs,

@@ -20,7 +20,7 @@
  * concurrently.  A reference-development build can select the classic
  * dependency; its global Qhull state is serialized by the adapter.
  *
- * Mainline construction (not with IVP_REFERENCE_INTERNAL_STATE, which keeps
+ * Stable construction (IVP_STABLE_INTERNAL_STATE, while the default keeps
  * the reference's options and retry loop):
  *   - qhull "Qs Pp C-0": Qhull derives its roundoff and outside width from
  *     the input.  The reference's "W1e-14 E1.0e-18" claim a precision double
@@ -64,7 +64,7 @@
 
 #define PS_MIN_EDGE_LEN 0.01f /* P_MIN_EDGE_LEN */
 
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
 #define PS_QHULL_COMMAND "qhull Qs Pp C-0 W1e-14 E1.0e-18"
 #define PS_QHULL_JOGGLE_COMMAND "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18"
 #else
@@ -263,7 +263,7 @@ static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
     int n_facets = ivp_qhull_for_each_facet(qhull, ps_facet, &ctx);
     *skip_point = ctx.skip_point;
     *too_many = false;
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     /* A closed triangulated convex hull of V vertices has 2V - 4 triangles */
     if (n_facets > 0 && !ctx.oom && !ctx.skip_point) {
         int vertices = 0;
@@ -299,7 +299,7 @@ static ivp_compact_ledge_t *ps_try_build(ivp_qhull_context_t *qhull,
     return ledge;
 }
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
 /* ── Mainline construction ──────────────────────────────────────────────── */
 
 static void ps_sub(double r[3], const double *a, const double *b)
@@ -610,7 +610,7 @@ static ivp_compact_ledge_t *ps_build_qhull_ledge(const ivp_allocator_t *alloc,
         }
         ivp_hashmap_destroy(&map);
     }
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     res = ps_build_mainline(qhull, alloc, pts, numpoints, skip_list, use_list);
 #else
     /* first loop, try to randomize point 0 until we get a result.  With

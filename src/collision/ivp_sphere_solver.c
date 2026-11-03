@@ -236,7 +236,7 @@ static void sphere_query_check_object(
     query->found++;
 }
 
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
 static void collect_intruding_objects(sphere_env_query_t *q, const ivp_ov_node_t *node,
                                       const float query_rlb[3], const float query_pos[3])
 {
@@ -330,7 +330,7 @@ int ivp_sphere_solver_check_environment(const ivp_sphere_solver_template_t *tmpl
     /* sphere_bb_rlb.set(m_radius, ...), sphere_bb_pos.set(m_center.k[0], ...) */
     const float sphere_bb_rlb[3] = { (float)q.radius, (float)q.radius, (float)q.radius };
     const float sphere_bb_pos[3] = { (float)q.center[0], (float)q.center[1], (float)q.center[2] };
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     collect_intruding_objects(&q, root, sphere_bb_rlb, sphere_bb_pos);
 #else
     sphere_ov_query_t ov_query = {

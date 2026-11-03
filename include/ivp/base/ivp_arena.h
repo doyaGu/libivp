@@ -3,8 +3,8 @@
  * One arena implementation serves both ordinary builder scratch storage and
  * the environment's transaction storage.  Its allocation layout is the
  * layout of the reference IVP_U_Memory: 32-byte aligned starts, 48--79 bytes
- * of reserved trailing space, and a retained first block.  The normal engine
- * build clears every reserved span; reference-internals builds may retain
+ * of reserved trailing space, and a retained first block.  Stable-internals
+ * builds clear every reserved span; the default reference policy may retain
  * bytes across transactions.  Environment-owned instances select that
  * content policy; ordinary scratch arenas use the same allocation engine.
  */

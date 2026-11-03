@@ -334,7 +334,7 @@ static inline void core_center_f(const ivp_object_t *obj, float c[3])
     c[2] = (float)core->m_world_f_core_last_psi.pos.k[2];
 }
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
 typedef struct ray_ov_query {
     ivp_ray_solver_t *solver;
     const ivp_ov_tree_t *tree;
@@ -375,7 +375,7 @@ void ivp_ray_solver_check_node(ivp_ray_solver_t *rs, const ivp_ov_node_t *node,
     /* IVP_Ray_Solver::check_ray_against_node (ivp_ray_solver.cxx:717) */
     if (!node) return;
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     ray_ov_query_t query = { rs, ov_tree };
     ivp_ov_query_visit_objects(
         ov_tree, node, IVP_OV_QUERY_REVERSE,
@@ -837,7 +837,7 @@ void ivp_ray_solver_group_check_object(ivp_ray_solver_group_t *g, ivp_object_t *
     }
 }
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
 typedef struct ray_group_ov_query {
     ivp_ray_solver_group_t *group;
     const ivp_ov_tree_t *tree;
@@ -885,7 +885,7 @@ void ivp_ray_solver_group_check_node(ivp_ray_solver_group_t *g, const ivp_ov_nod
     /* IVP_Ray_Solver_Group::check_ray_group_against_node (ivp_ray_solver.cxx:762) */
     if (!node) return;
 
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     ray_group_ov_query_t query = { g, ov_tree };
     ivp_ov_query_visit_objects(
         ov_tree, node, IVP_OV_QUERY_REVERSE,

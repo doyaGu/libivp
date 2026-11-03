@@ -25,7 +25,7 @@ struct ivp_active_value_manager {
     ivp_active_int_t     **delayed_ints;
     int                    n_delayed_ints, cap_delayed_ints;
     ivp_active_float_t    *mod_current_time;
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     uint64_t               update_source;
     uint64_t               update_sequence;
 #endif
@@ -33,7 +33,7 @@ struct ivp_active_value_manager {
 
 /* ── Propagation stamps ───────────────────────────────────────────────── */
 
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
 
 typedef int ivp_active_update_t;
 
@@ -240,7 +240,7 @@ static ivp_active_float_t *alloc_float(const ivp_allocator_t *alloc, const char 
         return NULL;
     }
     af->ref_count = 1;
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     af->last_update = 0; /* "should be updated" */
 #else
     if (type == IVP_ACTIVE_FLOAT_TERMINAL) {
@@ -264,7 +264,7 @@ static ivp_active_int_t *alloc_int(const ivp_allocator_t *alloc, const char *nam
         return NULL;
     }
     ai->ref_count = 1;
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     ai->last_update = 0;
 #else
     if (type == IVP_ACTIVE_INT_TERMINAL) {
@@ -669,13 +669,13 @@ ivp_active_int_t *ivp_active_int_test_range_create(const ivp_allocator_t *alloc,
 void ivp_active_float_set_delayed(ivp_active_float_t *af, double new_value, bool delayed) {
     if (af->type != IVP_ACTIVE_FLOAT_TERMINAL) return;
     af->value = new_value;
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     ivp_active_update_t update = active_update_for_float(af);
 #endif
     if (delayed && af->manager) {
         ivp_active_value_manager_delay_float(af->manager, af);
     } else {
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
         ivp_active_update_t update = active_update_for_float(af);
 #endif
         terminal_float_update(af, update);
@@ -685,14 +685,14 @@ void ivp_active_float_set_delayed(ivp_active_float_t *af, double new_value, bool
 void ivp_active_int_set_delayed(ivp_active_int_t *ai, int new_value, bool delayed) {
     if (ai->type != IVP_ACTIVE_INT_TERMINAL) return;
     ai->value = new_value;
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     ivp_active_update_t update = active_update_for_int(ai);
     /* IVP_U_Active_Float::change_meter++ */
 #endif
     if (delayed && ai->manager) {
         ivp_active_value_manager_delay_int(ai->manager, ai);
     } else {
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
         ivp_active_update_t update = active_update_for_int(ai);
 #endif
         terminal_int_update(ai, update);
@@ -849,7 +849,7 @@ ivp_active_value_manager_t *ivp_active_value_manager_create(const ivp_allocator_
     if (!m) return NULL;
     memset(m, 0, sizeof(*m));
     m->alloc = alloc;
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     m->update_source = active_update_source_create();
 #endif
     ivp_vhash_init(&m->floats_name_hash, alloc, IVP_U_MOD_NAME_HASH_SIZE, float_name_compare);
@@ -1119,7 +1119,7 @@ void ivp_active_value_manager_update_delayed(ivp_active_value_manager_t *m) {
 }
 
 void ivp_active_value_manager_refresh_psi(ivp_active_value_manager_t *m, double time) {
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     if (m->mod_current_time) {
         ivp_active_float_set(m->mod_current_time, time);
     }

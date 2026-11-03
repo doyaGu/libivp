@@ -17,10 +17,10 @@
  *   Test_Range    IVP_U_Active_Test_Range (1 if low <= test <= high)
  *
  * Propagation semantics:
- *   - Every terminal update carries one propagation stamp.  Stamps are local
- *     to the terminal or its manager, so unrelated worlds cannot affect a
- *     graph's history.  A manager refresh uses one stamp for current_time and
- *     all delayed terminals in that refresh.
+ *   - Every terminal update carries one propagation stamp. With stable
+ *     internals, stamps are local to the terminal or its manager; a manager
+ *     refresh uses one stamp for current_time and all delayed terminals.
+ *     The default reference policy uses a process-wide change meter.
  *   - Every derived node remembers its last propagation stamp and ignores
  *     further notifications carrying the same stamp.
  *     Within one terminal change each node is therefore recomputed at most
@@ -34,8 +34,8 @@
  *   - Construction evaluates each node once through the same guard.  Square
  *     nodes are not evaluated at construction, matching the reference.
  *
- * IVP_REFERENCE_INTERNAL_STATE restores the reference process-wide change
- * meter, including its construction-at-meter-zero quirk, for parity work.
+ * With IVP_STABLE_INTERNAL_STATE off, the reference process-wide change
+ * meter includes its construction-at-meter-zero quirk.
  *
  * Ownership (libivp): nodes are reference counted; create returns a node
  * with ref_count 1, every dependent node, listener and manager
@@ -50,8 +50,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#ifndef IVP_REFERENCE_INTERNAL_STATE
-#define IVP_REFERENCE_INTERNAL_STATE 0
+#ifndef IVP_STABLE_INTERNAL_STATE
+#define IVP_STABLE_INTERNAL_STATE 0
 #endif
 
 #ifdef __cplusplus
@@ -130,7 +130,7 @@ struct ivp_active_float {
     char                   *name;           /* owned copy (may be NULL) */
     double                  value;          /* IVP_U_Active_Float::double_value */
     double                  old_value;      /* terminal: value at last update */
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     int                     last_update;    /* reference change meter */
 #else
     uint64_t                last_update_source;
@@ -177,7 +177,7 @@ struct ivp_active_int {
     char                 *name;
     int                   value;
     int                   old_value;
-#if IVP_REFERENCE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE
     int                   last_update;
 #else
     uint64_t              last_update_source;
@@ -204,7 +204,7 @@ struct ivp_active_int {
 /* ── Reference change meter ─────────────────────────────────────────────── */
 
 /* IVP_U_Active_Float::change_meter in a reference-internals build.  The
- * normal build has no process-wide propagation state and returns -1. */
+ * stable-internals build has no process-wide propagation state and returns -1. */
 int  ivp_active_value_change_meter(void);
 
 /* ── Terminal constructors ──────────────────────────────────────────────── */

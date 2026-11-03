@@ -27,12 +27,12 @@ typedef struct ivp_env_pipeline {
     ivp_sim_units_manager_t  sim_units_manager;
     ivp_cache_obj_mgr_t      cache_mgr;
     /* Allocations survive nested callers and are released by the outermost
-     * transaction. Environment initialization normally enables clearing; a
-     * reference-internals build leaves reused spans intact. */
+     * transaction. Stable-internals builds clear spans; the default reference
+     * policy leaves reused spans intact. */
     ivp_arena_t              sim_unit_mem;
     /* IVP_Environment::short_term_mem: the persistent arena of the friction
      * solver and its linear constraint solver.  It preserves the reference
-     * IVP_U_Memory layout; initialization normally clears reused spans. */
+     * IVP_U_Memory layout and uses the same content policy. */
     ivp_arena_t              short_term_mem;
 
     ivp_time_t               time_of_last_psi;
@@ -65,7 +65,7 @@ typedef struct ivp_env_pipeline {
     uint64_t                 next_object_sequence;
     uint64_t                 next_controller_sequence;
     uint64_t                 next_contact_sequence;
-#if !IVP_REFERENCE_INTERNAL_STATE
+#if IVP_STABLE_INTERNAL_STATE
     int                      live_cluster_count;
 #endif
 #if IVP_EDIT_LOCALITY
