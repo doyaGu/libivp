@@ -13,25 +13,34 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        policy: [reference, stable]
+        include:
+          - policy: reference
+            suite: reference-unit
+            cmake_args: ""
+          - policy: stable
+            suite: release-unit
+            cmake_args: -DIVP_STABLE_INTERNAL_STATE=ON
+    name: library (${{ matrix.os }}, ${{ matrix.policy }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_args }}
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Release focused-test suite
         run: >-
           python tools/run_verification.py
-          --suite release-unit
+          --suite ${{ matrix.suite }}
           --build-dir build
           --parallel 4
-          --result-file build/verification/release-unit-${{ runner.os }}.json
+          --result-file build/verification/${{ matrix.suite }}-${{ runner.os }}.json
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: verification-release-unit-${{ runner.os }}
+          name: verification-${{ matrix.suite }}-${{ runner.os }}
           path: build/verification/*.json
           if-no-files-found: warn
 
@@ -69,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -S . ${{ matrix.cmake_args }}
+        run: cmake -B build -S . -DIVP_STABLE_INTERNAL_STATE=ON ${{ matrix.cmake_args }}
       - name: Build
         run: cmake --build build --parallel
       - name: Run verification suite
@@ -99,7 +108,7 @@ jobs:
       - name: Configure
         run: >-
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          -DIVP_ENABLE_SCENARIO_TESTS=ON
+          -DIVP_ENABLE_SCENARIO_TESTS=ON -DIVP_STABLE_INTERNAL_STATE=ON
       - name: Build scenario runner
         run: cmake --build build --target test_scenarios --parallel
       - name: Run scenario-invariant suite
@@ -167,7 +176,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install glslang
       - name: Configure
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON -DIVP_STABLE_INTERNAL_STATE=ON
       - name: Build
         run: cmake --build build --parallel
       - name: Run headless-example suite
