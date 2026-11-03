@@ -9,17 +9,18 @@ buoyancy, force fields and vehicles.
 The port follows the reference engine line by line and is checked against
 it bit for bit:
 
-- A **reference-development build** (`IVP_REFERENCE_INTERNAL_STATE=ON`)
+- The default build (`IVP_STABLE_INTERNAL_STATE=OFF`)
   reproduces the reference engine exactly in all 48 parity scenarios, in
   Release and Debug.
-- The default **mainline build** keeps the reference physics but no longer
+- The optional **mainline build** (`IVP_STABLE_INTERNAL_STATE=ON`) keeps the reference physics but no longer
   depends on incidental container order or allocator history. Each of its
   differences from the reference is registered by scenario in
   `tools/parity/`. Any unregistered difference is a bug.
 
 Parity is verified on macOS arm64. The library builds and its tests run on
-Linux, macOS and Windows; results are deterministic on one platform, not
-across platforms.
+Linux, macOS and Windows. The default reference policy can depend on addresses
+and allocation history; the optional stable policy removes those dependencies
+within one platform and build configuration. Results can differ across platforms.
 
 ## Building
 
@@ -46,8 +47,8 @@ target_link_libraries(my_app PRIVATE ivp)
 | Option | Default | Description |
 |---|---|---|
 | `IVP_REAL_DOUBLE` | ON | `double` for `ivp_real_t`, like the reference `IVP_DOUBLE` (OFF: `float`) |
-| `IVP_REFERENCE_INTERNAL_STATE` | OFF | Keep the reference's address- and history-sensitive internals, for parity work |
-| `IVP_EDIT_LOCALITY` | OFF | Adding or removing objects changes only the objects they interact with (trajectories differ from the reference) |
+| `IVP_STABLE_INTERNAL_STATE` | OFF | Use history-independent internals; OFF preserves the reference's address- and history-sensitive behavior |
+| `IVP_EDIT_LOCALITY` | OFF | Adding or removing objects changes only the objects they interact with; requires `IVP_STABLE_INTERNAL_STATE=ON` and changes trajectories |
 | `IVP_ENABLE_CHECKPOINTS` | OFF | Memory regions with in-place checkpoints, and rewinding to any recorded step |
 | `IVP_QHULL_MODE` | `REENTRANT` | `REENTRANT`: Qhull 2020.2, safe to call concurrently; `REFERENCE`: classic Qhull with serialized calls |
 | `IVP_ENABLE_ASSERTS` | OFF | Assertions and the reference debug code in Release (always on in Debug) |
@@ -59,6 +60,12 @@ target_link_libraries(my_app PRIVATE ivp)
 | `IVP_BUILD_EXAMPLES` | OFF | Graphical examples (enables the render module) |
 | `IVP_BUILD_RENDER` | OFF | SDL3 GPU render module |
 | `IVP_ENABLE_ASAN` / `IVP_ENABLE_UBSAN` | OFF | Sanitizers |
+
+Existing CMake caches using `IVP_REFERENCE_INTERNAL_STATE` are migrated to the
+inverse `IVP_STABLE_INTERNAL_STATE` value. When both are set, the new option
+takes precedence. Pass
+`-DIVP_STABLE_INTERNAL_STATE=OFF` or configure a fresh directory to select the
+new default in a previously configured build.
 
 Library code is compiled with `-ffp-contract=off -fno-fast-math
 -frounding-math` (`/fp:strict` on MSVC). Don't build it with fast-math or
