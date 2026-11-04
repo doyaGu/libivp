@@ -380,6 +380,16 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
 
 /* ── Frame loop ────────────────────────────────────────────────────────── */
 
+void ivp_renderer_set_camera(ivp_renderer_t *r, const ivp_camera_t *cam)
+{
+    if (!r || !cam) return;
+    ivp_camera_compute_matrices(cam, r->width, r->height,
+                                r->view_mat, r->proj_mat, r->vp_mat);
+    memcpy(r->cam_target, cam->target, sizeof(r->cam_target));
+    r->cam_dist = cam->mode == IVP_CAMERA_MODE_FLY ? 30.0f : cam->orbit_distance;
+    ivp_frustum_extract(&r->frustum, r->vp_mat);
+}
+
 bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
 {
     /* Timing */
@@ -416,15 +426,7 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
         if (cam->mode == IVP_CAMERA_MODE_FLY)
             ivp_camera_update_fly(cam);
     }
-    ivp_camera_compute_matrices(cam, r->width, r->height,
-                                r->view_mat, r->proj_mat, r->vp_mat);
-    if (cam) {
-        memcpy(r->cam_target, cam->target, sizeof(r->cam_target));
-        r->cam_dist = cam->mode == IVP_CAMERA_MODE_FLY ? 30.0f : cam->orbit_distance;
-    }
-
-    /* Extract frustum planes from VP matrix */
-    ivp_frustum_extract(&r->frustum, r->vp_mat);
+    ivp_renderer_set_camera(r, cam);
 
     /* Depth + MSAA resize */
     int pw, ph;

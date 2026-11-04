@@ -143,6 +143,38 @@ IVP_TEST(frustum_aabb_culling) {
     IVP_ASSERT_FALSE(ivp_frustum_test_aabb(&f, b_mn, b_mx));
 }
 
+IVP_TEST(camera_refresh_updates_rays_culling_and_shadow_target) {
+    ivp_renderer_t renderer;
+    memset(&renderer, 0, sizeof(renderer));
+    renderer.width = 1280;
+    renderer.height = 720;
+    ivp_camera_t camera;
+    ivp_camera_init(&camera);
+    camera.orbit_distance = 10.0f;
+    camera.orbit_yaw = 0.0f;
+    camera.orbit_pitch = 0.0f;
+    camera.target[0] = 0.0f;
+    camera.target[1] = 0.0f;
+    camera.target[2] = 0.0f;
+    ivp_camera_update_orbit(&camera);
+    ivp_renderer_set_camera(&renderer, &camera);
+    const float origin[3] = {0.0f, 0.0f, 0.0f};
+    IVP_ASSERT_TRUE(ivp_frustum_test_sphere(&renderer.frustum, origin, 0.1f));
+
+    /* Follow a body far enough that the old frustum no longer contains it. */
+    camera.target[0] = 100.0f;
+    ivp_camera_update_orbit(&camera);
+    ivp_renderer_set_camera(&renderer, &camera);
+    float ro[3], rd[3];
+    ivp_render_unproject_ray(&renderer, 640.0f, 360.0f, ro, rd);
+    float hit;
+    IVP_ASSERT_TRUE(ivp_render_ray_sphere(ro, rd, camera.target, 0.1f, &hit));
+    IVP_ASSERT_TRUE(ivp_frustum_test_sphere(&renderer.frustum, camera.target, 0.1f));
+    IVP_ASSERT_FALSE(ivp_frustum_test_sphere(&renderer.frustum, origin, 0.1f));
+    for (int k = 0; k < 3; k++) IVP_ASSERT_EQ(renderer.cam_target[k], camera.target[k]);
+    IVP_ASSERT_EQ(renderer.cam_dist, camera.orbit_distance);
+}
+
 /* ── PNG writer ───────────────────────────────────────────────────────── */
 
 static uint32_t be32(const unsigned char *p)
@@ -265,6 +297,7 @@ int main(void) {
     IVP_REGISTER(ray_aabb_hit_and_miss);
     IVP_REGISTER(frustum_sphere_culling);
     IVP_REGISTER(frustum_aabb_culling);
+    IVP_REGISTER(camera_refresh_updates_rays_culling_and_shadow_target);
     IVP_REGISTER(png_writer_roundtrip);
     IVP_REGISTER(png_writer_rejects_bad_input);
     IVP_RUN_ALL();

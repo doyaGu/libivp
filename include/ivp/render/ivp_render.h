@@ -87,6 +87,11 @@ void ivp_renderer_destroy(ivp_renderer_t *r);
  * Returns false when the user closes the window. */
 bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam);
 
+/* Refresh view/projection, culling and shadow-camera state after changing
+ * the camera during a frame. Call before queuing any world geometry.
+ * Does not process input or update the camera's eye/target. */
+void ivp_renderer_set_camera(ivp_renderer_t *r, const ivp_camera_t *cam);
+
 /* Upload vertex data, execute render passes, present. */
 void ivp_renderer_end_frame(ivp_renderer_t *r);
 
