@@ -503,36 +503,28 @@ static inline void demo_async_push_ws(ivp_environment_t *env, ivp_object_t *obj,
 
 /* World pose of the object frame (core pose combined with the object's
  * shift_core_f_object / q_core_f_object, like IVP_Cache_Object). */
-/* The physics moves a body once per PSI (1/60 s), the window draws faster and
- * unevenly (120 Hz, sub-steps of 1/300 s): drawn at its last PSI pose a moving
- * body would advance in jerks, and the follow camera chasing it would shake the
- * picture. While the window runs, g_demo_render_time holds the simulated time
- * and poses are extrapolated from the last PSI with the body's velocities.
- * Headless runs leave it at -1, so checks see the exact PSI poses. */
-static double g_demo_render_time = -1.0;
-
-static inline double demo_extrapolation_dt(const ivp_core_t *core)
-{
-    if (g_demo_render_time < 0.0) return 0.0;
-    double dt = g_demo_render_time - (double)core->time_of_last_psi;
-    return dt < 0.0 ? 0.0 : (dt > 0.05 ? 0.05 : dt);
-}
+/* Display and picking use the engine's AT trajectory at environment time.
+ * Update callbacks and headless checks leave this off and see PSI poses.
+ * Current velocities may already reflect an impact, so integrating them here
+ * would disagree with the engine's cached position/quaternion trajectory. */
+static bool g_demo_display_poses = false;
 
 static inline void demo_object_pose(const ivp_object_t *obj, float pos[3], float rot[9])
 {
+    if (g_demo_display_poses) {
+        ivp_transform_r_t m;
+        ivp_object_get_m_world_f_object_AT(obj, &m);
+        vec3r_to_float3(&m.pos, pos);
+        if (rot) {
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    rot[c * 3 + r] = (float)m.rot.rows[r].k[c];
+        }
+        return;
+    }
     const ivp_core_t *core = obj->physical_core;
     ivp_quatr_t q = core->q_world_f_core_last_psi;
     ivp_vec3r_t p = core->pos_world_f_core_last_psi;
-    const double dt = demo_extrapolation_dt(core);
-    if (dt > 0.0) {
-        for (int k = 0; k < 3; k++) p.k[k] += core->speed.k[k] * (ivp_real_t)dt;
-        /* spin in the core system: q * (w dt / 2, 1), normalised */
-        ivp_quatr_t dq = ivp_quatr_make(0.5 * dt * (double)core->rot_speed.k[0],
-                                        0.5 * dt * (double)core->rot_speed.k[1],
-                                        0.5 * dt * (double)core->rot_speed.k[2], 1.0);
-        ivp_quat_mult(&q, &q, &dq);
-        ivp_quat_fast_normalize(&q);
-    }
     if (!obj->shift_core_f_object_is_zero) {
         ivp_mat3r_t m;
         ivp_quat_to_mat3(&q, &m);
@@ -558,6 +550,14 @@ static inline void demo_core_point_ws(const ivp_object_t *obj, const ivp_vec3r_t
         return;
     }
     const ivp_core_t *core = obj->physical_core;
+    if (g_demo_display_poses) {
+        ivp_transform_r_t m;
+        ivp_core_calc_at_matrix(core, ivp_environment_get_time(obj->owner), &m);
+        ivp_vec3r_t p;
+        ivp_transform_point(&p, &m, p_cs);
+        vec3r_to_float3(&p, out);
+        return;
+    }
     ivp_mat3r_t m;
     ivp_quat_to_mat3(&core->q_world_f_core_last_psi, &m);
     for (int r = 0; r < 3; r++) {
@@ -571,9 +571,10 @@ static inline void demo_core_point_ws(const ivp_object_t *obj, const ivp_vec3r_t
 /* Mass centre (core position) as floats. */
 static inline void demo_object_center(const ivp_object_t *obj, float out[3])
 {
-    vec3r_to_float3(&obj->physical_core->pos_world_f_core_last_psi, out);
-    const double dt = demo_extrapolation_dt(obj->physical_core);
-    for (int k = 0; k < 3 && dt > 0.0; k++) out[k] += (float)(obj->physical_core->speed.k[k] * dt);
+    ivp_vec3r_t p = obj->physical_core->pos_world_f_core_last_psi;
+    if (g_demo_display_poses)
+        ivp_core_get_at_position(obj->physical_core, ivp_environment_get_time(obj->owner), &p);
+    vec3r_to_float3(&p, out);
 }
 
 static inline float demo_object_speed(const ivp_object_t *obj)
@@ -887,6 +888,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
 
     ivp_renderer_get_size(v->renderer, &v->win_w, &v->win_h);
     demo_debug_tick(&v->dbg, v->frame_dt);
+    g_demo_display_poses = true;
     {   /* hover follows the mouse; a click selects (or clears) */
         float mx, my, ro[3], rd[3];
         SDL_MouseButtonFlags btn = SDL_GetMouseState(&mx, &my);
@@ -908,7 +910,7 @@ static inline bool demo_viewer_begin_frame(demo_viewer_t *v, demo_world_t *w)
     /* the panel keeps the mouse to itself unless a drag is already running */
     if (!v->ui_captured || v->dragger.active)
         ivp_example_dragger_update(&v->dragger, &v->cam, w->env, v->win_w, v->win_h, v->frame_dt);
-    ivp_example_focus_update(&v->focus, &v->cam, w->env, v->frame_dt);
+    g_demo_display_poses = false;
     v->hud_y = 32.0f;
     v->hud_w = 0.0f;
     return true;
@@ -1022,6 +1024,7 @@ static inline void demo_viewer_end_frame(demo_viewer_t *v, const char *controls)
     y += 18.0f;
     ivp_example_draw_interaction_hud(v->renderer, 10.0f, y, DEMO_COL_HELP, DEMO_COL_HELP);
     ivp_renderer_end_frame(v->renderer);
+    g_demo_display_poses = false;
 }
 
 /* ── Drawing ──────────────────────────────────────────────────────────── *
@@ -1508,6 +1511,9 @@ struct demo_app {
     /* Called once per frame before the physics step.  viewer is NULL in
      * headless mode (play the scripted key presses there). */
     void (*update)(demo_app_t *app, demo_viewer_t *viewer, int frame);
+    /* Window only, after physics and before drawing: update the camera from
+     * AT poses without mixing display sampling into physics control. */
+    void (*update_view)(demo_app_t *app, demo_viewer_t *viewer);
     /* Draw the scene (the grid is already drawn). */
     void (*draw)(demo_app_t *app, demo_viewer_t *viewer);
     /* After the Space scene reset restored the saved poses. */
@@ -1694,7 +1700,12 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
         if (v->reset_requested && app->on_reset) app->on_reset(app);
         if (app->update) app->update(app, v, frame);
         demo_viewer_step(v, &app->world);
-        g_demo_render_time = (double)ivp_environment_get_time(app->world.env);
+        g_demo_display_poses = true;
+        if (app->update_view) app->update_view(app, v);
+        ivp_example_focus_update(&v->focus, &v->cam, app->world.env, v->frame_dt);
+        ivp_camera_update_orbit(&v->cam);
+        ivp_camera_update_fly(&v->cam);
+        ivp_renderer_set_camera(v->renderer, &v->cam);
         if (app->cfg.grid_extent >= 0.0f) {
             demo_draw_grid_ex(v, app->cfg.grid_extent > 0.0f ? app->cfg.grid_extent : 30.0f,
                               app->cfg.grid_spacing > 0.0f ? app->cfg.grid_spacing : 1.0f,
@@ -1722,7 +1733,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
             break;
         }
     }
-    g_demo_render_time = -1.0;
+    g_demo_display_poses = false;
     demo_viewer_destroy(v, &app->world);
     free(v);
     return 0;

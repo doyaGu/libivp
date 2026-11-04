@@ -162,13 +162,6 @@ static void jetski_update(demo_app_t *app, demo_viewer_t *v, int frame)
         s->throttle = s->drive.throttle > 0.0f ? s->drive.throttle : 0.5f * s->drive.throttle;
         s->steer = s->drive.steer;
         if (demo_key_just_pressed(v, SDL_SCANCODE_B)) ivp_jetski_activate_booster(&s->ski, 8.0f, 0.5f, 1.0f);
-        {
-            float c[3];
-            demo_object_center(s->body, c);
-            const ivp_vec3r_t *sp = &s->body->physical_core->speed;
-            const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
-            demo_drive_follow(v, &s->drive, c, vel);
-        }
     } else {
         /* the script of the scenario: handbrake off and throttle, steer, booster, steer back */
         if (frame == 60) {
@@ -247,6 +240,12 @@ static void draw_sea(demo_viewer_t *v, const jetski_demo_t *s, const float centr
             memcpy(prev, p, sizeof(prev));
         }
     }
+}
+
+static void jetski_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    jetski_demo_t *s = (jetski_demo_t *)app->user;
+    if (s->ski_ok) demo_drive_follow_object(v, &s->drive, s->body);
 }
 
 static void jetski_draw(demo_app_t *app, demo_viewer_t *v)
@@ -383,6 +382,7 @@ int main(int argc, char **argv)
     app.controls    = "Up/Down: throttle   Left/Right: steer   B: booster   F5: wave, springs, torque";
     app.viewer_init = jetski_viewer_init;
     app.update      = jetski_update;
+    app.update_view = jetski_update_view;
     app.on_reset    = jetski_reset;
     app.draw        = jetski_draw;
     app.stats       = jetski_stats;

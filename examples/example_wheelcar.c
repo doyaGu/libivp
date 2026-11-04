@@ -120,11 +120,6 @@ static void wheelcar_update(demo_app_t *app, demo_viewer_t *v, int frame)
         s->steer = s->drive.steer;
         s->brake = in.brake;
         drive(s);
-        float c[3];
-        demo_object_center(s->body, c);
-        const ivp_vec3r_t *sp = &s->body->physical_core->speed;
-        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
-        demo_drive_follow(v, &s->drive, c, vel);
     } else {
         /* settle, drive, steer, release the throttle and brake */
         if (frame == 90) {
@@ -157,6 +152,12 @@ static void wheelcar_reset(demo_app_t *app)
 {
     wheelcar_demo_t *s = (wheelcar_demo_t *)app->user;
     s->max_hard_error = s->max_tilt = s->speed_peak = 0.0f;
+}
+
+static void wheelcar_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    wheelcar_demo_t *s = (wheelcar_demo_t *)app->user;
+    if (s->car_ok) demo_drive_follow_object(v, &s->drive, s->body);
 }
 
 static void wheelcar_draw(demo_app_t *app, demo_viewer_t *v)
@@ -312,6 +313,7 @@ int main(int argc, char **argv)
     app.controls    = "Up/Down: drive   Left/Right: steer   B: handbrake   F5: torque, lock, springs";
     app.viewer_init = wheelcar_viewer_init;
     app.update      = wheelcar_update;
+    app.update_view = wheelcar_update_view;
     app.on_reset    = wheelcar_reset;
     app.draw        = wheelcar_draw;
     app.stats       = wheelcar_stats;

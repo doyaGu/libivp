@@ -109,10 +109,6 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
         }
         if (in.brake) brake = s->brake;
         apply_input(s, steer, engine, brake);
-        float target[3];
-        demo_object_center(s->chassis, target);
-        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
-        demo_drive_follow(v, &s->drive, target, vel);
         return;
     }
     /* scripted: settle 1 s, throttle 2 s, throttle + steer left 1.5 s, brake */
@@ -134,6 +130,12 @@ static void vehicle_update(demo_app_t *app, demo_viewer_t *v, int frame)
     if (frame >= 240) brake = s->brake;
     if (frame == 330) s->brake_v1 = demo_object_speed(s->chassis);
     apply_input(s, steer, engine, brake);
+}
+
+static void vehicle_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    vehicle_demo_t *s = (vehicle_demo_t *)app->user;
+    demo_drive_follow_object(v, &s->drive, s->chassis);
 }
 
 static void vehicle_draw(demo_app_t *app, demo_viewer_t *v)
@@ -304,6 +306,7 @@ int main(int argc, char **argv)
     app.controls = "Up/Down: drive, brake, reverse   Left/Right: steer   B: handbrake";
     app.viewer_init = vehicle_viewer_init;
     app.update   = vehicle_update;
+    app.update_view = vehicle_update_view;
     app.draw     = vehicle_draw;
     app.stats    = vehicle_stats;
     app.check    = vehicle_check;

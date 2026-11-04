@@ -12,7 +12,7 @@
  *   viewer_init:     demo_drive_panel(&v->panel, &d);
  *   update (window): demo_drive_read(&d, &in);  demo_drive_step(&d, &in, v->frame_dt);
  *                    use d.throttle, d.steer (+1 = right), in.brake
- *                    demo_drive_follow(v, &d, centre, velocity);
+ *   update_view:     demo_drive_follow_object(v, &d, vehicle);
  */
 #ifndef IVP_EXAMPLE_DEMO_DRIVE_H
 #define IVP_EXAMPLE_DEMO_DRIVE_H
@@ -89,6 +89,17 @@ static inline void demo_drive_follow(demo_viewer_t *v, demo_drive_t *d, const fl
     const float want_extra = fminf(0.2f * speed, 0.5f * base);
     d->cam_dist += (want_extra - d->cam_dist) * (1.0f - expf(-dt * 1.5f));
     v->cam.orbit_distance = base + d->cam_dist;
+}
+
+/* Call from update_view, after the physics step, to follow the display pose. */
+static inline void demo_drive_follow_object(demo_viewer_t *v, demo_drive_t *d,
+                                            const ivp_object_t *object)
+{
+    float centre[3];
+    demo_object_center(object, centre);
+    const ivp_vec3r_t *speed = &object->physical_core->speed;
+    const float vel[3] = {(float)speed->k[0], (float)speed->k[1], (float)speed->k[2]};
+    demo_drive_follow(v, d, centre, vel);
 }
 
 #endif /* IVP_EXAMPLE_DEMO_DRIVE_H */

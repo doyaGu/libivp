@@ -640,7 +640,14 @@ static void rolling_ball_update(demo_app_t *app, demo_viewer_t *v, int frame)
             s->fall_test_done = true;
         }
     }
-    if (v) chase_camera(s, v, c);
+}
+
+static void rolling_ball_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    rolling_ball_demo_t *s = (rolling_ball_demo_t *)app->user;
+    float c[3];
+    ball_pos(s, c);
+    chase_camera(s, v, c);
 }
 
 static void rolling_ball_reset(demo_app_t *app)
@@ -846,6 +853,7 @@ int main(int argc, char **argv)
     app.controls    = "Arrows: roll   Backspace: last checkpoint   P: autopilot   RMB: look around";
     app.viewer_init = rolling_ball_viewer_init;
     app.update      = rolling_ball_update;
+    app.update_view = rolling_ball_update_view;
     app.on_reset    = rolling_ball_reset;
     app.draw        = rolling_ball_draw;
     app.stats       = rolling_ball_stats;

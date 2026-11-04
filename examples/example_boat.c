@@ -131,11 +131,14 @@ static void boat_update(demo_app_t *app, demo_viewer_t *v, int frame)
     /* a boat resting on the water freezes, and a frozen core runs no controllers */
     if (s->throttle != 0.0f || s->steer != 0.0f)
         ivp_environment_ensure_core_in_simulation(app->world.env, s->hull);
-    if (v) {
-        float target[3];
-        demo_object_center(s->hull, target);
-        for (int k = 0; k < 3; k++) v->cam.target[k] += (target[k] - v->cam.target[k]) * 0.04f;
-    }
+}
+
+static void boat_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    boat_demo_t *s = (boat_demo_t *)app->user;
+    float target[3];
+    demo_object_center(s->hull, target);
+    for (int k = 0; k < 3; k++) v->cam.target[k] += (target[k] - v->cam.target[k]) * 0.04f;
 }
 
 static void boat_reset(demo_app_t *app)
@@ -330,6 +333,7 @@ int main(int argc, char **argv)
 
     app.viewer_init = boat_viewer_init;
     app.update   = boat_update;
+    app.update_view = boat_update_view;
     app.on_reset = boat_reset;
     app.draw     = boat_draw;
     app.stats    = boat_stats;

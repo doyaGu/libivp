@@ -843,6 +843,12 @@ if (IVP_BUILD_TESTS)
         ivp_add_test(test_demo_drive tests/test_demo_drive.c)
         target_include_directories(test_demo_drive PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples)
         set_tests_properties(test_demo_drive PROPERTIES LABELS "unit")
+
+        # Exercise the real example pose helpers without opening a window.
+        ivp_add_test(test_demo_pose tests/test_demo_pose.c)
+        target_link_libraries(test_demo_pose PRIVATE ivp_render)
+        target_include_directories(test_demo_pose PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+        set_tests_properties(test_demo_pose PROPERTIES LABELS "unit")
     endif ()
     set_tests_properties(test_math_ref PROPERTIES LABELS "unit")
     set_tests_properties(test_active_value_ref PROPERTIES LABELS "unit")

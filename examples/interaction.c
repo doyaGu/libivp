@@ -201,11 +201,9 @@ void ivp_example_dragger_update(ivp_example_dragger_t *dragger,
                     continue;
                 }
 
-                float center[3] = {
-                    (float)obj->physical_core->pos_world_f_core_last_psi.k[0],
-                    (float)obj->physical_core->pos_world_f_core_last_psi.k[1],
-                    (float)obj->physical_core->pos_world_f_core_last_psi.k[2]
-                };
+                ivp_vec3r_t p;
+                ivp_core_get_at_position(obj->physical_core, ivp_environment_get_time(env), &p);
+                float center[3] = {(float)p.k[0], (float)p.k[1], (float)p.k[2]};
                 float radius = (float)obj->physical_core->upper_limit_radius;
                 if (radius < 0.05f) radius = 0.05f;
                 radius *= dragger->settings.pick_radius_scale;
@@ -356,7 +354,8 @@ void ivp_example_focus_update(ivp_example_focus_controller_t *focus,
 
     if (focus->focused && focus->follow_enabled) {
         ivp_vec3r_t p;
-        ivp_object_get_position(focus->focused, &p);
+        ivp_core_get_at_position(focus->focused->physical_core,
+                                ivp_environment_get_time(env), &p);
         float target[3] = {
             (float)p.k[0],
             (float)p.k[1] + focus->vertical_offset,
@@ -406,15 +405,16 @@ void ivp_example_interaction_draw_overlays(ivp_renderer_t *renderer,
 
     if (dragger && dragger->active && dragger->target && dragger->has_target_point) {
         ivp_vec3r_t p;
-        ivp_object_get_position(dragger->target, &p);
+        ivp_core_get_at_position(dragger->target->physical_core,
+                                ivp_environment_get_time(dragger->target->owner), &p);
         float from[3] = {(float)p.k[0], (float)p.k[1], (float)p.k[2]};
         ivp_render_draw_arrow(renderer, from, dragger->target_ws, drag_color, 0.25f);
     }
 
     if (focus && focus->focused) {
-        ivp_vec3r_t p;
-        ivp_object_get_position(focus->focused, &p);
-        float pos[3] = {(float)p.k[0], (float)p.k[1], (float)p.k[2]};
+        ivp_transform_r_t m;
+        ivp_object_get_m_world_f_object_AT(focus->focused, &m);
+        float pos[3] = {(float)m.pos.k[0], (float)m.pos.k[1], (float)m.pos.k[2]};
         float hs[3] = {0.6f, 0.6f, 0.6f};
         ivp_render_draw_wire_box(renderer, pos, hs, NULL, focus_color);
     }

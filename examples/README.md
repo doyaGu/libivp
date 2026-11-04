@@ -51,6 +51,18 @@ IVP worlds are **Y down**: gravity is +Y and the camera's up vector is -Y, so
 "above the ground" means a smaller Y. Draw bodies with `demo_draw_object`,
 which handles solid / wire, shadows and the hover and selection outlines.
 
+In a window, object poses, mass centres and constraint anchors are sampled
+from the engine's AT trajectory at the current environment time. Camera
+following and interaction overlays use that same time. Update callbacks and
+headless checks use PSI poses, so display sampling does not change their
+physics observations. Put chase-camera updates in the window-only
+`update_view` callback, which runs after physics and before drawing. The
+ordinary `ivp_object_get_position()` and
+`ivp_object_get_orientation()` return the core's stored PSI pose; the object
+origin and orientation can differ when its mass centre is offset or its core
+is shared. Use `ivp_object_get_m_world_f_object_AT()` for the object's current
+world transform rather than integrating its current velocities for display.
+
 ## Command line
 
 | Option | |

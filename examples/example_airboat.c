@@ -174,9 +174,6 @@ static void airboat_update(demo_app_t *app, demo_viewer_t *v, int frame)
         demo_drive_step(&s->drive, &in, v->frame_dt);
         s->throttle = s->drive.throttle * (s->drive.throttle > 0.0f ? s->max_throttle : 0.5f * s->max_throttle);
         s->steer = s->drive.steer;                /* + turns right */
-        const float vel[3] = { (float)s->hull->physical_core->speed.k[0], (float)s->hull->physical_core->speed.k[1],
-                               (float)s->hull->physical_core->speed.k[2] };
-        demo_drive_follow(v, &s->drive, c, vel);
     } else {
         /* scripted: float 1 s, drive, steer left for 2 s, keep going */
         s->throttle = frame < 60 ? 0.0f : 0.35f;
@@ -293,6 +290,12 @@ static void draw_boat(demo_viewer_t *v, const airboat_demo_t *s)
             demo_solid_box(v, p, half, r2, c_deck);
         }
     }
+}
+
+static void airboat_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    airboat_demo_t *s = (airboat_demo_t *)app->user;
+    demo_drive_follow_object(v, &s->drive, s->hull);
 }
 
 static void airboat_draw(demo_app_t *app, demo_viewer_t *v)
@@ -454,6 +457,7 @@ int main(int argc, char **argv)
     app.controls    = "Up/Down: throttle forward / reverse   Left/Right: steer";
     app.viewer_init = airboat_viewer_init;
     app.update      = airboat_update;
+    app.update_view = airboat_update_view;
     app.on_reset    = airboat_reset;
     app.draw        = airboat_draw;
     app.stats       = airboat_stats;

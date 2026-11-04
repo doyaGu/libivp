@@ -150,9 +150,6 @@ static void offroad_update(demo_app_t *app, demo_viewer_t *v, int frame)
         }
         if (in.brake) brake = (float)BRAKE_FORCE;
         apply_input(s, steer, engine, brake);
-        const ivp_vec3r_t *sp = &s->chassis->physical_core->speed;
-        const float vel[3] = { (float)sp->k[0], (float)sp->k[1], (float)sp->k[2] };
-        demo_drive_follow(v, &s->drive, c, vel);
         return;
     }
     /* scripted: settle 1.5 s, then 6 s of throttle with the steering flung from
@@ -174,6 +171,12 @@ static void offroad_reset(demo_app_t *app)
     offroad_demo_t *s = (offroad_demo_t *)app->user;
     s->max_tilt = 0.0f;
     s->lowest_clearance = 1e9f;
+}
+
+static void offroad_update_view(demo_app_t *app, demo_viewer_t *v)
+{
+    offroad_demo_t *s = (offroad_demo_t *)app->user;
+    demo_drive_follow_object(v, &s->drive, s->chassis);
 }
 
 static void offroad_draw(demo_app_t *app, demo_viewer_t *v)
@@ -309,6 +312,7 @@ int main(int argc, char **argv)
     app.controls    = "Up/Down: drive, brake, reverse   Left/Right: steer (narrows with speed)   B: handbrake";
     app.viewer_init = offroad_viewer_init;
     app.update      = offroad_update;
+    app.update_view = offroad_update_view;
     app.on_reset    = offroad_reset;
     app.draw        = offroad_draw;
     app.stats       = offroad_stats;
