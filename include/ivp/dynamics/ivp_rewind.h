@@ -28,6 +28,9 @@
  * keeps its keyframes and log outside the region (config.storage).  Like
  * the checkpoints it is built on, a recording belongs to its region and
  * process; it cannot be saved or replayed elsewhere.
+ * The world scheduler's simulate calls bypass this recording protocol;
+ * recorded parallel rollouts must step each independent rewinder instead.
+ * See README.md for branch-search ownership and build policy choices.
  *
  * Built only with IVP_ENABLE_CHECKPOINTS (CMake option, default off).
  */

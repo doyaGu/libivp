@@ -192,14 +192,17 @@ static inline void ivp_object_set_client_data(ivp_object_t *obj, void *data) {
     obj->client_data = data;
 }
 
-/* Get the core (mass center) world position at the current PSI
- * (IVP_Core::get_position_PSI, m_world_f_core_last_psi). */
+/* Get the core (mass center) world position stored at the last PSI
+ * (IVP_Core::get_position_PSI, m_world_f_core_last_psi).  This is neither
+ * the object origin nor an AT sample at the current environment time;
+ * use ivp_object_get_m_world_f_object_AT for that object's world pose. */
 static inline void ivp_object_get_position(const ivp_object_t *obj,
                                             ivp_vec3r_t *out) {
     *out = obj->physical_core->m_world_f_core_last_psi.pos;
 }
 
-/* Get world orientation at current PSI time */
+/* Get the core's world orientation stored at the last PSI, without the
+ * core-to-object rotation or interpolation to the current environment time. */
 static inline void ivp_object_get_orientation(const ivp_object_t *obj,
                                                ivp_quatr_t *out) {
     *out = obj->physical_core->q_world_f_core_last_psi;

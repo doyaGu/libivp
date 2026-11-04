@@ -131,6 +131,39 @@ The ball bounces a few times and comes to rest on the box. Surfaces and
 surface managers are borrowed by the objects that use them, so free them
 after the environment.
 
+`ivp_object_get_position()` and `ivp_object_get_orientation()` read the core's
+pose stored at the last PSI. They do not sample the current environment time
+or include the core-to-object offset. For rendering an object's current world
+pose, use `ivp_object_get_m_world_f_object_AT()`; for a current mass-centre
+position, use `ivp_core_get_at_position()` with the environment time. Physics
+controllers should retain the sampling time and coordinate frame required by
+their reference algorithm.
+
+### Rewinding and rollout searches
+
+Build with `IVP_ENABLE_CHECKPOINTS=ON` to use `ivp_rewind_step()` and
+`ivp_rewind_seek()`. The environment and all mutable simulation/controller
+state must use one memory region. A recording restores that region in place,
+in the same process; it is not a portable save file or a clone into another
+world. Replay callbacks must depend only on their recorded inputs, PSI and
+region state.
+
+A step after seeking backwards discards the recorded future. Keep the search
+tree, candidate action sequences and scores outside the region, and size the
+keyframe ring so the search root remains reachable. Each parallel rollout
+needs an independent world, region and rewinder. The world scheduler advances
+environments directly and bypasses rewind recording; an application executor
+must call `ivp_rewind_step()` on each recorded slot instead, with one owner
+per slot and matching floating-point environments on its workers.
+
+The default `IVP_STABLE_INTERNAL_STATE=OFF` preserves the reference's address
+and allocation-history sensitivity. Scheduling one world on a different
+worker does not change its result, but independently reconstructed worlds
+need not match. Select `IVP_STABLE_INTERNAL_STATE=ON` when equivalent search
+slots must agree despite those histories; it deliberately differs from the
+reference in the 20 registered scenarios. Keep the default when reference
+parity is the goal.
+
 ### Graphical examples
 
 `examples/` has 51 examples on an SDL3 GPU renderer, from falling balls and
