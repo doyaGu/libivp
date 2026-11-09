@@ -1326,17 +1326,19 @@ IVP_TEST(sim_unit_core_timestamp_tracks_full_psi) {
     ivp_environment_destroy(env);
 }
 
-static bool pending_union_find_count_matches(const ivp_sim_units_manager_t *m)
+/* Number of linked units with a pending split request; every linked unit
+ * must belong to m. */
+static size_t linked_union_find_count(const ivp_sim_units_manager_t *m)
 {
     size_t count = 0;
     const ivp_sim_unit_t *heads[] = { m->sim_units_slot0, m->still_slot };
     for (int i = 0; i < 2; ++i) {
         for (const ivp_sim_unit_t *su = heads[i]; su; su = su->next_sim_unit) {
-            if (su->manager != m) return false;
+            IVP_ASSERT(su->manager == m);
             if (su->union_find_needed_for_sim_unit) count++;
         }
     }
-    return count == m->pending_union_find_count;
+    return count;
 }
 
 IVP_TEST(controller_removal_keeps_split_request_under_memory_pressure) {
@@ -1375,21 +1377,19 @@ IVP_TEST(controller_removal_keeps_split_request_under_memory_pressure) {
 
     ivp_sim_unit_t *fused_unit = object_a->physical_core->sim_unit;
     ivp_sim_units_manager_t *manager = ivp_env_get_sim_units_manager(env);
-    IVP_ASSERT_EQ(manager->pending_union_find_count, 0u);
+    IVP_ASSERT_EQ(linked_union_find_count(manager), 0u);
     const int attempts_before_remove = state.attempts;
     state.fail_from = attempts_before_remove + 1;
     IVP_ASSERT_TRUE(ivp_environment_remove_dependent_controller(
         env, controller, true));
     IVP_ASSERT_EQ(state.attempts, attempts_before_remove);
-    IVP_ASSERT_EQ(manager->pending_union_find_count, 1u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(manager));
+    IVP_ASSERT_EQ(linked_union_find_count(manager), 1u);
     state.fail_from = 0;
 
     ivp_sim_unit_do_sim_unit_union_find(fused_unit);
     IVP_ASSERT_TRUE(object_a->physical_core->sim_unit !=
                     object_b->physical_core->sim_unit);
-    IVP_ASSERT_EQ(manager->pending_union_find_count, 0u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(manager));
+    IVP_ASSERT_EQ(linked_union_find_count(manager), 0u);
 
     ivp_environment_destroy(env);
     IVP_ASSERT_EQ(state.live_blocks, 0);
@@ -1405,39 +1405,35 @@ IVP_TEST(sim_unit_pending_tracks_detach_wake_freeze_and_delete) {
     ivp_object_t *obj = ivp_environment_create_object(env, &tmpl, NULL);
     IVP_ASSERT_NOT_NULL(obj);
     ivp_sim_unit_t *su = obj->physical_core->sim_unit;
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
     ivp_sim_unit_request_union_find(su);
     ivp_sim_unit_request_union_find(su);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 1u);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 1u);
 
     ivp_sim_units_mgr_rem_sim_unit(m, su);
     IVP_ASSERT_NULL(su->manager);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
     ivp_sim_unit_request_union_find(su);
     ivp_sim_units_mgr_add_sim_unit(m, su);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 1u);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 1u);
     ivp_sim_unit_revive_for_simulation(su, env);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 1u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+    IVP_ASSERT_EQ(linked_union_find_count(m), 1u);
 
     /* Forced freeze runs union-find immediately, not through the PSI scan. */
     IVP_ASSERT_TRUE(ivp_object_disable_simulation(obj));
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
     ivp_sim_unit_request_union_find(obj->physical_core->sim_unit);
     ivp_environment_destroy_object(env, obj);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
 
     /* An empty linked unit can survive until manager teardown. */
     su = ivp_sim_unit_new(env->allocator);
     IVP_ASSERT_NOT_NULL(su);
     ivp_sim_unit_request_union_find(su);
     ivp_sim_units_mgr_add_sim_unit(m, su);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 1u);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 1u);
     ivp_sim_unit_delete(su);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
     ivp_environment_destroy(env);
 }
 
@@ -1469,7 +1465,7 @@ static const ivp_sim_ctrl_vt_t union_find_probe_vt = {
     union_find_probe_associated, union_find_probe_deleted, NULL
 };
 
-IVP_TEST(sim_unit_pending_keeps_reference_scan_order) {
+IVP_TEST(sim_unit_splits_at_the_end_of_its_own_step) {
     ivp_environment_t *env = ivp_environment_create(NULL);
     IVP_ASSERT_NOT_NULL(env);
     ivp_sim_units_manager_t *m = ivp_env_get_sim_units_manager(env);
@@ -1478,8 +1474,9 @@ IVP_TEST(sim_unit_pending_keeps_reference_scan_order) {
     ivp_object_t *objects[4];
     ivp_object_template_t tmpl;
     ivp_object_template_init(&tmpl);
-    tmpl.start_in_simulation = false;
     for (int i = 0; i < 4; ++i) {
+        /* objects 0..2 are simulated, object 3 stays still */
+        tmpl.start_in_simulation = i < 3;
         tmpl.position.k[0] = (ivp_real_t)(i * 10);
         objects[i] = ivp_environment_create_object(env, &tmpl, NULL);
         IVP_ASSERT_NOT_NULL(objects[i]);
@@ -1488,24 +1485,27 @@ IVP_TEST(sim_unit_pending_keeps_reference_scan_order) {
         };
         IVP_ASSERT_TRUE(ivp_core_add_core_controller(objects[i]->physical_core, &probes[i].base));
     }
+    ivp_sim_unit_t *still_unit = objects[3]->physical_core->sim_unit;
+    IVP_ASSERT_TRUE(still_unit->sim_unit_movement_type == IVP_MT_NOT_SIM);
     ivp_sim_unit_request_union_find(objects[0]->physical_core->sim_unit);
     ivp_sim_unit_request_union_find(objects[2]->physical_core->sim_unit);
-    /* Unit 3 was already visited when unit 0 asks for work: defer it to the
-     * next PSI, just as the reference's saved-next traversal does. */
-    probes[0].mark_next = objects[3]->physical_core->sim_unit;
+    /* Unit 0 asks for a split of the still unit 3.  Like the retail build,
+     * a unit splits at the end of its own PSI step; nothing scans the unit
+     * lists afterwards, so the still unit keeps its request. */
+    probes[0].mark_next = still_unit;
     ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_EQ(length, 2);
-    IVP_ASSERT_EQ(order[0], 2);
-    IVP_ASSERT_EQ(order[1], 0);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 1u);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
-    ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_EQ(length, 3);
-    IVP_ASSERT_EQ(order[2], 3);
-    IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
+    IVP_ASSERT_FALSE(objects[0]->physical_core->sim_unit->union_find_needed_for_sim_unit);
+    IVP_ASSERT_FALSE(objects[2]->physical_core->sim_unit->union_find_needed_for_sim_unit);
+    IVP_ASSERT_TRUE(still_unit->union_find_needed_for_sim_unit);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 1u);
     for (int i = 0; i < 8; ++i) ivp_environment_simulate_one_psi(env);
-    IVP_ASSERT_EQ(length, 3);
-    IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+    IVP_ASSERT_TRUE(still_unit->union_find_needed_for_sim_unit);
+
+    /* Once simulated, the woken unit splits in its own step. */
+    ivp_sim_unit_revive_for_simulation(still_unit, env);
+    ivp_environment_simulate_one_psi(env);
+    IVP_ASSERT_FALSE(objects[3]->physical_core->sim_unit->union_find_needed_for_sim_unit);
+    IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
     for (int i = 0; i < 4; ++i)
         ivp_core_rem_core_controller(objects[i]->physical_core, &probes[i].base);
     ivp_environment_destroy(env);
@@ -1538,7 +1538,6 @@ IVP_TEST(sim_unit_pending_retries_every_split_allocation_failure) {
             IVP_ASSERT_TRUE(ivp_sim_unit_fusion_simulation_unities(su, other));
             ivp_sim_unit_delete(other);
         }
-        IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
         ivp_sim_unit_request_union_find(su);
         state.attempts = 0;
         state.fail_at = fail_at;
@@ -1546,13 +1545,12 @@ IVP_TEST(sim_unit_pending_retries_every_split_allocation_failure) {
         bool failed = state.attempts >= fail_at;
         if (failed) {
             failures++;
-            IVP_ASSERT_TRUE(m->pending_union_find_count > 0);
+            IVP_ASSERT_TRUE(linked_union_find_count(m) > 0);
         }
-        IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
         state.fail_at = 0;
         /* Retry before simulation, including a newly split unit whose
          * controller index failed to rebuild. No extra flag may be needed. */
-        for (int pass = 0; pass < 3 && m->pending_union_find_count; ++pass) {
+        for (int pass = 0; pass < 3 && linked_union_find_count(m); ++pass) {
             ivp_sim_unit_t *heads[] = { m->sim_units_slot0, m->still_slot };
             for (int i = 0; i < 2; ++i) {
                 for (ivp_sim_unit_t *unit = heads[i]; unit;) {
@@ -1563,8 +1561,7 @@ IVP_TEST(sim_unit_pending_retries_every_split_allocation_failure) {
                 }
             }
         }
-        IVP_ASSERT_EQ(m->pending_union_find_count, 0u);
-        IVP_ASSERT_TRUE(pending_union_find_count_matches(m));
+        IVP_ASSERT_EQ(linked_union_find_count(m), 0u);
         IVP_ASSERT_TRUE(objects[0]->physical_core->sim_unit != objects[1]->physical_core->sim_unit);
         IVP_ASSERT_TRUE(objects[0]->physical_core->sim_unit != objects[2]->physical_core->sim_unit);
         IVP_ASSERT_TRUE(objects[1]->physical_core->sim_unit != objects[2]->physical_core->sim_unit);
@@ -2659,7 +2656,7 @@ int main(void) {
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
     IVP_REGISTER(controller_removal_keeps_split_request_under_memory_pressure);
     IVP_REGISTER(sim_unit_pending_tracks_detach_wake_freeze_and_delete);
-    IVP_REGISTER(sim_unit_pending_keeps_reference_scan_order);
+    IVP_REGISTER(sim_unit_splits_at_the_end_of_its_own_step);
     IVP_REGISTER(sim_unit_pending_retries_every_split_allocation_failure);
     IVP_REGISTER(sim_unit_controller_rebuild_failure_clears_partial_index);
     IVP_REGISTER(sim_unit_controller_rebuild_failure_preserves_live_index);

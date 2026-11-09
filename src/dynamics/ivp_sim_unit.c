@@ -395,7 +395,6 @@ void ivp_sim_units_mgr_init(ivp_sim_units_manager_t *m, struct ivp_environment *
     m->l_environment = env;
     m->sim_units_slot0 = NULL;
     m->still_slot = NULL;
-    m->pending_union_find_count = 0;
 }
 
 static void mgr_add_unit_to_slot(ivp_sim_unit_t *sim_u, ivp_sim_unit_t **slot)
@@ -423,7 +422,6 @@ void ivp_sim_units_mgr_add_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
 {
     IVP_ASSERT(!su->manager);
     su->manager = m;
-    if (su->union_find_needed_for_sim_unit) m->pending_union_find_count++;
     ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
     mgr_add_unit_to_slot(su, slot);
 }
@@ -925,10 +923,6 @@ static void mgr_restore_unit_ordering(ivp_sim_units_manager_t *manager)
 void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *su)
 {
     IVP_ASSERT(su->manager == m);
-    if (su->union_find_needed_for_sim_unit) {
-        IVP_ASSERT(m->pending_union_find_count > 0);
-        m->pending_union_find_count--;
-    }
     ivp_sim_unit_t **slot = (su->sim_unit_movement_type < IVP_MT_NOT_SIM) ? &m->sim_units_slot0 : &m->still_slot;
     mgr_rem_unit_from_slot(su, slot);
     su->manager = NULL;
@@ -938,18 +932,11 @@ void ivp_sim_units_mgr_rem_sim_unit(ivp_sim_units_manager_t *m, ivp_sim_unit_t *
 
 void ivp_sim_unit_request_union_find(ivp_sim_unit_t *su)
 {
-    if (su->union_find_needed_for_sim_unit) return;
     su->union_find_needed_for_sim_unit = true;
-    if (su->manager) su->manager->pending_union_find_count++;
 }
 
 static void su_clear_union_find_request(ivp_sim_unit_t *su)
 {
-    if (!su->union_find_needed_for_sim_unit) return;
-    if (su->manager) {
-        IVP_ASSERT(su->manager->pending_union_find_count > 0);
-        su->manager->pending_union_find_count--;
-    }
     su->union_find_needed_for_sim_unit = false;
 }
 
@@ -1208,9 +1195,11 @@ static int su_fast_moving_flag(ivp_core_t *my_core)
     return fast_moving_core;
 }
 
+/* movement_check_deferred: a parallel island consumes the movement check
+ * clock later, in island order (su_try_parallel_island_run) */
 static bool su_prepare_single_sim_unit_psi(ivp_sim_unit_t *su,
                                            ivp_sim_es_t *es,
-                                           bool movement_check_preassigned)
+                                           bool movement_check_deferred)
 {
     struct ivp_environment *env = es->environment;
     es->sim_unit = su;
@@ -1231,16 +1220,17 @@ static bool su_prepare_single_sim_unit_psi(ivp_sim_unit_t *su,
         my_core->impacts_since_last_PSI = 0;
         fast_moving_flag |= su_fast_moving_flag(my_core);
     }
+    bool check_movement_state = false;
     if (fast_moving_flag < 0) {
+        /* retail RVA 0x121B0 leaves the movement-check clock untouched for
+         * fast units */
         su->sim_unit_has_fast_objects = true;
     } else {
         su->sim_unit_just_slowed_down = su->sim_unit_has_fast_objects;
         if (su->sim_unit_just_slowed_down) su_clear_movement_check_values(su);
         su->sim_unit_has_fast_objects = false;
+        if (!movement_check_deferred) check_movement_state = ivp_env_must_perform_movement_check(env, su);
     }
-    bool check_movement_state = movement_check_preassigned
-                                    ? su->parallel_movement_check
-                                    : ivp_env_must_perform_movement_check(env, su);
     for (int j = controller_num - 1; j >= 0; j--) {
         if (j >= ivp_pvec_len(&su->controller_cores)) continue;
         int debug_contr_prio;
@@ -1301,6 +1291,10 @@ static void su_simulate_single_sim_unit_psi(ivp_sim_unit_t *su,
         su_prepare_single_sim_unit_psi(su, es, false);
     su_finish_single_sim_unit_psi(su, env, touched_cores,
                                   check_movement_state);
+    /* retail 0x12443..0x1244C splits before ending this unit's transaction;
+     * the manager keeps its prefetched traversal, so units inserted by the
+     * split get no further PSI step now */
+    if (su->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(su);
     ivp_env_sim_mem_end(env);
 }
 
@@ -1316,15 +1310,11 @@ static void su_parallel_simulate_task(void *opaque, size_t task_index)
     ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(
         context->sim_units, (int)task_index);
     ivp_sim_es_t event_sim = context->event_sim;
-    bool check_movement_state =
-        su_prepare_single_sim_unit_psi(su, &event_sim, true);
+    (void)su_prepare_single_sim_unit_psi(su, &event_sim, true);
     int output = su->parallel_touched_offset;
     for (int i = ivp_pvec_len(&su->sim_unit_cores) - 1; i >= 0; i--) {
         context->touched_cores->elems[output++] = su_core_at(su, i);
     }
-    su->parallel_should_freeze =
-        check_movement_state &&
-        su_calc_movement_state_only(su, event_sim.environment);
 }
 
 /* These islands run no application callback, allocate no environment scratch,
@@ -1394,19 +1384,6 @@ static bool su_try_parallel_island_run(struct ivp_environment *env,
     }
     if (!ivp_pvec_reserve(touched_cores, touched_count)) return false;
 
-    /* Safe controllers do not consume the environment RNG, so movement
-     * checks can be assigned now in the exact reference island order.  The
-     * IVP_EDIT_LOCALITY checks are stateless; the restore below only
-     * matters for the reference countdown. */
-    short saved_next_movement_check = env->pl->next_movement_check;
-    int saved_rand_seed = env->pl->rand_seed;
-    for (int i = 0; i < unit_count; i++) {
-        ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
-        su->parallel_movement_check =
-            ivp_env_must_perform_movement_check(env, su);
-        su->parallel_should_freeze = false;
-    }
-
     su_parallel_context_t context;
     context.sim_units = units;
     context.touched_cores = touched_cores;
@@ -1414,17 +1391,27 @@ static bool su_try_parallel_island_run(struct ivp_environment *env,
     if (!ivp_env_parallel_for(env, IVP_PARALLEL_WORK_ISLAND,
                               (size_t)unit_count, minimum_tasks,
                               su_parallel_simulate_task, &context)) {
-        env->pl->next_movement_check = saved_next_movement_check;
-        env->pl->rand_seed = saved_rand_seed;
         return false;
     }
     touched_cores->n = touched_count;
 
-    /* Freezing mutates manager lists, so only this small commit remains on
-     * the PSI thread and follows the original island order. */
+    /* The movement-check clock, freezing and splitting mutate environment
+     * state or manager lists, so this commit stays on the PSI thread in the
+     * original island order.  Safe controllers do not consume the
+     * environment RNG, and fast units leave the clock untouched. */
     for (int i = 0; i < unit_count; i++) {
         ivp_sim_unit_t *su = (ivp_sim_unit_t *)ivp_pvec_at(units, i);
-        if (su->parallel_should_freeze) su_freeze_sim_unit(su, env);
+        const bool check_movement_state =
+            !su->sim_unit_has_fast_objects &&
+            ivp_env_must_perform_movement_check(env, su);
+        if (check_movement_state && su_calc_movement_state_only(su, env)) {
+            su_freeze_sim_unit(su, env);
+        }
+        if (su->union_find_needed_for_sim_unit) {
+            ivp_env_sim_mem_begin(env);
+            ivp_sim_unit_do_sim_unit_union_find(su);
+            ivp_env_sim_mem_end(env);
+        }
     }
     return true;
 }
@@ -1533,21 +1520,9 @@ sim_units_2:
 sim_units_1:
     su_simulate_single_sim_unit_psi(s_u, &es, touched_cores);
 sim_units_0:
-    /* IVP_Sim_Units_Manager scans both lists in this order. If no linked
-     * unit is dirty, both loops can only read links/flags: skip the empty
-     * work. Otherwise retain the complete reference traversal (including
-     * its saved next pointers and treatment of newly split units). */
-    if (!sman->pending_union_find_count) return;
-    for (s_u = sman->sim_units_slot0; s_u;) {
-        ivp_sim_unit_t *next_su = s_u->next_sim_unit;
-        if (s_u->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(s_u);
-        s_u = next_su;
-    }
-    for (s_u = sman->still_slot; s_u;) {
-        ivp_sim_unit_t *next_su = s_u->next_sim_unit;
-        if (s_u->union_find_needed_for_sim_unit) ivp_sim_unit_do_sim_unit_union_find(s_u);
-        s_u = next_su;
-    }
+    /* each unit splits at the end of its own step (retail); no deferred
+     * scan of the unit lists */
+    return;
 }
 
 static void su_reset_time(ivp_sim_unit_t *su, double offset)

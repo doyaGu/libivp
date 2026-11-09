@@ -95,8 +95,6 @@ typedef struct ivp_sim_unit {
     bool     union_find_needed_for_sim_unit;
     bool     sim_unit_has_fast_objects;
     bool     sim_unit_just_slowed_down;
-    bool     parallel_movement_check;
-    bool     parallel_should_freeze;
     int      parallel_touched_offset;
     struct ivp_sim_unit *prev_sim_unit;
     struct ivp_sim_unit *next_sim_unit;
@@ -116,9 +114,6 @@ typedef struct ivp_sim_units_manager {
     struct ivp_environment *l_environment;
     ivp_sim_unit_t *sim_units_slot0;        /* sim_units_slots[0] (others unused) */
     ivp_sim_unit_t *still_slot;
-    /* Exact count of linked units with union_find_needed_for_sim_unit set.
-     * Topology changes run on the world owner, never in safe island kernels. */
-    size_t pending_union_find_count;
 } ivp_sim_units_manager_t;
 
 ivp_sim_unit_t *ivp_sim_unit_new(const ivp_allocator_t *allocator);
