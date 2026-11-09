@@ -185,7 +185,11 @@ static void constraints_update(demo_app_t *app, demo_viewer_t *v, int frame)
                 ez = hc[2] - cc[2] - (float)p.k[2];
     const float err = sqrtf(ex * ex + ey * ey + ez * ez);
     if (t > 1.0 && err > s->arm_worst) s->arm_worst = err;
-    s->cart_moved = fabsf(cc[0] - (float)X_ARM) + fabsf(cc[2]);
+    /* the cart rocks back and forth under the circling head, so take the
+     * largest distance from its start, not where it happens to be now */
+    const float cart_dx = cc[0] - (float)X_ARM;
+    const float cart_d = sqrtf(cart_dx * cart_dx + cc[2] * cc[2]);
+    if (cart_d > s->cart_moved) s->cart_moved = cart_d;
 }
 
 static void constraints_reset(demo_app_t *app)
@@ -195,6 +199,7 @@ static void constraints_reset(demo_app_t *app)
     s->yaw_min = s->yaw_max = 0.0f;
     s->weld_broke = false;
     s->arm_worst = 0.0f;
+    s->cart_moved = 0.0f;
     ivp_constraint_local_reset_broken(&s->weld, true);
     ivp_constraint_local_rebind_reference(&s->weld);
     ivp_environment_ensure_core_in_simulation(s->env, s->weight);
@@ -269,7 +274,7 @@ static void constraints_draw(demo_app_t *app, demo_viewer_t *v)
     demo_hud(v, ivp_constraint_local_is_broken(&s->weld) ? DEMO_COL_WARNING : DEMO_COL_INFO,
              "weld    %s  (limit %.0f, weight alone %.1f)",
              ivp_constraint_local_is_broken(&s->weld) ? "BROKEN" : "holding", WELD_BREAK, 20.0 * DEMO_GRAVITY / 60.0);
-    demo_hud(v, DEMO_COL_INFO, "arm     worst error %.2f m, cart pushed %.2f m", (double)s->arm_worst,
+    demo_hud(v, DEMO_COL_INFO, "arm     worst error %.2f m, cart pushed up to %.2f m", (double)s->arm_worst,
              (double)s->cart_moved);
 }
 
@@ -300,7 +305,8 @@ static bool constraints_check(demo_app_t *app)
                      "the weld broke under the jerk at %.2f s and the weight fell to y %.2f", s->weld_broke_at,
                      (double)wc[1]);
     ok &= demo_check(tag, s->arm_worst < 0.6f, "the keyed head follows its target (worst %.2f m)", (double)s->arm_worst);
-    ok &= demo_check(tag, s->cart_moved > 0.15f, "and the reaction moves the cart (%.2f m)", (double)s->cart_moved);
+    ok &= demo_check(tag, s->cart_moved > 0.15f, "and the reaction moves the cart (up to %.2f m)",
+                     (double)s->cart_moved);
     return ok;
 }
 
