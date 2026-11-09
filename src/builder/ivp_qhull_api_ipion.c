@@ -1,7 +1,15 @@
-/* ivp_qhull_api_classic.c -- adapter for classic process-global Qhull. */
+/* ivp_qhull_api_ipion.c -- adapter for the reference engine's bundled Qhull.
+ *
+ * The bundled Qhull (qhull_ipion/) keeps its state in process globals, so a
+ * process-wide lock is held for a context's whole lifetime: concurrent
+ * callers are safe, their hull builds run one after another.  The calls
+ * follow IVP_Qhull_Context and IVP_SurfaceBuilder_Pointsoup of the
+ * reference (ivp_surbuild_pointsoup.cxx) without IVP_QHULL_REENTRANT.
+ */
 #include "ivp_qhull_api.h"
 
-#include <qhull_a.h>
+#include "qhull_ivp.h"
+#include "qhull_a.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -23,9 +31,6 @@ struct ivp_qhull_context {
     bool memory_initialized;
     bool hull_active;
 };
-
-/* Classic Qhull expects its embedding application to provide this label. */
-char qh_version[] = "version 3.0 2001/02/11";
 
 ivp_qhull_context_t *ivp_qhull_context_create(void)
 {
@@ -51,7 +56,9 @@ int ivp_qhull_new_hull(ivp_qhull_context_t *context, double *points,
 
     context->memory_initialized = true;
     context->hull_active = true;
-    return qh_new_qhull(3, n_points, points, False, command, NULL, stderr);
+    /* the reference passes stderr for both; the bundled qh_new_qhull
+     * produces no output */
+    return qh_new_qhull(3, n_points, points, False, command, stderr, stderr);
 }
 
 int ivp_qhull_for_each_facet(ivp_qhull_context_t *context,

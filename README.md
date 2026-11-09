@@ -24,8 +24,10 @@ within one platform and build configuration. Results can differ across platforms
 
 ## Building
 
-You need CMake 3.20 or later and a C17 compiler. CMake fetches the pinned
-Qhull 2020.2 dependency; the examples also fetch SDL3.
+You need CMake 3.20 or later and a C17 compiler. The default build uses the
+reference engine's bundled Qhull, kept in `src/builder/qhull_ipion`; with
+`IVP_REENTRANT_QHULL=ON` CMake fetches the pinned Qhull 2020.2 instead. The
+examples also fetch SDL3.
 
 ```bash
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
@@ -50,7 +52,7 @@ target_link_libraries(my_app PRIVATE ivp)
 | `IVP_STABLE_INTERNAL_STATE` | OFF | Use history-independent internals; OFF preserves the reference's address- and history-sensitive behavior |
 | `IVP_EDIT_LOCALITY` | OFF | Adding or removing objects changes only the objects they interact with; requires `IVP_STABLE_INTERNAL_STATE=ON` and changes trajectories |
 | `IVP_ENABLE_CHECKPOINTS` | OFF | Memory regions with in-place checkpoints, and rewinding to any recorded step |
-| `IVP_QHULL_MODE` | `REENTRANT` | `REENTRANT`: Qhull 2020.2, safe to call concurrently; `REFERENCE`: classic Qhull with serialized calls |
+| `IVP_REENTRANT_QHULL` | OFF | Like the reference: OFF uses the reference engine's bundled Qhull (process-global, hull builds serialized); ON fetches Qhull 2020.2 `libqhull_r`, whose hull builds can run concurrently |
 | `IVP_ENABLE_ASSERTS` | OFF | Assertions and the reference debug code in Release (always on in Debug) |
 | `IVP_CONTAINER_DEBUG` | OFF | Iterator, bounds and canary checks on containers |
 | `IVP_ENABLE_STATS` | OFF | Runtime statistics counters |

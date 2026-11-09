@@ -1,4 +1,5 @@
-# External Qhull dependency and libivp's private adapter seam.
+# Qhull backends (the reference's bundled Qhull or external Qhull 8.0.2)
+# and libivp's private adapter seam.
 include_guard(GLOBAL)
 
 include(FetchContent)
@@ -14,9 +15,7 @@ function(ivp_add_qhull_backend)
 
     set(_ivp_qhull_builder_dir
             "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/builder")
-    string(TOUPPER "${IVP_QHULL_MODE}" _ivp_qhull_mode)
-
-    if (_ivp_qhull_mode STREQUAL "REENTRANT")
+    if (IVP_REENTRANT_QHULL)
         FetchContent_Declare(
                 ivp_qhull_modern
                 URL https://github.com/qhull/qhull/archive/refs/tags/v8.0.2.tar.gz
@@ -44,57 +43,52 @@ function(ivp_add_qhull_backend)
                 ${_ivp_qhull_source_dir}/libqhull_r/rboxlib_r.c
                 ${_ivp_qhull_source_dir}/libqhull_r/userprintf_rbox_r.c
         )
+        if (NOT EXISTS "${_ivp_qhull_source_dir}/libqhull_r/libqhull_r.h")
+            message(FATAL_ERROR
+                    "The Qhull 8.0.2 dependency has an unexpected source layout: ${_ivp_qhull_source_dir}")
+        endif ()
         set(_ivp_qhull_adapter_source
                 "${_ivp_qhull_builder_dir}/ivp_qhull_api_reentrant.c")
         set(_ivp_qhull_description "Qhull 2020.2 libqhull_r")
         set(_ivp_qhull_parallel_builds ON)
-    elseif (_ivp_qhull_mode STREQUAL "REFERENCE")
-        # Qhull does not publish the reference engine's 2.6 snapshot as a tag.
-        # Its earliest immutable upstream tag is the classic global-state line.
-        FetchContent_Declare(
-                ivp_qhull_classic
-                URL https://github.com/qhull/qhull/archive/refs/tags/v3.0.tar.gz
-                URL_HASH SHA256=2389b9a1b824f626ea9e50ab536d89d2f44d0c7ed91b285d2bdbd0ae05e316c5
-                SOURCE_SUBDIR src
-        )
-        FetchContent_MakeAvailable(ivp_qhull_classic)
-        set(_ivp_qhull_source_dir "${ivp_qhull_classic_SOURCE_DIR}/src")
+    else ()
+        # The reference engine's own Qhull (ivp_compact_builder/qhull*.cxx,
+        # "ipion 99/07/10"), ported to C in src/builder/qhull_ipion.
+        set(_ivp_qhull_source_dir "${_ivp_qhull_builder_dir}/qhull_ipion")
         set(_ivp_qhull_vendor_sources
-                ${_ivp_qhull_source_dir}/user.c
-                ${_ivp_qhull_source_dir}/global.c
-                ${_ivp_qhull_source_dir}/stat.c
-                ${_ivp_qhull_source_dir}/io.c
-                ${_ivp_qhull_source_dir}/geom2.c
-                ${_ivp_qhull_source_dir}/poly2.c
-                ${_ivp_qhull_source_dir}/merge.c
                 ${_ivp_qhull_source_dir}/qhull.c
-                ${_ivp_qhull_source_dir}/geom.c
-                ${_ivp_qhull_source_dir}/poly.c
-                ${_ivp_qhull_source_dir}/qset.c
-                ${_ivp_qhull_source_dir}/mem.c
+                ${_ivp_qhull_source_dir}/qhull_geom.c
+                ${_ivp_qhull_source_dir}/qhull_geom2.c
+                ${_ivp_qhull_source_dir}/qhull_global.c
+                ${_ivp_qhull_source_dir}/qhull_io.c
+                ${_ivp_qhull_source_dir}/qhull_mem.c
+                ${_ivp_qhull_source_dir}/qhull_merge.c
+                ${_ivp_qhull_source_dir}/qhull_poly.c
+                ${_ivp_qhull_source_dir}/qhull_poly2.c
+                ${_ivp_qhull_source_dir}/qhull_qset.c
+                ${_ivp_qhull_source_dir}/qhull_stat.c
+                ${_ivp_qhull_source_dir}/qhull_user.c
         )
         set(_ivp_qhull_adapter_source
-                "${_ivp_qhull_builder_dir}/ivp_qhull_api_classic.c")
-        set(_ivp_qhull_description "classic Qhull 3.0 (serialized)")
+                "${_ivp_qhull_builder_dir}/ivp_qhull_api_ipion.c")
+        set(_ivp_qhull_description "the reference engine's bundled Qhull (serialized)")
         set(_ivp_qhull_parallel_builds OFF)
-    else ()
-        message(FATAL_ERROR
-                "IVP_QHULL_MODE must be REENTRANT or REFERENCE, got: ${IVP_QHULL_MODE}")
-    endif ()
-
-    if (NOT EXISTS "${_ivp_qhull_source_dir}/qhull.h" AND
-        NOT EXISTS "${_ivp_qhull_source_dir}/libqhull_r/libqhull_r.h")
-        message(FATAL_ERROR
-                "The selected Qhull dependency has an unexpected source layout: ${_ivp_qhull_source_dir}")
     endif ()
 
     # Keep upstream diagnostics separate from libivp-owned code.  This target
     # is the only place that knows Qhull's source layout and warning profile.
     add_library(ivp_qhull_vendor STATIC ${_ivp_qhull_vendor_sources})
     target_include_directories(ivp_qhull_vendor PRIVATE
-            "${_ivp_qhull_source_dir}")
+            "${_ivp_qhull_source_dir}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../include")
     if (NOT MSVC)
         target_link_libraries(ivp_qhull_vendor PUBLIC m)
+    endif ()
+    if (NOT IVP_REENTRANT_QHULL)
+        # The bundled Qhull reports through ivp_message: a static cycle
+        # (ivp -> ivp_qhull -> ivp_qhull_vendor -> ivp) CMake repeats on
+        # the link line for single-pass linkers.
+        target_link_libraries(ivp_qhull_vendor PRIVATE ivp)
     endif ()
     ivp_apply_strict_fp(ivp_qhull_vendor)
     if (MSVC)
@@ -125,7 +119,8 @@ function(ivp_add_qhull_backend)
     # The adapter is first-party code and keeps the project's strict warnings.
     add_library(ivp_qhull STATIC "${_ivp_qhull_adapter_source}")
     target_include_directories(ivp_qhull PRIVATE
-            "${_ivp_qhull_builder_dir}")
+            "${_ivp_qhull_builder_dir}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../include")
     target_include_directories(ivp_qhull SYSTEM PRIVATE
             "${_ivp_qhull_source_dir}")
     target_link_libraries(ivp_qhull PUBLIC ivp_qhull_vendor)
