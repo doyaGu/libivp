@@ -2397,7 +2397,27 @@ void ivp_environment_simulate_dtime(ivp_environment_t *env, ivp_real_t elapsed_t
 
 void ivp_environment_simulate_one_psi_owned(ivp_environment_t *env)
 {
-    env_simulate_until_owned(env, env->current_time + env->pl->delta_psi_time);
+    /* The event loop fires a queued event once its float event time lies
+     * below the double target (retail IVP_Time arithmetic), so a plain
+     * current + delta target can reach a PSI one call early or late.  Pick
+     * the target so that exactly the queued PSI fires: past its event time,
+     * and not past the event time the following PSI will be queued at
+     * (env_psi_event rebases on the PSI's time and queues it one step
+     * later). */
+    ivp_time_manager_t *tm = &env->pl->time_manager;
+    const double delta = env->pl->delta_psi_time;
+    ivp_time_t until = env->current_time + delta;
+    if (tm->psi_event.index != IVP_MINLIST_UNUSED) {
+        const ivp_time_t base = tm->base_time;
+        const double relative = (double)tm->min_hash.elems[tm->psi_event.index].value;
+        const ivp_time_t next_base = base + relative;
+        const double next_relative = (double)(float)ivp_time_diff(next_base + delta, next_base);
+        while (until - next_base > next_relative) until = nextafter(until, -INFINITY);
+        while (!(until - base > relative)) until = nextafter(until, INFINITY);
+        if (until < env->current_time) until = env->current_time;
+    }
+    env_set_statistics_simulation_time(env, until);
+    ivp_time_manager_event_loop(tm, env, until);
 }
 
 void ivp_environment_simulate_one_psi(ivp_environment_t *env)
@@ -2579,7 +2599,12 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
      * once from it (retail RVA 0x12A60); later steps do not change it */
     env_set_delta_psi_time_d(env, 1.0 / 66.0);
     pl->integrated_energy_damp = exp((double)(float)log(0.9f) * pl->delta_psi_time);
-    env_set_delta_psi_time_d(env, (double)cfg.delta_psi_time);
+    /* the configured step replaces the default only when it is valid (a
+     * libivp creation contract; set_delta_PSI_time itself checks nothing) */
+    double dt = (double)cfg.delta_psi_time;
+    if (dt >= (double)IVP_MIN_DELTA_PSI_TIME && dt <= (double)IVP_MAX_DELTA_PSI_TIME) {
+        env_set_delta_psi_time_d(env, dt);
+    }
     ivp_sim_units_mgr_init(&pl->sim_units_manager, env);
     if (ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event) != IVP_OK) {
         ivp_environment_destroy(env);
