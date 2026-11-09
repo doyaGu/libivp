@@ -1332,30 +1332,41 @@ void ivp_mindist_do_impact(ivp_mindist_t *md)
 
 /* ── IVP_Mindist::mindist_rescue_push / IVP_Anomaly_Manager::inter_penetration ── */
 
-static void anomaly_solve_inter_penetration_simple(ivp_object_t *obj0, ivp_object_t *obj1, double speed_change)
+/* IVP_Anomaly_Manager::get_push_speed_penetration (IVP_FLOAT) */
+static float anomaly_get_push_speed_penetration(ivp_object_t *obj0)
 {
     struct ivp_environment *env = obj0->owner;
-    double d_time = (double)ivp_env_get_delta_psi_time(env);
+    double d_time = ivp_env_get_delta_psi_time(env);
+    double grav = ivp_env_get_gravity_scalar(env);
+    return (float)((grav * 2.0f) * d_time);
+}
+
+/* retail RVA 0x2F780: normize the mass center direction (no fallback), query
+ * the rescue speed, push both bodies at core0's position, no pinned test */
+static void anomaly_solve_inter_penetration_simple(ivp_object_t *obj0, ivp_object_t *obj1)
+{
+    struct ivp_environment *env = obj0->owner;
+    double d_time = ivp_env_get_delta_psi_time(env);
     ivp_core_t *core0 = obj0->physical_core;
     ivp_core_t *core1 = obj1->physical_core;
     const ivp_transform_r_t *m0 = &core0->m_world_f_core_last_psi;
     const ivp_transform_r_t *m1 = &core1->m_world_f_core_last_psi;
     ivp_vec3f_t vec01;
     lvf_subtract2_p(&vec01, &m1->pos, &m0->pos);
-    float delta_length = (float)lvf_real_length_plus_normize(&vec01);
-    if (delta_length <= 0.01) lvf_set3(&vec01, 1.0f, 0.0f, 0.0f);
-    if (IVP_MTIS_SIMULATED(core0->movement_state) && !core0->pinned) {
+    (void)lvf_normize(&vec01);
+    double speed_change = (double)anomaly_get_push_speed_penetration(obj0);
+    if (IVP_MTIS_SIMULATED(core0->movement_state)) {
         ivp_vec3f_t p0;
-        lvf_set_multiple(&p0, &vec01, (D)(-speed_change * (double)ivp_core_get_mass_f(core0)));
+        lvf_set_multiple(&p0, &vec01, (D)((double)-ivp_core_get_mass_f(core0) * speed_change));
         ivp_object_async_push_object_ws(obj0, &m0->pos, &p0);
         ivp_vec3f_t rot_speed_object;
-        lvf_setd3(&rot_speed_object, (D)-d_time, 0, 0);
+        lvf_setd3(&rot_speed_object, (D)d_time, 0, 0);
         ivp_object_async_add_rot_speed_object_cs(obj0, &rot_speed_object);
     }
-    if (IVP_MTIS_SIMULATED(core1->movement_state) && !core1->pinned) {
+    if (IVP_MTIS_SIMULATED(core1->movement_state)) {
         ivp_vec3f_t p1;
-        lvf_set_multiple(&p1, &vec01, (D)(speed_change * (double)ivp_core_get_mass_f(core1)));
-        ivp_object_async_push_object_ws(obj1, &m1->pos, &p1);
+        lvf_set_multiple(&p1, &vec01, (D)((double)ivp_core_get_mass_f(core1) * speed_change));
+        ivp_object_async_push_object_ws(obj1, &m0->pos, &p1);
         ivp_vec3f_t rot_speed_object;
         lvf_setd3(&rot_speed_object, (D)d_time, 0, 0);
         ivp_object_async_add_rot_speed_object_cs(obj1, &rot_speed_object);
@@ -1372,17 +1383,17 @@ static void anomaly_solve_inter_penetration_simple(ivp_object_t *obj0, ivp_objec
     }
 }
 
-static void anomaly_inter_penetration(ivp_mindist_t *mindist, ivp_object_t *obj0, ivp_object_t *obj1, double speed_change)
+static void anomaly_inter_penetration(ivp_mindist_t *mindist, ivp_object_t *obj0, ivp_object_t *obj1)
 {
     ivp_object_t *my_objects[2] = { obj0, obj1 };
     int swapped = 0;
     if (obj1->physical_core->physical_unmoveable) swapped = 1;
     if (!my_objects[swapped]->physical_core->physical_unmoveable) {
-        anomaly_solve_inter_penetration_simple(obj0, obj1, speed_change);
+        anomaly_solve_inter_penetration_simple(obj0, obj1);
         return;
     }
     if (mindist->synapse[swapped].status > IVP_ST_TRIANGLE) {
-        anomaly_solve_inter_penetration_simple(obj0, obj1, speed_change);
+        anomaly_solve_inter_penetration_simple(obj0, obj1);
         return;
     }
     ivp_object_t *moving_obj = my_objects[1 - swapped];
@@ -1416,6 +1427,7 @@ static void anomaly_inter_penetration(ivp_mindist_t *mindist, ivp_object_t *obj0
     lvm_vmult3(&unmovable_cache->m_world_f_object, &push_direction, &world_push_dir);
     ivp_vec3f_t world_push_vec;
     lvf_set_p(&world_push_vec, &world_push_dir);
+    const double speed_change = (double)anomaly_get_push_speed_penetration(obj0);
     ivp_core_t *moving_core = moving_obj->physical_core;
     if (IVP_MTIS_SIMULATED(moving_core->movement_state)) {
         lvf_mult(&world_push_vec, (D)speed_change);
@@ -1428,12 +1440,8 @@ void ivp_mindist_mindist_rescue_push(ivp_mindist_t *md)
     if (md->is_recursive) return;   /* IVP_Mindist_Recursive::mindist_rescue_push: "will be solved later" */
     ivp_object_t *obj0 = md->synapse[0].l_obj;
     ivp_object_t *obj1 = md->synapse[1].l_obj;
-    struct ivp_environment *env = obj0->owner;
-    /* IVP_Anomaly_Manager::get_push_speed_penetration */
-    double d_time = (double)ivp_env_get_delta_psi_time(env);
-    double grav = ivp_env_get_gravity_scalar(env);
-    double speed_change = (grav * 4.0f) * d_time;
-    anomaly_inter_penetration(md, obj0, obj1, (double)(float)speed_change);
+    /* the anomaly manager queries the rescue speed itself */
+    anomaly_inter_penetration(md, obj0, obj1);
 }
 
 /* ── IVP_Mindist::create_cp_in_advance_pretension ──────────────────────── */
