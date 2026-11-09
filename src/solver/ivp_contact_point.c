@@ -794,19 +794,16 @@ static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t
         ivp_vec3r_t K_area, L_area;
         lvp_cross(&K_area, &Kvec, &norm);
         lvp_cross(&L_area, &Lvec, &norm);
-        D a, b, x;
-        a = lvp_dot(&K_area, &Lp);
-        b = lvp_dot(&K_area, &Lp_next);
-        D ab_diff = a - b;
-        D inv_a_b = (fabs((double)ab_diff) > P_DOUBLE_EPS) ? (D)(1.0f / ab_diff) : (D)0.0f;
-        x = lvp_dot(&K_area, &Kp);
-        sl = (a - x) * inv_a_b;
+        /* ivp_kk_contact_fraction: the retail build divides without the
+         * later SDK's zero guard */
+        D a = lvp_dot(&K_area, &Lp);
+        D b = lvp_dot(&K_area, &Lp_next);
+        D reciprocal = 1.0 / (a - b);
+        sl = (a - lvp_dot(&K_area, &Kp)) * reciprocal;
         a = lvp_dot(&L_area, &Kp);
         b = lvp_dot(&L_area, &Kp_next);
-        ab_diff = a - b;
-        inv_a_b = (fabs((double)ab_diff) > P_DOUBLE_EPS) ? (D)(1.0f / ab_diff) : (D)0.0f;
-        x = lvp_dot(&L_area, &Lp);
-        sk = (a - x) * inv_a_b;
+        reciprocal = 1.0 / (a - b);
+        sk = (a - lvp_dot(&L_area, &Lp)) * reciprocal;
         ivp_vec3r_t world_edge_space0, world_edge_space1;
         lvp_set_interpolate_pp(&world_edge_space0, &Kp, &Kp_next, sk);
         lvp_set_interpolate_pp(&world_edge_space1, &Lp, &Lp_next, sl);
