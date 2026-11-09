@@ -7,9 +7,9 @@
  *                   lower one.
  *   Zone 2 (center): Group filter — same-group objects pass through
  *                   each other, different groups collide normally: of a
- *                   column red, red, blue, blue the second red cube falls
- *                   through the first one, the blue cubes land on the reds
- *                   and fall through each other.
+ *                   staggered column red, red, blue, blue the second red
+ *                   cube falls through the first one, the blue cubes land
+ *                   on the reds and fall through each other.
  *   Zone 3 (right): Layer mask filter — objects on disjoint layers
  *                   ignore each other: of a column green, yellow, yellow,
  *                   green each cube falls through the other colour and
@@ -255,10 +255,13 @@ int main(int argc, char **argv)
     s->next_toggle = PAIR_TOGGLE_PERIOD;
 
     /* ═══ Zone 2 (CENTER, x=0): group filter ════════════════════════════ *
-     * A column, 4 m apart: red, red (group 1), blue, blue (group 2). */
+     * A column, 4 m apart: red, red (group 1), blue, blue (group 2),
+     * staggered 0.4 m left and right.  Straight above each other the two
+     * reds come to rest in the same place, and a blue cube landing on that
+     * doubled support sinks through it (the reference engine too). */
     s->z2_start = s->n_obj;
     for (int i = 0; i < 4; i++) {
-        ivp_object_t *cube = add_cube(&app, 0.6, 0.0, -1.3 - 4.0 * i);
+        ivp_object_t *cube = add_cube(&app, 0.6, (i & 1) ? 0.4 : -0.4, -1.3 - 4.0 * i);
         ivp_object_set_collision_group(cube, i < 2 ? 1 : 2);
     }
 
