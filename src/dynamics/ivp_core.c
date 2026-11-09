@@ -1095,26 +1095,25 @@ void ivp_core_rem_core_controller(ivp_core_t *core, ivp_sim_ctrl_t *c)
 
 /* ── IVP_Calc_Next_PSI_Solver ──────────────────────────────────────────── */
 
-static void cnps_calc_rotation_matrix(ivp_core_t *pc, float delta_sim_time, ivp_quatr_t *q_core_f_core)
+static void cnps_calc_rotation_matrix(ivp_core_t *pc, double delta_sim_time, ivp_quatr_t *q_core_f_core)
 {
     struct ivp_environment *env = ivp_core_env(pc);
     if (pc->rot_inertias_are_equal || ivp_env_get_state(env) == IVP_ES_AT) {
         if (pc->car_wheel && pc->max_surface_deviation == IVP_REAL(0.0)) {   /* IVP_FAST_WHEELS_ENABLED */
-            ivp_car_wheel_calc_fast_wheel_rotation(pc, delta_sim_time, q_core_f_core);
+            ivp_car_wheel_calc_fast_wheel_rotation(pc, (float)delta_sim_time, q_core_f_core);
         } else {
             ivp_quat_set_fast_multiple_with_clip(q_core_f_core, &pc->rot_speed, (ivp_real_t)delta_sim_time);
         }
         return;
     }
-    const double max_angle = (double)(5.0f * 6.0f / 360.0f);
-    const double qmax_angle = max_angle * max_angle;
     double square_rot_speed = (double)lvf_quad_length(&pc->rot_speed);
-    double dt = (double)delta_sim_time;
+    double dt = delta_sim_time;
     double qangle = square_rot_speed * dt * dt;
     int steps = 1;
-    if (qangle > 4.0 * qmax_angle) {
-        steps = 1 + (int)sqrt(qangle / qmax_angle);
-        dt /= (double)(float)steps;
+    /* retail: double thresholds (ten degrees per step), no float rounding */
+    if (qangle > 0.02777777777777778) {
+        steps = 1 + (int)sqrt(qangle * 144.0);
+        dt /= (double)steps;
     }
     ivp_quat_set_very_fast_multiple(q_core_f_core, &pc->rot_speed, (ivp_real_t)dt);
     ivp_vec3f_t ri = ivp_core_rot_inertia_f(pc), iri = ivp_core_inv_rot_inertia_f(pc);
@@ -1140,14 +1139,11 @@ static void cnps_calc_psi_rotation_axis(ivp_core_t *core, const ivp_quatr_t *q_c
     double qlen = (double)q_core_f_core->x * (double)q_core_f_core->x + (double)q_core_f_core->y * (double)q_core_f_core->y +
                   (double)q_core_f_core->z * (double)q_core_f_core->z;
     if (qlen > P_DOUBLE_EPS) {
-        double ilen = ivp_isqrt_double(qlen, 3);
-        float abs_angle = lv_upper_limit_asin((float)(qlen * ilen));
-        IVP_IF(1)
-        {
-            /* reference: "#if defined(DEBUG) && 0" (never compiled):
-             * ref_angle = asin(sqrt(qlen)) - 1E9f; IVP_ASSERT(abs_angle >= ref_angle); */
-        }
-        core->abs_omega = 2.0f * abs_angle * core->i_delta_time;
+        const double ilen = ivp_isqrt_double(qlen, 3), angle = qlen * ilen;
+        /* retail: the upper_limit_asin polynomial evaluated in double */
+        const double a2 = angle * angle, a3 = angle * a2;
+        core->abs_omega = (float)((angle + (double)(1.0f / 6.0f) * a3 + (double)0.40414f * a3 * a2) *
+                                  (double)core->i_delta_time * 2.0);
         ivp_vec3r_t rot_axis_ws, core_f_core_ws;
         lvp_set3(&core_f_core_ws, q_core_f_core->x, q_core_f_core->y, q_core_f_core->z);
         lvm_vmult3(&core->m_world_f_core_last_psi, &core_f_core_ws, &rot_axis_ws);
@@ -1201,7 +1197,8 @@ static void cnps_calc_next_psi_matrix_body(ivp_core_t *core,
         ivp_vec3f_t sp = ivp_core_speed_f(core);
         core->current_speed = (float)lvf_real_length(&sp);
     }
-    float simulation_delta_time = (float)event_sim->delta_time;
+    /* retail RVA 0x1E300 keeps the event's double step through rotation */
+    double simulation_delta_time = (double)event_sim->delta_time;
     core->i_delta_time = (float)event_sim->i_delta_time;
     ivp_quatr_t q_core_f_core;
     const bool identity_rotation = cnps_has_identity_rotation(core);

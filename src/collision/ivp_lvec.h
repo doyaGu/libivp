@@ -624,12 +624,6 @@ static inline D lvq_estimate_q_diff_to(const ivp_quatr_t *a, const ivp_quatf_t *
 }
 
 /* IVP_Inline_Math helpers (float) */
-static inline float lv_upper_limit_asin(float angle) {
-    float quad_angle = angle * angle;
-    float triple_angle = angle * quad_angle;
-    float quint_angle = triple_angle * quad_angle;
-    return angle + (1.0f / 6.0f) * triple_angle + 0.40414f * quint_angle;
-}
 static inline float lv_approx5_sin(float angle) {
     float q = angle * angle, t = angle * q, p = t * q;
     return angle - (1.0f / 6.0f) * t + (1.0f / 120.0f) * p;
