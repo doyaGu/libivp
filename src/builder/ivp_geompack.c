@@ -3031,7 +3031,7 @@ static void resedg_(ivp_geompack_t *gp, int		u_in,
     int fr, lu, lv, sp;
     double mindis;
     int nce;
-    double ang[5], enc[3];
+    double ang[5] = { 0.0 }, enc[3];   /* zeroed only for -Wmaybe-uninitialized */
     int ccw;
     double enl[3], enr[3];
     int luo, lvo;
