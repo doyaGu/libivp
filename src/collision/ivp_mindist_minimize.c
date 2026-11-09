@@ -421,12 +421,16 @@ static inline void syn_update(ivp_cache_ledge_point_t *c, const ivp_compact_edge
     ivp_md_synapse_update(c->tmp.synapse, e, st);
 }
 
+/* IVP_Mindist_Minimize_Solver::calc_contact_center_projection: the double
+ * core position differences projected on the float plane, summed y, z, x,
+ * then stored as float (retail) */
 static void set_diff_center(ivp_mindist_t *md, const ivp_cache_obj_t *a, const ivp_cache_obj_t *b)
 {
-    /* IVP_U_Float_Point diff_center.subtract(core_pos_a, core_pos_b) (double -> float) */
-    ivp_vec3f_t diff_center;
-    lvf_subtract2_p(&diff_center, &a->core_pos, &b->core_pos);
-    md->contact_dot_diff_center = (float)lvf_dot(&diff_center, &md->contact_plane);
+    const ivp_vec3f_t *n = &md->contact_plane;
+    md->contact_dot_diff_center =
+        (float)(((double)a->core_pos.k[1] - (double)b->core_pos.k[1]) * (double)n->k[1] +
+                ((double)a->core_pos.k[2] - (double)b->core_pos.k[2]) * (double)n->k[2] +
+                ((double)a->core_pos.k[0] - (double)b->core_pos.k[0]) * (double)n->k[0]);
 }
 
 static ivp_mrc_type_t p_minimize_PF(mms_t *m, const ivp_compact_edge_t *P, const ivp_compact_edge_t *F,

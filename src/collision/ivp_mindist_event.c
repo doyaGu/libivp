@@ -235,8 +235,10 @@ static D sv_pk_kk(solver3d_t *t, const ivp_transform_r_t *A, const ivp_transform
     lvm_vmult3(B, &t->v[3], &K_vec_world);
     lvp_subtract2(&KP, &P_world, &K_world);
     lvp_cross(&Lot, &K_vec_world, &KP);
-    lvp_cross_and_normize(&Lot2, &Lot, &K_vec_world);
-    return lvp_dot(&Lot2, &P_ne_vec_world);
+    /* retail: double cross product, normize(), then a z, y, x dot */
+    lvp_cross(&Lot2, &Lot, &K_vec_world);
+    (void)lvp_normize(&Lot2);
+    return P_ne_vec_world.k[2] * Lot2.k[2] + P_ne_vec_world.k[1] * Lot2.k[1] + P_ne_vec_world.k[0] * Lot2.k[0];
 }
 
 /* PK_COLL: f[0]=P_object, f[1]=K_object, v[0]=K_vec_object, v[1]=K_Lot_object, scalar=plane_offset */

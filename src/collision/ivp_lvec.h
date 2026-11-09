@@ -339,16 +339,6 @@ static inline void lvp_cross(ivp_vec3r_t *r, const ivp_vec3r_t *v1, const ivp_ve
     D c = v1->k[0] * v2->k[1] - v2->k[0] * v1->k[1];
     r->k[0] = a; r->k[1] = b; r->k[2] = c;
 }
-/* IVP_U_Point::inline_calc_cross_product_and_normize: the reference stores the
- * cross product components through (IVP_FLOAT) casts before normize() */
-static inline bool lvp_normize(ivp_vec3r_t *a);
-static inline void lvp_cross_and_normize(ivp_vec3r_t *r, const ivp_vec3r_t *v1, const ivp_vec3r_t *v2) {
-    D a = v1->k[1] * v2->k[2] - v2->k[1] * v1->k[2];
-    D b = v1->k[2] * v2->k[0] - v2->k[2] * v1->k[0];
-    D c = v1->k[0] * v2->k[1] - v2->k[0] * v1->k[1];
-    r->k[0] = (D)(float)a; r->k[1] = (D)(float)b; r->k[2] = (D)(float)c;
-    (void)lvp_normize(r);
-}
 static inline D lvp_real_length(const ivp_vec3r_t *a) { return LV_SQRT(lvp_quad_length(a)); }
 static inline D lvp_fast_real_length(const ivp_vec3r_t *a) { return LV_SQRT(lvp_quad_length(a)); }
 static inline bool lvp_normize(ivp_vec3r_t *a) {
