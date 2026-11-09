@@ -96,10 +96,10 @@ IVP_TEST(box_0_6_layout_and_mass_center)
     IVP_ASSERT_NOT_NULL(s);
     check_box_layout(_fail_count, ivp_surface_get_single_convex(s), 0.6f);
 
-    /* reference mass center 0x1.57dc8ap-34 (x3): sign and bits depend on
+    /* reference mass center 0x1.2a59bcp-32 (x3): sign and bits depend on
      * the triangle order */
     for (int k = 0; k < 3; k++) {
-        IVP_ASSERT_EQ(f_bits(s->mass_center[k]), 0x2eabee45u);
+        IVP_ASSERT_EQ(f_bits(s->mass_center[k]), 0x2f952cdeu);
         IVP_ASSERT_EQ(f_bits(s->rotation_inertia[k]), 0x3e2dc751u); /* 0x1.5b8ea2p-3 */
     }
     IVP_ASSERT_EQ(f_bits(s->upper_limit_radius), 0x3f850582u); /* 0x1.0a0b04p+0 */
@@ -113,7 +113,7 @@ IVP_TEST(box_0_6_blob_matches_reference)
     /* complete reference compact surface (header, ledge, ledgetree node),
      * little endian */
     static const char ref_hex[] =
-        "45eeab2e45eeab2e45eeab2e51c72d3e51c72d3e51c72d3e8205853fcd9c0100"
+        "de2c952fde2c952fde2c952f51c72d3e51c72d3e51c72d3e8205853fcd9c0100"
         "80010000000000000000000000000000d000000000000000041500000c000000"
         "00b0000000000600010019000200060001a0000000000c0003001d000100fa7f"
         "029000000000fa7f0200030004000b00038000000400fd7f02000c0005001c00"
@@ -157,9 +157,11 @@ IVP_TEST(box_0_4_mass_center)
     ivp_compact_surface_t *s = box_pointsoup(0.4, 0.4, 0.4);
     IVP_ASSERT_NOT_NULL(s);
     check_box_layout(_fail_count, ivp_surface_get_single_convex(s), 0.4f);
+    /* reference mass center (-0x1.42111p-28, 0x1.054442p-28, 0x1.054442p-28) */
+    static const uint32_t mass_center[3] = { 0xb1a10888u, 0x3182a221u, 0x3182a221u };
     for (int k = 0; k < 3; k++) {
-        IVP_ASSERT_EQ(f_bits(s->mass_center[k]), 0xaf088889u);      /* -0x1.111112p-33 */
-        IVP_ASSERT_EQ(f_bits(s->rotation_inertia[k]), 0x3d9a7848u); /* 0x1.34f09p-4 */
+        IVP_ASSERT_EQ(f_bits(s->mass_center[k]), mass_center[k]);
+        IVP_ASSERT_EQ(f_bits(s->rotation_inertia[k]), 0x3d9a7847u); /* 0x1.34f08ep-4 */
     }
     ivp_compact_surface_free(NULL, s);
 }

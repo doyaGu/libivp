@@ -27,7 +27,7 @@ IVP_TEST(gmmz_init_layout)
     IVP_ASSERT_EQ(ivp_gmmz_init(&m, 5, NULL), IVP_OK);
     IVP_ASSERT_EQ(m.columns, 5);
     IVP_ASSERT_EQ(m.aligned_row_len, IVP_GM_VECFPU_SIZE == 4 ? 8 : 5);
-    IVP_ASSERT_TRUE(m.matrix_eps == (double)(1.0f / 10E8f));
+    IVP_ASSERT_TRUE(m.matrix_eps == 1.0e-9);
     for (int i = 0; i < 5 * m.aligned_row_len; i++) IVP_ASSERT_TRUE(m.matrix_values[i] == 0.0);
     ivp_gmmz_destroy(&m, NULL);
     IVP_ASSERT_NULL(m.matrix_values);
@@ -280,19 +280,14 @@ IVP_TEST(vecfpu_unaligned_window)
  * not solver output; exceptional inputs therefore compare by NaN class.
  * In particular, four independent partial sums are not equivalent.  Keep the
  * FMA-reference flavour's unfused prefix and contracted tail. */
+static double scalar_madd(double a, double b, double c);
+
+/* IVP_VecFPU::fpu_large_dot_product: the retail build accumulates the
+ * software dot from the last element */
 static double scalar_dot(const double *a, const double *b, int count)
 {
     double sum = 0.0;
-    for (int k = 0; k < count; k++) {
-#if IVP_GM_USE_FMA
-        if (k >= (count >= 8 ? count & ~7 : 0)) {
-            sum = fma(a[k], b[k], sum);
-            continue;
-        }
-#endif
-        double product = a[k] * b[k];
-        sum = sum + product;
-    }
+    for (int k = count - 1; k >= 0; k--) sum = scalar_madd(a[k], b[k], sum);
     return sum;
 }
 

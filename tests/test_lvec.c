@@ -383,8 +383,10 @@ static bool exercise_vector_arithmetic(void)
             D factor = (D)random_float(&random_state) +
                        (D)random_float(&random_state) * (D)0x1p-26;
 
-            D expected_dot = (D)(lhs.k[0] * rhs.k[0] + lhs.k[1] * rhs.k[1] +
-                                 lhs.k[2] * rhs.k[2]);
+            /* IVP_U_Float_Point::dot_product: double products summed z, y, x */
+            D expected_dot = (D)((double)lhs.k[2] * (double)rhs.k[2] +
+                                 (double)lhs.k[1] * (double)rhs.k[1] +
+                                 (double)lhs.k[0] * (double)rhs.k[0]);
             D actual_dot = vector_dot(&lhs, &rhs);
             ok = ok && same_real_result(actual_dot, expected_dot);
 
@@ -537,16 +539,17 @@ static bool exercise_scr_pairwise_products(void)
             ok = ok && same_float_result(actual.hesse_val,
                                          expected.hesse_val);
 
-            double expected_dot3 = (double)(lhs.k[0] * rhs.k[0] +
-                                            lhs.k[1] * rhs.k[1] +
-                                            lhs.k[2] * rhs.k[2]);
+            double expected_dot3 = (double)lhs.k[2] * (double)rhs.k[2] +
+                                   (double)lhs.k[1] * (double)rhs.k[1] +
+                                   (double)lhs.k[0] * (double)rhs.k[0];
             double actual_dot = ivp_scr_f_dot3(&lhs, &rhs);
             ok = ok && same_real_result((D)actual_dot, (D)expected_dot3);
 
-            double expected_dot4 = (double)(lhs.k[0] * rhs.k[0] +
-                                            lhs.k[1] * rhs.k[1] +
-                                            lhs.k[2] * rhs.k[2] +
-                                            lhs.hesse_val * rhs.hesse_val);
+            /* IVP_U_Point_4::dot_product4: double products summed w, z, y, x */
+            double expected_dot4 = (double)lhs.hesse_val * (double)rhs.hesse_val +
+                                   (double)lhs.k[2] * (double)rhs.k[2] +
+                                   (double)lhs.k[1] * (double)rhs.k[1] +
+                                   (double)lhs.k[0] * (double)rhs.k[0];
             actual_dot = ivp_scr_f_dot4(&lhs, &rhs);
             ok = ok && same_real_result((D)actual_dot, (D)expected_dot4);
 

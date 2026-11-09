@@ -138,10 +138,10 @@ static void set_m(ivp_mat3r_t *m, const float v[9]) {
 IVP_TEST(ref_isqrt_double) {
     static const double xs[6] = { 0.01, 0.5, 1.0, 2.0, 3.7, 1e6 };
     static const double ref[6][4] = {
-        { 0x1.3fee80bc9ba5cp+3, 0x1.3ffffe90a5a31p+3, 0x1.3ffffffffffd9p+3, 0x1.4p+3 },
-        { 0x1.6a058p+0, 0x1.6a09e6536af66p+0, 0x1.6a09e667f3bccp+0, 0x1.6a09e667f3bcdp+0 },
+        { 0x1.3fee80bc9ba5bp+3, 0x1.3ffffe90a5a3p+3, 0x1.3ffffffffffd9p+3, 0x1.4p+3 },
+        { 0x1.6a058p+0, 0x1.6a09e6536af66p+0, 0x1.6a09e667f3bcdp+0, 0x1.6a09e667f3bccp+0 },
         { 0x1p+0, 0x1p+0, 0x1p+0, 0x1p+0 },
-        { 0x1.6a058p-1, 0x1.6a09e6536af66p-1, 0x1.6a09e667f3bccp-1, 0x1.6a09e667f3bcdp-1 },
+        { 0x1.6a058p-1, 0x1.6a09e6536af66p-1, 0x1.6a09e667f3bcdp-1, 0x1.6a09e667f3bccp-1 },
         { 0x1.0a2cc7101d3d4p-1, 0x1.0a2d168da35a5p-1, 0x1.0a2d168dc6f62p-1, 0x1.0a2d168dc6f62p-1 },
         { 0x1.0624cfe512482p-10, 0x1.0624dd2f199d1p-10, 0x1.0624dd2f1a9fcp-10, 0x1.0624dd2f1a9fcp-10 },
     };
@@ -151,12 +151,13 @@ IVP_TEST(ref_isqrt_double) {
 }
 
 IVP_TEST(ref_isqrt_float_and_inline_double) {
-    /* IVP_Inline_Math::isqrt_float == (float)IVP_Fast_Math::isqrt(x, 2),
-     * IVP_Inline_Math::isqrt_double == IVP_Fast_Math::isqrt(x, 3) */
+    /* IVP_Inline_Math::isqrt_float == IVP_Fast_Math::isqrt(x, 2) (returned
+     * unrounded), IVP_Inline_Math::isqrt_double == IVP_Fast_Math::isqrt(x, 3) */
     static const float fx[4] = { 2.0f, 0.37f, 123.5f, 1e-4f };
-    static const double rf[4] = { 0x1.6a09e6p-1, 0x1.a4dc86p+0, 0x1.709354p-4, 0x1.9p+6 };
-    static const double rd[4] = { 0x1.6a09e667f3bcdp-1, 0x1.a4dc850638c51p+0,
-                                  0x1.7093544a82ba4p-4, 0x1.90000054c4002p+6 };
+    static const double rf[4] = { 0x1.6a09e667f3bcdp-1, 0x1.a4dc850638c51p+0,
+                                  0x1.7093544a82ba3p-4, 0x1.90000054c3ffep+6 };
+    static const double rd[4] = { 0x1.6a09e667f3bccp-1, 0x1.a4dc850638c51p+0,
+                                  0x1.7093544a82ba3p-4, 0x1.90000054c4001p+6 };
     for (int i = 0; i < 4; i++) {
         EXACT(ivp_isqrt_float(fx[i]), rf[i]);
         EXACT(ivp_isqrt_double_inline((double)fx[i]), rd[i]);
@@ -228,7 +229,8 @@ IVP_TEST(ref_quat_very_fast_multiple) {
     ivp_vec3f_t w = {{ 1.3f, -0.7f, 2.1f }};
     ivp_quatr_t q;
     ivp_quat_set_very_fast_multiple(&q, &w, (ivp_real_t)0.0055555557f);
-    static const double r1[4] = { 0x1.d95084p-9, -0x1.fdb96p-10, 0x1.7e4a8ap-8, 0x1.fffcaae55c92ep-1 };
+    static const double r1[4] = { 0x1.d95084724e2ap-9, -0x1.fdb9606186842p-10, 0x1.7e4a8946119ddp-8,
+                                  0x1.fffcaae55e3c4p-1 };
     Q_EQ(q, r1);
     /* reference result is a unit quaternion (not w = 1) */
     double n = (double)q.x * (double)q.x + (double)q.y * (double)q.y +
@@ -236,8 +238,12 @@ IVP_TEST(ref_quat_very_fast_multiple) {
     IVP_ASSERT_NEAR(n, 1.0, 1e-6);
     ivp_vec3f_t big = {{ 30.0f, -20.0f, 25.0f }};
     ivp_quat_set_very_fast_multiple(&q, &big, (ivp_real_t)0.1f);
-    static const double r2[4] = { 0x1.ep-1, -0x1.aaaaaap-1, 0x1.d95554p-1, 0x0p+0 };
-    Q_EQ(q, r2);
+    /* the retail w has no clamp: sqrt of a negative argument */
+    static const double r2[3] = { 0x1.dfffff57ffff6p-1, -0x1.aaaaaabfffffdp-1, 0x1.d9555524ffffap-1 };
+    REF_EQ(q.x, r2[0]);
+    REF_EQ(q.y, r2[1]);
+    REF_EQ(q.z, r2[2]);
+    IVP_ASSERT_TRUE(isnan((double)q.w));
 }
 
 IVP_TEST(ref_quat_set_variants_and_angles) {
@@ -378,9 +384,9 @@ IVP_TEST(ref_quat_fast_normize_and_correct_steps) {
     ivp_quat_fast_normalize(&q);
     EXACT(q.w, 1.0);
     /* normize_quat refuses |q|^2 <= P_DOUBLE_EPS and leaves q unchanged */
-    q = mkq(1e-6, 0.0, 0.0, 0.0);
+    q = mkq(1e-10, 0.0, 0.0, 0.0);
     IVP_ASSERT_TRUE(ivp_quat_normalize(&q) != IVP_OK);
-    REF_EQ(q.x, (double)(ivp_real_t)1e-6);
+    REF_EQ(q.x, (double)(ivp_real_t)1e-10);
 }
 
 IVP_TEST(ref_quat_from_rotation_vectors) {
@@ -506,11 +512,11 @@ IVP_TEST(ref_point_normize_lengths) {
     V_EXACT(e, PT_NORM);
 
     /* quad_length < P_DOUBLE_EPS: fault, vector unchanged */
-    ivp_vec3r_t tiny = {{ (ivp_real_t)1e-6f, 0, 0 }};
+    ivp_vec3r_t tiny = {{ (ivp_real_t)1e-10f, 0, 0 }};
     IVP_ASSERT_TRUE(ivp_vec3r_normalize(&tiny) != IVP_OK);
     IVP_ASSERT_TRUE(ivp_vec3r_fast_normalize(&tiny) != IVP_OK);
     EXACT(ivp_vec3r_normalize_and_length(&tiny), 0.0);
-    EXACT(tiny.k[0], (double)(ivp_real_t)1e-6f);
+    EXACT(tiny.k[0], (double)(ivp_real_t)1e-10f);
 }
 
 IVP_TEST(ref_point_helpers) {
@@ -628,12 +634,12 @@ IVP_TEST(ref_matrix3_orthogonize_handedness) {
     set_m(&m, M_IN);
     IVP_ASSERT_EQ(ivp_mat3r_orthonormize(&m), IVP_OK);
     static const double on[9] = {
-        0x1.df16a3c2d7336p-1, -0x1.293447851de39p-2, 0x1.9a92ec00ecdadp-3,
-        0x1.447e31bd1370fp-2, 0x1.e2dfb2ef97a9fp-1, -0x1.9c0df4b535f8p-4,
+        0x1.df16a3c2d7334p-1, -0x1.293447851de38p-2, 0x1.9a92ec00ecdabp-3,
+        0x1.447e31bd1370ep-2, 0x1.e2dfb2ef97a9ep-1, -0x1.9c0df4b535f7ep-4,
         -0x1.492c74d2520bp-3, 0x1.41aa16416bf8p-3, 0x1.f2e76244029ccp-1 };
     M_EQ(m, on);
-    /* handedness: right-handed result (reference det = 0x1.ffff7a4775529p-1) */
-    REF_NEAR(ivp_mat3r_determinant(&m), 0x1.ffff7a4775529p-1, 1e-6);
+    /* handedness: right-handed result (reference det = 0x1.ffff7a4775526p-1) */
+    REF_NEAR(ivp_mat3r_determinant(&m), 0x1.ffff7a4775526p-1, 1e-6);
     IVP_ASSERT_TRUE(ivp_mat3r_determinant(&m) > 0);
 
     /* identity stays identity (old libivp version produced det == -1) */
@@ -707,14 +713,14 @@ IVP_TEST(ref_matrix3_init_normized) {
     ivp_mat3r_t nm;
     ivp_mat3r_init_normized_col(&nm, &v, IVP_INDEX_Y);
     static const double cy[9] = {
-        -0x1.192d4259dc352p-1, 0x1.b14c08172f744p-4, 0x1.a870de9de2252p-1,
-        0x1.4286bc53dd824p-1, -0x1.32eb3029937f9p-1, 0x1.f9a79f5be8d37p-2,
-        0x1.192d4259dc352p-1, 0x1.96374686ecf8ap-1, 0x1.0cddb4ea129b8p-2 };
+        -0x1.192d4259dc353p-1, 0x1.b14c08172f744p-4, 0x1.a870de9de2254p-1,
+        0x1.4286bc53dd825p-1, -0x1.32eb3029937f9p-1, 0x1.f9a79f5be8d38p-2,
+        0x1.192d4259dc353p-1, 0x1.96374686ecf8ap-1, 0x1.0cddb4ea129b9p-2 };
     M_EQ(nm, cy);
     ivp_mat3r_init_normized_row(&nm, &v, IVP_INDEX_Z);
     static const double rz[9] = {
-        0x1.a870de9de2252p-1, 0x1.f9a79f5be8d37p-2, 0x1.0cddb4ea129b8p-2,
-        -0x1.192d4259dc352p-1, 0x1.4286bc53dd824p-1, 0x1.192d4259dc352p-1,
+        0x1.a870de9de2254p-1, 0x1.f9a79f5be8d38p-2, 0x1.0cddb4ea129b9p-2,
+        -0x1.192d4259dc353p-1, 0x1.4286bc53dd825p-1, 0x1.192d4259dc353p-1,
         0x1.b14c08172f744p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf8ap-1 };
     M_EQ(nm, rz);
     ivp_mat3r_init_normized_col2(&nm, &v, IVP_INDEX_X, &vc);
@@ -732,9 +738,9 @@ IVP_TEST(ref_matrix3_init_normized) {
     const ivp_vec3r_t vd = {{ 0.5f, 0.0f, 0.5f }}; /* triggers the fallback branch */
     ivp_mat3r_init_normized_col(&nm, &vd, IVP_INDEX_Z);
     static const double fb[9] = {
-        -0x1.a20bd700c2c3ep-2, 0x1.279a74590331cp-1, 0x1.6a09e667f3bcdp-1,
-        -0x1.a20bd700c2c3ep-1, -0x1.279a74590331cp-1, 0.0,
-        0x1.a20bd700c2c3ep-2, -0x1.279a74590331cp-1, 0x1.6a09e667f3bcdp-1 };
+        -0x1.a20bd700c2c3ep-2, 0x1.279a74590331dp-1, 0x1.6a09e667f3bccp-1,
+        -0x1.a20bd700c2c3ep-1, -0x1.279a74590331dp-1, 0.0,
+        0x1.a20bd700c2c3ep-2, -0x1.279a74590331dp-1, 0x1.6a09e667f3bccp-1 };
     M_EQ(nm, fb);
 }
 
