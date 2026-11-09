@@ -740,9 +740,12 @@ static void push_core(ivp_core_t *c, const double p_cs[3], const double imp_cs[3
     }
 }
 
+/* IVP_Core::rot_push_core_cs: retail RVA 0xCB70 keeps only the X inertia
+ * product through the addition */
 static void rot_push_core_cs(ivp_core_t *c, const double imp_cs[3])
 {
-    for (int k = 0; k < 3; k++) {
+    c->rot_speed.k[0] = (float)(FP(imp_cs[0]) * (double)(float)c->inv_rot_inertia.k[0] + (double)c->rot_speed.k[0]);
+    for (int k = 1; k < 3; k++) {
         c->rot_speed.k[k] += (float)FP(imp_cs[k] * (double)c->inv_rot_inertia.k[k]);
     }
 }

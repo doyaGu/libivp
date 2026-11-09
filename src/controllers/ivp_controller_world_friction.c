@@ -141,10 +141,14 @@ static void world_friction_reference(const ivp_world_friction_state_t *state,
         }
         /* impulses = corr * I; rot_push_core_cs: rot_speed += impulses * inv_I */
         const ivp_vec3f_t ri = ivp_core_rot_inertia_f(core), iri = ivp_core_inv_rot_inertia_f(core);
-        ivp_vec3f_t imp, h;
+        ivp_vec3f_t imp;
         lvf_set_pairwise_mult(&imp, &corr, &ri);
-        lvf_set_pairwise_mult(&h, &imp, &iri);
-        lvf_add(&core->rot_speed, &h);
+        /* retail RVA 0xCB70 keeps only the X inertia product through the addition */
+        const float dy = imp.k[1] * iri.k[1];
+        const float dz = imp.k[2] * iri.k[2];
+        core->rot_speed.k[0] = (float)((double)imp.k[0] * (double)iri.k[0] + (double)core->rot_speed.k[0]);
+        core->rot_speed.k[1] += dy;
+        core->rot_speed.k[2] += dz;
     }
 }
 

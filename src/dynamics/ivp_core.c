@@ -333,9 +333,13 @@ void ivp_core_async_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws)
 /* rot_push_core_cs */
 void ivp_core_rot_push_cs(ivp_core_t *core, const ivp_vec3r_t *torque_impulse_cs)
 {
-    ivp_vec3f_t ri = ivp_vec3f_from_r(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core), h;
-    lvf_set_pairwise_mult(&h, &ri, &iri);
-    lvf_add(&core->rot_speed, &h);
+    ivp_vec3f_t ri = ivp_vec3f_from_r(torque_impulse_cs), iri = ivp_core_inv_rot_inertia_f(core);
+    const float dy = ri.k[1] * iri.k[1];
+    const float dz = ri.k[2] * iri.k[2];
+    /* retail RVA 0xCB70 keeps only the X inertia product through the addition */
+    core->rot_speed.k[0] = (float)((double)ri.k[0] * (double)iri.k[0] + (double)core->rot_speed.k[0]);
+    core->rot_speed.k[1] += dy;
+    core->rot_speed.k[2] += dz;
 }
 
 /* async_rot_push_core_multiple_cs(impulse, 1.0) */
@@ -379,7 +383,10 @@ void ivp_core_calc_calc(ivp_core_t *core)
     ivp_vec3f_t diff_vec;
     lvf_set3(&diff_vec, iri.k[1] - iri.k[2], iri.k[2] - iri.k[0], iri.k[0] - iri.k[1]);
     double qdiff = (double)lvf_quad_length(&diff_vec);
-    double qrlen = (double)lvf_quad_length(&iri);
+    /* retail RVA 0xD1A0 compares the inverse-inertia differences to the
+     * inertia length */
+    ivp_vec3f_t ri = ivp_core_rot_inertia_f(core);
+    double qrlen = (double)lvf_quad_length(&ri);
     const double eps = 0.1f;
     core->rot_inertias_are_equal = (qdiff < qrlen * (eps * eps));
     core->inv_object_diameter = 0.5f / (float)core->upper_limit_radius;
@@ -673,7 +680,7 @@ void ivp_core_synchronize_with_rot_z(ivp_core_t *core)
     ivp_core_inline_calc_at_quaternion(core, current_time, &core->q_world_f_core_next_psi);
     ivp_quat_to_mat3(&core->q_world_f_core_next_psi, &core->m_world_f_core_last_psi.rot);
     ivp_core_inline_calc_at_position(core, current_time, &core->m_world_f_core_last_psi.pos);
-    if (!core->rot_inertias_are_equal) {   /* IVP_FAST_WHEELS_ENABLED */
+    {   /* retail RVA 0xCFA0 recomputes the angular speed for equal inertias too */
         double f = (double)(2.0f * core->i_delta_time);
         lvf_setd3(&core->rot_speed, (D)(f * asin((double)q_core_f_core.x)), (D)(f * asin((double)q_core_f_core.y)),
                   (D)(f * asin((double)q_core_f_core.z)));
