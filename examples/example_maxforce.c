@@ -38,7 +38,12 @@ typedef struct maxforce_demo {
     int                       n_kicks;
     float                     clip_max_stretch;   /* max anchor distance since the last kick */
     float                     break_max_gap;      /* same for the BREAK constraint */
+    bool                      clip_flew_out;      /* the CLIP cube left the joint after the kick */
+    float                     clip_return_min;    /* closest anchor distance since then */
 } maxforce_demo_t;
+
+/* the cubes start 2 m from their anchors */
+static const float JOINT_LENGTH = 2.0f;
 
 static void make_joint(ivp_constraint_template_t *t, ivp_object_t *ref, ivp_object_t *dyn,
                        ivp_constraint_force_exceed_t type)
@@ -86,6 +91,8 @@ static void kick(demo_app_t *app)
     s->n_kicks++;
     s->clip_max_stretch = 0.0f;
     s->break_max_gap = 0.0f;
+    s->clip_flew_out = false;
+    s->clip_return_min = 1e9f;
 }
 
 static void maxforce_update(demo_app_t *app, demo_viewer_t *v, int frame)
@@ -93,6 +100,8 @@ static void maxforce_update(demo_app_t *app, demo_viewer_t *v, int frame)
     maxforce_demo_t *s = (maxforce_demo_t *)app->user;
     float d = anchor_distance(&s->clip_joint);
     if (d > s->clip_max_stretch) s->clip_max_stretch = d;
+    if (s->n_kicks > 0 && d > JOINT_LENGTH + 1.0f) s->clip_flew_out = true;
+    if (s->clip_flew_out && d < s->clip_return_min) s->clip_return_min = d;
     d = anchor_distance(&s->break_joint);
     if (d > s->break_max_gap) s->break_max_gap = d;
     if (v) {
@@ -109,6 +118,8 @@ static void maxforce_reset(demo_app_t *app)
     arm_joints(s);
     s->clip_max_stretch = 0.0f;
     s->break_max_gap = 0.0f;
+    s->clip_flew_out = false;
+    s->clip_return_min = 1e9f;
 }
 
 static void maxforce_draw(demo_app_t *app, demo_viewer_t *v)
@@ -160,13 +171,13 @@ static bool maxforce_check(demo_app_t *app)
      * the limit is exceeded the impulse is scaled by
      * d_time * halfimpulse / |impulse|, which practically switches the joint
      * off, so the clipped cube can fly as far as the released one (same with
-     * the legacy engine).  It stays attached, though: at the end it rests
-     * closer to its anchor than the released cube. */
-    float clip_gap = anchor_distance(&s->clip_joint);
-    float break_gap = anchor_distance(&s->break_joint);
-    ok &= demo_check(tag, clip_gap < break_gap,
-                     "CLIP cube ends closer to its anchor (gap %.3f m vs %.3f m released; max %.3f / %.3f m)",
-                     (double)clip_gap, (double)break_gap, (double)s->clip_max_stretch, (double)s->break_max_gap);
+     * the legacy engine).  It stays attached, though: once the cube has
+     * flown out, the joint pulls it back to its anchor.  The cube keeps
+     * swinging afterwards, so its distance at the end of the run says
+     * nothing. */
+    ok &= demo_check(tag, s->clip_flew_out && s->clip_return_min < JOINT_LENGTH + 0.5f,
+                     "CLIP pulled its cube back after it flew out (closest %.3f m, joint %.1f m, max %.3f m)",
+                     (double)s->clip_return_min, (double)JOINT_LENGTH, (double)s->clip_max_stretch);
     return ok;
 }
 
