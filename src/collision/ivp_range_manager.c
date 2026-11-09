@@ -44,9 +44,9 @@ void ivp_range_manager_default_intra_objects(const ivp_range_manager_t *rm, doub
     if (max_dist < (double)rm->look_ahead_min_seconds_intra * sum_speed) {
         max_dist = (double)rm->look_ahead_min_seconds_intra * sum_speed;
     }
-    double orig_speed0 = speed0;
+    /* retail: speed1 takes the already increased speed0 */
     speed0 += (double)0.2f * speed1;
-    speed1 += (double)0.18f * orig_speed0;
+    speed1 += (double)0.18f * speed0;
     double sum = speed0 + speed1;
     double inv_sum = (double)1.0f / sum;
     *range0 = max_dist * speed0 * inv_sum;
