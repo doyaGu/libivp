@@ -68,10 +68,10 @@ static void fmc_integrate_triangle(ri_find_mass_center_t *fmc,
     n[1] = (float)(b2 * a0 - a2 * b0);
     n[2] = (float)(b0 * a1 - a0 * b1);
 
-    /* IVP_U_Float_Point::dot_product / quad_length: float arithmetic */
-    float det_f = n[0] * p0[0] + n[1] * p0[1] + n[2] * p0[2];
+    /* IVP_U_Float_Point::dot_product: double products summed z, y, x;
+     * quad_length: float arithmetic */
+    double det = (double)n[2] * (double)p0[2] + (double)n[1] * (double)p0[1] + (double)n[0] * (double)p0[0];
     float ql_f = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
-    double det = (double)det_f;
 
     fmc->qsum_surface += (double)ql_f;
     fmc->sum_det += det;

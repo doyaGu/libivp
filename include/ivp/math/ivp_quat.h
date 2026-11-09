@@ -77,7 +77,8 @@ static inline void ivp_quatf_set(ivp_quatf_t *out, const ivp_quatr_t *src) {
 /* ── Arithmetic ─────────────────────────────────────────────────────────── */
 
 /* out = q1 * q2 (Hamilton product), IVP_U_Quat::inline_set_mult_quat.
- * Evaluation order matches the reference exactly; out may alias q1/q2. */
+ * Evaluation order matches the reference exactly (ivu_linear_software.hxx;
+ * only the Windows PIII header uses the retail order); out may alias q1/q2. */
 static inline void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                   const ivp_quatr_t *q2) {
     double x1 = (double)q1->x, y1 = (double)q1->y, z1 = (double)q1->z, w1 = (double)q1->w;

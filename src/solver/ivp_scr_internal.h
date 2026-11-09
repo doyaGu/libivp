@@ -6,8 +6,8 @@
  *   - cross_direction_position_cs* / cr_mult_inv* are IVP_U_Point_4
  *     (= IVP_U_Float_Hesse: three floats + a float hesse_val);
  *   - m_velocity_ds_f_impulse_ds is an IVP_U_Matrix3 (double) accumulated
- *     from float dot products (IVP_U_Point_4::dot_product4 and
- *     IVP_U_Float_Point::dot_product are float expressions);
+ *     from dot products (IVP_U_Point_4::dot_product4 is a float
+ *     expression, IVP_U_Float_Point::dot_product sums double products);
  *   - the exert_* functions push the float core speeds with
  *     IVP_U_Float_Point::add_multiple (double product, float store); the
  *     dim1 linear push multiplies IVP_FLOAT impulse * IVP_FLOAT inv_mass in
@@ -92,29 +92,15 @@ static inline double ivp_scr_f_dot4(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o
 #endif
 }
 
-/* IVP_U_Float_Point::dot_product on the xyz part (float expression) */
+/* IVP_U_Float_Point::dot_product on the xyz part (double products, z y x) */
 static inline double ivp_scr_f_dot3(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o)
 {
-#if IVP_ARM64_NEON
-    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
-    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
-    sum += a->k[2] * o->k[2];
-    return (double)sum;
-#else
-    return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2]);
-#endif
+    return (double)a->k[2] * (double)o->k[2] + (double)a->k[1] * (double)o->k[1] + (double)a->k[0] * (double)o->k[0];
 }
 
 static inline double ivp_scr_f_dot_vp(const ivp_vec3f_t *a, const ivp_scr_p4_t *o)
 {
-#if IVP_ARM64_NEON
-    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
-    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
-    sum += a->k[2] * o->k[2];
-    return (double)sum;
-#else
-    return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2]);
-#endif
+    return (double)a->k[2] * (double)o->k[2] + (double)a->k[1] * (double)o->k[1] + (double)a->k[0] * (double)o->k[0];
 }
 
 static inline ivp_vec3f_t ivp_scr_f_xyz(const ivp_scr_p4_t *p)

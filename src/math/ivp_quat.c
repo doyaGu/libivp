@@ -62,6 +62,7 @@ static void qd_normize_correct_step(quatd_t *quat, int steps) {
     quat->w *= factor;
 }
 
+/* IVP_U_Quat::inline_set_mult_quat (ivu_linear_software.hxx order) */
 static inline void qd_mult(quatd_t *res, const quatd_t *q1, const quatd_t *q2) {
     double xx = q1->w * q2->x + q1->x * q2->w + q1->y * q2->z - q1->z * q2->y;
     double yy = q1->w * q2->y + q1->y * q2->w + q1->z * q2->x - q1->x * q2->z;
@@ -226,9 +227,14 @@ void ivp_quat_set_invert_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
                               const ivp_quatr_t *q2) {
     quatd_t a = qd_load(q1);
     quatd_t b = qd_load(q2);
-    quatd_t inv = { -a.x, -a.y, -a.z, a.w };
+    quatd_t q = { -a.x, -a.y, -a.z, a.w };
+    /* RVA 0x19620 inlines its own accumulation order, unlike
+     * inline_set_mult_quat (ivu_quat.cxx set_invert_mult) */
     quatd_t r;
-    qd_mult(&r, &inv, &b);
+    r.y = q.z * b.x + q.y * b.w + q.w * b.y - q.x * b.z;
+    r.z = q.w * b.z + q.z * b.w + q.x * b.y - q.y * b.x;
+    r.w = q.w * b.w - q.x * b.x - q.y * b.y - q.z * b.z;
+    r.x = q.y * b.z + q.w * b.x + q.x * b.w - q.z * b.y;
     qd_store(out, &r);
 }
 
@@ -327,9 +333,9 @@ void ivp_quat_set_fast_multiple_with_clip(ivp_quatr_t *q,
     qd_store(q, &r);
 }
 
-/* ivp_very_fast_sin (ivu_quat.cxx): IVP_FLOAT in/out, float arithmetic */
-static inline float ivp_very_fast_sin(float x) {
-    return x - x * x * x * (1.0f / 6.0f);
+/* ivp_very_fast_sin (ivu_quat.cxx): IVP_DOUBLE in/out, float 1/6 constant */
+static inline double ivp_very_fast_sin(double x) {
+    return x - x * x * x * (double)(1.0f / 6.0f);
 }
 
 void ivp_quat_set_very_fast_multiple(ivp_quatr_t *q,
@@ -337,11 +343,10 @@ void ivp_quat_set_very_fast_multiple(ivp_quatr_t *q,
                                       ivp_real_t factor) {
     double f = (double)factor * .5;
     quatd_t r;
-    r.x = (double)ivp_very_fast_sin((float)((double)angles->k[0] * f));
-    r.y = (double)ivp_very_fast_sin((float)((double)angles->k[1] * f));
-    r.z = (double)ivp_very_fast_sin((float)((double)angles->k[2] * f));
-    double qlen = r.x * r.x + r.y * r.y + r.z * r.z;
-    r.w = (qlen < 1.0) ? sqrt(1.0 - qlen) : 0.0;
+    r.x = ivp_very_fast_sin((double)angles->k[0] * f);
+    r.y = ivp_very_fast_sin((double)angles->k[1] * f);
+    r.z = ivp_very_fast_sin((double)angles->k[2] * f);
+    r.w = sqrt(1.0 - (r.z * r.z + r.y * r.y + r.x * r.x));
     qd_store(q, &r);
 }
 
@@ -436,21 +441,15 @@ void ivp_quat_set_interpolate_smoothly(ivp_quatr_t *out, const ivp_quatr_t *from
     double t = (double)t_in;
     quatd_t res;
 
-    /* calc cosine */
-    double cosom = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+    /* calc cosine (retail order z, y, w, x) */
+    double cosom = from.z * to.z + from.y * to.y + from.w * to.w + from.x * to.x;
 
     /* adjust signs (if necessary) */
-    float sign;
-    if (cosom > 0.0) {
-        sign = 1.0f;
-    } else {
-        cosom = -cosom;
-        sign = -1.0f;
-    }
+    float sign = cosom > 0.0 ? 1.0f : -1.0f;
+    if (sign < 0.0f) cosom = -cosom;
 
-    /* 1.0f - 0.001f is evaluated in float by the reference */
-    const float threshold = 1.0f - 0.001f;
-    if (cosom < (double)threshold) {
+    /* the retail threshold 1.0 - 0.001f is a double expression */
+    if (cosom < 1.0 - (double)0.001f) {
         /* standard case (slerp) */
         double omega = acos(cosom);
         double i_sinom = 1.0 / sqrt(1.0 - cosom * cosom);

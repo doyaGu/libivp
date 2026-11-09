@@ -93,15 +93,9 @@ static inline D lvf_quad_length(const ivp_vec3f_t *a) {
     return (D)(a->k[0] * a->k[0] + a->k[1] * a->k[1] + a->k[2] * a->k[2]);
 #endif
 }
+/* IVP_U_Float_Point::dot_product: double products summed z, y, x */
 static inline D lvf_dot(const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
-#if IVP_ARM64_NEON
-    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(b->k));
-    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
-    sum += a->k[2] * b->k[2];
-    return (D)sum;
-#else
-    return (D)(a->k[0] * b->k[0] + a->k[1] * b->k[1] + a->k[2] * b->k[2]);
-#endif
+    return (D)((double)a->k[2] * (double)b->k[2] + (double)a->k[1] * (double)b->k[1] + (double)a->k[0] * (double)b->k[0]);
 }
 static inline D lvf_quad_distance(const ivp_vec3f_t *a, const ivp_vec3f_t *p) {
     D x = (D)(a->k[0] - p->k[0]), y = (D)(a->k[1] - p->k[1]), z = (D)(a->k[2] - p->k[2]);
@@ -612,7 +606,7 @@ static inline void lvq_set_matrix(const ivp_quatr_t *q, ivp_transform_r_t *m) {
     ivp_quat_to_mat3(q, &m->rot);
 }
 
-/* IVP_U_Quat::inline_set_mult_quat */
+/* IVP_U_Quat::inline_set_mult_quat (ivu_linear_software.hxx order) */
 static inline void lvq_mult(ivp_quatr_t *res, const ivp_quatr_t *q1, const ivp_quatr_t *q2) {
     D xx = q1->w * q2->x + q1->x * q2->w + q1->y * q2->z - q1->z * q2->y;
     D yy = q1->w * q2->y + q1->y * q2->w + q1->z * q2->x - q1->x * q2->z;
