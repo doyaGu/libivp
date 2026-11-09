@@ -30,14 +30,14 @@ mkdir -p "$OUT"
 echo "=== reference $FLAVOR libraries ($LIBDIR) ==="
 cmake -B "$LIBDIR" -S "$IVP_REF_SRC" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="$CXXFLAGS" -DCMAKE_CXX_FLAGS_RELEASE="$CXXFLAGS_RELEASE" \
-  -DIVP_QHULL_MODE=REENTRANT \
+  $PARITY_REF_CMAKE_OPTIONS \
   -DIVP_BUILD_EXAMPLES=OFF -DIVP_BUILD_TESTS=OFF > "$OUT.cmake.log" 2>&1
 cmake --build "$LIBDIR" -j"$IVP_JOBS" > "$OUT.build.log"
 
 echo "=== reference $FLAVOR runner ==="
 mkdir -p "$OUT/runner"
 # shellcheck disable=SC2046
-c++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math -w $RUNNER_DEFS -DIVP_VERSION_SDK -DIVP_ENABLE_QHULL \
+c++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math -w $RUNNER_DEFS $PARITY_REF_DEFS -DIVP_VERSION_SDK -DIVP_ENABLE_QHULL \
   $(parity_ref_includes "$LIBDIR") "$IVP_REF_SRC"/tools/ivp_reference_runner/*.cxx \
   $(parity_ref_libs "$LIBDIR") -o "$OUT/runner/legacy_runner"
 echo "$OUT/runner/legacy_runner"

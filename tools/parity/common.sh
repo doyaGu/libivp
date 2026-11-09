@@ -10,6 +10,13 @@ IVP_PARITY_DIR="${IVP_PARITY_DIR:-$PARITY_REPO/build/parity}"
 IVP_JOBS="${IVP_JOBS:-8}"
 PARITY_SCENARIO_LIST="$PARITY_REPO/tools/scenarios.txt"
 
+# reference CMake options: the reentrant Qhull 2020.2 backend and native
+# arithmetic.  The reference defaults to its bundled original Qhull and to the
+# software x87 emulation, which libivp does not port.
+PARITY_REF_CMAKE_OPTIONS="-DIVP_REENTRANT_QHULL=ON -DIVP_ENABLE_X87_EMULATION=OFF -DIVP_X87_ARITHMETIC=OFF -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=OFF"
+# the same selection for sources compiled against the reference headers
+PARITY_REF_DEFS="-DIVP_ENABLE_X87_EMULATION=0 -DIVP_X87_ARITHMETIC=0 -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=0"
+
 # reference module directories (include paths of the runner and of overrides)
 PARITY_REF_MODULES="ivp_compact_builder ivp_surface_manager ivp_collision ivp_physics ivp_utility ivp_controller ivp_intern"
 # static libraries of the reference build (listed twice when linking)
@@ -17,8 +24,8 @@ PARITY_REF_LIBS="libivp_physics.a libivp_compact_builder.a libivp_collision.a li
 
 # Compile flags of the reference library objects (macOS / Unix build of the
 # reference CMake project), used for instrumented override files.
-PARITY_OVERRIDE_FLAGS_RELEASE="-DAPPLE -DIVP_VERSION_SDK -DUNIX -ffp-contract=off -O3 -DNDEBUG -std=c++98 -w -fno-strict-aliasing"
-PARITY_OVERRIDE_FLAGS_DEBUG="-DAPPLE -DIVP_VERSION_SDK -DUNIX -ffp-contract=off -DDEBUG -O3 -std=c++98 -w -fno-strict-aliasing"
+PARITY_OVERRIDE_FLAGS_RELEASE="-DAPPLE -DIVP_VERSION_SDK -DUNIX $PARITY_REF_DEFS -ffp-contract=off -O3 -DNDEBUG -std=c++98 -w -fno-strict-aliasing"
+PARITY_OVERRIDE_FLAGS_DEBUG="-DAPPLE -DIVP_VERSION_SDK -DUNIX $PARITY_REF_DEFS -ffp-contract=off -DDEBUG -O3 -std=c++98 -w -fno-strict-aliasing"
 
 parity_die() { echo "parity: $*" >&2; exit 1; }
 

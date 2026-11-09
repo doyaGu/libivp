@@ -6,7 +6,8 @@
 #
 # The reference engine (default: ../ivp next to this repository) is built in
 # Release with CMake and -ffp-contract=off (the same strict FP rules as
-# libivp; libivp reproduces this build bit for bit).  Set IVP_REF_FMA=1 to
+# libivp; libivp reproduces this build bit for bit), with the reentrant
+# Qhull 2020.2 backend and without the reference's software x87 emulation.  Set IVP_REF_FMA=1 to
 # build it with the compiler's default contraction instead, like the shipped
 # arm64 libraries (FMA: differs by ~1e-6 and chaotically in some scenes).
 # tools/ivp_reference_runner/*.cxx of the reference tree is compiled against
@@ -30,7 +31,8 @@ REF_CXX_FLAGS="-ffp-contract=off"
 if [ "${IVP_REF_FMA:-0}" = "1" ]; then REF_CXX_FLAGS=""; fi
 cmake -B "$LEGACY_BUILD" -S "$REF_SRC" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="$REF_CXX_FLAGS" \
-  -DIVP_QHULL_MODE=REENTRANT \
+  -DIVP_REENTRANT_QHULL=ON -DIVP_ENABLE_X87_EMULATION=OFF \
+  -DIVP_X87_ARITHMETIC=OFF -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=OFF \
   -DIVP_BUILD_EXAMPLES=OFF -DIVP_BUILD_TESTS=OFF > /dev/null
 cmake --build "$LEGACY_BUILD" -j8 > /dev/null
 
@@ -43,6 +45,7 @@ for d in ivp_compact_builder ivp_surface_manager ivp_collision ivp_physics ivp_u
   INC+=(-I"$REF_SRC/$d")
 done
 c++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math -w -DIVP_VERSION_SDK -DIVP_ENABLE_QHULL \
+  -DIVP_ENABLE_X87_EMULATION=0 -DIVP_X87_ARITHMETIC=0 -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=0 \
   "${INC[@]}" "$REF_SRC"/tools/ivp_reference_runner/*.cxx "${LIBS[@]}" "${LIBS[@]}" -o "$RUNNER"
 
 echo "=== Generating reference JSONL ==="

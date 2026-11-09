@@ -30,6 +30,6 @@ for f in "$@"; do
   OBJS="$OBJS $o"
 done
 # shellcheck disable=SC2086
-c++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math -w $RUNNER_DEFS -DIVP_VERSION_SDK -DIVP_ENABLE_QHULL $INC \
+c++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math -w $RUNNER_DEFS $PARITY_REF_DEFS -DIVP_VERSION_SDK -DIVP_ENABLE_QHULL $INC \
   "$IVP_REF_SRC"/tools/ivp_reference_runner/*.cxx $OBJS $(parity_ref_libs "$LIBDIR") -o "$OUT/legacy_runner"
 echo "$OUT/legacy_runner"
