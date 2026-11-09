@@ -769,7 +769,9 @@ if (IVP_BUILD_TESTS)
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py
                              $<TARGET_FILE:ivp_benchmark>
                              $<IF:$<OR:$<CONFIG:Debug>,$<BOOL:${IVP_ENABLE_ASSERTS}>>,--expect-serial-islands,--expect-parallel-islands>)
-            set_tests_properties(test_benchmark_runner PROPERTIES LABELS "unit;perf" TIMEOUT 30)
+            # The worker-count invariance cases run large scenes several
+            # times; unoptimised Debug builds need well over 30 s for them.
+            set_tests_properties(test_benchmark_runner PROPERTIES LABELS "unit;perf" TIMEOUT 120)
         endif ()
     endif ()
 
