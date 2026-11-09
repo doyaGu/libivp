@@ -639,9 +639,9 @@ void ivp_core_clip_velocity(ivp_core_t *core, ivp_vec3f_t *velocity, ivp_vec3f_t
     } else {
         if ((!core->car_wheel) || (core->max_surface_deviation != IVP_REAL(0.0))) {
             double square_rot_speed = (double)lvf_quad_length(rotation_vec);
-            /* IVP_FLOAT * IVP_FLOAT */
-            double max_rot_speed = (double)(ivp_env_anomaly_get_max_angular_velocity_per_psi(env) *
-                                            ivp_env_get_inv_delta_psi_time(env));
+            /* IVP_FLOAT * IVP_DOUBLE */
+            double max_rot_speed = (double)ivp_env_anomaly_get_max_angular_velocity_per_psi(env) *
+                                   ivp_env_get_inv_delta_psi_time(env);
             double quad_max_rot_speed = max_rot_speed * max_rot_speed;
             if (square_rot_speed > quad_max_rot_speed) {
                 ivp_env_anomaly_max_angular_velocity_exceeded(env, core, rotation_vec);
@@ -1268,11 +1268,11 @@ void ivp_cnps_set_transformation(ivp_core_t *core, const ivp_quatr_t *rotation, 
     ivp_time_t current_time = ivp_env_get_current_time(env);
     ivp_environment_set_current_time_internal(env, current_time);
     float simulation_delta_time = (float)ivp_time_diff(current_time, core->time_of_last_psi);
-    if (simulation_delta_time >= ivp_env_get_delta_psi_time(env)) {
+    if ((double)simulation_delta_time >= ivp_env_get_delta_psi_time(env)) {
         core->i_delta_time = 1.0f / simulation_delta_time;
     } else {
-        simulation_delta_time = ivp_env_get_delta_psi_time(env);
-        core->i_delta_time = ivp_env_get_inv_delta_psi_time(env);
+        simulation_delta_time = (float)ivp_env_get_delta_psi_time(env);
+        core->i_delta_time = (float)ivp_env_get_inv_delta_psi_time(env);
     }
     core->time_of_last_psi = current_time;
     core->q_world_f_core_next_psi = *rotation;
@@ -1350,8 +1350,8 @@ static bool cnps_core_is_parallel_safe(const ivp_core_t *core)
         ((!core->car_wheel) ||
          (core->max_surface_deviation != IVP_REAL(0.0)))) {
         double max_rotation =
-            (double)(ivp_env_anomaly_get_max_angular_velocity_per_psi(env) *
-                     ivp_env_get_inv_delta_psi_time(env));
+            (double)ivp_env_anomaly_get_max_angular_velocity_per_psi(env) *
+            ivp_env_get_inv_delta_psi_time(env);
         if ((double)lvf_quad_length(&core->rot_speed) >
             max_rotation * max_rotation) {
             return false;
@@ -1446,7 +1446,7 @@ void ivp_core_apply_velocity_limit(ivp_core_t *core)
     }
     float max_angular_velocity_per_psi = ivp_env_anomaly_get_max_angular_velocity_per_psi(env);
     if (max_angular_velocity_per_psi > 0.0f) {
-        double max_rot_speed = (double)(ivp_env_get_inv_delta_psi_time(env) * max_angular_velocity_per_psi); /* float product */
+        double max_rot_speed = ivp_env_get_inv_delta_psi_time(env) * (double)max_angular_velocity_per_psi; /* double product */
         double rot_len = (double)lvf_real_length(&core->rot_speed);
         if (rot_len > max_rot_speed) {
             unk = (float)(max_rot_speed / rot_len);

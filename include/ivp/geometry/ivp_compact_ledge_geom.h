@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 /* Reference P_DOUBLE_EPS / P_DOUBLE_RES (ivu_types.hxx:420-422, IVP_DOUBLE build). */
-#define IVP_GEOM_DOUBLE_EPS 1e-10
+#define IVP_GEOM_DOUBLE_EPS 1e-19
 #define IVP_GEOM_DOUBLE_RES 1e-12
 #define IVP_GEOM_FLOAT_RES  1e-6f
 /* Reference P_MIN_EDGE_LEN (ivu_types.hxx:427). */

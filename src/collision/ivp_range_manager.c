@@ -4,7 +4,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 
-#define RM_P_DOUBLE_EPS 1e-10 /* P_DOUBLE_EPS */
+#define RM_P_DOUBLE_EPS 1e-19 /* P_DOUBLE_EPS */
 
 void ivp_range_manager_init(ivp_range_manager_t *rm, ivp_real_t delta_psi_time)
 {

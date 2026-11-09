@@ -43,7 +43,7 @@
 
 /* ── Reference constants (IVP_DOUBLE build) ────────────────────────────── */
 
-#define PC_P_DOUBLE_EPS 1e-10 /* P_DOUBLE_EPS */
+#define PC_P_DOUBLE_EPS 1e-19 /* P_DOUBLE_EPS */
 /* P_Pop_Too_Flat_Eps is a zero initialised global that only convexify()
  * assigns; convexify() is not reachable from convert_template_to_ledge. */
 #define PC_P_POP_TOO_FLAT_EPS 0.0

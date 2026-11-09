@@ -37,7 +37,7 @@
 #define IVP_FLOAT_MAX       1e16f
 
 #ifdef IVP_REAL_DOUBLE
-    #define IVP_DOUBLE_EPS  1e-10
+    #define IVP_DOUBLE_EPS  1e-19   /* retail P_DOUBLE_EPS */
     #define IVP_DOUBLE_RES  1e-12
     #define IVP_DOUBLE_MAX  1e20
     #define IVP_MAX_WORLD   10000.0

@@ -2,7 +2,7 @@
  *
  * Reference: IVP_U_Point / IVP_U_Float_Point (ivu_linear.cxx,
  * ivu_linear_software.hxx, ivu_linear_double.hxx).  The reference library
- * is the double build (P_DOUBLE_EPS = 1e-10, IVP_U_Point = double).
+ * is the double build (P_DOUBLE_EPS = 1e-19, IVP_U_Point = double).
  *
  * ivp_vec3r_* follows IVP_U_Float_Point in the float build and IVP_U_Point
  * with IVP_REAL_DOUBLE; helpers that only exist on IVP_U_Point

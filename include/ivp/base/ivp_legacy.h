@@ -23,7 +23,7 @@ extern "C" {
 #ifdef IVP_REAL_DOUBLE
 #define P_DOUBLE_MAX       1e20
 #define P_DOUBLE_RES       1E-12
-#define P_DOUBLE_EPS       1e-10
+#define P_DOUBLE_EPS       1e-19 /* retail division/normalization cutoff */
 #define P_MAX_WORLD_DOUBLE 10000.0
 #else
 #define P_DOUBLE_MAX       P_FLOAT_MAX
@@ -35,10 +35,10 @@ extern "C" {
 #define P_MIN_EDGE_LEN     0.01f
 #define P_RES_EPS          (P_MAX_WORLD_DOUBLE * P_DOUBLE_RES)
 
-/* IVP_Time::operator- returns float(a - b) promoted to double
- * (ivu_types.hxx:186).  Every reference "time difference" goes through it. */
+/* IVP_Time::operator- (ivu_types.hxx).  Every reference "time difference"
+ * goes through it. */
 static inline double ivp_time_diff(ivp_time_t a, ivp_time_t b) {
-    return (double)(float)(a - b);
+    return a - b; /* retail: no float cast (the later SDK rounded to float) */
 }
 
 /* IVP_Time_CODE: incremented whenever the environment time changes */

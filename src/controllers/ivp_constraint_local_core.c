@@ -23,7 +23,7 @@
 #define FP(x) ((double)(float)(x))
 
 #define CL_PI 3.14159265358979323846
-#define CL_DOUBLE_EPS 1e-10      /* reference P_DOUBLE_EPS (double build) */
+#define CL_DOUBLE_EPS 1e-19      /* reference P_DOUBLE_EPS (double build) */
 #define CL_MATRIX_EPS ((double)1e-9f) /* mg_impulse_f_dvRA.MATRIX_EPS = 1E-9f (IVP_DOUBLE member) */
 
 /* ── small double matrix helpers (reference IVP_U_Matrix semantics) ───── */

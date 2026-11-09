@@ -23,7 +23,7 @@
 
 /* HALFSPACESOUP_TOLERANCE (0.01f * P_MIN_EDGE_LEN) */
 #define IVP_HALFSPACE_TOLERANCE ((double)(0.01f * 0.01f))
-#define HS_DOUBLE_EPS 1e-10 /* P_DOUBLE_EPS */
+#define HS_DOUBLE_EPS 1e-19 /* P_DOUBLE_EPS */
 
 /* IVP_U_Point::set_crossing (ivu_linear.cxx:332) with the reference's
  * IVP_U_Matrix::real_invert (ivu_linear.cxx:767).  The libivp plane

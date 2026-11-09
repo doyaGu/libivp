@@ -25,7 +25,7 @@
 
 #include <math.h>
 
-#define RI_DOUBLE_EPS 1e-10  /* P_DOUBLE_EPS */
+#define RI_DOUBLE_EPS 1e-19  /* P_DOUBLE_EPS */
 #define RI_DOUBLE_RES 1e-12  /* P_DOUBLE_RES */
 
 /* ── IVP_Compact_Ledge_Find_Mass_Center ────────────────────────────────── */

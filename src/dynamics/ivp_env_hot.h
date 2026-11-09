@@ -24,14 +24,16 @@ static inline ivp_time_t ivp_env_hot_old_time_of_last_psi(const ivp_environment_
     return env->pl->time_of_last_psi;
 }
 
-static inline float ivp_env_hot_delta_psi_time(const ivp_environment_t *env)
+/* IVP_Environment::get_delta_PSI_time / get_inv_delta_PSI_time return the
+ * IVP_DOUBLE members (retail; the later SDK rounded them to float) */
+static inline double ivp_env_hot_delta_psi_time(const ivp_environment_t *env)
 {
-    return (float)env->pl->delta_psi_time;
+    return env->pl->delta_psi_time;
 }
 
-static inline float ivp_env_hot_inv_delta_psi_time(const ivp_environment_t *env)
+static inline double ivp_env_hot_inv_delta_psi_time(const ivp_environment_t *env)
 {
-    return (float)env->pl->inv_delta_psi_time;
+    return env->pl->inv_delta_psi_time;
 }
 
 static inline double ivp_env_hot_integrated_energy_damp(const ivp_environment_t *env)

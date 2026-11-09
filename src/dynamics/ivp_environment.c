@@ -354,8 +354,8 @@ void ivp_env_sim_mem_end(struct ivp_environment *env)
 ivp_time_t ivp_env_get_current_time(const struct ivp_environment *env) { return env->current_time; }
 ivp_time_t ivp_env_get_next_psi_time(const struct ivp_environment *env) { return env->pl->time_of_next_psi; }
 ivp_time_t ivp_env_get_old_time_of_last_psi(const struct ivp_environment *env) { return env->pl->time_of_last_psi; }
-float ivp_env_get_delta_psi_time(const struct ivp_environment *env) { return (float)env->pl->delta_psi_time; }
-float ivp_env_get_inv_delta_psi_time(const struct ivp_environment *env) { return (float)env->pl->inv_delta_psi_time; }
+double ivp_env_get_delta_psi_time(const struct ivp_environment *env) { return env->pl->delta_psi_time; }
+double ivp_env_get_inv_delta_psi_time(const struct ivp_environment *env) { return env->pl->inv_delta_psi_time; }
 double ivp_env_get_integrated_energy_damp(const struct ivp_environment *env) { return env->pl->integrated_energy_damp; }
 ivp_time_code_t ivp_env_get_current_time_code(const struct ivp_environment *env) { return env->pl->current_time_code; }
 #ifdef IVP_DEBUG_BUILD
@@ -684,8 +684,8 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
     if (!ivp_build_uses_reference_internal_state()) {
         ivp_cluster_restore_child_order(&pl->root_cluster);
     }
-    /* int(int * IVP_FLOAT get_delta_PSI_time()): float product */
-    for (int i = (int)((float)um->check_objects_per_second_threshold_0 * ivp_env_get_delta_psi_time(env)); i >= 0; i--) {
+    /* int(int * IVP_DOUBLE get_delta_PSI_time()): double product */
+    for (int i = (int)((double)um->check_objects_per_second_threshold_0 * ivp_env_get_delta_psi_time(env)); i >= 0; i--) {
         ivp_object_t *an_object = pl->an_object_to_be_checked;
         pl->an_object_to_be_checked = env_next_object_to_check(env, an_object);
         if (!an_object) return; /* no objects available */
@@ -694,7 +694,7 @@ static void env_check_for_unused_objects(ivp_environment_t *env)
         if (env_number_of_real_objects(env) < um->num_objects_in_environment_threshold_0) return;
     }
     if (env_number_of_real_objects(env) < um->num_objects_in_environment_threshold_1) return;
-    for (int i = (int)((float)um->check_objects_per_second_threshold_1 * ivp_env_get_delta_psi_time(env)); i >= 0; i--) {
+    for (int i = (int)((double)um->check_objects_per_second_threshold_1 * ivp_env_get_delta_psi_time(env)); i >= 0; i--) {
         ivp_object_t *an_object = pl->an_object_to_be_checked;
         if (!an_object) return;
         pl->an_object_to_be_checked = env_next_object_to_check(env, an_object);
@@ -751,7 +751,7 @@ void ivp_env_anomaly_max_angular_velocity_exceeded(struct ivp_environment *env, 
 {
     (void)core;
     double square_rot_speed = (double)lvf_quad_length(rot);
-    double max_rot_speed = (double)(ivp_env_anomaly_get_max_angular_velocity_per_psi(env) * ivp_env_get_inv_delta_psi_time(env));
+    double max_rot_speed = (double)ivp_env_anomaly_get_max_angular_velocity_per_psi(env) * ivp_env_get_inv_delta_psi_time(env);
     lvf_mult(rot, (D)((double)0.9f * max_rot_speed / sqrt(square_rot_speed)));
     env->anomaly_manager.anomalies_detected++;
     env->anomaly_manager.anomalies_corrected++;
@@ -2139,7 +2139,7 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     /* IVP_Environment constructor: IVP_U_Point temp_grav(0.0f, 9.83f, 0.0f) */
     ivp_vec3r_set(&cfg->gravity, IVP_REAL(0.0), (ivp_real_t)9.83f, IVP_REAL(0.0));
-    cfg->delta_psi_time = (ivp_real_t)(1.0f / 66.0f);
+    cfg->delta_psi_time = (ivp_real_t)(1.0 / 66.0); /* retail: binary64 1/66 */
     cfg->freeze_params = ivp_freeze_params_default();
     cfg->allocator = NULL;
     cfg->initial_object_capacity = IVP_OBJECTS_INIT_CAPACITY;
@@ -2169,7 +2169,6 @@ static bool env_set_delta_psi_time_d(ivp_environment_t *env, double psi_time)
     ivp_env_pipeline_t *pl = env->pl;
     pl->delta_psi_time = psi_time;
     pl->inv_delta_psi_time = 1.0f / pl->delta_psi_time;
-    pl->integrated_energy_damp = exp((double)(float)log(0.9f) * pl->delta_psi_time);
     env->delta_psi_time = (ivp_real_t)psi_time;
     return true;
 }
@@ -2214,9 +2213,8 @@ static void env_simulate_psi(ivp_environment_t *env)
     const ivp_real_t dt = (ivp_real_t)pl->delta_psi_time;
     IVP_IF(1 || env->debug_manager->display_statistic)
     {
-        /* get_current_time() - last_statistic_output: IVP_Time::operator-
-         * rounds the difference to float */
-        if ((double)(float)(env->current_time - pl->statistic_manager.last_statistic_output) >= 1.0) {
+        /* get_current_time() - last_statistic_output: IVP_Time::operator- */
+        if (ivp_time_diff(env->current_time, pl->statistic_manager.last_statistic_output) >= 1.0) {
             ivp_statistic_manager_output(&pl->statistic_manager);
             pl->statistic_manager.last_statistic_output = env->current_time;
         }
@@ -2442,7 +2440,7 @@ void ivp_environment_reset_time(ivp_environment_t *env)
             if (b && b->reset_time) b->reset_time(slot->ctx, old);
         }
     }
-    /* IVP_Time(get_current_time() - get_old_time_of_last_PSI()): IVP_Time::operator- is float */
+    /* IVP_Time(get_current_time() - get_old_time_of_last_PSI()): IVP_Time::operator- */
     ivp_environment_set_current_time_internal(env, ivp_time_diff(env->current_time, old));
     pl->time_of_last_psi = 0.0;
     pl->time_of_next_psi = 0.0 + (double)ivp_env_get_delta_psi_time(env);
@@ -2576,9 +2574,12 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     pl->gravity_ctrl.vt = &gravity_vt;
     ivp_env_register_sim_controller(env, &pl->gravity_ctrl);
     ivp_environment_set_gravity(env, &cfg.gravity);
-    /* set_delta_PSI_time */
+    /* the constructor sets the binary64 1/66 and computes the energy damping
+     * once from it (retail RVA 0x12A60); later steps do not change it */
+    (void)env_set_delta_psi_time_d(env, 1.0 / 66.0);
+    pl->integrated_energy_damp = exp((double)(float)log(0.9f) * pl->delta_psi_time);
     double dt = (double)cfg.delta_psi_time;
-    if (!env_set_delta_psi_time_d(env, dt)) (void)env_set_delta_psi_time_d(env, (double)(1.0f / 66.0f));
+    if (!env_set_delta_psi_time_d(env, dt)) (void)env_set_delta_psi_time_d(env, 1.0 / 66.0);
     ivp_sim_units_mgr_init(&pl->sim_units_manager, env);
     if (ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event) != IVP_OK) {
         ivp_environment_destroy(env);

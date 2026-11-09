@@ -31,7 +31,7 @@
 #include <math.h>
 #include <string.h>
 
-#define LS_DOUBLE_EPS 1e-10            /* P_DOUBLE_EPS */
+#define LS_DOUBLE_EPS 1e-19            /* P_DOUBLE_EPS */
 #define LS_FLOAT_RES  ((double)1e-6f)  /* P_FLOAT_RES  */
 
 /* ── IVV_Sphere ────────────────────────────────────────────────────────── */

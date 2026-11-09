@@ -17,7 +17,7 @@ extern "C" {
  * Code that reproduces an IVP_DOUBLE computation of the original engine uses
  * these, independent of IVP_REAL_DOUBLE (which only selects the storage type
  * of ivp_real_t).  P_RES_EPS = P_MAX_WORLD_DOUBLE * P_DOUBLE_RES = 1e-8. */
-#define IVP_REF_DOUBLE_EPS  1e-10        /* P_DOUBLE_EPS                   */
+#define IVP_REF_DOUBLE_EPS  1e-19        /* P_DOUBLE_EPS                   */
 #define IVP_REF_DOUBLE_RES  1e-12        /* P_DOUBLE_RES                   */
 #define IVP_REF_DOUBLE_MAX  1e20         /* P_DOUBLE_MAX                   */
 #define IVP_REF_MAX_WORLD   10000.0      /* P_MAX_WORLD_DOUBLE             */

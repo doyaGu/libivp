@@ -26,7 +26,7 @@
 #include <string.h>
 
 #define RS_DOUBLE_RES 1e-12 /* P_DOUBLE_RES */
-#define RS_DOUBLE_EPS 1e-10 /* P_DOUBLE_EPS */
+#define RS_DOUBLE_EPS 1e-19 /* P_DOUBLE_EPS */
 
 /* ── Small helpers (reference vector semantics) ────────────────────────── */
 

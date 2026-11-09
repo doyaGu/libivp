@@ -46,8 +46,8 @@ typedef enum ivp_env_state {
 ivp_time_t      ivp_env_get_current_time(const struct ivp_environment *env);
 ivp_time_t      ivp_env_get_next_psi_time(const struct ivp_environment *env);
 ivp_time_t      ivp_env_get_old_time_of_last_psi(const struct ivp_environment *env);
-float           ivp_env_get_delta_psi_time(const struct ivp_environment *env);
-float           ivp_env_get_inv_delta_psi_time(const struct ivp_environment *env);
+double          ivp_env_get_delta_psi_time(const struct ivp_environment *env);
+double          ivp_env_get_inv_delta_psi_time(const struct ivp_environment *env);
 double          ivp_env_get_integrated_energy_damp(const struct ivp_environment *env);
 ivp_time_code_t ivp_env_get_current_time_code(const struct ivp_environment *env);
 #ifdef IVP_DEBUG_BUILD

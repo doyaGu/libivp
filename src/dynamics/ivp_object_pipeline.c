@@ -487,7 +487,7 @@ bool ivp_object_disable_simulation(ivp_object_t *obj)
         }
         ivp_quatf_set(&core->q_world_f_core_calm_reference[0], &core->q_world_f_core_next_psi);
         lvf_set_p(&core->position_world_f_core_calm_reference[0], &core->pos_world_f_core_last_psi);
-        /* IVP_Time ref_time = now_time - 20 (IVP_Time::operator- rounds to float) */
+        /* IVP_Time ref_time = now_time - 20 (IVP_Time::operator-) */
         core->time_of_calm_reference[0] = ivp_time_diff(ivp_env_get_current_time(ivp_core_env(core)), 20.0);
         ivp_sim_unit_do_sim_unit_union_find(core->sim_unit);
         return ivp_sim_unit_sim_unit_calc_movement_state(core->sim_unit, ivp_core_env(core));

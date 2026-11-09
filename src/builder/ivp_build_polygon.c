@@ -124,7 +124,7 @@ void ivp_surface_recompute_bounds(ivp_compact_surface_t *surface)
         }
         double radius = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
         double work = radius * (double)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
-        if (work < 1e-10) work = 1e-10;
+        if (work < IVP_DOUBLE_EPS) work = IVP_DOUBLE_EPS; /* P_DOUBLE_EPS */
         for (int i = 0; i < 3; i++) {
             root->center[i] = (float)c[i];
             int bs = (int)(((double)mx[i] - c[i]) / work) + 1;

@@ -66,8 +66,9 @@ void ivp_time_manager_event_loop(ivp_time_manager_t *tm, struct ivp_environment 
 
     /* IVP_Event_Manager_Standard::simulate_time_events */
     float event_time;
-    while ((event_time = ivp_minlist_find_min_value(&tm->min_hash)) <
-           (float)ivp_time_diff(time, tm->base_time)) {
+    /* IVP_FLOAT event_time < IVP_Time - IVP_Time (a double difference) */
+    while ((double)(event_time = ivp_minlist_find_min_value(&tm->min_hash)) <
+           ivp_time_diff(time, tm->base_time)) {
         ivp_time_event_t *ev = (ivp_time_event_t *)ivp_minlist_find_min_elem(&tm->min_hash);
         ivp_minlist_remove(&tm->min_hash, (ivp_minlist_index_t)ev->index);
         ev->index = IVP_MINLIST_UNUSED;

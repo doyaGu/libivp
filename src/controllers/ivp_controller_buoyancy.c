@@ -520,8 +520,8 @@ static bool calculate_future_extrapolation(const ivp_buoyancy_state_t *state, co
                                            ivp_mi_vector_t *future_input, ivp_mi_vector_t *future_solution)
 {
     D future_time = (D)(current_time + (double)state->nr_future_psi_for_extrapolation * (double)d_time);
-    /* IVP_Time::operator-: float(seconds - b.seconds) */
-    D divisor = (D)(float)(current_time - cd->last_psi_time);
+    /* IVP_Time::operator- (retail: no float cast) */
+    D divisor = (D)(current_time - cd->last_psi_time);
     if (divisor > P_DOUBLE_RES) {
         float time_quotient = (float)((float)(future_time - cd->last_psi_time) / divisor);
 
