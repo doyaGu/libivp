@@ -144,7 +144,12 @@ void ivp_frs_async_apply_impulse(const ivp_impact_solver_lt_t *info, double impu
     if (c1) {
         ivp_vec3f_t hp, iri = ivp_core_inv_rot_inertia_f(c1);
         lvf_set_pairwise_mult(&hp, &info->contact_cross_nomal_cs[1], &iri);
-        vrr_add_multiple_f(&c1->rot_speed_change, &hp, impulse);
+        /* retail RVA 0x364C0 keeps the second core's X inertia product
+         * wide; only Y/Z pass through the float hp */
+        c1->rot_speed_change.k[0] = (ivp_real_t)(float)((double)c1->rot_speed_change.k[0] +
+            ((double)info->contact_cross_nomal_cs[1].k[0] * (double)iri.k[0]) * impulse);
+        c1->rot_speed_change.k[1] = (ivp_real_t)(float)((double)c1->rot_speed_change.k[1] + (double)hp.k[1] * impulse);
+        c1->rot_speed_change.k[2] = (ivp_real_t)(float)((double)c1->rot_speed_change.k[2] + (double)hp.k[2] * impulse);
         vr_add_multiple_f(&c1->speed_change, &info->surf_normal, impulse * (double)ivp_core_get_inv_mass_f(c1));
     }
 }
