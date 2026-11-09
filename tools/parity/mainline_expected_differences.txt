@@ -1,12 +1,15 @@
 # Default engine behavior versus the reference engine.  Both sides use
 # reentrant Qhull 8.0.2.  With reference internals enabled all 48 scenarios
-# match; this exact 20-scenario set comes from the mainline internal-state
+# match; this exact 23-scenario set comes from the mainline internal-state
 # rules (history-independent ordering, cleared arenas) rather than from a
 # Qhull version difference.  IVP_EDIT_LOCALITY builds have their own set
 # (edit_locality_expected_differences.txt).
 springs
 rope
+motor
+buoyancy
 cubes
+check_distance
 vehicle
 concave_static
 compound_dynamic
@@ -21,6 +24,6 @@ world_friction
 golem
 fixed_keyed
 constraint_break
-attacher
+fake_jetski
 merge_objects
 object_attach

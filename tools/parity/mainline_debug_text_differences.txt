@@ -1,6 +1,5 @@
 # Debug mainline runs whose JSONL matches the reference but whose debug text
-# does not.  The reference prints "calc_unscaled_KK_vals: parallel edges"
-# for edge pairs met in the order of its address-keyed mindist loop hash; the
-# mainline keys that hash by feature order, so the message count differs while
-# every frame stays bit for bit identical.
-hinge_limits
+# does not.  The mainline keys the mindist loop hash by feature order instead
+# of the reference's addresses, which can change how often messages such as
+# "calc_unscaled_KK_vals: parallel edges" are printed while every frame stays
+# bit for bit identical.  No scenario does so at present.
