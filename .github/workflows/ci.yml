@@ -20,7 +20,7 @@ jobs:
             cmake_args: ""
           - policy: stable
             suite: release-unit
-            cmake_args: -DIVP_STABLE_INTERNAL_STATE=ON
+            cmake_args: -DIVP_STABLE_INTERNAL_STATE=ON -DIVP_REENTRANT_QHULL=ON
     name: library (${{ matrix.os }}, ${{ matrix.policy }})
     runs-on: ${{ matrix.os }}
     steps:
@@ -68,7 +68,7 @@ jobs:
             suite: determinism-features-unit
             parallel: 4
           - name: tsan-threading
-            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON
+            cmake_args: -DCMAKE_BUILD_TYPE=Debug -DIVP_ENABLE_TSAN=ON -DIVP_REENTRANT_QHULL=ON
             suite: tsan-threading
             parallel: 1
     name: verification (${{ matrix.name }})

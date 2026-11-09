@@ -51,14 +51,14 @@
       "test_polygon_collision_debug",
       "test_profile_benchmark",
       "test_qhull_concurrency",
-      "test_qhull_overlap",
       "test_ray_solver",
       "test_replay_equivalence",
       "test_solver",
       "test_utility",
       "test_utility_ref",
       "test_verification_runner"
-    ]
+    ],
+    "unit-reentrant-qhull": ["test_qhull_overlap"]
   },
   "suites": [
     {
@@ -75,8 +75,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "ON",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -109,8 +109,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "OFF",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -143,8 +143,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -176,8 +176,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -226,8 +226,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "OFF"
       },
       "selection": {
@@ -260,8 +260,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "ON",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -276,7 +276,7 @@
           "Linux": ["test_parity_compare"]
         },
         "scenario_set": null,
-        "test_sets": ["unit-common"],
+        "test_sets": ["unit-common", "unit-reentrant-qhull"],
         "tests": []
       }
     },
@@ -292,8 +292,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "ON",
         "IVP_ENABLE_TSAN": "OFF",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {
@@ -324,8 +324,8 @@
         "IVP_ENABLE_SCENARIO_TESTS": "OFF",
         "IVP_ENABLE_TSAN": "ON",
         "IVP_ENABLE_UBSAN": "OFF",
-        "IVP_QHULL_MODE": "REENTRANT",
         "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "ON",
         "IVP_STABLE_INTERNAL_STATE": "ON"
       },
       "selection": {

@@ -48,13 +48,13 @@ class VerificationRunnerTests(unittest.TestCase):
                 "// comment\n"
                 "CMAKE_BUILD_TYPE:STRING=Debug\n"
                 "IVP_ENABLE_ASAN:BOOL=TRUE\n"
-                "IVP_QHULL_MODE:STRING=REENTRANT\n",
+                "IVP_REENTRANT_QHULL:BOOL=FALSE\n",
                 encoding="utf-8",
             )
             cache = verification.parse_cmake_cache(cache_path)
         checks = verification.validate_cache(
             cache,
-            {"IVP_ENABLE_ASAN": "ON", "IVP_QHULL_MODE": "REENTRANT"},
+            {"IVP_ENABLE_ASAN": "ON", "IVP_REENTRANT_QHULL": "OFF"},
         )
         self.assertEqual(2, len(checks))
         self.assertEqual(
