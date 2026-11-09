@@ -176,9 +176,12 @@ static bool phantom_check(demo_app_t *app)
     }
     ok &= demo_check(tag, near_in == n_near && far_in == 0,
                      "the %d objects dropped into the phantom entered it, none of the others (%d)", near_in, far_in);
+    /* a kicked object left the sphere and entered it again on the way down;
+     * where it comes to rest is up to the bounce (a box landing near the
+     * rim may tumble out again), so it need not be inside at the end */
     int back = 0;
     for (int i = 0; i < N_DROP; i++)
-        if (s->kicked[i] && tr->exits[i] >= 1 && tr->enters[i] >= 2 && is_tracked(s, s->drop_objs[i])) back++;
+        if (s->kicked[i] && tr->exits[i] >= 1 && tr->enters[i] >= 2) back++;
     ok &= demo_check(tag, s->n_kicks == 1 && s->kicked_inside >= 3 && back == s->kicked_inside,
                      "kicked %d objects up: %d left the phantom and fell back in", s->kicked_inside, back);
     ok &= demo_check(tag, s->inconsistent == 0 && s->phantom.n_tracked == tr->total_enters - tr->total_exits,
