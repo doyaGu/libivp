@@ -6,11 +6,11 @@
   `IVP_STABLE_INTERNAL_STATE=OFF` 和 `IVP_QHULL_MODE=REENTRANT`，
   Release/Debug 必须 48/48 逐位一致。
 - **mainline：**使用 `IVP_STABLE_INTERNAL_STATE=ON` 和可重入 Qhull 2020.2，必须恰好只有
-  `mainline_expected_differences.txt` 登记的 20 个场景不同；多一个或少一个都失败。
+  `mainline_expected_differences.txt` 登记的 23 个场景不同；多一个或少一个都失败。
   Debug 主线另外只允许 `mainline_debug_text_differences.txt` 登记的场景在调试文本上
   不同（JSONL 仍须逐位一致），同样多一个或少一个都失败。
 - **edit-locality：**主线加 `IVP_EDIT_LOCALITY=ON`，必须恰好只有
-  `edit_locality_expected_differences.txt` 登记的 39 个场景不同。
+  `edit_locality_expected_differences.txt` 登记的 38 个场景不同。
 
 三个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
@@ -21,7 +21,9 @@ Qhull 已不再是两端的差异变量。
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照引擎固定为 `2b4965e`，包含 Qhull 8.0.2 可重入迁移。需要克隆到与
+对照引擎固定为 `238b883`。原版默认使用自带的原始 Qhull 并开启软件 x87 模拟；
+脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）改用可重入 Qhull 8.0.2
+（`IVP_REENTRANT_QHULL=ON`）并关闭 x87 模拟，libivp 不移植这两项。需要克隆到与
 本仓库同级的 `../ivp`：
 
 ```bash

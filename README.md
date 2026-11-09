@@ -161,7 +161,7 @@ and allocation-history sensitivity. Scheduling one world on a different
 worker does not change its result, but independently reconstructed worlds
 need not match. Select `IVP_STABLE_INTERNAL_STATE=ON` when equivalent search
 slots must agree despite those histories; it deliberately differs from the
-reference in the 20 registered scenarios. Keep the default when reference
+reference in the 23 registered scenarios. Keep the default when reference
 parity is the goal.
 
 ### Graphical examples
