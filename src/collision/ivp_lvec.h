@@ -58,9 +58,10 @@ static inline double lv_ref_isqrt(double square, int resolution_steps) {
 static inline D lv_isqrt(D x, int n) {
     return (D)lv_ref_isqrt((double)x, n);
 }
-/* IVP_Inline_Math::isqrt_float == IVP_Fast_Math::isqrt(quad, 2) */
-static inline float lv_isqrt_float(float x) {
-    return (float)lv_ref_isqrt((double)x, 2);
+/* IVP_Inline_Math::isqrt_float == IVP_Fast_Math::isqrt(quad, 2), returned
+ * unrounded as IVP_DOUBLE (ivu_linear.hxx) */
+static inline double lv_isqrt_float(float x) {
+    return lv_ref_isqrt((double)x, 2);
 }
 /* IVP_Inline_Math::isqrt_double == IVP_Fast_Math::isqrt(quad, 3) */
 static inline D lv_isqrt_double(D x) {
@@ -433,10 +434,9 @@ static inline void lv_hesse_calc_ppp(lv_hesse_t *h, const ivp_vec3r_t *t0, const
     lvp_set_vert_to_area(&h->n, t0, t1, t2);
     h->hesse_val = -(h->n.k[0] * t0->k[0] + h->n.k[1] * t0->k[1] + h->n.k[2] * t0->k[2]);
 }
+/* IVP_U_Hesse::normize: no length guard (ivu_linear.cxx) */
 static inline void lv_hesse_normize(lv_hesse_t *h) {
-    D len = lvp_real_length(&h->n);
-    if (len < P_DOUBLE_EPS) { lvp_zero(&h->n); h->hesse_val = 0.0; return; }
-    D l = 1.0f / len;
+    D l = 1.0 / lvp_real_length(&h->n);
     lvp_mult(&h->n, l);
     h->hesse_val *= l;
 }

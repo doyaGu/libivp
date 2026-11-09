@@ -36,9 +36,9 @@ extern "C" {
 double ivp_isqrt_double(double square, int resolution_steps);
 
 /* Float isqrt — IVP_Inline_Math::isqrt_float(quad) (ivu_linear.cxx):
- * (IVP_FLOAT)IVP_Fast_Math::isqrt(quad, 2), i.e. the double Newton iteration
- * with resolution 2 (~1e-14) rounded to float. */
-float ivp_isqrt_float(float x);
+ * IVP_Fast_Math::isqrt(quad, 2), i.e. the double Newton iteration with
+ * resolution 2 (~1e-14), returned unrounded like the retail build. */
+double ivp_isqrt_float(float x);
 
 /* IVP_Inline_Math::isqrt_double(quad) == IVP_Fast_Math::isqrt(quad, 3). */
 double ivp_isqrt_double_inline(double x);

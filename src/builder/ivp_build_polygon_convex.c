@@ -968,14 +968,8 @@ static void pc_tri_calc_hesse(pc_tri_t *tri)
     h[2] = c2;
     h[3] = -(h[0] * fp0 + h[1] * fp1 + h[2] * fp2);
 
-    /* IVP_U_Hesse::normize */
-    double len = sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]);
-    if (len < PC_P_DOUBLE_EPS) {
-        h[0] = h[1] = h[2] = 0.0;
-        h[3] = 0.0;
-        return;
-    }
-    double l = 1.0 / len;
+    /* IVP_U_Hesse::normize (no length guard) */
+    double l = 1.0 / sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]);
     double m0 = h[0] * l;
     double m1 = h[1] * l;
     double m2 = h[2] * l;

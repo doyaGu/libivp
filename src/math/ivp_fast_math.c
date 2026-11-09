@@ -24,10 +24,12 @@ typedef union {
 
 /* ── Float inverse square root ──────────────────────────────────────────── */
 
-/* Reference: IVP_FLOAT IVP_Inline_Math::isqrt_float(IVP_FLOAT quad)
- *            { return IVP_Fast_Math::isqrt(quad, 2); }   (ivu_linear.cxx) */
-float ivp_isqrt_float(float x) {
-    return (float)ivp_isqrt_double((double)x, 2);
+/* Reference: IVP_DOUBLE IVP_Inline_Math::isqrt_float(IVP_FLOAT quad)
+ *            { return IVP_Fast_Math::isqrt(quad, 2); }   (ivu_linear.cxx)
+ * The retail build returns the unrounded value; callers that store it in a
+ * float narrow it themselves. */
+double ivp_isqrt_float(float x) {
+    return ivp_isqrt_double((double)x, 2);
 }
 
 /* Reference: IVP_DOUBLE IVP_Inline_Math::isqrt_double(IVP_DOUBLE quad)
