@@ -153,6 +153,10 @@ typedef void (*ivp_material_manager_fn_t)(void *ctx,
                                            ivp_real_t *out_elasticity,
                                            ivp_real_t *out_adhesion);
 
+/* Returns true when a orders before b (IVP_Environment::Client_Data_Compare).
+ * Lets a host order opaque identities without depending on heap addresses. */
+typedef bool (*ivp_client_data_compare_fn_t)(const void *a, const void *b);
+
 /* ── Environment ────────────────────────────────────────────────────────── */
 
 #define IVP_MAX_GLOBAL_COLLISION_LISTENERS 8 /* deprecated: no limit any more */
@@ -199,6 +203,10 @@ typedef struct ivp_environment {
 
     /* Collision filter (in addition to the reference nocoll group ident check) */
     ivp_collision_filter_t   collision_filter;
+
+    /* Optional order of opaque object client_data identities for ball pairs
+     * (IVP_Environment::set_client_data_compare); NULL keeps the default */
+    ivp_client_data_compare_fn_t client_data_compare;
 
     bool                     ccd_enabled;   /* unused */
 
@@ -444,10 +452,19 @@ static inline ivp_real_t ivp_environment_get_delta_psi_time(const ivp_environmen
     return env->delta_psi_time;
 }
 
+/* IVP_Environment::set_client_data_compare: order two balls' synapses by
+ * their objects' client_data with compare (NULL: the default order, the
+ * client_data addresses in reference-internals builds, the stable object
+ * order otherwise). */
+void ivp_environment_set_client_data_compare(ivp_environment_t *env, ivp_client_data_compare_fn_t compare);
+
 /* IVP_Environment::set_gravity (also updates the standard gravity controller). */
 void ivp_environment_set_gravity(ivp_environment_t *env, const ivp_vec3r_t *g);
 
-/* IVP_Environment::set_delta_PSI_time (range IVP_MIN_DELTA_PSI_TIME..IVP_MAX_DELTA_PSI_TIME). */
+/* IVP_Environment::set_delta_PSI_time.  Like the retail build it assigns any
+ * step; keep it within IVP_MIN_DELTA_PSI_TIME..IVP_MAX_DELTA_PSI_TIME.  The
+ * integrated energy damping keeps the value of the binary64 1/66 the
+ * environment starts with. */
 void ivp_environment_set_delta_psi_time(ivp_environment_t *env, ivp_real_t dt);
 
 /* IVP_Environment::simulate_until / simulate_variable_time_step / reset_time. */

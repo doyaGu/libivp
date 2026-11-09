@@ -2154,6 +2154,12 @@ void ivp_environment_config_init(ivp_environment_config_t *cfg)
     cfg->disable_performance_counter = false;
 }
 
+void ivp_environment_set_client_data_compare(ivp_environment_t *env, ivp_client_data_compare_fn_t compare)
+{
+    if (!env) return;
+    env->client_data_compare = compare;
+}
+
 /* IVP_Environment::set_gravity */
 void ivp_environment_set_gravity(ivp_environment_t *env, const ivp_vec3r_t *g)
 {
@@ -2162,24 +2168,19 @@ void ivp_environment_set_gravity(ivp_environment_t *env, const ivp_vec3r_t *g)
     lvf_set_p(&env->pl->grav_vec, g);
 }
 
-/* IVP_Environment::set_delta_PSI_time */
-static bool env_set_delta_psi_time_d(ivp_environment_t *env, double psi_time)
+/* IVP_Environment::set_delta_PSI_time: the retail build assigns any step
+ * (no range check) */
+static void env_set_delta_psi_time_d(ivp_environment_t *env, double psi_time)
 {
-    if (!(psi_time >= (double)IVP_MIN_DELTA_PSI_TIME && psi_time <= (double)IVP_MAX_DELTA_PSI_TIME)) return false;
     ivp_env_pipeline_t *pl = env->pl;
     pl->delta_psi_time = psi_time;
     pl->inv_delta_psi_time = 1.0f / pl->delta_psi_time;
     env->delta_psi_time = (ivp_real_t)psi_time;
-    return true;
 }
 
 void ivp_environment_set_delta_psi_time_internal(struct ivp_environment *env, double psi_time)
 {
-    if (!env_set_delta_psi_time_d(env, psi_time)) {
-        /* out of range: nothing changed */
-        IVP_ASSERT(psi_time >= (double)IVP_MIN_DELTA_PSI_TIME);
-        IVP_ASSERT(psi_time <= (double)IVP_MAX_DELTA_PSI_TIME);
-    }
+    env_set_delta_psi_time_d(env, psi_time);
 }
 
 void ivp_environment_set_delta_psi_time(ivp_environment_t *env, ivp_real_t dt)
@@ -2576,10 +2577,9 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     ivp_environment_set_gravity(env, &cfg.gravity);
     /* the constructor sets the binary64 1/66 and computes the energy damping
      * once from it (retail RVA 0x12A60); later steps do not change it */
-    (void)env_set_delta_psi_time_d(env, 1.0 / 66.0);
+    env_set_delta_psi_time_d(env, 1.0 / 66.0);
     pl->integrated_energy_damp = exp((double)(float)log(0.9f) * pl->delta_psi_time);
-    double dt = (double)cfg.delta_psi_time;
-    if (!env_set_delta_psi_time_d(env, dt)) (void)env_set_delta_psi_time_d(env, 1.0 / 66.0);
+    env_set_delta_psi_time_d(env, (double)cfg.delta_psi_time);
     ivp_sim_units_mgr_init(&pl->sim_units_manager, env);
     if (ivp_time_manager_init(&pl->time_manager, env->allocator, env_psi_event) != IVP_OK) {
         ivp_environment_destroy(env);
