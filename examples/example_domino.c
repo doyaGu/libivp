@@ -45,8 +45,12 @@ static int cascade_front(const domino_t *s)
 static void tip_first_tile(demo_app_t *app)
 {
     domino_t *s = (domino_t *)app->user;
-    /* IVP_U_Float_Point angular_vel(0, 0, -2): async_add_rot_speed_object_cs */
-    demo_async_add_rot_speed_cs(app->world.env, s->tiles[0], 0.0, 0.0, -2.0);
+    /* async_add_rot_speed_object_cs.  The reference example spins the tile
+     * with (0, 0, -2), which tips it away from the row; the cascade then
+     * only started when its sliding foot happened to kick the second tile,
+     * and the reference engine no longer does that.  +2 tips it into the
+     * row. */
+    demo_async_add_rot_speed_cs(app->world.env, s->tiles[0], 0.0, 0.0, 2.0);
     s->tipped = true;
 }
 
