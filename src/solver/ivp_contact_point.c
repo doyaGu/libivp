@@ -475,6 +475,34 @@ static void cp_ledge_reference(const ivp_object_t *obj, const ivp_compact_edge_t
     else ivp_surman_remove_reference_to_ledge(obj->surman, ledge);
 }
 
+/* Inverse-rotate the contact normal before forming its moment arm (retail
+ * RVA 0x1F860): the normal's x component stays double (summed z, y, x for
+ * the first core, x, y, z for the second), y/z are float stores, and the
+ * cross product uses double products. */
+static void cp_contact_normal_cross(const ivp_transform_r_t *m, const ivp_vec3f_t *normal,
+                                    const ivp_vec3f_t *point, ivp_vec3f_t *cross, bool second_core)
+{
+    ivp_vec3f_t n;
+    lvm_vimult3_f(m, normal, &n);
+    const double n0 = (double)normal->k[0], n1 = (double)normal->k[1], n2 = (double)normal->k[2];
+    const double nx = second_core ? LVM_E(m, 0, 0) * n0 + LVM_E(m, 1, 0) * n1 + LVM_E(m, 2, 0) * n2
+                                  : LVM_E(m, 2, 0) * n2 + LVM_E(m, 1, 0) * n1 + LVM_E(m, 0, 0) * n0;
+    const double p0 = (double)point->k[0], p1 = (double)point->k[1], p2 = (double)point->k[2];
+    cross->k[0] = (float)((double)n.k[2] * p1 - (double)n.k[1] * p2);
+    cross->k[1] = (float)(nx * p2 - (double)n.k[2] * p0);
+    cross->k[2] = (float)((double)n.k[1] * p0 - nx * p1);
+}
+
+/* ivp_contact_inverse_mass (ivp_friction.hxx): inverse mass of one contact
+ * contribution plus an existing one, rounded once */
+static float cp_contact_inverse_mass(const ivp_vec3f_t *cross, const ivp_core_t *core, float previous)
+{
+    const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
+    const double c0 = (double)cross->k[0], c1 = (double)cross->k[1], c2 = (double)cross->k[2];
+    return (float)(((double)iri.k[2] * c2 * c2 + c1 * (double)iri.k[1] * c1 + (double)iri.k[0] * c0 * c0) +
+                   (double)ivp_core_get_inv_mass_f(core) + (double)previous);
+}
+
 ivp_contact_pt_t *ivp_contact_pt_create(ivp_mindist_t *md)
 {
     const ivp_allocator_t *allocator = ivp_env_get_allocator(md->env);
@@ -900,19 +928,21 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
     {
         ivp_core_t *core0 = syn0->l_obj->physical_core;
         if (!core0->physical_unmoveable) {
-            ivp_vec3f_t surface_normal_cs;
-            const ivp_transform_r_t *m_world_f_core = &core0->m_world_f_core_last_psi;
-            lvm_vimult4_pf(m_world_f_core, &info->contact_point_ws, &info->contact_point_cs[0]);
-            lvm_vimult3_f(m_world_f_core, &info->surf_normal, &surface_normal_cs);
-            lvf_cross(&info->contact_cross_nomal_cs[0], &info->contact_point_cs[0], &surface_normal_cs);
+            const ivp_transform_r_t *m = &core0->m_world_f_core_last_psi;
+            /* retail RVA 0x1F860: the contact point is inverse rotated with
+             * double offsets, summed y, z, x */
+            const double px = info->contact_point_ws.k[0] - m->pos.k[0];
+            const double py = info->contact_point_ws.k[1] - m->pos.k[1];
+            const double pz = info->contact_point_ws.k[2] - m->pos.k[2];
+            info->contact_point_cs[0].k[0] = (float)(LVM_E(m, 1, 0) * py + LVM_E(m, 2, 0) * pz + LVM_E(m, 0, 0) * px);
+            info->contact_point_cs[0].k[1] = (float)(LVM_E(m, 1, 1) * py + LVM_E(m, 2, 1) * pz + LVM_E(m, 0, 1) * px);
+            info->contact_point_cs[0].k[2] = (float)(LVM_E(m, 1, 2) * py + LVM_E(m, 2, 2) * pz + LVM_E(m, 0, 2) * px);
+            cp_contact_normal_cross(m, &info->surf_normal, &info->contact_point_cs[0],
+                                    &info->contact_cross_nomal_cs[0], false);
             ivp_vec3f_t sp = ivp_core_speed_f(core0);
             ivp_core_get_surface_speed_on_test(core0, &info->contact_point_cs[0], &sp, &core0->rot_speed,
                                                &delta_velocity_ws);
-            ivp_vec3f_t hp;
-            ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core0);
-            lvf_set_pairwise_mult(&hp, &info->contact_cross_nomal_cs[0], &iri);
-            info->inv_virtual_mass = (float)(lvf_dot(&info->contact_cross_nomal_cs[0], &hp) +
-                                             (D)ivp_core_get_inv_mass_f(core0));
+            info->inv_virtual_mass = cp_contact_inverse_mass(&info->contact_cross_nomal_cs[0], core0, 0.0f);
         } else {
             core0 = NULL;
             lvf_zero(&delta_velocity_ws);
@@ -925,22 +955,16 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
     {
         ivp_core_t *core1 = syn1->l_obj->physical_core;
         if (!core1->physical_unmoveable) {
-            ivp_vec3f_t surface_normal_cs;
             const ivp_transform_r_t *m_world_f_core = &core1->m_world_f_core_last_psi;
             lvm_vimult4_pf(m_world_f_core, &info->contact_point_ws, &info->contact_point_cs[1]);
-            lvm_vimult3_f(m_world_f_core, &info->surf_normal, &surface_normal_cs);
-            lvf_cross(&info->contact_cross_nomal_cs[1], &info->contact_point_cs[1], &surface_normal_cs);
+            cp_contact_normal_cross(m_world_f_core, &info->surf_normal, &info->contact_point_cs[1],
+                                    &info->contact_cross_nomal_cs[1], true);
             ivp_vec3f_t dh;
             ivp_vec3f_t sp = ivp_core_speed_f(core1);
             ivp_core_get_surface_speed_on_test(core1, &info->contact_point_cs[1], &sp, &core1->rot_speed, &dh);
             lvf_subtract(&delta_velocity_ws, &dh);
-            ivp_vec3f_t hp;
-            ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core1);
-            lvf_set_pairwise_mult(&hp, &info->contact_cross_nomal_cs[1], &iri);
-            /* IVP_FLOAT += IVP_DOUBLE expression */
-            info->inv_virtual_mass = (float)((double)info->inv_virtual_mass +
-                                             (lvf_dot(&info->contact_cross_nomal_cs[1], &hp) +
-                                              (D)ivp_core_get_inv_mass_f(core1)));
+            info->inv_virtual_mass = cp_contact_inverse_mass(&info->contact_cross_nomal_cs[1], core1,
+                                                             info->inv_virtual_mass);
         } else {
             lvf_zero(&info->contact_point_cs[1]);
             lvf_zero(&info->contact_cross_nomal_cs[1]);
