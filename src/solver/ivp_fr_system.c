@@ -255,7 +255,7 @@ static void cp_static_friction_single(ivp_contact_pt_t *cp, const ivp_sim_es_t *
 {
     ivp_impact_solver_lt_t *info = cp->tmp_contact_info;
     double closing_speed = ivp_impact_lt_get_closing_speed(info);
-    double gap_diff = (double)(desired_gap - ivp_cp_get_gap_length(cp)); /* IVP_FLOAT - IVP_FLOAT */
+    double gap_diff = (double)desired_gap - (double)ivp_cp_get_gap_length(cp); /* retail: double */
     double a = ivp_frs_calc_desired_gap_speed(closing_speed, gap_diff, speedup_factor);
     double b = (double)info->virtual_mass;
     double impulse = a * b;
@@ -273,8 +273,8 @@ static void cp_static_friction_single(ivp_contact_pt_t *cp, const ivp_sim_es_t *
 static float cp_friction_force_local_constraint_2d(ivp_contact_pt_t *cp, const ivp_sim_es_t *es)
 {
     ivp_impact_solver_lt_t *info = cp->tmp_contact_info;
-    /* IVP_FLOAT now_friction_pressure * IVP_FLOAT real_friction_factor is a float product */
-    double maximum_impulse_force = (double)(cp->now_friction_pressure * cp->real_friction_factor) * es->delta_time;
+    /* retail RVA 0x1B080 keeps the pressure product wide until the step */
+    double maximum_impulse_force = (double)cp->now_friction_pressure * (double)cp->real_friction_factor * es->delta_time;
     if (maximum_impulse_force < (double)P_FLOAT_RES) return 0.0f;
     ivp_core_t *core_a = info->contact_core[0];
     ivp_core_t *core_b = info->contact_core[1];
@@ -289,23 +289,25 @@ static float cp_friction_force_local_constraint_2d(ivp_contact_pt_t *cp, const i
     ivp_scr_f_init_translation_ws(&tcb, core_a, core_b, &info->contact_point_ws, &info->span_friction_v[0], &info->span_friction_v[1], NULL);
     double a = (double)cp->span_friction_s[0] * es->i_delta_time - (double)tcb.delta_velocity_ds.k[0];
     double b = (double)cp->span_friction_s[1] * es->i_delta_time - (double)tcb.delta_velocity_ds.k[1];
+    /* the reaction solver fills the upper triangle; retail RVA 0x1B080
+     * treats the matrix as symmetric, using tpm01 in both off-diagonal
+     * slots, with the squared determinant cutoff 1e-38 */
     const double tpm00 = tcb.m[0][0];
     const double tpm01 = tcb.m[0][1];
-    const double tpm10 = tcb.m[1][0];
+    const double tpm10 = tpm01;
     const double tpm11 = tcb.m[1][1];
-    /* IVP_Inline_Math::invert_2x2_matrix */
-    double Dm = (tpm00 * tpm11) - (tpm01 * tpm10);
-    if (Dm * Dm < P_DOUBLE_EPS * P_DOUBLE_EPS) return 0.0f;
-    double DI = 1.0f / Dm;
+    double Dm = tpm00 * tpm11 - tpm01 * tpm10;
+    if (Dm * Dm < 1e-38) return 0.0f;
+    double DI = 1.0 / Dm;
     double inv0 = tpm11 * DI;
-    double inv1 = -tpm10 * DI;
-    double inv2 = -tpm01 * DI;
+    double inv1 = -tpm01 * DI;
+    double inv2 = inv1;
     double inv3 = tpm00 * DI;
     ivp_vec3f_t impulses;
     impulses.k[0] = (float)(inv0 * a + inv1 * b);
     impulses.k[1] = (float)(inv2 * a + inv3 * b);
     impulses.k[2] = 0.0f;
-    double square_impulse = (double)(impulses.k[0] * impulses.k[0] + impulses.k[1] * impulses.k[1]);
+    double square_impulse = (double)impulses.k[1] * (double)impulses.k[1] + (double)impulses.k[0] * (double)impulses.k[0];
     if (square_impulse > maximum_impulse_force * maximum_impulse_force) {
         double isum_impulse = (double)lv_isqrt_float((float)square_impulse);
         double f = maximum_impulse_force * isum_impulse;
@@ -313,12 +315,12 @@ static float cp_friction_force_local_constraint_2d(ivp_contact_pt_t *cp, const i
         impulses.k[1] = (float)((double)impulses.k[1] * f);
     }
     ivp_scr_f_exert(&tcb, core_a, core_b, &impulses, 2, true); /* exert_impulse_dim2 */
-    float e = (float)(square_impulse * es->delta_time * es->delta_time);
-    /* IVP_FLOAT span_friction_s: the factor is a float expression */
-    e = e * (cp->span_friction_s[0] * cp->span_friction_s[0] + cp->span_friction_s[1] * cp->span_friction_s[1]);
-    e = (float)(0.5f * sqrt((double)e));
-    float diff_e = e - cp->old_energy_dynamic_fr;
-    cp->old_energy_dynamic_fr = e;
+    /* retail: the energy is a double expression */
+    double e = 0.5 * sqrt(((double)cp->span_friction_s[0] * (double)cp->span_friction_s[0] +
+                           (double)cp->span_friction_s[1] * (double)cp->span_friction_s[1]) *
+                          (es->delta_time * es->delta_time * square_impulse));
+    float diff_e = (float)(e - (double)cp->old_energy_dynamic_fr);
+    cp->old_energy_dynamic_fr = (float)e;
     return diff_e;
 }
 
@@ -395,20 +397,16 @@ static void cp_friction_force_local_constraint_1d(ivp_contact_pt_t *cp, const iv
     }
 }
 
-static float cp_get_possible_friction_slide_way(const ivp_contact_pt_t *cp)
-{
-    return cp->now_friction_pressure * cp->real_friction_factor * cp->inv_virt_mass_mindist_no_dir;
-}
-
 static void cp_calc_pretension(ivp_contact_pt_t *cp, float len)
 {
-    double qlen_of_spring = (double)(cp->span_friction_s[0] * cp->span_friction_s[0] +
-                                     cp->span_friction_s[1] * cp->span_friction_s[1]);
-    if (qlen_of_spring > (double)(len * len + P_FLOAT_RES)) {
-        double ilen_of_spring = (double)lv_isqrt_float((float)qlen_of_spring);
+    /* retail: double products and a double bound */
+    double qlen_of_spring = (double)cp->span_friction_s[0] * (double)cp->span_friction_s[0] +
+                            (double)cp->span_friction_s[1] * (double)cp->span_friction_s[1];
+    if (qlen_of_spring > (double)len * (double)len + (double)P_FLOAT_RES) {
+        double ilen_of_spring = lv_isqrt_float((float)qlen_of_spring);
         cp->integrated_destroyed_energy = (float)((double)cp->integrated_destroyed_energy +
                                                   (qlen_of_spring * ilen_of_spring - (double)len) *
-                                                      (double)cp->real_friction_factor * (double)cp->now_friction_pressure);
+                                                      (double)cp->now_friction_pressure * (double)cp->real_friction_factor);
         double percent_of_old = (double)len * ilen_of_spring;
         cp->span_friction_s[0] = (float)((double)cp->span_friction_s[0] * percent_of_old);
         cp->span_friction_s[1] = (float)((double)cp->span_friction_s[1] * percent_of_old);
@@ -441,13 +439,17 @@ static void pair_destroy(ivp_fr_core_pair_t *p)
     ivp_free(p->allocator, p, sizeof(*p));
 }
 
+/* retail RVA 0x1BC20 keeps each product and the pair sum wide until both
+ * double time factors are applied */
 static float pair_get_sum_slide_way(ivp_fr_core_pair_t *pair, const ivp_sim_es_t *es)
 {
-    float sum = 0.0f;
+    double sum = 0.0;
     for (int i = ivp_pvec_len(&pair->fr_dists) - 1; i >= 0; i--) {
-        sum += cp_get_possible_friction_slide_way(cp_at(&pair->fr_dists, i));
+        const ivp_contact_pt_t *cp = cp_at(&pair->fr_dists, i);
+        sum += (double)cp->now_friction_pressure * (double)cp->real_friction_factor *
+               (double)cp->inv_virt_mass_mindist_no_dir;
     }
-    return (float)((double)sum * es->delta_time * es->delta_time);
+    return (float)(sum * es->delta_time * es->delta_time);
 }
 
 /* IVP_Friction_Core_Pair::get_average_friction_vector */
@@ -542,31 +544,22 @@ typedef struct mutual_energizer {
     double whole_mutual_energy;
 } mutual_energizer_t;
 
+/* IVP_Mutual_Energizer (retail: no zero-mass guard, no clamp) */
 static double me_calc_impulse_to_reduce_energy_level(double speed_pot, double inv_mass0, double inv_mass1, double delta_e)
 {
-    delta_e *= 2.0;
     double inv_mass_sum = inv_mass0 + inv_mass1;
-    if (inv_mass_sum < P_DOUBLE_EPS) return 0.0;
-    double divisor = 1.0f / inv_mass_sum;
-    double root = (speed_pot * speed_pot - inv_mass_sum * delta_e);
-    root = fabs(root);
-    root = sqrt(root);
-    return (speed_pot - root) * divisor;
+    double root = sqrt(fabs(speed_pot * speed_pot - (delta_e + delta_e) * inv_mass_sum));
+    return (speed_pot - root) * (1.0 / inv_mass_sum);
 }
 
 static double me_calc_energy_potential(double speed_pot, double mass0, double mass1, double inv_mass0, double inv_mass1)
 {
-    double energy_now = mass1 * speed_pot * speed_pot;
-    double inv_mass_sum = inv_mass0 + inv_mass1;
-    if (inv_mass_sum < P_DOUBLE_EPS) return 0.0;
-    double x = speed_pot / inv_mass_sum;
+    double x = speed_pot / (inv_mass0 + inv_mass1);
     double speed1 = speed_pot - x * inv_mass1;
+    double E1 = speed1 * speed1 * mass1;
     double speed0 = x * inv_mass0;
-    double E1 = mass1 * speed1 * speed1;
-    double E0 = mass0 * speed0 * speed0;
-    double tmp = energy_now - E0 - E1;
-    if (tmp < 0) tmp = 0;
-    return 0.5f * tmp;
+    double E0 = speed0 * speed0 * mass0;
+    return 0.5 * (speed_pot * speed_pot * mass1 - E0 - E1);
 }
 
 static void me_get_rot_inertia(ivp_core_t *core, ivp_vec3f_t *rot_vec_obj, double *rot_inertia, double *inv_rot_inertia)
@@ -614,9 +607,9 @@ static void me_init(mutual_energizer_t *me, ivp_core_t *core0, ivp_core_t *core1
         me->inv_trans_inertia[1] = (double)ivp_core_get_inv_mass_f(me->core[1]);
         if (me->core[0]->physical_unmoveable || me->core[0]->pinned) {
             me->trans_inertia[0] = 10000 * me->trans_inertia[1];
-            me->inv_trans_inertia[0] = me->inv_trans_inertia[1] * (double)(1.0f / 10000.0f);
+            me->inv_trans_inertia[0] = me->inv_trans_inertia[1] * 0.0001;
             me->rot_inertia[0] = 10000 * me->rot_inertia[1];
-            me->inv_rot_inertia[0] = me->inv_rot_inertia[1] * (double)(1.0f / 10000.0f);
+            me->inv_rot_inertia[0] = me->inv_rot_inertia[1] * 0.0001;
         } else {
             me->trans_inertia[0] = (double)ivp_core_get_mass_f(me->core[0]);
             me->inv_trans_inertia[0] = (double)ivp_core_get_inv_mass_f(me->core[0]);
@@ -664,13 +657,15 @@ static double pair_destroy_mutual_energy(ivp_fr_core_pair_t *pair, double d_e)
     return d_e;
 }
 
+/* retail RVA 0x1CCD0 stores a float cache but reduces by the unrounded
+ * product; zero energy skips the reduction, car wheels do not */
 static void pair_remove_energy_gained_by_real_friction(ivp_fr_core_pair_t *pair)
 {
-    pair->integrated_anti_energy = (float)((double)pair->integrated_anti_energy *
-                                           ivp_env_get_integrated_energy_damp(ivp_core_env(pair->objs[0])));
-    if (pair->integrated_anti_energy < 0.0f) return;
-    if (pair->objs[0]->car_wheel || pair->objs[1]->car_wheel) return;   /* IVP_FAST_WHEELS_ENABLED */
-    double amount_energy_destr = pair_destroy_mutual_energy(pair, (double)pair->integrated_anti_energy);
+    const double damp = ivp_env_get_integrated_energy_damp(ivp_core_env(pair->objs[0]));
+    const double energy_to_remove = (double)pair->integrated_anti_energy * damp;
+    pair->integrated_anti_energy = (float)energy_to_remove;
+    if (!(energy_to_remove > 0.0)) return;
+    double amount_energy_destr = pair_destroy_mutual_energy(pair, energy_to_remove);
     /* statistic counter, every build (ivp_friction.cxx:1598) */
     ivp_env_get_statistic_manager(ivp_core_env(pair->objs[0]))->sum_energy_destr += amount_energy_destr;
     pair->integrated_anti_energy = (float)((double)pair->integrated_anti_energy - amount_energy_destr);
@@ -2586,7 +2581,9 @@ static void fs_dyn_do_simulation(ivp_sim_ctrl_t *c, ivp_sim_es_t *es, ivp_pvec_t
     if (fs->friction_dist_number <= 1) {
         ivp_contact_pt_t *cp = fs->first_friction_dist;
         if (!cp) return;
-        float max_local_spring_len = (float)((double)cp_get_possible_friction_slide_way(cp) * es->delta_time * es->delta_time);
+        /* retail RVA 0x1D750 narrows only after both time factors */
+        float max_local_spring_len = (float)((double)cp->inv_virt_mass_mindist_no_dir * (double)cp->now_friction_pressure *
+                                             (double)cp->real_friction_factor * es->delta_time * es->delta_time);
         cp_calc_pretension(cp, max_local_spring_len);
         if (!cp->two_friction_values) {
             (void)cp_friction_force_local_constraint_2d(cp, es);
