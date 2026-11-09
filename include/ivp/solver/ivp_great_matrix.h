@@ -207,9 +207,9 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
 
 #define IVP_GM_FAULT IVP_ERR_SINGULAR_MATRIX
 
-/* MATRIX_EPS set by the IVP_Great_Matrix_Many_Zero constructor: 1.0f/10E8f
- * evaluated in float, then widened. */
-#define IVP_GMMZ_DEFAULT_EPS ((double)(1.0f / 10E8f))
+/* MATRIX_EPS set by the IVP_Great_Matrix_Many_Zero constructor: the retail
+ * double threshold 1.0e-9 (not the float-rounded 1.0f/10E8f). */
+#define IVP_GMMZ_DEFAULT_EPS 1.0e-9
 
 /* Row length rounded up to the vector block size (calc_aligned_row_len). */
 static inline int ivp_gm_aligned_len(int n) {

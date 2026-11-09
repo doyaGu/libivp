@@ -757,7 +757,14 @@ double ivp_vecfpu_large_dot_product(const double *base_a, int off_a,
         off_a -= shift;
     }
     if (size <= 0) return 0.0;
-    return gm_reduce_add(0.0, base_a + off_a, base_b + off_b, size);
+    /* retail 0x35F40 / 0x34340 accumulate the software dot from the last
+     * element (ivp_great_matrix.cxx) */
+    const double *a = base_a + off_a, *b = base_b + off_b;
+    double sum = 0.0;
+    for (int i = size - 1; i >= 0; i--) {
+        sum = GM_FMA(a[i], b[i], sum);
+    }
+    return sum;
 }
 
 /* ── Block allocation with reference arena layout ───────────────────────── */
