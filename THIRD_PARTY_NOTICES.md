@@ -5,11 +5,30 @@ license notices are kept with the relevant source or reproduced here.
 
 ## Qhull
 
-- Not vendored.  CMake fetches an immutable official archive from
-  https://github.com/qhull/qhull: Qhull 2020.2 (8.0.2) by default, or Qhull
-  3.0 for reference-development builds.
-- Each fetched archive contains its original `COPYING.txt`.  Both license
-  texts are reproduced below for distributions of libivp.
+- Default build (`IVP_REENTRANT_QHULL=OFF`): `src/builder/qhull_ipion/`
+  holds the Qhull the IVP reference engine bundles in
+  `ivp_compact_builder/qhull*.cxx`, a Qhull 2.x snapshot copyright 1993-1999
+  The Geometry Center (version label "ipion 99/07/10").  Its license is
+  reproduced below as "Geometry Center Qhull license"; the original source
+  may be obtained from http://www.qhull.org.
+  Modifications, as required by condition 3 of that license:
+  - Ipion Software GmbH, 1999: adapted Qhull for the IVP engine (C++
+    sources, IVP message output and memory functions, ivp_qh_version).
+  - The IVP reference engine (https://github.com/doyaGu/ivp), 2026: kept the
+    arithmetic of the retail engine binaries (the order of the plane
+    distance sum in `qh_distplane`, binary64 stores in `qh_backnormal` and
+    `qh_sethyperplane_gauss`) and guarded a diagnostic against a null error
+    stream.
+  - libivp (doyaGu), 2026-11-09: compiled as C17 instead of C++ so a default
+    libivp build matches the reference engine's default build; the reference
+    engine's optional software x87 arithmetic was removed, IVP's message,
+    memory and integer helpers are provided by `qhull_ivp.h`, a C++
+    functional cast and a C++ overload declaration were rewritten in C, and
+    two unused parameters were named.
+- `IVP_REENTRANT_QHULL=ON`: not vendored.  CMake fetches the immutable
+  official Qhull 2020.2 (8.0.2) archive from https://github.com/qhull/qhull,
+  which contains its original `COPYING.txt`; that license is reproduced
+  below as "Qhull 2020.2 license".
 
 ### Qhull 2020.2 license
 
@@ -53,7 +72,10 @@ modified, and redistributed under the following conditions:
    qhull_bug@qhull.org; the authors may or may not act on them as
    they desire.
 
-### Qhull 3.0 license
+### Geometry Center Qhull license
+
+The license under which The Geometry Center distributed Qhull 2.x and 3.0;
+it applies to `src/builder/qhull_ipion/`.
 
                     Qhull, Copyright (c) 1993-2001
 
