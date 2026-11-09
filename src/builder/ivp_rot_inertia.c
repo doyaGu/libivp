@@ -154,27 +154,28 @@ static void mcs_integrate_triangle(ri_mass_center_solver_t *s,
         double ly0 = p0[y] - lydx * p0[x];
 
         double ka, kb, kc;
+        /* retail RVA 0x3B550 product and summation order */
         if (three_edge_area) {
-            ka = fzdy * ly0 * ly0;
-            kb = fzdy * (double)2.0f * ly0 * lydx;
-            kc = fzdy * lydx * lydx;
+            ka = ly0 * ly0 * fzdy;
+            kb = ly0 * lydx * fzdy + ly0 * lydx * fzdy;
+            kc = lydx * lydx * fzdy;
         } else {
             double lzdx = vec[z] / vec[x];
             double lz0 = p0[z] - lzdx * p0[x];
             ka = (ly0 + fydz * lz0) * lz0;
-            kb = ly0 * lzdx + lydx * lz0 + (double)2.0f * fydz * lz0 * lzdx;
-            kc = (lydx + fydz * lzdx) * lzdx;
+            kb = lz0 * lzdx * fydz + lz0 * lzdx * fydz + lzdx * ly0 + lz0 * lydx;
+            kc = (lzdx * fydz + lydx) * lzdx;
         }
         double x0 = p0[x];
         double x1 = p1[x];
         double dx = x1 - x0;
         double dx2 = (x1 * x1 - x0 * x0) * (double)0.5f;
-        double dx3 = (x1 * x1 * x1 - x0 * x0 * x0) * (double)(1.0f / 3.0f);
+        double dx3 = (x1 * x1 * x1 - x0 * x0 * x0) * (1.0 / 3.0); /* double 1/3 */
         double dx4 = (x1 * x1 * x1 * x1 - x0 * x0 * x0 * x0) * (double)0.25f;
         double dx5 = (x1 * x1 * x1 * x1 * x1 - x0 * x0 * x0 * x0 * x0) * (double)0.2f;
-        double fa = dx * ka + dx2 * kb + dx3 * kc;
-        double k = dx2 * ka + dx3 * kb + dx4 * kc;
-        double m = dx3 * ka + dx4 * kb + dx5 * kc;
+        double fa = dx * ka + dx3 * kc + dx2 * kb;
+        double k = dx4 * kc + dx3 * kb + dx2 * ka;
+        double m = dx5 * kc + dx4 * kb + dx3 * ka;
         area_msum += fa;
         area_mzsum += k;
         area_mzzsum += m;
