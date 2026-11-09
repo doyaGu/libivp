@@ -6,7 +6,7 @@
  *
  *   1. ledges_to_boxes_and_spheres(): one terminal sphere per ledge
  *      (bounding box center, half diagonal, encoded box sizes);
- *   2. cluster_spheres_topdown_mediancut(): balanced mean split over all
+ *   2. cluster_spheres_topdown_mediancut(): balanced box-midpoint split over all
  *      three axes with the reference handling of spheres on the median;
  *   3. optional build_root_convex_hull() (IVP_Compact_Recursive);
  *   4. allocate_compact_surface() / insert_compact_ledges() (optional point
@@ -28,7 +28,6 @@
 #include <ivp/base/ivp_assert.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
 
-#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -283,9 +282,10 @@ static ls_sphere_t *ls_cluster(ls_ctx_t *c, ls_sphere_t **terminals, int len)
     float diff[3];
 
     for (int axis = 0; axis < 3; axis++) {
-        double median = 0.0;
-        for (int m = 0; m < len; m++) median += terminals[m]->center[axis];
-        median /= (double)len;
+        /* retail 0x38C90: split at the enclosing box midpoint (float
+         * endpoints promoted before subtracting), not at the later SDK's
+         * average of the terminal centers */
+        const double median = (double)ext_min[axis] + ((double)ext_max[axis] - (double)ext_min[axis]) * 0.5;
 
         IVP_IF(0) {
             /* ivp_message("Median on axis %d: %f\n", axis, median); */
@@ -310,14 +310,8 @@ static ls_sphere_t *ls_cluster(ls_ctx_t *c, ls_sphere_t **terminals, int len)
                     lh[axis][n_l[axis]++] = ts;
                     continue;
                 }
-                if (n_l[axis] == 0) {
-                    lh[axis][n_l[axis]++] = ts;
-                    continue;
-                }
-                if (n_r[axis] == 0) {
-                    rh[axis][n_r[axis]++] = ts;
-                    continue;
-                }
+                /* retail alternates from the left when both centers lie on
+                 * the split */
                 if (toggle) {
                     lh[axis][n_l[axis]++] = ts;
                     toggle = false;
@@ -336,20 +330,14 @@ static ls_sphere_t *ls_cluster(ls_ctx_t *c, ls_sphere_t **terminals, int len)
         diff[axis] = volume2 + volume1;
     }
 
-    int chosen_axis = 0;
-    {
-        double max_diff = DBL_MAX;
-        for (int i = 0; i < 3; i++) {
-            if ((double)diff[i] < max_diff && n_l[i] != 0 && n_r[i] != 0) {
-                chosen_axis = i;
-                max_diff = (double)diff[i];
-            }
-        }
-    }
+    /* retail chooses the later axis on equal volume costs: Z before Y
+     * before X; an empty side is not skipped */
+    const int chosen_axis = diff[0] < diff[1] ? (diff[0] < diff[2] ? 0 : 2)
+                                              : (diff[1] < diff[2] ? 1 : 2);
     IVP_ASSERT(n_l[chosen_axis] != 0); /* lefthand_terminals[chosen_axis]->len() != 0 */
     IVP_ASSERT(n_r[chosen_axis] != 0); /* righthand_terminals[chosen_axis]->len() != 0 */
     if (n_l[chosen_axis] == 0 || n_r[chosen_axis] == 0) {
-        /* cannot happen with the tie rules above (reference asserts) */
+        /* the reference asserts and would recurse into an empty side */
         c->failed = true;
         ivp_free(c->alloc, buf, vec_sz);
         ns->child_1 = terminals[0];
