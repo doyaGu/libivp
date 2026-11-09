@@ -29,9 +29,11 @@ fi
 echo "=== Building legacy IVP libraries ($LEGACY_BUILD) ==="
 REF_CXX_FLAGS="-ffp-contract=off"
 if [ "${IVP_REF_FMA:-0}" = "1" ]; then REF_CXX_FLAGS=""; fi
+# The same Qhull as a default libivp build (the bundled one);
+# PARITY_REENTRANT_QHULL=ON for libivp builds with IVP_REENTRANT_QHULL=ON.
 cmake -B "$LEGACY_BUILD" -S "$REF_SRC" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="$REF_CXX_FLAGS" \
-  -DIVP_REENTRANT_QHULL=ON -DIVP_ENABLE_X87_EMULATION=OFF \
+  -DIVP_REENTRANT_QHULL="${PARITY_REENTRANT_QHULL:-OFF}" -DIVP_ENABLE_X87_EMULATION=OFF \
   -DIVP_X87_ARITHMETIC=OFF -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=OFF \
   -DIVP_BUILD_EXAMPLES=OFF -DIVP_BUILD_TESTS=OFF > /dev/null
 cmake --build "$LEGACY_BUILD" -j8 > /dev/null

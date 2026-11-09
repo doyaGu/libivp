@@ -3,6 +3,7 @@
 # mainline, mainline with edit locality) against the reference engine.
 #
 #   tools/parity/check.sh [--release] [--debug] [--sweep "dt:steps ..."]
+#                         [--reentrant-qhull]
 #
 # Without options: --release --debug.
 #   --release  reference built with -ffp-contract=off (NDEBUG) vs Release
@@ -13,11 +14,14 @@
 #              (reference development and mainline),
 #              e.g. --sweep "0.016666666666666666:900 0.0125:1200"
 #              (JSONL only)
+#   --reentrant-qhull  build the reference and libivp with Qhull 8.0.2
+#              libqhull_r (IVP_REENTRANT_QHULL=ON) instead of the bundled
+#              Qhull both engines default to; builds go to build/parity_reentrant
 #
 # Builds go to $IVP_PARITY_DIR (default build/parity); the reference sources
 # are taken from $IVP_REF_SRC (default ../ivp).  Exit code 1 if any
 # comparison violates its policy.  The reference-development build uses the
-# same reentrant Qhull release as the reference and must be 48/48 identical.
+# same Qhull as the reference and must be 48/48 identical.
 # The mainline build must differ in exactly the scenarios
 # listed by mainline_expected_differences.txt, and the mainline build with
 # IVP_EDIT_LOCALITY in exactly those of
@@ -27,16 +31,21 @@
 # tools/scenarios.txt ($SCENARIOS restricts it).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+for arg in "$@"; do
+  [ "$arg" = --reentrant-qhull ] && export PARITY_REENTRANT_QHULL=ON
+done
 source "$HERE/common.sh"
 DO_REL=0; DO_DBG=0; SWEEP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) DO_REL=1 ;; --debug) DO_DBG=1 ;;
     --sweep) shift; SWEEP="${1:-}"; DO_REL=1 ;;
+    --reentrant-qhull) ;;
     *) parity_die "unknown option $1" ;;
   esac
   shift
 done
+echo "=== Qhull: IVP_REENTRANT_QHULL=$PARITY_REENTRANT_QHULL on both engines ==="
 [ $DO_REL = 0 ] && [ $DO_DBG = 0 ] && { DO_REL=1; DO_DBG=1; }
 parity_check_ref_src
 FAIL=0
@@ -44,15 +53,15 @@ EXPECTED_MAINLINE="$HERE/mainline_expected_differences.txt"
 EXPECTED_LOCALITY="$HERE/edit_locality_expected_differences.txt"
 EXPECTED_MAINLINE_DEBUG_TEXT="$HERE/mainline_debug_text_differences.txt"
 
-build_lib() { # <dir> <build type> <stable internals> <qhull mode> [edit locality]
+build_lib() { # <dir> <build type> <stable internals> [edit locality]
   mkdir -p "$1"
   cmake -B "$1" -S "$PARITY_REPO" -DCMAKE_BUILD_TYPE="$2" \
     -DIVP_ENABLE_SCENARIO_TESTS=ON \
     -DIVP_STABLE_INTERNAL_STATE="$3" \
-    -DIVP_QHULL_MODE="$4" \
-    -DIVP_EDIT_LOCALITY="${5:-OFF}" > "$1.cmake.log" &&
+    -DIVP_REENTRANT_QHULL="$PARITY_REENTRANT_QHULL" \
+    -DIVP_EDIT_LOCALITY="${4:-OFF}" > "$1.cmake.log" &&
     cmake --build "$1" --target test_scenarios -j"$IVP_JOBS" > "$1.build.log" ||
-    parity_die "libivp $2/$4 build failed (see $1.build.log)"
+    parity_die "libivp $2 build failed (see $1.build.log)"
 }
 
 # run_policy <flavor> <name> <expected differences> <compare options...>
@@ -79,9 +88,9 @@ report_comparison() { # <result file> <compare exit code>
 
 if [ $DO_REL = 1 ]; then
   "$HERE/build_reference.sh" release > /dev/null || parity_die "reference release build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release OFF REENTRANT
-  build_lib "$IVP_PARITY_DIR/lib_mainline_release" Release ON REENTRANT
-  build_lib "$IVP_PARITY_DIR/lib_locality_release" Release ON REENTRANT ON
+  build_lib "$IVP_PARITY_DIR/lib_reference_release" Release OFF
+  build_lib "$IVP_PARITY_DIR/lib_mainline_release" Release ON
+  build_lib "$IVP_PARITY_DIR/lib_locality_release" Release ON ON
   REF_RUNNER="$(parity_ref_dir release)/runner/legacy_runner"
   echo "=== release: reference-development policy ==="
   rm -rf "$IVP_PARITY_DIR/out/ref_release" \
@@ -124,9 +133,9 @@ fi
 
 if [ $DO_DBG = 1 ]; then
   "$HERE/build_reference.sh" debug > /dev/null || parity_die "reference debug build failed"
-  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug OFF REENTRANT
-  build_lib "$IVP_PARITY_DIR/lib_mainline_debug" Debug ON REENTRANT
-  build_lib "$IVP_PARITY_DIR/lib_locality_debug" Debug ON REENTRANT ON
+  build_lib "$IVP_PARITY_DIR/lib_reference_debug" Debug OFF
+  build_lib "$IVP_PARITY_DIR/lib_mainline_debug" Debug ON
+  build_lib "$IVP_PARITY_DIR/lib_locality_debug" Debug ON ON
   echo "=== debug: reference-development policy ==="
   rm -rf "$IVP_PARITY_DIR/out/ref_debug" \
          "$IVP_PARITY_DIR/out/lib_reference_debug" \

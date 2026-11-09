@@ -3,9 +3,8 @@
 本工具同时检查 libivp 的三个构建域：
 
 - **reference-development（默认配置）：**使用
-  `IVP_STABLE_INTERNAL_STATE=OFF` 和 `IVP_QHULL_MODE=REENTRANT`，
-  Release/Debug 必须 48/48 逐位一致。
-- **mainline：**使用 `IVP_STABLE_INTERNAL_STATE=ON` 和可重入 Qhull 2020.2，必须恰好只有
+  `IVP_STABLE_INTERNAL_STATE=OFF`，Release/Debug 必须 48/48 逐位一致。
+- **mainline：**使用 `IVP_STABLE_INTERNAL_STATE=ON`，必须恰好只有
   `mainline_expected_differences.txt` 登记的 23 个场景不同；多一个或少一个都失败。
   Debug 主线另外只允许 `mainline_debug_text_differences.txt` 登记的场景在调试文本上
   不同（JSONL 仍须逐位一致），同样多一个或少一个都失败。
@@ -14,16 +13,19 @@
 
 三个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
-Qhull 已不再是两端的差异变量。
+两端使用同一个 Qhull：默认都是原版自带的 Qhull（`IVP_REENTRANT_QHULL=OFF`，
+libivp 的 `src/builder/qhull_ipion`）；`check.sh --reentrant-qhull` 两端都改用
+Qhull 8.0.2 `libqhull_r`，构建放在 `build/parity_reentrant`。两种 Qhull 下三个域的
+结果和登记的差异集合相同。
 
 本目录的脚本用来构建原版、批量运行场景，并比较输出。
 
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照引擎固定为 `0ca99d6`。原版默认使用自带的原始 Qhull 并开启软件 x87 模拟；
-脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）改用可重入 Qhull 8.0.2
-（`IVP_REENTRANT_QHULL=ON`）并关闭 x87 模拟，libivp 不移植这两项。需要克隆到与
+对照引擎固定为 `0ca99d6`。原版默认开启软件 x87 模拟，libivp 不移植这一项；
+脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）把它关闭，Qhull 按
+`PARITY_REENTRANT_QHULL`（默认 `OFF`）与 libivp 一致。需要克隆到与
 本仓库同级的 `../ivp`：
 
 ```bash
