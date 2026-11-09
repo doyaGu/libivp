@@ -2968,17 +2968,24 @@ static int geo_run(geo_scene_t *sc, FILE *out, int scenario_id, int steps, doubl
     return 0;
 }
 
-/* objects resting at the end must still be above the floor level y_max */
-static void geo_check_contained(const geo_scene_t *sc, invariant_result_t *inv, const char *name, double y_max)
+/* objects resting at the end must still be above the floor level y_max;
+ * known_loss is an object the reference engine itself loses (-1: none) */
+static void geo_check_contained_except(const geo_scene_t *sc, invariant_result_t *inv, const char *name,
+                                       double y_max, int known_loss)
 {
     if (!inv) return;
     for (int i = 0; i < sc->count; i++) {
         const ivp_core_t *core = ivp_object_get_core_const(sc->objects[i]);
-        if (core->physical_unmoveable) continue;
+        if (core->physical_unmoveable || i == known_loss) continue;
         double y = (double)core->pos_world_f_core_last_psi.k[1];
         inv_check(inv, y == y && y < y_max, "%s object %d (%s) stays on the geometry: y=%.6f", name, i,
                   sc->types[i], y);
     }
+}
+
+static void geo_check_contained(const geo_scene_t *sc, invariant_result_t *inv, const char *name, double y_max)
+{
+    geo_check_contained_except(sc, inv, name, y_max, -1);
 }
 
 static const double GEO_TETRA[4 * 3] = {
@@ -3572,7 +3579,10 @@ static int run_spawn_remove(FILE *out, int steps, double dt, invariant_result_t 
         snapshot_frame(out, SCENARIO_SPAWN_REMOVE, step, dt, sc.env, sc.objects, sc.types, sc.count);
     }
 
-    geo_check_contained(&sc, inv, "spawn_remove", 1.5);
+    /* The bottom box of the initial stack (object 2) sinks through the
+     * ground at step 112 in the reference since its retail penetration rescue
+     * (5763771), with or without its x87 emulation; libivp reproduces it. */
+    geo_check_contained_except(&sc, inv, "spawn_remove", 1.5, 2);
     geo_scene_destroy(&sc);
     return 0;
 }
