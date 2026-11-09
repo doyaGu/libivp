@@ -21,7 +21,7 @@ Qhull 已不再是两端的差异变量。
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照引擎固定为 `238b883`。原版默认使用自带的原始 Qhull 并开启软件 x87 模拟；
+对照引擎固定为 `0ca99d6`。原版默认使用自带的原始 Qhull 并开启软件 x87 模拟；
 脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）改用可重入 Qhull 8.0.2
 （`IVP_REENTRANT_QHULL=ON`）并关闭 x87 模拟，libivp 不移植这两项。需要克隆到与
 本仓库同级的 `../ivp`：
