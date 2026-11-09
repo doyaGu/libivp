@@ -181,12 +181,12 @@ static void is_do_rescue_push(impact_solver_t *s, const ivp_vec3f_t *push_dir_no
     ivp_vec3f_t world_speed0, world_speed1;
     ivp_core_get_surface_speed_on_test(s->core[0], s->obj_point[0], &s->trans_speed[0], &s->rot_speed[0], &world_speed0);
     ivp_core_get_surface_speed_on_test(s->core[1], s->obj_point[1], &s->trans_speed[1], &s->rot_speed[1], &world_speed1);
-    ivp_vec3f_t rel_speed_world;
-    lvf_subtract2(&rel_speed_world, &world_speed1, &world_speed0);
-    double dist_velocity = (double)lvf_dot(&rel_speed_world, &diff_vec_world);
-    if (panic_mode) {
-        if (dist_velocity > 0.0) dist_velocity = 0.0;
-    }
+    /* retail: the speed differences stay double, summed z, y, x */
+    double dist_velocity =
+        ((double)world_speed1.k[2] - (double)world_speed0.k[2]) * (double)diff_vec_world.k[2] +
+        ((double)world_speed1.k[1] - (double)world_speed0.k[1]) * (double)diff_vec_world.k[1] +
+        ((double)world_speed1.k[0] - (double)world_speed0.k[0]) * (double)diff_vec_world.k[0];
+    if (panic_mode && dist_velocity > 0.0) dist_velocity = 0.0;
     double desired_velo_change = (double)s->rescue_speed_impact_solver - dist_velocity;
     if (desired_velo_change < 0.0) return;
     /* ivp_impact.cxx:281 "#if 0" translation-only rescue push (with its IVP_IF(1) rescue counter block):
@@ -208,7 +208,8 @@ static void is_do_rescue_push(impact_solver_t *s, const ivp_vec3f_t *push_dir_no
         ivp_core_get_surface_speed_on_test(s->core[0], s->obj_point[0], &translation_vec, &rotation_vec, &speed_change_vec);
         speed_change_scalar += (double)lvf_dot(&push_vec_world, &speed_change_vec);
     }
-    double resulting_push = desired_velo_change / (speed_change_scalar + (double)1e-15f);
+    /* retail divides directly; the later SDK added an epsilon */
+    double resulting_push = desired_velo_change / speed_change_scalar;
     if (resulting_push < 0.0) return;
     IVP_IF(1) {
         if (panic_mode) {
@@ -381,9 +382,10 @@ static void is_do_impact(impact_solver_t *s, ivp_core_t *pushed_cores[2], bool a
     }
     used_conservation = (double)(1.0f - (1.0f / ((float)pushes_while_system * IVP_INV_HALF_CONSERVATION_STEPS + 1.0f)) *
                                             (1.0f - s->percent_energy_conservation));
+    /* retail RVA 0x22ED0 keeps the sum wide through the safety factor */
     s->rescue_speed_impact_solver =
-        (float)(imp_settings_for_core(s->core[0])->min_vertical_speed_at_collision +
-                rescue_speed_addon) * IVP_SAFETY_FACTOR_FOR_DELAY;
+        (float)(((double)imp_settings_for_core(s->core[0])->min_vertical_speed_at_collision +
+                 (double)rescue_speed_addon) * (double)IVP_SAFETY_FACTOR_FOR_DELAY);
     s->delaying_is_allowed = allow_delaying;
     pushed_cores[0] = s->core[0];
     pushed_cores[1] = s->core[1];
@@ -599,23 +601,21 @@ void ivp_impact_lt_do_impact_long_term(ivp_impact_solver_lt_t *info, ivp_core_t 
 
 /* ── IVP_Contact_Point rescue / coll distance (ivp_impact.cxx) ────────── */
 
-static float cp_get_rot_speed_uncertainty(ivp_contact_pt_t *cp)
+/* IVP_Contact_Point::get_rot_speed_uncertainty (retail: IVP_DOUBLE result,
+ * the squared angle bound as double constants) */
+static double cp_get_rot_speed_uncertainty(ivp_contact_pt_t *cp)
 {
-    float rot_uncertainty = 0.0f;
+    double result = 0.0;
     for (int i = 0; i < 2; i++) {
         ivp_core_t *my_core = cp->tmp_contact_info->contact_core[i];
         if (!my_core) continue;
         if (cp->synapse[i].status == IVP_ST_BALL) continue;
-        double tan_quad = (double)lvf_quad_length(&my_core->rot_speed) * (double)IVP_COLL_DETECT_MIN_TIME *
-                          (double)IVP_COLL_DETECT_MIN_TIME;
-        double max_tan_quad = (double)(IVP_ROT_MAX_UNCERTAINTY * IVP_ROT_MAX_UNCERTAINTY);
-        if (tan_quad > max_tan_quad) tan_quad = max_tan_quad;
-        double alpha = sqrt(tan_quad);
-        double uncertain_way = (1.0f - cos(alpha)) * (double)my_core->upper_limit_radius;
-        double uncertain_speed = uncertain_way * (double)ivp_env_get_inv_delta_psi_time(ivp_core_env(my_core));
-        rot_uncertainty = (float)((double)rot_uncertainty + uncertain_speed);
+        double square = (double)lvf_quad_length(&my_core->rot_speed) * 0.000025;
+        if (square > 0.25) square = 0.25;
+        result += (1.0 - cos(sqrt(square))) * (double)my_core->upper_limit_radius *
+                  ivp_env_get_inv_delta_psi_time(ivp_core_env(my_core));
     }
-    return rot_uncertainty;
+    return result;
 }
 
 float ivp_contact_pt_get_rescue_speed_impact(ivp_contact_pt_t *cp, struct ivp_environment *env)
@@ -629,7 +629,7 @@ float ivp_contact_pt_get_rescue_speed_impact(ivp_contact_pt_t *cp, struct ivp_en
     } else {
         cp->tmp_contact_info->impact.rescue_speed_addon = 0.0f;
     }
-    double rot_uncertainty = (double)cp_get_rot_speed_uncertainty(cp);
+    double rot_uncertainty = cp_get_rot_speed_uncertainty(cp);
     resc_val += rot_uncertainty;
     IVP_ASSERT(resc_val < 1000.0);
     IVP_IF(resc_val > (double)ivp_env_get_statistic_manager(env)->max_rescue_speed) {
