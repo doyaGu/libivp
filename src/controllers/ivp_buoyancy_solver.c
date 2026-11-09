@@ -46,9 +46,11 @@ static inline float bs_fast_asin(float angle)
     return angle + 0.12f * triple_angle + 0.29f * quint_angle;
 }
 
+/* IVP_Inline_Math::save_acosf: acosd (double acos) since the reference
+ * 7b9e404, rounded to float */
 static inline float bs_save_acosf(float angle)
 {
-    return angle >= 1.0f ? 0.0f : acosf(angle);
+    return angle >= 1.0f ? 0.0f : (float)acos((double)angle);
 }
 
 /* ── IVP_U_Float_Hesse ────────────────────────────────────────────────── */
