@@ -41,10 +41,26 @@ static inline void p4_line_wise_mult4(ivp_car_point4_t *r, const ivp_car_point4_
     r->hesse_val = (float)w;
 }
 
-/* IVP_U_Point_4::dot_product4 (float arithmetic) */
+/* IVP_U_Point_4::dot_product4: double products summed w, z, y, x */
 static inline D p4_dot4(const ivp_car_point4_t *a, const ivp_car_point4_t *b)
 {
-    return (D)(a->v.k[0] * b->v.k[0] + a->v.k[1] * b->v.k[1] + a->v.k[2] * b->v.k[2] + a->hesse_val * b->hesse_val);
+    return (D)((double)a->hesse_val * (double)b->hesse_val + (double)a->v.k[2] * (double)b->v.k[2] +
+               (double)a->v.k[1] * (double)b->v.k[1] + (double)a->v.k[0] * (double)b->v.k[0]);
+}
+
+/* ivp_translation_cross (ivp_solver_core_reaction.cxx): cross_ws x/y stay
+ * double through the inverse rotation, z is a float store */
+static inline double p4_translation_cross(const ivp_transform_r_t *m, const ivp_vec3f_t *p, const ivp_vec3f_t *d,
+                                          ivp_vec3f_t *out)
+{
+    const double x = (double)p->k[1] * (double)d->k[2] - (double)p->k[2] * (double)d->k[1];
+    const double y = (double)p->k[2] * (double)d->k[0] - (double)p->k[0] * (double)d->k[2];
+    const double z = (double)(float)((double)p->k[0] * (double)d->k[1] - (double)p->k[1] * (double)d->k[0]);
+    const double zz = z * LVM_E(m, 2, 2) + y * LVM_E(m, 1, 2) + x * LVM_E(m, 0, 2);
+    out->k[0] = (float)(z * LVM_E(m, 2, 0) + y * LVM_E(m, 1, 0) + x * LVM_E(m, 0, 0));
+    out->k[1] = (float)(z * LVM_E(m, 2, 1) + y * LVM_E(m, 1, 1) + x * LVM_E(m, 0, 1));
+    out->k[2] = (float)zz;
+    return zz;
 }
 
 /* IVP_Core::get_inv_masses() */
@@ -72,21 +88,22 @@ static void scr_init_trans_ws(ivp_car_scr_t *s, const ivp_vec3r_t *pos_ws, ivp_c
     ivp_vec3f_t speed = ivp_core_speed_f(core);
 
     {
-        ivp_vec3f_t cross_ws;
-        lvf_cross(&cross_ws, &pos_rel_core, s->direction_ws[0]);
-        lvm_vimult3_f(m_world_f_core, &cross_ws, &cdp[0].v);
+        const double raw_z = p4_translation_cross(m_world_f_core, &pos_rel_core, s->direction_ws[0], &cdp[0].v);
         cdp[0].hesse_val = 1.0f;
         p4_line_wise_mult4(&cmi[0], &cdp[0], &im);
-        s->m[0][0] = s->m[0][0] + p4_dot4(&cmi[0], &cdp[0]);
+        /* retail: the retained transformed z times the inverse inertia, and
+         * the diagonal summed y, w, z, x */
+        cmi[0].v.k[2] = (float)(raw_z * (double)im.v.k[2]);
+        s->m[0][0] = (D)((double)cdp[0].v.k[1] * (double)im.v.k[1] * (double)cdp[0].v.k[1] + (double)im.hesse_val +
+                         raw_z * (double)im.v.k[2] * (double)cdp[0].v.k[2] +
+                         (double)cdp[0].v.k[0] * (double)cmi[0].v.k[0] + (double)s->m[0][0]);
         D a = lvf_dot(&core->rot_speed, &cdp[0].v) + lvf_dot(&speed, s->direction_ws[0]);
         scr_add_delta(s, 0, a, sign);
     }
 
     if (!s->direction_ws[1]) return;
     {
-        ivp_vec3f_t cross_ws;
-        lvf_cross(&cross_ws, &pos_rel_core, s->direction_ws[1]);
-        lvm_vimult3_f(m_world_f_core, &cross_ws, &cdp[1].v);
+        (void)p4_translation_cross(m_world_f_core, &pos_rel_core, s->direction_ws[1], &cdp[1].v);
         cdp[1].hesse_val = 1.0f;
         p4_line_wise_mult4(&cmi[1], &cdp[1], &im);
         s->m[1][1] = s->m[1][1] + p4_dot4(&cmi[1], &cdp[1]);

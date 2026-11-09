@@ -78,18 +78,28 @@ static inline void ivp_scr_f_line_wise_mult4(ivp_scr_p4_t *out, const ivp_scr_p4
 #endif
 }
 
-/* IVP_U_Point_4::dot_product4 (float expression) */
+/* IVP_U_Point_4::dot_product4: double products summed w, z, y, x (retail
+ * RVA 0x339B0) */
 static inline double ivp_scr_f_dot4(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o)
 {
-#if IVP_ARM64_NEON
-    float32x2_t products = vmul_f32(vld1_f32(a->k), vld1_f32(o->k));
-    float sum = vget_lane_f32(products, 0) + vget_lane_f32(products, 1);
-    sum += a->k[2] * o->k[2];
-    sum += a->hesse_val * o->hesse_val;
-    return (double)sum;
-#else
-    return (double)(a->k[0] * o->k[0] + a->k[1] * o->k[1] + a->k[2] * o->k[2] + a->hesse_val * o->hesse_val);
-#endif
+    return (double)a->hesse_val * (double)o->hesse_val + (double)a->k[2] * (double)o->k[2] +
+           (double)a->k[1] * (double)o->k[1] + (double)a->k[0] * (double)o->k[0];
+}
+
+/* ivp_translation_cross (ivp_solver_core_reaction.cxx, retail RVA 0x33560):
+ * cross_ws x/y stay double through the inverse rotation, z is a float
+ * store; returns the transformed z before its float store */
+static inline double ivp_scr_f_translation_cross(const ivp_transform_r_t *m, const ivp_vec3f_t *p,
+                                                 const ivp_vec3f_t *d, ivp_scr_p4_t *out)
+{
+    const double x = (double)p->k[1] * (double)d->k[2] - (double)p->k[2] * (double)d->k[1];
+    const double y = (double)p->k[2] * (double)d->k[0] - (double)p->k[0] * (double)d->k[2];
+    const double z = (double)(float)((double)p->k[0] * (double)d->k[1] - (double)p->k[1] * (double)d->k[0]);
+    const double zz = z * LVM_E(m, 2, 2) + y * LVM_E(m, 1, 2) + x * LVM_E(m, 0, 2);
+    out->k[0] = (float)(z * LVM_E(m, 2, 0) + y * LVM_E(m, 1, 0) + x * LVM_E(m, 0, 0));
+    out->k[1] = (float)(z * LVM_E(m, 2, 1) + y * LVM_E(m, 1, 1) + x * LVM_E(m, 0, 1));
+    out->k[2] = (float)zz;
+    return zz;
 }
 
 /* IVP_U_Float_Point::dot_product on the xyz part (double products, z y x) */
@@ -124,16 +134,30 @@ static inline void ivp_scr_f_init_trans_ws(ivp_scr_f_t *s, const ivp_vec3r_t *po
 
     for (int i = 0; i < 3; i++) {
         if (i > 0 && !s->direction_ws[i]) return;
-        ivp_vec3f_t cross_ws, cs;
-        lvf_cross(&cross_ws, &pos_rel_core, s->direction_ws[i]);
-        lvm_vimult3_f(m_world_f_core, &cross_ws, &cs);
-        cdp[i].k[0] = cs.k[0];
-        cdp[i].k[1] = cs.k[1];
-        cdp[i].k[2] = cs.k[2];
+        double raw_z = 0.0;
+        if (i < 2) {
+            raw_z = ivp_scr_f_translation_cross(m_world_f_core, &pos_rel_core, s->direction_ws[i], &cdp[i]);
+        } else {
+            ivp_vec3f_t cross_ws, cs;
+            lvf_cross(&cross_ws, &pos_rel_core, s->direction_ws[i]);
+            lvm_vimult3_f(m_world_f_core, &cross_ws, &cs);
+            cdp[i].k[0] = cs.k[0];
+            cdp[i].k[1] = cs.k[1];
+            cdp[i].k[2] = cs.k[2];
+        }
         cdp[i].hesse_val = 1.0f;
         ivp_scr_f_line_wise_mult4(&cmi[i], &cdp[i], &im);
 
-        s->m[i][i] = s->m[i][i] + ivp_scr_f_dot4(&cmi[i], &cdp[i]);
+        if (i == 0) {
+            /* retail multiplies the retained transformed z by the inverse
+             * inertia before narrowing, and sums the diagonal y, w, z, x */
+            cmi[0].k[2] = (float)(raw_z * (double)im.k[2]);
+            s->m[0][0] = (double)cdp[0].k[1] * (double)im.k[1] * (double)cdp[0].k[1] + (double)im.hesse_val +
+                         raw_z * (double)im.k[2] * (double)cdp[0].k[2] + (double)cdp[0].k[0] * (double)cmi[0].k[0] +
+                         s->m[0][0];
+        } else {
+            s->m[i][i] = s->m[i][i] + ivp_scr_f_dot4(&cmi[i], &cdp[i]);
+        }
         for (int j = 0; j < i; j++) {
             s->m[j][i] = s->m[j][i] + ivp_scr_f_dot3(&cmi[i], &cdp[j]);
         }
