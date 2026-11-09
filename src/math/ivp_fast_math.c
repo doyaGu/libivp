@@ -128,17 +128,19 @@ double ivp_isqrt_double(double square, int resolution_steps) {
     double squareh = square * 0.5;
     double inv_sqrt = h.val;
 
-    /* 2 base Newton-Raphson iterations (always performed) */
-    inv_sqrt += inv_sqrt * (0.5 - inv_sqrt * inv_sqrt * squareh);
-    inv_sqrt += inv_sqrt * (0.5 - inv_sqrt * inv_sqrt * squareh);
+    /* 2 base Newton-Raphson iterations (always performed).  The retail
+     * build multiplies x * (1 + (0.5 - ...)) and forms the first correction
+     * as h*x*x, the later ones as x*x*h (ivu_float.hxx). */
+    inv_sqrt *= 1.0 + (0.5 - squareh * inv_sqrt * inv_sqrt);
+    inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
 
     /* Additional iterations based on resolution_steps */
     if (resolution_steps > 0)
-        inv_sqrt += inv_sqrt * (0.5 - (inv_sqrt * inv_sqrt * squareh));
+        inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
     if (resolution_steps > 1)
-        inv_sqrt += inv_sqrt * (0.5 - (inv_sqrt * inv_sqrt * squareh));
+        inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
     if (resolution_steps > 2)
-        inv_sqrt += inv_sqrt * (0.5 - (inv_sqrt * inv_sqrt * squareh));
+        inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
 
     IVP_ASSERT(ivp_fabsd((double)1.0f - inv_sqrt * inv_sqrt * square) < (double)0.001f);
     return inv_sqrt;

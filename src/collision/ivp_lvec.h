@@ -46,11 +46,12 @@ static inline double lv_ref_isqrt(double square, int resolution_steps) {
     double inv_sqrt;
     memcpy(&inv_sqrt, &hbits, sizeof(inv_sqrt));
     double squareh = square * 0.5f;
-    inv_sqrt += inv_sqrt * (0.5f - inv_sqrt * inv_sqrt * squareh);
-    inv_sqrt += inv_sqrt * (0.5f - inv_sqrt * inv_sqrt * squareh);
-    if (resolution_steps > 0) inv_sqrt += inv_sqrt * (0.5f - (inv_sqrt * inv_sqrt * squareh));
-    if (resolution_steps > 1) inv_sqrt += inv_sqrt * (0.5f - (inv_sqrt * inv_sqrt * squareh));
-    if (resolution_steps > 2) inv_sqrt += inv_sqrt * (0.5f - (inv_sqrt * inv_sqrt * squareh));
+    /* retail: x *= 1 + (0.5 - h*x*x), then x *= 1 + (0.5 - x*x*h) */
+    inv_sqrt *= 1.0 + (0.5 - squareh * inv_sqrt * inv_sqrt);
+    inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
+    if (resolution_steps > 0) inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
+    if (resolution_steps > 1) inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
+    if (resolution_steps > 2) inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
     return inv_sqrt;
 }
 
