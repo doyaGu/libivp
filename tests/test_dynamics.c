@@ -14,6 +14,7 @@
 #include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_registry.h"
 #include "controllers/ivp_controller_system.h"
+#include <fenv.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -1300,6 +1301,43 @@ static int dependent_discovery_fn(void *ctx,
     if (n > max_handles) n = max_handles;
     for (int i = 0; i < n; i++) out_handles[i] = probe->discovery_handles[i];
     return n;
+}
+
+static void count_pre_psi(void *ctx, ivp_environment_t *env, ivp_psi_phase_t phase, ivp_time_t time,
+                          ivp_real_t dt)
+{
+    (void)env;
+    (void)time;
+    (void)dt;
+    if (phase == IVP_PSI_PHASE_PRE_PSI) (*(int *)ctx)++;
+}
+
+/* The retail IVP_Time arithmetic compares the queued float PSI event time
+ * with a double target; simulate_one_psi must still run exactly one PSI per
+ * call for every step size and rounding mode. */
+IVP_TEST(simulate_one_psi_runs_exactly_one_psi) {
+    static const double steps[] = { 1.0 / 60.0, 1.0 / 66.0, 0.01, 1.0 / 180.0, 0.0125 };
+    static const int modes[] = { FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO };
+    for (size_t m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
+        for (size_t d = 0; d < sizeof(steps) / sizeof(steps[0]); d++) {
+            ivp_environment_config_t cfg;
+            ivp_environment_config_init(&cfg);
+            cfg.delta_psi_time = (ivp_real_t)steps[d];
+            ivp_environment_t *env = ivp_environment_create(&cfg);
+            IVP_ASSERT_NOT_NULL(env);
+            int psis = 0;
+            ivp_environment_set_phase_hook(env, count_pre_psi, &psis);
+            bool exact = fesetround(modes[m]) == 0;
+            for (int i = 0; i < 1000 && exact; i++) {
+                int before = psis;
+                ivp_environment_simulate_one_psi(env);
+                exact = psis == before + 1;
+            }
+            fesetround(FE_TONEAREST);
+            IVP_ASSERT_TRUE(exact);
+            ivp_environment_destroy(env);
+        }
+    }
 }
 
 IVP_TEST(sim_unit_core_timestamp_tracks_full_psi) {
@@ -2653,6 +2691,7 @@ int main(void) {
     /* Hooks / events */
     IVP_REGISTER(phase_hook_called);
     IVP_REGISTER(sim_unit_event_pipeline);
+    IVP_REGISTER(simulate_one_psi_runs_exactly_one_psi);
     IVP_REGISTER(sim_unit_core_timestamp_tracks_full_psi);
     IVP_REGISTER(controller_removal_keeps_split_request_under_memory_pressure);
     IVP_REGISTER(sim_unit_pending_tracks_detach_wake_freeze_and_delete);

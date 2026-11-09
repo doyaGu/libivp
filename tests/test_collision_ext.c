@@ -7,6 +7,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
+#include <ivp/events/ivp_listener_collision.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/geometry/ivp_compact_surface.h>
 #include <ivp/geometry/ivp_compact_ledge.h>
@@ -735,6 +736,65 @@ IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
  * Test Registration and Main
  * ======================================================================== */
 
+/* ── host order of ball identities (IVP_Environment::set_client_data_compare) ── */
+
+typedef struct ball_order_probe {
+    int events;
+    const void *first_client_data;
+} ball_order_probe_t;
+
+static void ball_order_on_pre_collision(void *ctx, const ivp_collision_event_t *ev)
+{
+    ball_order_probe_t *probe = (ball_order_probe_t *)ctx;
+    if (probe->events++ == 0) probe->first_client_data = ivp_object_get_client_data(ev->obj_a);
+}
+
+static bool ball_ids_ascending(const void *a, const void *b) { return *(const int *)a < *(const int *)b; }
+static bool ball_ids_descending(const void *a, const void *b) { return *(const int *)a > *(const int *)b; }
+
+/* Two balls closing at 20 m/s; returns the client_data of the first object
+ * reported for their first collision. */
+static const void *ball_pair_first_object(ivp_client_data_compare_fn_t compare, int ids[2])
+{
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_vec3r_set(&cfg.gravity, IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    ivp_environment_t *env = ivp_environment_create(&cfg);
+    if (!env) return NULL;
+    ivp_environment_set_client_data_compare(env, compare);
+    for (int i = 0; i < 2; i++) {
+        ivp_object_template_t t;
+        ivp_object_template_init(&t);
+        t.type = IVP_OBJECT_BALL;
+        t.ball_radius = IVP_REAL(1.0);
+        t.mass = IVP_REAL(1.0);
+        t.client_data = &ids[i];
+        ivp_vec3r_set(&t.position, i ? IVP_REAL(1.1) : IVP_REAL(-1.1), IVP_REAL(0.0), IVP_REAL(0.0));
+        ivp_object_t *obj = ivp_environment_create_object(env, &t, NULL);
+        if (obj) ivp_vec3r_set(&obj->physical_core->speed, i ? IVP_REAL(-10.0) : IVP_REAL(10.0), IVP_REAL(0.0), IVP_REAL(0.0));
+    }
+    ball_order_probe_t probe = {0, NULL};
+    ivp_collision_listener_t listener;
+    ivp_collision_listener_init(&listener, IVP_COLLISION_CB_PRE_COLLISION, &probe);
+    listener.pre_collision_fn = ball_order_on_pre_collision;
+    (void)ivp_environment_add_collision_listener_global(env, &listener);
+    for (int i = 0; i < 3 && !probe.events; i++) ivp_environment_simulate_one_psi(env);
+    ivp_environment_destroy(env);
+    return probe.first_client_data;
+}
+
+IVP_TEST(ball_pair_order_follows_host_client_data_compare)
+{
+    int ids[2] = { 1, 2 };
+    const void *ascending = ball_pair_first_object(ball_ids_ascending, ids);
+    const void *descending = ball_pair_first_object(ball_ids_descending, ids);
+    IVP_ASSERT_NOT_NULL(ascending);
+    IVP_ASSERT_NOT_NULL(descending);
+    /* the compare function alone decides which ball comes first */
+    IVP_ASSERT_TRUE(ascending != descending);
+    IVP_ASSERT_TRUE(ball_pair_first_object(ball_ids_ascending, ids) == ascending);
+}
+
 int main(void) {
     /* Range Manager Tests */
     IVP_REGISTER(range_manager_init_defaults);
@@ -747,6 +807,7 @@ int main(void) {
     IVP_REGISTER(collision_filter_callback_true);
     IVP_REGISTER(collision_filter_callback_false);
     IVP_REGISTER(collision_filter_no_collision_group);
+    IVP_REGISTER(ball_pair_order_follows_host_client_data_compare);
 
     /* Compact Ledge Solver Tests */
     IVP_REGISTER(compact_ledge_solver_point_to_ledge);
