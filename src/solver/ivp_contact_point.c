@@ -798,11 +798,11 @@ static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t
          * later SDK's zero guard */
         D a = lvp_dot(&K_area, &Lp);
         D b = lvp_dot(&K_area, &Lp_next);
-        D reciprocal = 1.0 / (a - b);
+        D reciprocal = (D)(1.0 / (double)(a - b));
         sl = (a - lvp_dot(&K_area, &Kp)) * reciprocal;
         a = lvp_dot(&L_area, &Kp);
         b = lvp_dot(&L_area, &Kp_next);
-        reciprocal = 1.0 / (a - b);
+        reciprocal = (D)(1.0 / (double)(a - b));
         sk = (a - lvp_dot(&L_area, &Lp)) * reciprocal;
         ivp_vec3r_t world_edge_space0, world_edge_space1;
         lvp_set_interpolate_pp(&world_edge_space0, &Kp, &Kp_next, sk);

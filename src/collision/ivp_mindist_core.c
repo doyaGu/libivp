@@ -142,7 +142,7 @@ static void traverse_cluster(const ivp_compact_ledgetree_node_t *node, const ivp
                              ledge_collection_t *out)
 {
     if (out->failed) return;
-    const D work = IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
+    const D work = (D)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
     ivp_vec3r_t dist_vec;
     ivp_vec3f_t center;
     lvf_set3(&center, node->center[0], node->center[1], node->center[2]);

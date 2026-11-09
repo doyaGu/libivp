@@ -421,7 +421,7 @@ static inline void lv_hesse_calc_ppp(lv_hesse_t *h, const ivp_vec3r_t *t0, const
 }
 /* IVP_U_Hesse::normize: no length guard (ivu_linear.cxx) */
 static inline void lv_hesse_normize(lv_hesse_t *h) {
-    D l = 1.0 / lvp_real_length(&h->n);
+    D l = (D)(1.0 / (double)lvp_real_length(&h->n));
     lvp_mult(&h->n, l);
     h->hesse_val *= l;
 }
