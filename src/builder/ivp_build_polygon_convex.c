@@ -992,8 +992,9 @@ static void pc_insert_pierce_info(pc_tetra_t *pop)
         double min_scal_val = PC_MAX_SCAL_VAL;
         for (pc_tri_t *tri2 = pop->first; tri2; tri2 = tri2->next) {
             if (tri2->is_hidden) continue;
-            double scal_val = tri->hesse[0] * tri2->hesse[0] + tri->hesse[1] * tri2->hesse[1] +
-                              tri->hesse[2] * tri2->hesse[2];
+            /* retail order z, y, x (ivp_object_polygon_tetra.cxx) */
+            double scal_val = tri->hesse[2] * tri2->hesse[2] + tri->hesse[1] * tri2->hesse[1] +
+                              tri->hesse[0] * tri2->hesse[0];
             if (scal_val < min_scal_val) {
                 min_scal_val = scal_val;
                 found_tri = tri2;
