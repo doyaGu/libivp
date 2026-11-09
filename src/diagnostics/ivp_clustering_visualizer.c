@@ -204,7 +204,7 @@ static bool cv_recursively_traverse_cluster(ivp_clustering_visualizer_shortrange
 
     {   /* now check bounding box against bounding box */
         v->stats_n_box_collisiontests++;
-        float work = IVP_COMPACT_BOUNDINGBOX_STEP_SIZE * node->radius;
+        float work = (float)(IVP_COMPACT_BOUNDINGBOX_STEP_SIZE * (double)node->radius);
         if ((ivp_real_t)fabs((double)distance_between_centers.k[0]) >=
             (ivp_real_t)((float)node->box_sizes[0] * work) + v->intruder_radius) goto abort;
         if ((ivp_real_t)fabs((double)distance_between_centers.k[1]) >=
@@ -278,7 +278,7 @@ void ivp_clustering_visualizer_shortrange_visualize_collisions(ivp_clustering_vi
 
                 if (callback->reported_ledge) v->stats_n_reported_ledges++;
 
-                ivp_real_t work = (ivp_real_t)(IVP_COMPACT_BOUNDINGBOX_STEP_SIZE * node->radius);
+                ivp_real_t work = (ivp_real_t)(IVP_COMPACT_BOUNDINGBOX_STEP_SIZE * (double)node->radius);
                 callback->box_extents.k[0] = (ivp_real_t)node->box_sizes[0] * work;
                 callback->box_extents.k[1] = (ivp_real_t)node->box_sizes[1] * work;
                 callback->box_extents.k[2] = (ivp_real_t)node->box_sizes[2] * work;

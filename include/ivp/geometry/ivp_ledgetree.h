@@ -23,7 +23,7 @@ extern "C" {
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
-#define IVP_COMPACT_BOUNDINGBOX_STEP_SIZE  (1.0f / 250.0f)
+#define IVP_COMPACT_BOUNDINGBOX_STEP_SIZE  (1.0 / 250.0) /* retail: binary64 */
 #define IVP_COMPACT_SURFACE_DEVIATION_STEP_SIZE (1.0f / 250.0f)
 
 /* ── Ledgetree node structure ───────────────────────────────────────────── */
@@ -95,7 +95,7 @@ static inline float ivp_ledgetree_decode_box_size(
     const ivp_compact_ledgetree_node_t *n, int axis)
 {
     return (float)n->box_sizes[axis] * n->radius *
-           IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
+           (float)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
 }
 
 /* ── Traversal (non-inline, in ivp_ledgetree.c) ─────────────────────────── */

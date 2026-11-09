@@ -286,7 +286,7 @@ static void execute_merges(merge_pair_t *pairs, int n_pairs,
 
         /* Compute box_sizes from children */
         if (parent->radius > 0.0f) {
-            float step = IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
+            float step = (float)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
             float work = parent->radius * step;
 
             /* Compute extents from children */
@@ -383,7 +383,7 @@ static bu_sphere_t *build_bvh_bottomup(ivp_ledge_soup_t *soup,
         s->radius = sqrtf(dx*dx + dy*dy + dz*dz);
 
         if (s->radius > 0.0f) {
-            float work = s->radius * IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
+            float work = s->radius * (float)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE;
             for (int a = 0; a < 3; a++) {
                 int bs = (int)((mx[a] - s->center[a]) / work) + 1;
                 s->box_sizes[a] = (uint8_t)(bs > 255 ? 255 : bs);
@@ -630,7 +630,7 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_bottomup(
         node->radius = radius;
 
         if (radius > 0.0f) {
-            float inv_step = 1.0f / (radius * IVP_COMPACT_BOUNDINGBOX_STEP_SIZE);
+            float inv_step = 1.0f / (radius * (float)IVP_COMPACT_BOUNDINGBOX_STEP_SIZE);
             float mn[3], mx[3];
             ivp_ledge_calc_bounding_box(dst_ledge, mn, mx);
             for (int a = 0; a < 3; a++) {
