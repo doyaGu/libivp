@@ -54,7 +54,9 @@ IVP_TEST(core_init_basic) {
     /* Reference IVP_Core::init sets IVP_MT_NOT_SIM (ivp_core.cxx:1050);
      * cores enter simulation only when revived. */
     IVP_ASSERT_EQ((int)core.movement_state, (int)IVP_MT_NOT_SIM);
-    IVP_ASSERT_FALSE(core.rot_inertias_are_equal);
+    /* Retail RVA 0xD1A0 compares the inverse-inertia differences with the
+     * inertia length, so (2, 3, 4) counts as equal. */
+    IVP_ASSERT_TRUE(core.rot_inertias_are_equal);
 }
 
 IVP_TEST(core_init_equal_inertias) {
@@ -63,6 +65,11 @@ IVP_TEST(core_init_equal_inertias) {
     ivp_core_init(&core, IVP_REAL(1.0), &inertia);
 
     IVP_ASSERT_TRUE(core.rot_inertias_are_equal);
+
+    ivp_core_t flat;
+    inertia = ivp_vec3r(IVP_REAL(0.1), IVP_REAL(1.0), IVP_REAL(10.0));
+    ivp_core_init(&flat, IVP_REAL(1.0), &inertia);
+    IVP_ASSERT_FALSE(flat.rot_inertias_are_equal);
 }
 
 /* Reference 1587518: calc_calc clamps zero or invalid inertia to a finite
