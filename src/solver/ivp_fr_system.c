@@ -1264,6 +1264,11 @@ bool ivp_fr_system_fusion_friction_systems(ivp_fr_system_t *first_sys, ivp_fr_sy
         IVP_ASSERT(added >= 0);
         IVP_USE(added);
         if (plan->destination_is_new && !plan->destination_is_published) {
+            /* the reference re-adds the contacts one by one
+             * (dist_added_update_pair_info): a new pair takes the core
+             * order of the first contact moved into it */
+            plan->destination->objs[0] = core0;
+            plan->destination->objs[1] = core1;
             bool published = fs_add_fr_pair(first_sys, plan->destination);
             IVP_ASSERT(published);
             IVP_USE(published);
