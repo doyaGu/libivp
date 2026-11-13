@@ -464,15 +464,16 @@ ivp_gpu_pipeline_t *ivp_gpu_pipeline_create(ivp_gpu_device_t *dev,
 {
     const int prog = (int)desc->program;
     bool is_msl = (dev->shader_format == SDL_GPU_SHADERFORMAT_MSL);
-    int num_ub = is_msl ? 1 : 0;
 
+    /* Every vertex shader reads one uniform block: [[buffer(0)]] in MSL,
+     * set = 1, binding = 0 in SPIR-V (SDL GPU has no push constants). */
     SDL_GPUShaderCreateInfo vs_ci = {0};
     vs_ci.code                = dev->code[prog][0];
     vs_ci.code_size           = dev->code_len[prog][0];
     vs_ci.entrypoint          = is_msl ? "vs_main" : "main";
     vs_ci.format              = dev->shader_format;
     vs_ci.stage               = SDL_GPU_SHADERSTAGE_VERTEX;
-    vs_ci.num_uniform_buffers = (Uint32)num_ub;
+    vs_ci.num_uniform_buffers = 1;
 
     SDL_GPUShader *vs = SDL_CreateGPUShader(dev->device, &vs_ci);
     if (!vs) {
