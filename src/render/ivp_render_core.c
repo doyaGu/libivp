@@ -128,8 +128,11 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
     if (!r) { SDL_DestroyWindow(win); return IVP_ERR_OUT_OF_MEMORY; }
     memset(r, 0, sizeof(*r));
     r->window = win;
+    /* The window may not get the requested size: in the browser a canvas
+     * sized by the page's CSS decides it. */
     r->width  = cfg.width;
     r->height = cfg.height;
+    SDL_GetWindowSize(win, &r->width, &r->height);
 
     /* GPU device, with its swapchain and shaders */
     ivp_result_t res = ivp_gpu_device_create(&r->gpu, win, cfg.msaa_samples,
