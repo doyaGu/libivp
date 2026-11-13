@@ -119,6 +119,20 @@ if (IVP_ENABLE_TSAN)
     add_link_options(-fsanitize=thread)
 endif ()
 
+# ── WebAssembly (Emscripten) ──────────────────────────────────────────────────
+# The wasm build is single-threaded: without -pthread, Threads::Threads is
+# empty and the pthread calls are Emscripten's stubs, so environments and
+# world schedulers asking for more than one worker fail to create.
+if (EMSCRIPTEN)
+    if (IVP_ENABLE_TSAN)
+        message(FATAL_ERROR "IVP_ENABLE_TSAN is not supported by Emscripten")
+    endif ()
+    # The default 64 KiB stack is too small for the great matrix and 3DS
+    # import frames, and larger scenes outgrow the initial 16 MiB heap.
+    # EXIT_RUNTIME makes main's return value the node process exit code.
+    add_link_options(-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=2MB -sEXIT_RUNTIME=1)
+endif ()
+
 # ── Compile definitions from options ──────────────────────────────────────────
 if (IVP_REAL_DOUBLE)
     add_compile_definitions(IVP_REAL_DOUBLE)
@@ -527,6 +541,13 @@ if (IVP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()
 
+# The benchmark and the tests run under node and read and write real files.
+# This comes after add_subdirectory(examples), so the browser examples, which
+# cannot use the host file system, do not get it.
+if (EMSCRIPTEN)
+    add_link_options(-sNODERAWFS=1)
+endif ()
+
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 if (IVP_BUILD_BENCHMARKS)
     add_executable(ivp_benchmark benchmarks/ivp_benchmark.c)
@@ -782,7 +803,10 @@ if (IVP_BUILD_TESTS)
                              $<TARGET_FILE:test_scenarios> ${IVP_REPO_ROOT}/tools/scenarios.txt)
             set_tests_properties(test_scenario_counter PROPERTIES LABELS "unit;perf" TIMEOUT 120)
         endif ()
-        if (IVP_BUILD_BENCHMARKS)
+        # The runner starts the benchmark binary itself and checks
+        # worker-count invariance, which needs threads; the single-threaded
+        # wasm build has neither a native binary nor workers.
+        if (IVP_BUILD_BENCHMARKS AND NOT EMSCRIPTEN)
             add_test(NAME test_benchmark_runner
                      COMMAND ${Python3_EXECUTABLE} ${IVP_REPO_ROOT}/tests/test_benchmark_runner.py
                              $<TARGET_FILE:ivp_benchmark>
