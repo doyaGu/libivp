@@ -892,6 +892,7 @@ if (IVP_BUILD_TESTS)
     # invariants: scenario-specific invariant tests
     # parity:     bit-exact reference comparison tests
     # smoke:      example smoke tests
+    # browser:    the WebAssembly example pages in headless Chrome
 
     set(IVP_UNIT_TESTS
             test_base test_math test_containers test_geometry
@@ -1127,6 +1128,32 @@ if (IVP_BUILD_TESTS)
                     LABELS "smoke"
                     TIMEOUT 300
             )
+        endif ()
+        # The WebAssembly build's pages in headless Chrome: each loads,
+        # shows frames without errors and draws. Needs Chrome or Chromium.
+        if (EMSCRIPTEN)
+            find_program(IVP_BROWSER_SMOKE_CHROME
+                    NAMES google-chrome google-chrome-stable chromium
+                          chromium-browser chrome "Google Chrome" Chromium
+                    PATHS "/Applications/Google Chrome.app/Contents/MacOS"
+                          "/Applications/Chromium.app/Contents/MacOS"
+                    DOC "Chrome or Chromium for test_browser_smoke")
+            if (IVP_BROWSER_SMOKE_CHROME)
+                add_test(
+                        NAME test_browser_smoke
+                        COMMAND ${Python3_EXECUTABLE}
+                        ${IVP_REPO_ROOT}/tools/web/browser_smoke.py
+                        --build-dir ${CMAKE_BINARY_DIR}
+                        --chrome ${IVP_BROWSER_SMOKE_CHROME}
+                        --screenshots ${CMAKE_BINARY_DIR}/browser_smoke_screenshots
+                )
+                set_tests_properties(test_browser_smoke PROPERTIES
+                        LABELS "browser"
+                        TIMEOUT 900
+                )
+            else ()
+                message(STATUS "test_browser_smoke is disabled: no Chrome or Chromium found (set IVP_BROWSER_SMOKE_CHROME).")
+            endif ()
         endif ()
         # examples/COVERAGE.md lists which headers the examples use; it is generated.
         set(IVP_COVERAGE_SCRIPT ${IVP_REPO_ROOT}/tools/example_coverage.py)
