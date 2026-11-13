@@ -224,8 +224,10 @@ void ivp_gpu_wait_idle(ivp_gpu_device_t *dev)
 #ifdef __EMSCRIPTEN__
 /* Return to the browser until it shows the next frame (needs Asyncify): the
  * canvas is presented when control goes back to the event loop, and frames
- * follow the display like vsync. */
+ * follow the display like vsync.  Module.ivpFrames counts the frames shown,
+ * for tools/web/browser_smoke.py. */
 EM_ASYNC_JS(void, ivp_gles_wait_animation_frame, (void), {
+    Module['ivpFrames'] = (Module['ivpFrames'] || 0) + 1;
     await new Promise(function(resolve) { requestAnimationFrame(resolve); });
 });
 #endif
