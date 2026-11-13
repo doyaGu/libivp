@@ -37,6 +37,7 @@ class VerificationRunnerTests(unittest.TestCase):
                 "release-unit",
                 "scenario-invariants",
                 "tsan-threading",
+                "wasm-browser-smoke",
                 "wasm-examples-headless",
                 "wasm-unit",
             },

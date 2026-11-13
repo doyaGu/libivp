@@ -349,6 +349,37 @@
       }
     },
     {
+      "id": "wasm-browser-smoke",
+      "type": "ctest",
+      "configuration": "Release",
+      "required_cache": {
+        "EMSCRIPTEN": "ON",
+        "IVP_BUILD_EXAMPLES": "ON",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_CHECKPOINTS": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
+        "IVP_STABLE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["browser"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {},
+        "scenario_set": null,
+        "test_sets": [],
+        "tests": ["test_browser_smoke"]
+      }
+    },
+    {
       "id": "wasm-examples-headless",
       "type": "ctest",
       "configuration": "Release",
