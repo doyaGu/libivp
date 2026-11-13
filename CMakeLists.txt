@@ -465,7 +465,6 @@ if (IVP_BUILD_RENDER)
     # copied next to it.  Names are <name>.<vert|frag>.
     set(IVP_SHADER_NAMES
         line3d.vert line2d.vert line.frag
-        tri3d.vert tri3d.frag
         tri3d_inst.vert tri3d_inst.frag
         shadow.vert shadow.frag
         hud_rect.vert hud_rect.frag
@@ -503,7 +502,6 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_gpu.c
         src/render/ivp_render_draw.c
         src/render/ivp_render_hud.c
-        src/render/ivp_render_hud_atlas.c
         src/render/ivp_render_core.c
         src/render/ivp_render_pick.c
         src/render/ivp_render_frustum.c

@@ -60,7 +60,6 @@ static ivp_render_config_t resolve_config(const ivp_render_config_t *c)
 
     if (c->max_draw_vertices > 0) d.max_draw_vertices = c->max_draw_vertices;
     if (c->max_hud_vertices  > 0) d.max_hud_vertices  = c->max_hud_vertices;
-    if (c->max_tri_vertices  > 0) d.max_tri_vertices   = c->max_tri_vertices;
     if (c->sphere_segments   > 0) d.sphere_segments    = c->sphere_segments;
     if (c->hud_font_scale    > 0) d.hud_font_scale     = c->hud_font_scale;
 
@@ -71,7 +70,6 @@ static ivp_render_config_t resolve_config(const ivp_render_config_t *c)
 
 typedef struct { float pos[3]; float col[3]; } draw_vertex_t;
 typedef struct { float pos[2]; float col[3]; } hud_vertex_t;
-typedef struct { float pos[3]; float nrm[3]; float col[3]; } tri_vertex_t;
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
@@ -158,29 +156,6 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         if (res != IVP_OK) goto fail_3d;
     }
 
-    /* 3D solid triangle stream (depth, triangle list) */
-    {
-        ivp_gpu_attrib_desc_t attrs[3] = {
-            { 0, 3, (int)offsetof(tri_vertex_t, pos) },
-            { 1, 3, (int)offsetof(tri_vertex_t, nrm) },
-            { 2, 3, (int)offsetof(tri_vertex_t, col) },
-        };
-        ivp_gpu_stream_desc_t desc = {0};
-        desc.capacity       = cfg.max_tri_vertices;
-        desc.stride         = (int)sizeof(tri_vertex_t);
-        desc.attribs        = attrs;
-        desc.attrib_count   = 3;
-        desc.depth_test     = true;
-        desc.depth_write    = true;
-        desc.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-        desc.cull_mode      = SDL_GPU_CULLMODE_NONE;
-
-        res = ivp_gpu_stream_create(&r->stream_tri, &r->gpu, &desc,
-                                    r->shaders.vs_tri3d, r->shaders.vs_tri3d_len,
-                                    r->shaders.fs_tri3d, r->shaders.fs_tri3d_len);
-        if (res != IVP_OK) goto fail_2d;
-    }
-
     /* Instanced solid pipeline (for proto mesh sphere/box) */
     {
         /* Proto mesh vertex: pos[3] + nrm[3] */
@@ -213,7 +188,7 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         r->inst_pipeline = ivp_gpu_create_pipeline(&r->gpu, &desc,
             r->shaders.vs_inst, r->shaders.vs_inst_len,
             r->shaders.fs_inst, r->shaders.fs_inst_len);
-        if (!r->inst_pipeline) { res = IVP_ERR_RENDER_SHADER; goto fail_tri; }
+        if (!r->inst_pipeline) { res = IVP_ERR_RENDER_SHADER; goto fail_2d; }
 
         /* Same shaders, alpha blended, depth tested but not written */
         desc.blend       = true;
@@ -224,7 +199,7 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         if (!r->inst_pipeline_blend) {
             SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
             res = IVP_ERR_RENDER_SHADER;
-            goto fail_tri;
+            goto fail_2d;
         }
     }
 
@@ -320,8 +295,6 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
 fail_inst:
     SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline_blend);
     SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline);
-fail_tri:
-    ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
 fail_2d:
     ivp_gpu_stream_destroy(&r->stream_2d, &r->gpu);
 fail_3d:
@@ -368,7 +341,6 @@ void ivp_renderer_destroy(ivp_renderer_t *r)
         SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->inst_pipeline_blend);
         r->inst_pipeline_blend = NULL;
     }
-    ivp_gpu_stream_destroy(&r->stream_tri, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_2d, &r->gpu);
     ivp_gpu_stream_destroy(&r->stream_3d, &r->gpu);
     ivp_shader_cache_free(&r->shaders);
@@ -466,7 +438,6 @@ bool ivp_renderer_begin_frame(ivp_renderer_t *r, ivp_camera_t *cam)
     /* Reset streams + instance buffers */
     ivp_gpu_stream_reset(&r->stream_3d);
     ivp_gpu_stream_reset(&r->stream_2d);
-    ivp_gpu_stream_reset(&r->stream_tri);
     ivp_gpu_stream_reset(&r->stream_overlay);
     for (int i = 0; i < 3; i++) ivp_gpu_stream_reset(&r->stream_rect[i]);
     r->overlay_mode = false;
@@ -485,7 +456,6 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     /* Upload all streams + instance buffers */
     ivp_gpu_stream_upload(&r->stream_3d, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_2d, &r->gpu, r->cmd);
-    ivp_gpu_stream_upload(&r->stream_tri, &r->gpu, r->cmd);
     ivp_gpu_stream_upload(&r->stream_overlay, &r->gpu, r->cmd);
     for (int i = 0; i < 3; i++) ivp_gpu_stream_upload(&r->stream_rect[i], &r->gpu, r->cmd);
     ivp_solid_upload(r);
@@ -546,26 +516,6 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     /* ── 3D wireframe draw (push constant = VP matrix, 64 bytes) ──────── */
     ivp_gpu_stream_draw(&r->stream_3d, pass, r->cmd,
                         r->vp_mat, 64);
-
-    /* ── 3D solid triangles (push constant = MVP + normal_mat + light_dir) */
-    if (r->stream_tri.vertex_count > 0) {
-        struct {
-            float mvp[16];
-            float normal_mat[16];
-            float light_dir[4];
-        } tri_uniform;
-        memcpy(tri_uniform.mvp, r->vp_mat, 64);
-        /* For streaming tris, normal_mat = identity (positions are world-space) */
-        memset(tri_uniform.normal_mat, 0, 64);
-        tri_uniform.normal_mat[0] = 1.0f;
-        tri_uniform.normal_mat[5] = 1.0f;
-        tri_uniform.normal_mat[10] = 1.0f;
-        tri_uniform.normal_mat[15] = 1.0f;
-        memcpy(tri_uniform.light_dir, r->lighting.light_dir, 12);
-        tri_uniform.light_dir[3] = r->lighting.ambient;
-        ivp_gpu_stream_draw(&r->stream_tri, pass, r->cmd,
-                            &tri_uniform, (Uint32)sizeof(tri_uniform));
-    }
 
     /* ── Instanced solid draws (sphere + box proto meshes) ────────────── */
     if (r->protos.ready && r->inst_pipeline) {
@@ -632,7 +582,6 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     /* Advance all ring buffers (slot cycling only, no fence management) */
     ivp_gpu_stream_advance(&r->stream_3d, NULL);
     ivp_gpu_stream_advance(&r->stream_2d, NULL);
-    ivp_gpu_stream_advance(&r->stream_tri, NULL);
     ivp_gpu_stream_advance(&r->stream_overlay, NULL);
     for (int i = 0; i < 3; i++) ivp_gpu_stream_advance(&r->stream_rect[i], NULL);
     ivp_solid_advance(r);
@@ -758,11 +707,9 @@ void ivp_render_stats_get(const ivp_renderer_t *r, ivp_render_stats_t *stats)
         ? (float)stats->hud_vertex_count / (float)stats->hud_vertex_capacity
         : 0.0f;
 
-    stats->tri_vertex_count    = r->stream_tri.vertex_count;
-    stats->tri_vertex_capacity = r->stream_tri.capacity;
-    stats->tri_utilization     = (stats->tri_vertex_capacity > 0)
-        ? (float)stats->tri_vertex_count / (float)stats->tri_vertex_capacity
-        : 0.0f;
+    stats->tri_vertex_count    = 0;   /* no triangle stream */
+    stats->tri_vertex_capacity = 0;
+    stats->tri_utilization     = 0.0f;
 
     stats->solid_sphere_count = r->protos.ready
         ? r->protos.sphere_instances.count : 0;

@@ -29,10 +29,6 @@ bool ivp_frustum_test_aabb(const ivp_frustum_t *f,
 
 /* (declarations after struct definitions below) */
 
-/* ── HUD atlas ─────────────────────────────────────────────────────────── */
-
-SDL_GPUTexture *ivp_hud_atlas_create(ivp_gpu_device_t *dev);
-
 /* Push the backdrop gradient quad (ivp_render_hud.c). */
 void ivp_hud_push_backdrop(ivp_renderer_t *r);
 
@@ -135,7 +131,6 @@ struct ivp_renderer {
     ivp_shader_cache_t       shaders;
     ivp_gpu_stream_t         stream_3d;   /* 3D wireframe lines */
     ivp_gpu_stream_t         stream_2d;   /* 2D HUD overlay     */
-    ivp_gpu_stream_t         stream_tri;  /* 3D solid triangles  */
     /* 2D filled rectangles, alpha blended, in three layers drawn in order:
      * backdrop (before the 3D scene), panels, then text and widgets */
     ivp_gpu_stream_t         stream_rect[3];

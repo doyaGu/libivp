@@ -224,8 +224,6 @@ typedef struct ivp_shader_cache {
     unsigned char *vs_3d;       size_t vs_3d_len;
     unsigned char *fs;          size_t fs_len;
     unsigned char *vs_2d;       size_t vs_2d_len;
-    unsigned char *vs_tri3d;    size_t vs_tri3d_len;
-    unsigned char *fs_tri3d;    size_t fs_tri3d_len;
     unsigned char *vs_inst;     size_t vs_inst_len;
     unsigned char *fs_inst;     size_t fs_inst_len;
     unsigned char *vs_shadow;   size_t vs_shadow_len;

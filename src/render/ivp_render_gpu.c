@@ -86,12 +86,6 @@ ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,
     SDL_snprintf(name, sizeof(name), "line2d.vert.%s", ext);
     ok = ok && load_shader_file(&cache->vs_2d, &cache->vs_2d_len, name);
 
-    SDL_snprintf(name, sizeof(name), "tri3d.vert.%s", ext);
-    ok = ok && load_shader_file(&cache->vs_tri3d, &cache->vs_tri3d_len, name);
-
-    SDL_snprintf(name, sizeof(name), "tri3d.frag.%s", ext);
-    ok = ok && load_shader_file(&cache->fs_tri3d, &cache->fs_tri3d_len, name);
-
     SDL_snprintf(name, sizeof(name), "tri3d_inst.vert.%s", ext);
     ok = ok && load_shader_file(&cache->vs_inst, &cache->vs_inst_len, name);
 
@@ -122,8 +116,6 @@ void ivp_shader_cache_free(ivp_shader_cache_t *cache)
     if (cache->vs_3d)    { SDL_free(cache->vs_3d);    cache->vs_3d    = NULL; }
     if (cache->fs)       { SDL_free(cache->fs);       cache->fs       = NULL; }
     if (cache->vs_2d)    { SDL_free(cache->vs_2d);    cache->vs_2d    = NULL; }
-    if (cache->vs_tri3d) { SDL_free(cache->vs_tri3d); cache->vs_tri3d = NULL; }
-    if (cache->fs_tri3d) { SDL_free(cache->fs_tri3d); cache->fs_tri3d = NULL; }
     if (cache->vs_inst)  { SDL_free(cache->vs_inst);  cache->vs_inst  = NULL; }
     if (cache->fs_inst)  { SDL_free(cache->fs_inst);  cache->fs_inst  = NULL; }
     if (cache->vs_shadow) { SDL_free(cache->vs_shadow); cache->vs_shadow = NULL; }

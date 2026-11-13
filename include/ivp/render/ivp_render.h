@@ -60,7 +60,7 @@ typedef struct ivp_render_config {
     float       max_frame_dt;       /* default: 0.1 */
     int         max_draw_vertices;  /* 3D wire stream capacity  (default: 128K) */
     int         max_hud_vertices;   /* 2D HUD stream cap        (default: 32K)  */
-    int         max_tri_vertices;   /* 3D solid tri stream cap   (default: 256K) */
+    int         max_tri_vertices;   /* unused: solids are drawn instanced         */
     int         sphere_segments;    /* wireframe sphere segs     (default: 24)   */
     int         hud_font_scale;     /* bitmap font scale         (default: 2)    */
 } ivp_render_config_t;
@@ -369,7 +369,7 @@ typedef struct ivp_render_stats {
     int   hud_vertex_count;
     int   hud_vertex_capacity;
     float hud_utilization;
-    int   tri_vertex_count;
+    int   tri_vertex_count;      /* always 0: solids are drawn instanced */
     int   tri_vertex_capacity;
     float tri_utilization;
     int   solid_sphere_count;
