@@ -76,12 +76,14 @@ FMA contraction: results would no longer match the reference.
 ### WebAssembly
 
 With Emscripten the library, the tests and the examples build for
-WebAssembly; the tests and the examples' headless checks run under node.
+WebAssembly; the tests and the examples' headless checks run under node, and
+the example pages are checked in headless Chrome when one is installed.
 
 ```bash
 emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
 cmake --build build-wasm
 ctest --test-dir build-wasm -L unit -LE threading      # under node
+ctest --test-dir build-wasm -L browser                 # the pages in headless Chrome
 python3 -m http.server -d build-wasm/examples 8000      # http://localhost:8000/
 ```
 

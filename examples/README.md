@@ -38,7 +38,15 @@ cmake --build build-wasm
 python3 -m http.server -d build-wasm/examples 8000      # open http://localhost:8000/
 node build-wasm/examples/example_shapes.js --headless   # self-check under node
 python3 tools/smoke_test_examples.py --build-dir build-wasm   # all of them
+python3 tools/web/browser_smoke.py --build-dir build-wasm     # the pages in headless Chrome
 ```
+
+The headless self-checks skip the renderer. `tools/web/browser_smoke.py`
+opens every page in headless Chrome with software WebGL (SwiftShader, as on
+CI machines) and fails a page that throws, logs a console or WebGL error,
+does not show 30 frames, or leaves the canvas blank; `--screenshots DIR`
+keeps a PNG of each canvas. When CMake finds Chrome or Chromium it runs as
+the ctest `test_browser_smoke` (label `browser`).
 
 Browsers do not run WebAssembly from `file://` pages, so serve the directory
 over HTTP. The keys and the mouse work as in a window: the page passes F1-F5,
