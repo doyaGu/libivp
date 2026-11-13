@@ -1131,6 +1131,8 @@ if (IVP_BUILD_TESTS)
         endif ()
         # The WebAssembly build's pages in headless Chrome: each loads,
         # shows frames without errors and draws. Needs Chrome or Chromium.
+        # devicePixelRatio 2, as on a Retina screen, so that window units and
+        # device pixels differ.
         if (EMSCRIPTEN)
             find_program(IVP_BROWSER_SMOKE_CHROME
                     NAMES google-chrome google-chrome-stable chromium
@@ -1145,6 +1147,7 @@ if (IVP_BUILD_TESTS)
                         ${IVP_REPO_ROOT}/tools/web/browser_smoke.py
                         --build-dir ${CMAKE_BINARY_DIR}
                         --chrome ${IVP_BROWSER_SMOKE_CHROME}
+                        --device-scale-factor 2
                         --screenshots ${CMAKE_BINARY_DIR}/browser_smoke_screenshots
                 )
                 set_tests_properties(test_browser_smoke PROPERTIES
