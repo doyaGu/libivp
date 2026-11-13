@@ -219,13 +219,24 @@ IVP_TEST(compact_grid_binary_layout_matches_reference)
     ivp_compact_grid_t *g = ivp_gridbuild_array_to_compact_grid(NULL, &t, h);
     IVP_ASSERT_NOT_NULL(g);
     IVP_ASSERT_EQ(g->n_compact_ledges, 13);
-    IVP_ASSERT_EQ(g->offset_grid_elements, 240);
-    IVP_ASSERT_EQ((int)((const char *)ivp_ledge_get_point_array(ivp_compact_grid_get_ledge(g, 0)) - (const char *)g), 300);
-    IVP_ASSERT_EQ(g->offset_compact_ledge_array[0], 848);
-    IVP_ASSERT_EQ((int)g->byte_size, 2272);
+    /* The header holds the reference intp byte_size, so the offsets below
+     * are the LP64 reference layout; 32-bit targets (wasm32) only check
+     * that the parts lie in order inside the grid. */
+    int points = (int)((const char *)ivp_ledge_get_point_array(ivp_compact_grid_get_ledge(g, 0)) - (const char *)g);
     if (sizeof(void *) == 8) {
+        IVP_ASSERT_EQ(g->offset_grid_elements, 240);
+        IVP_ASSERT_EQ(points, 300);
+        IVP_ASSERT_EQ(g->offset_compact_ledge_array[0], 848);
+        IVP_ASSERT_EQ((int)g->byte_size, 2272);
         IVP_ASSERT_EQ((int)offsetof(ivp_compact_grid_t, offset_compact_ledge_array), 176);
         IVP_ASSERT_TRUE(fnv1a64((const unsigned char *)g, (size_t)g->byte_size) == 0x0aeb1059d8309edbull);
+    } else {
+        IVP_ASSERT_TRUE(g->offset_grid_elements >=
+                        (int32_t)(offsetof(ivp_compact_grid_t, offset_compact_ledge_array) +
+                                  13u * sizeof(int32_t)));
+        IVP_ASSERT_TRUE(points > g->offset_grid_elements);
+        IVP_ASSERT_TRUE(g->offset_compact_ledge_array[0] > points);
+        IVP_ASSERT_TRUE(g->offset_compact_ledge_array[12] < (int32_t)g->byte_size);
     }
     ivp_compact_grid_free(NULL, g);
 }
