@@ -27,8 +27,9 @@ built but has not been run.
 
 With Emscripten every example becomes a page, `example_<name>.html` (with
 its `.js` and `.wasm`), and `index.html` lists them with the gallery's cards.
-The renderer draws with WebGL2 there, and the build fetches and builds SDL3
-statically; `glslangValidator` is not needed.
+The renderer draws with WebGL2 there, and the build links Emscripten's SDL3
+port (`-sUSE_SDL=3`), which emcc downloads and builds on first use;
+`glslangValidator` is not needed.
 
 ```bash
 emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
