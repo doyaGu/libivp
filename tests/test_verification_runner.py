@@ -37,6 +37,8 @@ class VerificationRunnerTests(unittest.TestCase):
                 "release-unit",
                 "scenario-invariants",
                 "tsan-threading",
+                "wasm-examples-headless",
+                "wasm-unit",
             },
             set(suites),
         )

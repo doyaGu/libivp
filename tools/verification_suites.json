@@ -347,6 +347,88 @@
           "test_replay_equivalence"
         ]
       }
+    },
+    {
+      "id": "wasm-examples-headless",
+      "type": "ctest",
+      "configuration": "Release",
+      "required_cache": {
+        "EMSCRIPTEN": "ON",
+        "IVP_BUILD_EXAMPLES": "ON",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_CHECKPOINTS": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
+        "IVP_STABLE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": [],
+        "labels": ["smoke"],
+        "tests": ["test_demo_drive", "test_demo_panel", "test_render_math"]
+      },
+      "expected": {
+        "exclude": [],
+        "platform_tests": {},
+        "scenario_set": null,
+        "test_sets": [],
+        "tests": [
+          "test_demo_drive",
+          "test_demo_panel",
+          "test_example_coverage_table",
+          "test_render_math",
+          "test_smoke_examples"
+        ]
+      }
+    },
+    {
+      "id": "wasm-unit",
+      "type": "ctest",
+      "configuration": "Release",
+      "required_cache": {
+        "EMSCRIPTEN": "ON",
+        "IVP_BUILD_EXAMPLES": "ON",
+        "IVP_BUILD_TESTS": "ON",
+        "IVP_EDIT_LOCALITY": "OFF",
+        "IVP_ENABLE_ASAN": "OFF",
+        "IVP_ENABLE_CHECKPOINTS": "OFF",
+        "IVP_ENABLE_SCENARIO_TESTS": "OFF",
+        "IVP_ENABLE_TSAN": "OFF",
+        "IVP_ENABLE_UBSAN": "OFF",
+        "IVP_REAL_DOUBLE": "ON",
+        "IVP_REENTRANT_QHULL": "OFF",
+        "IVP_STABLE_INTERNAL_STATE": "OFF"
+      },
+      "selection": {
+        "exclude": ["test_internal_parallel", "test_parallel_worlds", "test_qhull_concurrency"],
+        "labels": ["unit"],
+        "tests": []
+      },
+      "expected": {
+        "exclude": [
+          "test_benchmark_runner",
+          "test_convex_robustness",
+          "test_internal_parallel",
+          "test_internal_state_stability",
+          "test_parallel_worlds",
+          "test_qhull_concurrency",
+          "test_replay_equivalence"
+        ],
+        "platform_tests": {},
+        "scenario_set": null,
+        "test_sets": ["unit-common"],
+        "tests": [
+          "test_demo_drive",
+          "test_demo_panel",
+          "test_demo_pose",
+          "test_parity_compare",
+          "test_render_math"
+        ]
+      }
     }
   ]
 }
