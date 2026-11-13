@@ -50,37 +50,18 @@ void ivp_shadow_light_matrix(float out[16], const float light_dir[3],
 
 bool ivp_shadow_init(ivp_renderer_t *r)
 {
-    if (!ivp_gpu_shadow_map_create(&r->shadow_map, &r->gpu, SHADOW_MAP_SIZE))
-        return false;
+    r->shadow_map = ivp_gpu_shadow_map_create(r->gpu, SHADOW_MAP_SIZE);
+    if (!r->shadow_map) return false;
+    r->shadow_map_size = SHADOW_MAP_SIZE;
 
-    ivp_gpu_stream_desc_t desc = {0};
-    ivp_gpu_attrib_desc_t vtx_attrs[2] = {
-        { 0, 3, 0 },
-        { 1, 3, 3 * (int)sizeof(float) },
-    };
-    ivp_gpu_attrib_desc_t inst_attrs[5] = {
-        { 2, 4, 0 }, { 3, 4, 4 * (int)sizeof(float) },
-        { 4, 4, 8 * (int)sizeof(float) }, { 5, 4, 12 * (int)sizeof(float) },
-        { 6, 4, 16 * (int)sizeof(float) },
-    };
-    desc.capacity          = 1;
-    desc.stride            = 6 * (int)sizeof(float);
-    desc.attribs           = vtx_attrs;
-    desc.attrib_count      = 2;
-    desc.inst_attribs      = inst_attrs;
-    desc.inst_attrib_count = 5;
-    desc.inst_stride       = (int)sizeof(ivp_solid_instance_t);
-    desc.depth_test        = true;
-    desc.depth_write       = true;
-    desc.depth_only        = true;
-    desc.primitive_type    = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-    desc.cull_mode         = SDL_GPU_CULLMODE_NONE;
+    ivp_gpu_pipeline_desc_t desc;
+    ivp_render_solid_pipeline_desc(&desc, IVP_GPU_PROGRAM_SHADOW);
+    desc.depth_only = true;
 
-    r->shadow_pipeline = ivp_gpu_create_pipeline(&r->gpu, &desc,
-        r->shaders.vs_shadow, r->shaders.vs_shadow_len,
-        r->shaders.fs_shadow, r->shaders.fs_shadow_len);
+    r->shadow_pipeline = ivp_gpu_pipeline_create(r->gpu, &desc);
     if (!r->shadow_pipeline) {
-        ivp_gpu_shadow_map_destroy(&r->shadow_map, &r->gpu);
+        ivp_gpu_shadow_map_destroy(r->gpu, r->shadow_map);
+        r->shadow_map = NULL;
         return false;
     }
     r->shadows_enabled = true;
@@ -89,11 +70,10 @@ bool ivp_shadow_init(ivp_renderer_t *r)
 
 void ivp_shadow_destroy(ivp_renderer_t *r)
 {
-    if (r->shadow_pipeline) {
-        SDL_ReleaseGPUGraphicsPipeline(r->gpu.device, r->shadow_pipeline);
-        r->shadow_pipeline = NULL;
-    }
-    ivp_gpu_shadow_map_destroy(&r->shadow_map, &r->gpu);
+    ivp_gpu_pipeline_destroy(r->gpu, r->shadow_pipeline);
+    r->shadow_pipeline = NULL;
+    ivp_gpu_shadow_map_destroy(r->gpu, r->shadow_map);
+    r->shadow_map = NULL;
 }
 
 /* Render the depth pass for this frame's solids.  Sets shadow_valid and
@@ -101,7 +81,7 @@ void ivp_shadow_destroy(ivp_renderer_t *r)
 void ivp_shadow_render(ivp_renderer_t *r)
 {
     r->shadow_valid = false;
-    if (!r->shadows_enabled || !r->shadow_pipeline || !r->shadow_map.tex) return;
+    if (!r->shadows_enabled || !r->shadow_pipeline || !r->shadow_map) return;
     if (!ivp_solid_has_instances(r)) return;
 
     /* The box follows the camera: roughly what the camera can look at. */
@@ -109,22 +89,14 @@ void ivp_shadow_render(ivp_renderer_t *r)
     if (extent < 8.0f) extent = 8.0f;
     if (extent > 60.0f) extent = 60.0f;
     ivp_shadow_light_matrix(r->light_vp, r->lighting.light_dir, r->cam_target,
-                            extent, r->shadow_map.size);
+                            extent, r->shadow_map_size);
 
-    SDL_GPUDepthStencilTargetInfo dt = {0};
-    dt.texture          = r->shadow_map.tex;
-    dt.clear_depth      = 1.0f;
-    dt.load_op          = SDL_GPU_LOADOP_CLEAR;
-    dt.store_op         = SDL_GPU_STOREOP_STORE;
-    dt.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
-    dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(r->cmd, NULL, 0, &dt);
+    ivp_gpu_pass_t *pass = ivp_gpu_shadow_pass_begin(r->gpu, r->shadow_map);
     if (!pass) return;
-    SDL_BindGPUGraphicsPipeline(pass, r->shadow_pipeline);
-    SDL_PushGPUVertexUniformData(r->cmd, 0, r->light_vp, 64);
+    ivp_gpu_bind_pipeline(pass, r->shadow_pipeline);
+    ivp_gpu_push_uniforms(pass, r->light_vp, 64);
     ivp_solid_draw(r, pass);
-    SDL_EndGPURenderPass(pass);
+    ivp_gpu_pass_end(pass);
     r->shadow_valid = true;
 }
 

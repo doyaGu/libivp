@@ -279,26 +279,26 @@ static void cone_build(proto_vertex_t verts[CONE_VERTS], Uint16 indices[CONE_TRI
 #define BUILTIN_COUNT 4    /* sphere, box, cylinder, cone */
 
 static void builtin(ivp_proto_shapes_t *ps, int i,
-                    ivp_gpu_proto_mesh_t **mesh, ivp_gpu_instance_buf_t **inst)
+                    ivp_gpu_mesh_t **mesh, ivp_gpu_instance_buf_t **inst)
 {
     switch (i) {
-    case 0:  *mesh = &ps->sphere;   *inst = &ps->sphere_instances;   break;
-    case 1:  *mesh = &ps->box;      *inst = &ps->box_instances;      break;
-    case 2:  *mesh = &ps->cylinder; *inst = &ps->cylinder_instances; break;
-    default: *mesh = &ps->cone;     *inst = &ps->cone_instances;     break;
+    case 0:  *mesh = ps->sphere;   *inst = &ps->sphere_instances;   break;
+    case 1:  *mesh = ps->box;      *inst = &ps->box_instances;      break;
+    case 2:  *mesh = ps->cylinder; *inst = &ps->cylinder_instances; break;
+    default: *mesh = ps->cone;     *inst = &ps->cone_instances;     break;
     }
 }
 
 /* Instance buffer a draw of built-in shape i goes to (opaque or blend). */
 static ivp_gpu_instance_buf_t *builtin_buf(ivp_renderer_t *r, int i)
 {
-    ivp_gpu_proto_mesh_t *m;
+    ivp_gpu_mesh_t *m;
     ivp_gpu_instance_buf_t *b;
     builtin(&r->protos, i, &m, &b);
     return r->solid_alpha < 0.999f ? &r->protos.blend[i] : b;
 }
 
-static ivp_result_t shapes_upload_generated(ivp_gpu_proto_mesh_t *out,
+static ivp_result_t shapes_upload_generated(ivp_gpu_mesh_t **out,
                                             ivp_gpu_device_t *dev, bool cone)
 {
     proto_vertex_t verts[CYL_VERTS > CONE_VERTS ? CYL_VERTS : CONE_VERTS];
@@ -306,8 +306,8 @@ static ivp_result_t shapes_upload_generated(ivp_gpu_proto_mesh_t *out,
     int nv, ni;
     if (cone) cone_build(verts, idx, &nv, &ni);
     else      cylinder_build(verts, idx, &nv, &ni);
-    return ivp_gpu_proto_mesh_upload(out, dev, verts, nv,
-                                     (int)sizeof(proto_vertex_t), idx, ni);
+    *out = ivp_gpu_mesh_create(dev, verts, nv, (int)sizeof(proto_vertex_t), idx, ni);
+    return *out ? IVP_OK : IVP_ERR_OUT_OF_MEMORY;
 }
 
 ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev)
@@ -322,10 +322,11 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
         if (ico.overflow || ico.nv <= 0 || ico.ni <= 0) {
             return IVP_ERR_CAPACITY_EXCEEDED;
         }
-        res = ivp_gpu_proto_mesh_upload(&ps->sphere, dev,
+        ps->sphere = ivp_gpu_mesh_create(dev,
             ico.verts, ico.nv, (int)sizeof(proto_vertex_t),
             ico.indices, ico.ni);
-        if (res != IVP_OK) goto fail;
+        res = IVP_ERR_OUT_OF_MEMORY;
+        if (!ps->sphere) goto fail;
     }
 
     /* Unit box */
@@ -333,10 +334,11 @@ ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev
         proto_vertex_t bv[BOX_VERTS];
         Uint16 bi[BOX_TRIS * 3];
         box_build(bv, bi);
-        res = ivp_gpu_proto_mesh_upload(&ps->box, dev,
+        ps->box = ivp_gpu_mesh_create(dev,
             bv, BOX_VERTS, (int)sizeof(proto_vertex_t),
             bi, BOX_TRIS * 3);
-        if (res != IVP_OK) goto fail;
+        res = IVP_ERR_OUT_OF_MEMORY;
+        if (!ps->box) goto fail;
     }
 
     res = shapes_upload_generated(&ps->cylinder, dev, false);
@@ -383,10 +385,11 @@ void ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev)
     ivp_gpu_instance_buf_destroy(&ps->cylinder_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->box_instances, dev);
     ivp_gpu_instance_buf_destroy(&ps->sphere_instances, dev);
-    ivp_gpu_proto_mesh_destroy(&ps->cone, dev);
-    ivp_gpu_proto_mesh_destroy(&ps->cylinder, dev);
-    ivp_gpu_proto_mesh_destroy(&ps->box, dev);
-    ivp_gpu_proto_mesh_destroy(&ps->sphere, dev);
+    ivp_gpu_mesh_destroy(dev, ps->cone);
+    ivp_gpu_mesh_destroy(dev, ps->cylinder);
+    ivp_gpu_mesh_destroy(dev, ps->box);
+    ivp_gpu_mesh_destroy(dev, ps->sphere);
+    ps->cone = ps->cylinder = ps->box = ps->sphere = NULL;
     ps->ready = false;
 }
 
@@ -646,18 +649,18 @@ ivp_render_mesh_t *ivp_render_mesh_create(ivp_renderer_t *r,
     }
     m->radius = sqrtf(rad2);
 
-    if (ivp_gpu_proto_mesh_upload(&m->mesh, &r->gpu, verts, nv,
-                                  (int)sizeof(proto_vertex_t), idx, nv) != IVP_OK)
-        goto fail;
-    if (ivp_gpu_instance_buf_create(&m->instances, &r->gpu, MESH_INSTANCE_CAP,
+    m->mesh = ivp_gpu_mesh_create(r->gpu, verts, nv,
+                                  (int)sizeof(proto_vertex_t), idx, nv);
+    if (!m->mesh) goto fail;
+    if (ivp_gpu_instance_buf_create(&m->instances, r->gpu, MESH_INSTANCE_CAP,
                                     (int)sizeof(ivp_solid_instance_t)) != IVP_OK) {
-        ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+        ivp_gpu_mesh_destroy(r->gpu, m->mesh);
         goto fail;
     }
-    if (ivp_gpu_instance_buf_create(&m->blend_instances, &r->gpu, MESH_INSTANCE_CAP / 4,
+    if (ivp_gpu_instance_buf_create(&m->blend_instances, r->gpu, MESH_INSTANCE_CAP / 4,
                                     (int)sizeof(ivp_solid_instance_t)) != IVP_OK) {
-        ivp_gpu_instance_buf_destroy(&m->instances, &r->gpu);
-        ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+        ivp_gpu_instance_buf_destroy(&m->instances, r->gpu);
+        ivp_gpu_mesh_destroy(r->gpu, m->mesh);
         goto fail;
     }
     free(verts);
@@ -678,10 +681,10 @@ static void mesh_release(ivp_render_mesh_t *m)
 {
     ivp_renderer_t *r = m->renderer;
     /* The GPU may still read the buffers of frames in flight. */
-    if (r->gpu.device) SDL_WaitForGPUIdle(r->gpu.device);
-    ivp_gpu_instance_buf_destroy(&m->blend_instances, &r->gpu);
-    ivp_gpu_instance_buf_destroy(&m->instances, &r->gpu);
-    ivp_gpu_proto_mesh_destroy(&m->mesh, &r->gpu);
+    ivp_gpu_wait_idle(r->gpu);
+    ivp_gpu_instance_buf_destroy(&m->blend_instances, r->gpu);
+    ivp_gpu_instance_buf_destroy(&m->instances, r->gpu);
+    ivp_gpu_mesh_destroy(r->gpu, m->mesh);
     free(m);
 }
 
@@ -734,7 +737,7 @@ bool ivp_solid_has_instances(const ivp_renderer_t *r)
 void ivp_solid_begin_frame(ivp_renderer_t *r)
 {
     if (!r->protos.ready) return;
-    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    ivp_gpu_mesh_t *m;  ivp_gpu_instance_buf_t *b;
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
         ivp_gpu_instance_buf_reset(b);
@@ -750,59 +753,41 @@ void ivp_solid_begin_frame(ivp_renderer_t *r)
 void ivp_solid_upload(ivp_renderer_t *r)
 {
     if (!r->protos.ready) return;
-    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    ivp_gpu_mesh_t *m;  ivp_gpu_instance_buf_t *b;
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
-        ivp_gpu_instance_buf_upload(b, &r->gpu, r->cmd);
-        ivp_gpu_instance_buf_upload(&r->protos.blend[i], &r->gpu, r->cmd);
+        ivp_gpu_instance_buf_upload(b, r->gpu);
+        ivp_gpu_instance_buf_upload(&r->protos.blend[i], r->gpu);
     }
     for (ivp_render_mesh_t *u = r->meshes; u; u = u->next) {
-        ivp_gpu_instance_buf_upload(&u->instances, &r->gpu, r->cmd);
-        ivp_gpu_instance_buf_upload(&u->blend_instances, &r->gpu, r->cmd);
+        ivp_gpu_instance_buf_upload(&u->instances, r->gpu);
+        ivp_gpu_instance_buf_upload(&u->blend_instances, r->gpu);
     }
 }
 
-void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass)
+void ivp_solid_draw(ivp_renderer_t *r, ivp_gpu_pass_t *pass)
 {
     if (!r->protos.ready) return;
-    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    ivp_gpu_mesh_t *m;  ivp_gpu_instance_buf_t *b;
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
-        if (b->count > 0) ivp_gpu_proto_mesh_draw_instanced(m, b, pass);
+        ivp_gpu_instance_buf_draw(b, m, pass);
     }
     for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
-        if (u->instances.count > 0)
-            ivp_gpu_proto_mesh_draw_instanced(&u->mesh, &u->instances, pass);
+        ivp_gpu_instance_buf_draw(&u->instances, u->mesh, pass);
 }
 
 /* Translucent instances; the caller binds the blend pipeline. */
-void ivp_solid_draw_blend(ivp_renderer_t *r, SDL_GPURenderPass *pass)
+void ivp_solid_draw_blend(ivp_renderer_t *r, ivp_gpu_pass_t *pass)
 {
     if (!r->protos.ready) return;
-    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
+    ivp_gpu_mesh_t *m;  ivp_gpu_instance_buf_t *b;
     for (int i = 0; i < BUILTIN_COUNT; i++) {
         builtin(&r->protos, i, &m, &b);
-        if (r->protos.blend[i].count > 0)
-            ivp_gpu_proto_mesh_draw_instanced(m, &r->protos.blend[i], pass);
+        ivp_gpu_instance_buf_draw(&r->protos.blend[i], m, pass);
     }
     for (ivp_render_mesh_t *u = r->meshes; u; u = u->next)
-        if (u->blend_instances.count > 0)
-            ivp_gpu_proto_mesh_draw_instanced(&u->mesh, &u->blend_instances, pass);
-}
-
-void ivp_solid_advance(ivp_renderer_t *r)
-{
-    if (!r->protos.ready) return;
-    ivp_gpu_proto_mesh_t *m;  ivp_gpu_instance_buf_t *b;
-    for (int i = 0; i < BUILTIN_COUNT; i++) {
-        builtin(&r->protos, i, &m, &b);
-        ivp_gpu_instance_buf_advance(b, NULL);
-        ivp_gpu_instance_buf_advance(&r->protos.blend[i], NULL);
-    }
-    for (ivp_render_mesh_t *u = r->meshes; u; u = u->next) {
-        ivp_gpu_instance_buf_advance(&u->instances, NULL);
-        ivp_gpu_instance_buf_advance(&u->blend_instances, NULL);
-    }
+        ivp_gpu_instance_buf_draw(&u->blend_instances, u->mesh, pass);
 }
 
 void ivp_render_set_solid_alpha(ivp_renderer_t *r, float alpha)

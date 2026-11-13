@@ -57,10 +57,10 @@ typedef struct ivp_render_lighting {
 /* ── Prototype shape meshes for instanced solid draw ───────────────────── */
 
 typedef struct ivp_proto_shapes {
-    ivp_gpu_proto_mesh_t    sphere;
-    ivp_gpu_proto_mesh_t    box;
-    ivp_gpu_proto_mesh_t    cylinder;   /* radius 1, y in [-1,1] */
-    ivp_gpu_proto_mesh_t    cone;       /* base radius 1 at y=-1, apex y=+1 */
+    ivp_gpu_mesh_t         *sphere;
+    ivp_gpu_mesh_t         *box;
+    ivp_gpu_mesh_t         *cylinder;   /* radius 1, y in [-1,1] */
+    ivp_gpu_mesh_t         *cone;       /* base radius 1 at y=-1, apex y=+1 */
     ivp_gpu_instance_buf_t  sphere_instances;
     ivp_gpu_instance_buf_t  box_instances;
     ivp_gpu_instance_buf_t  cylinder_instances;
@@ -75,7 +75,7 @@ typedef struct ivp_proto_shapes {
 struct ivp_render_mesh {
     ivp_renderer_t         *renderer;
     ivp_render_mesh_t      *next;
-    ivp_gpu_proto_mesh_t    mesh;
+    ivp_gpu_mesh_t         *mesh;
     ivp_gpu_instance_buf_t  instances;
     ivp_gpu_instance_buf_t  blend_instances;
     float                   center[3];   /* bounding sphere, mesh space */
@@ -89,6 +89,11 @@ typedef struct ivp_solid_instance {
     float alpha;          /* 1 = opaque; < 1 is drawn in the blend pass */
 } ivp_solid_instance_t;
 
+/* Pipeline description shared by the instanced solid and shadow pipelines:
+ * proto mesh vertices plus ivp_solid_instance_t (ivp_render_core.c). */
+void ivp_render_solid_pipeline_desc(ivp_gpu_pipeline_desc_t *desc,
+                                    ivp_gpu_program_t program);
+
 /* Proto shape lifecycle (defined in ivp_render_solid.c). */
 ivp_result_t ivp_proto_shapes_init(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
 void         ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *dev);
@@ -97,9 +102,8 @@ void         ivp_proto_shapes_destroy(ivp_proto_shapes_t *ps, ivp_gpu_device_t *
  * (defined in ivp_render_solid.c). */
 void ivp_solid_begin_frame(ivp_renderer_t *r);
 void ivp_solid_upload(ivp_renderer_t *r);
-void ivp_solid_draw(ivp_renderer_t *r, SDL_GPURenderPass *pass);
-void ivp_solid_draw_blend(ivp_renderer_t *r, SDL_GPURenderPass *pass);
-void ivp_solid_advance(ivp_renderer_t *r);
+void ivp_solid_draw(ivp_renderer_t *r, ivp_gpu_pass_t *pass);
+void ivp_solid_draw_blend(ivp_renderer_t *r, ivp_gpu_pass_t *pass);
 void ivp_solid_destroy_meshes(ivp_renderer_t *r);
 bool ivp_solid_has_instances(const ivp_renderer_t *r);
 
@@ -114,10 +118,11 @@ void ivp_shadow_render(ivp_renderer_t *r);
 /* ── Screenshot hooks (defined in ivp_render_capture.c) ────────────────── */
 
 bool ivp_png_write_rgb(const char *path, const unsigned char *rgb, int w, int h);
-SDL_GPUTexture *ivp_capture_target(ivp_renderer_t *r);   /* NULL: not capturing */
-void ivp_capture_record(ivp_renderer_t *r);              /* blit + download */
-void ivp_capture_finish(ivp_renderer_t *r, SDL_GPUFence *fence);
-void ivp_capture_destroy(ivp_renderer_t *r);
+/* Before the main pass: start reading back this frame if one is requested.
+ * Returns whether the frame is captured. */
+bool ivp_capture_begin(ivp_renderer_t *r);
+/* After ivp_gpu_frame_end of a captured frame: write the PNG. */
+void ivp_capture_finish(ivp_renderer_t *r);
 
 /* ── Renderer struct ───────────────────────────────────────────────────── */
 
@@ -127,8 +132,7 @@ struct ivp_renderer {
     int                      width, height;
 
     /* GPU backend */
-    ivp_gpu_device_t         gpu;
-    ivp_shader_cache_t       shaders;
+    ivp_gpu_device_t        *gpu;
     ivp_gpu_stream_t         stream_3d;   /* 3D wireframe lines */
     ivp_gpu_stream_t         stream_2d;   /* 2D HUD overlay     */
     /* 2D filled rectangles, alpha blended, in three layers drawn in order:
@@ -140,23 +144,21 @@ struct ivp_renderer {
     bool                     overlay_mode;   /* wire draws go to stream_overlay */
 
     /* Instanced solid rendering */
-    SDL_GPUGraphicsPipeline *inst_pipeline;
-    SDL_GPUGraphicsPipeline *inst_pipeline_blend;   /* alpha blended, no depth write */
+    ivp_gpu_pipeline_t      *inst_pipeline;
+    ivp_gpu_pipeline_t      *inst_pipeline_blend;   /* alpha blended, no depth write */
     float                    solid_alpha;           /* applies to the next solid draws */
     ivp_proto_shapes_t       protos;
     ivp_render_mesh_t       *meshes;      /* user meshes, singly linked */
 
     /* Directional light shadow (ivp_render_shadow.c) */
-    ivp_gpu_shadow_map_t     shadow_map;
-    SDL_GPUGraphicsPipeline *shadow_pipeline;
+    ivp_gpu_shadow_map_t    *shadow_map;
+    int                      shadow_map_size;
+    ivp_gpu_pipeline_t      *shadow_pipeline;
     bool                     shadows_enabled;
     bool                     shadow_valid;   /* the map holds this frame's depth */
     float                    light_vp[16];
     float                    cam_target[3];  /* centre of the shadow box */
     float                    cam_dist;       /* sizes the shadow box */
-
-    /* MSAA */
-    ivp_gpu_msaa_t           msaa;
 
     /* Camera input state */
     ivp_camera_input_t       cam_input;
@@ -193,17 +195,9 @@ struct ivp_renderer {
 
     /* Screenshot (ivp_render_capture.c) */
     char                     capture_path[512];
-    SDL_GPUTexture          *capture_tex;
-    SDL_GPUTransferBuffer   *capture_tb;
-    int                      capture_w, capture_h;
 
-    /* Per-frame GPU command state (valid between begin_frame / end_frame) */
-    SDL_GPUCommandBuffer    *cmd;
-    SDL_GPUTexture          *swapchain_tex;
-
-    /* Frame-level fence ring (replaces per-stream fence tracking) */
-    SDL_GPUFence            *frame_fences[IVP_GPU_RING_FRAMES];
-    int                      frame_ring;  /* current ring index [0..2] */
+    /* A frame is being recorded (between begin_frame and end_frame) */
+    bool                     frame_active;
 };
 
 #ifdef __cplusplus

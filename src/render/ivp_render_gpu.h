@@ -1,13 +1,24 @@
-/* ivp_render_gpu.h -- Internal: SDL3 GPU device, pipeline, stream management
+/* ivp_render_gpu.h -- Internal: the render module's GPU backend interface
  *
  * This header is INTERNAL to the render module. It is not part of the public
  * API and should not be included by code outside src/render/.
  *
- * Key abstractions:
- *   ivp_gpu_stream_t       -- triple-buffered vertex stream (pipeline+bufs)
- *   ivp_gpu_instance_buf_t -- triple-buffered instance data for batched draw
- *   ivp_gpu_msaa_t         -- MSAA intermediate targets (color + depth)
- *   ivp_gpu_proto_mesh_t   -- static prototype mesh (vertex+index GPU bufs)
+ * The renderer draws through this interface only.  One backend implements
+ * it, chosen at configure time (IVP_RENDER_BACKEND):
+ *   ivp_render_sdlgpu.c  SDL3 GPU (Metal, Vulkan, D3D12): the native default
+ *   ivp_render_gles.c    OpenGL ES 3.0 / WebGL2: the Emscripten build
+ *
+ * The device, pipelines, buffers, meshes, shadow map and passes are opaque
+ * backend objects.  Streams and instance buffers (ivp_render_stream.c) add
+ * CPU staging on top of backend buffers.
+ *
+ * A frame:
+ *   ivp_gpu_frame_begin
+ *   ivp_gpu_buffer_upload ...            (before the first pass)
+ *   ivp_gpu_shadow_pass_begin ... ivp_gpu_pass_end   (optional)
+ *   ivp_gpu_capture_begin                (optional, before the main pass)
+ *   ivp_gpu_main_pass_begin ... ivp_gpu_pass_end
+ *   ivp_gpu_frame_end                    (or ivp_gpu_frame_cancel)
  */
 #ifndef IVP_RENDER_GPU_H
 #define IVP_RENDER_GPU_H
@@ -15,151 +26,187 @@
 #include <ivp/base/ivp_result.h>
 #include <SDL3/SDL.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── Constants ─────────────────────────────────────────────────────────── */
+typedef struct ivp_gpu_device     ivp_gpu_device_t;
+typedef struct ivp_gpu_pipeline   ivp_gpu_pipeline_t;
+typedef struct ivp_gpu_buffer     ivp_gpu_buffer_t;
+typedef struct ivp_gpu_mesh       ivp_gpu_mesh_t;
+typedef struct ivp_gpu_shadow_map ivp_gpu_shadow_map_t;
+typedef struct ivp_gpu_pass       ivp_gpu_pass_t;
 
-#define IVP_GPU_RING_FRAMES 3   /* triple-buffered cycling */
+/* ── Device ────────────────────────────────────────────────────────────── */
 
-/* ── GPU device ────────────────────────────────────────────────────────── */
+/* Window flags the backend needs, to be added to SDL_CreateWindow's.  Also
+ * sets any attributes that must be in place before the window exists. */
+SDL_WindowFlags ivp_gpu_window_flags(int msaa_samples);
 
-typedef struct ivp_gpu_device {
-    SDL_GPUDevice          *device;
-    SDL_Window             *window;
-    SDL_GPUShaderFormat     shader_format;
-    SDL_GPUTextureFormat    swapchain_format;
-    SDL_GPUTexture         *depth_texture;
-    int                     depth_w, depth_h;
-    SDL_GPUSampleCount      sample_count;
-} ivp_gpu_device_t;
-
-ivp_result_t ivp_gpu_device_init(ivp_gpu_device_t *dev, SDL_Window *window,
-                                 int msaa_samples);
+ivp_result_t ivp_gpu_device_create(ivp_gpu_device_t **out, SDL_Window *window,
+                                   int msaa_samples, bool vsync);
 void         ivp_gpu_device_destroy(ivp_gpu_device_t *dev);
-bool         ivp_gpu_device_ensure_depth(ivp_gpu_device_t *dev, int w, int h);
 
-/* ── MSAA targets ──────────────────────────────────────────────────────── */
+/* Wait until the GPU no longer reads any resource (before destroying one
+ * that frames in flight may use). */
+void ivp_gpu_wait_idle(ivp_gpu_device_t *dev);
 
-typedef struct ivp_gpu_msaa {
-    SDL_GPUTexture *color_tex;   /* multisampled color render target */
-    SDL_GPUTexture *depth_tex;   /* multisampled depth render target */
-    int             width, height;
-    SDL_GPUSampleCount sample_count;
-    bool            enabled;
-} ivp_gpu_msaa_t;
+/* ── Frame ─────────────────────────────────────────────────────────────── */
 
-bool ivp_gpu_msaa_ensure(ivp_gpu_msaa_t *msaa, ivp_gpu_device_t *dev,
-                         int w, int h);
-void ivp_gpu_msaa_destroy(ivp_gpu_msaa_t *msaa, ivp_gpu_device_t *dev);
+typedef enum ivp_gpu_frame_status {
+    IVP_GPU_FRAME_READY,   /* record and draw this frame */
+    IVP_GPU_FRAME_SKIP,    /* no target this frame (minimised, resizing) */
+    IVP_GPU_FRAME_ERROR    /* the device failed */
+} ivp_gpu_frame_status_t;
 
-/* ── Vertex attribute descriptor ───────────────────────────────────────── */
+ivp_gpu_frame_status_t ivp_gpu_frame_begin(ivp_gpu_device_t *dev);
+void ivp_gpu_frame_end(ivp_gpu_device_t *dev);      /* submit and present */
+void ivp_gpu_frame_cancel(ivp_gpu_device_t *dev);   /* drop the frame */
+
+/* ── Pipelines ─────────────────────────────────────────────────────────── */
+
+/* Shader programs; each backend supplies its own code for them. */
+typedef enum ivp_gpu_program {
+    IVP_GPU_PROGRAM_LINE3D,   /* 3D lines: pos3 + col3, uniform mat4 vp */
+    IVP_GPU_PROGRAM_LINE2D,   /* 2D lines: pos2 + col3, uniform mat4 ortho */
+    IVP_GPU_PROGRAM_SOLID,    /* instanced lit solids with shadows */
+    IVP_GPU_PROGRAM_SHADOW,   /* instanced depth only, uniform mat4 light_vp */
+    IVP_GPU_PROGRAM_RECT,     /* 2D rectangles: pos2 + rgba, uniform mat4 ortho */
+    IVP_GPU_PROGRAM_COUNT
+} ivp_gpu_program_t;
+
+typedef enum ivp_gpu_primitive {
+    IVP_GPU_PRIMITIVE_LINES,
+    IVP_GPU_PRIMITIVE_TRIANGLES
+} ivp_gpu_primitive_t;
 
 typedef struct ivp_gpu_attrib_desc {
     int location;
-    int components;  /* 2, 3, or 4 */
-    int offset;      /* byte offset within vertex struct */
+    int components;  /* 2, 3, or 4 floats */
+    int offset;      /* byte offset within the vertex struct */
 } ivp_gpu_attrib_desc_t;
 
-/* ── GPU vertex stream (triple-buffered) ───────────────────────────────── */
-/*
- * A stream bundles: pipeline + triple-buffered GPU/transfer buffers + CPU staging.
- * Triple-buffering eliminates per-frame upload stalls by cycling through
- * buffer slots and using fences to ensure the GPU is done before reuse.
- */
+typedef struct ivp_gpu_pipeline_desc {
+    ivp_gpu_program_t            program;
+    ivp_gpu_primitive_t          primitive;
+    /* Per-vertex attributes (vertex buffer, or the mesh for instanced draws) */
+    int                          stride;
+    const ivp_gpu_attrib_desc_t *attribs;
+    int                          attrib_count;
+    /* Per-instance attributes (instanced pipelines only) */
+    int                          inst_stride;
+    const ivp_gpu_attrib_desc_t *inst_attribs;
+    int                          inst_attrib_count;
+    bool depth_test;
+    bool depth_write;
+    bool depth_always;    /* keep the depth target, never reject (overlays) */
+    bool blend;           /* straight alpha blending */
+    bool depth_only;      /* shadow pass: no colour target, depth bias */
+    bool shadow_sampler;  /* the fragment shader samples the shadow map */
+} ivp_gpu_pipeline_desc_t;
 
+ivp_gpu_pipeline_t *ivp_gpu_pipeline_create(ivp_gpu_device_t *dev,
+                                            const ivp_gpu_pipeline_desc_t *desc);
+void ivp_gpu_pipeline_destroy(ivp_gpu_device_t *dev, ivp_gpu_pipeline_t *pipe);
+
+/* ── Buffers and meshes ────────────────────────────────────────────────── */
+
+/* Vertex data rewritten every frame; `size` is the capacity in bytes.
+ * Upload between ivp_gpu_frame_begin and the first pass. */
+ivp_gpu_buffer_t *ivp_gpu_buffer_create(ivp_gpu_device_t *dev, size_t size);
+void ivp_gpu_buffer_destroy(ivp_gpu_device_t *dev, ivp_gpu_buffer_t *buf);
+void ivp_gpu_buffer_upload(ivp_gpu_device_t *dev, ivp_gpu_buffer_t *buf,
+                           const void *data, size_t size);
+
+/* Static vertices with 16-bit indices, drawn as instanced triangles. */
+ivp_gpu_mesh_t *ivp_gpu_mesh_create(ivp_gpu_device_t *dev,
+                                    const void *vtx_data, int vtx_count,
+                                    int vtx_stride,
+                                    const Uint16 *idx_data, int idx_count);
+void ivp_gpu_mesh_destroy(ivp_gpu_device_t *dev, ivp_gpu_mesh_t *mesh);
+
+/* ── Shadow map (square depth texture, compared when sampled) ──────────── */
+
+ivp_gpu_shadow_map_t *ivp_gpu_shadow_map_create(ivp_gpu_device_t *dev, int size);
+void ivp_gpu_shadow_map_destroy(ivp_gpu_device_t *dev, ivp_gpu_shadow_map_t *map);
+
+/* ── Passes and draws ──────────────────────────────────────────────────── */
+
+/* Depth-only pass into the shadow map, cleared to 1.  NULL on failure. */
+ivp_gpu_pass_t *ivp_gpu_shadow_pass_begin(ivp_gpu_device_t *dev,
+                                          ivp_gpu_shadow_map_t *map);
+/* The window pass (or the capture target), colour cleared to `clear` and
+ * depth to 1, with a width x height viewport.  NULL on failure: cancel the
+ * frame. */
+ivp_gpu_pass_t *ivp_gpu_main_pass_begin(ivp_gpu_device_t *dev,
+                                        const float clear[4],
+                                        int width, int height);
+void ivp_gpu_pass_end(ivp_gpu_pass_t *pass);
+
+void ivp_gpu_bind_pipeline(ivp_gpu_pass_t *pass, ivp_gpu_pipeline_t *pipe);
+/* Vertex stage uniform block 0; stays bound for the following draws. */
+void ivp_gpu_push_uniforms(ivp_gpu_pass_t *pass, const void *data, size_t size);
+void ivp_gpu_bind_shadow_map(ivp_gpu_pass_t *pass, ivp_gpu_shadow_map_t *map);
+
+void ivp_gpu_draw(ivp_gpu_pass_t *pass, const ivp_gpu_buffer_t *buf,
+                  int vertex_count);
+void ivp_gpu_draw_mesh_instanced(ivp_gpu_pass_t *pass, const ivp_gpu_mesh_t *mesh,
+                                 const ivp_gpu_buffer_t *instances,
+                                 int instance_count);
+
+/* ── Screenshot ────────────────────────────────────────────────────────── */
+
+/* Read back this frame: call before ivp_gpu_main_pass_begin.  False when the
+ * backend cannot capture. */
+bool ivp_gpu_capture_begin(ivp_gpu_device_t *dev);
+/* After ivp_gpu_frame_end: the captured frame as tightly packed RGB8 rows,
+ * top row first, owned by the caller (free()).  NULL if capturing failed. */
+unsigned char *ivp_gpu_capture_take(ivp_gpu_device_t *dev, int *width, int *height);
+
+/* ── Streams and instance buffers (ivp_render_stream.c) ────────────────── */
+
+/* A pipeline plus a per-frame vertex buffer with CPU staging. */
 typedef struct ivp_gpu_stream {
-    /* Pipeline */
-    SDL_GPUGraphicsPipeline *pipeline;
-    /* Triple-buffered GPU + transfer */
-    SDL_GPUBuffer           *gpu_buf[IVP_GPU_RING_FRAMES];
-    SDL_GPUTransferBuffer   *transfer_buf[IVP_GPU_RING_FRAMES];
-    SDL_GPUFence            *fence[IVP_GPU_RING_FRAMES];
-    int                      ring_slot;     /* current slot [0,2] */
-    /* CPU staging */
-    void                    *vertices;
-    int                      vertex_count;
-    int                      capacity;      /* in vertices */
-    int                      stride;        /* bytes per vertex */
+    ivp_gpu_pipeline_t *pipeline;
+    ivp_gpu_buffer_t   *buf;
+    void               *vertices;      /* CPU staging */
+    int                 vertex_count;
+    int                 capacity;      /* in vertices */
+    int                 stride;        /* bytes per vertex */
 } ivp_gpu_stream_t;
 
-/* Pipeline creation descriptor (consumed once during stream_create). */
-typedef struct ivp_gpu_stream_desc {
-    int                         capacity;
-    int                         stride;
-    const ivp_gpu_attrib_desc_t *attribs;
-    int                         attrib_count;
-    bool                        depth_test;
-    bool                        depth_write;
-    bool                        depth_always;     /* keep the depth target, never reject (overlays) */
-    SDL_GPUPrimitiveType        primitive_type;   /* explicitly set by caller */
-    SDL_GPUCullMode             cull_mode;        /* 0 = NONE (default) */
-    int                         num_uniform_bufs; /* 0 = auto (1 for MSL) */
-    int                         fs_num_samplers;  /* fragment shader texture samplers */
-    bool                        blend;            /* straight alpha blending */
-    bool                        depth_only;       /* no colour target, 1 sample, depth bias (shadow pass) */
-    /* Optional: second vertex buffer for instancing (slot 1) */
-    const ivp_gpu_attrib_desc_t *inst_attribs;
-    int                         inst_attrib_count;
-    int                         inst_stride;
-} ivp_gpu_stream_desc_t;
-
-/* Create a fully-initialized stream: pipeline + triple-buffered bufs. */
-ivp_result_t ivp_gpu_stream_create(ivp_gpu_stream_t *out,
-                                   ivp_gpu_device_t *dev,
-                                   const ivp_gpu_stream_desc_t *desc,
-                                   const unsigned char *vs_code, size_t vs_len,
-                                   const unsigned char *fs_code, size_t fs_len);
-
+ivp_result_t ivp_gpu_stream_create(ivp_gpu_stream_t *out, ivp_gpu_device_t *dev,
+                                   const ivp_gpu_pipeline_desc_t *desc,
+                                   int capacity);
 void ivp_gpu_stream_destroy(ivp_gpu_stream_t *s, ivp_gpu_device_t *dev);
 
-/* Reset vertex count to zero (call at start of frame). */
 static inline void ivp_gpu_stream_reset(ivp_gpu_stream_t *s)
 {
     s->vertex_count = 0;
 }
 
-/* Push raw vertex data into the CPU staging area.
- * Returns pointer to the pushed region, or NULL if out of capacity. */
+/* Room for `count` vertices in the staging area, or NULL when full. */
 void *ivp_gpu_stream_push(ivp_gpu_stream_t *s, int count);
+void  ivp_gpu_stream_upload(ivp_gpu_stream_t *s, ivp_gpu_device_t *dev);
+/* Bind the pipeline, push the uniforms and draw the staged vertices. */
+void  ivp_gpu_stream_draw(ivp_gpu_stream_t *s, ivp_gpu_pass_t *pass,
+                          const void *uniform_data, size_t uniform_size);
 
-/* Upload CPU staging → GPU via copy pass (triple-buffered: waits fence). */
-void ivp_gpu_stream_upload(ivp_gpu_stream_t *s,
-                           ivp_gpu_device_t *dev,
-                           SDL_GPUCommandBuffer *cmd);
-
-/* Bind pipeline, bind vertex buffer, push uniform, draw.
- * Call inside an active render pass. `uniform_data` and `uniform_size`
- * specify the push-constant payload (typically 64 or 160 bytes). */
-void ivp_gpu_stream_draw(ivp_gpu_stream_t *s,
-                         SDL_GPURenderPass *pass,
-                         SDL_GPUCommandBuffer *cmd,
-                         const void *uniform_data,
-                         Uint32 uniform_size);
-
-/* Advance ring slot after frame submit (call after SubmitGPUCommandBuffer). */
-void ivp_gpu_stream_advance(ivp_gpu_stream_t *s, SDL_GPUFence *frame_fence);
-
-/* ── Instance buffer (triple-buffered) ─────────────────────────────────── */
-
+/* Per-instance data for instanced mesh draws, with CPU staging. */
 typedef struct ivp_gpu_instance_buf {
-    SDL_GPUBuffer          *gpu_buf[IVP_GPU_RING_FRAMES];
-    SDL_GPUTransferBuffer  *transfer_buf[IVP_GPU_RING_FRAMES];
-    SDL_GPUFence           *fence[IVP_GPU_RING_FRAMES];
-    int                     ring_slot;
-    void                   *data;       /* CPU staging */
-    int                     count;      /* current instance count */
-    int                     capacity;   /* max instances */
-    int                     stride;     /* bytes per instance */
+    ivp_gpu_buffer_t *buf;
+    void             *data;       /* CPU staging */
+    int               count;      /* current instance count */
+    int               capacity;   /* max instances */
+    int               stride;     /* bytes per instance */
 } ivp_gpu_instance_buf_t;
 
 ivp_result_t ivp_gpu_instance_buf_create(ivp_gpu_instance_buf_t *out,
                                          ivp_gpu_device_t *dev,
                                          int capacity, int stride);
-void ivp_gpu_instance_buf_destroy(ivp_gpu_instance_buf_t *b,
-                                  ivp_gpu_device_t *dev);
+void ivp_gpu_instance_buf_destroy(ivp_gpu_instance_buf_t *b, ivp_gpu_device_t *dev);
 
 static inline void ivp_gpu_instance_buf_reset(ivp_gpu_instance_buf_t *b)
 {
@@ -167,74 +214,10 @@ static inline void ivp_gpu_instance_buf_reset(ivp_gpu_instance_buf_t *b)
 }
 
 void *ivp_gpu_instance_buf_push(ivp_gpu_instance_buf_t *b, int count);
-void  ivp_gpu_instance_buf_upload(ivp_gpu_instance_buf_t *b,
-                                  ivp_gpu_device_t *dev,
-                                  SDL_GPUCommandBuffer *cmd);
-void  ivp_gpu_instance_buf_advance(ivp_gpu_instance_buf_t *b,
-                                   SDL_GPUFence *frame_fence);
-
-/* ── Prototype mesh (static GPU vertex+index buffers) ──────────────────── */
-
-typedef struct ivp_gpu_proto_mesh {
-    SDL_GPUBuffer *vtx_buf;
-    SDL_GPUBuffer *idx_buf;
-    int            vertex_count;
-    int            index_count;
-    int            vtx_stride;
-} ivp_gpu_proto_mesh_t;
-
-ivp_result_t ivp_gpu_proto_mesh_upload(ivp_gpu_proto_mesh_t *out,
-                                       ivp_gpu_device_t *dev,
-                                       const void *vtx_data, int vtx_count,
-                                       int vtx_stride,
-                                       const Uint16 *idx_data, int idx_count);
-void ivp_gpu_proto_mesh_destroy(ivp_gpu_proto_mesh_t *m, ivp_gpu_device_t *dev);
-
-/* Instanced draw: prototype mesh + instance buffer.
- * Pipeline must already be bound. */
-void ivp_gpu_proto_mesh_draw_instanced(const ivp_gpu_proto_mesh_t *mesh,
-                                       const ivp_gpu_instance_buf_t *inst,
-                                       SDL_GPURenderPass *pass);
-
-/* ── Pipeline creation (internal) ──────────────────────────────────────── */
-
-/* Create a standalone graphics pipeline from a stream descriptor.
- * Used for instanced pipelines that don't have their own stream. */
-SDL_GPUGraphicsPipeline *ivp_gpu_create_pipeline(
-    ivp_gpu_device_t *dev,
-    const ivp_gpu_stream_desc_t *desc,
-    const unsigned char *vs_code, size_t vs_len,
-    const unsigned char *fs_code, size_t fs_len);
-
-/* ── Shadow map (depth texture + comparison sampler) ──────────────────── */
-
-typedef struct ivp_gpu_shadow_map {
-    SDL_GPUTexture *tex;
-    SDL_GPUSampler *smp;
-    int             size;     /* square, texels */
-} ivp_gpu_shadow_map_t;
-
-bool ivp_gpu_shadow_map_create(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev, int size);
-void ivp_gpu_shadow_map_destroy(ivp_gpu_shadow_map_t *map, ivp_gpu_device_t *dev);
-
-/* ── Shader blob loading ───────────────────────────────────────────────── */
-
-/* Shader blob cache (one per renderer, not global). */
-typedef struct ivp_shader_cache {
-    unsigned char *vs_3d;       size_t vs_3d_len;
-    unsigned char *fs;          size_t fs_len;
-    unsigned char *vs_2d;       size_t vs_2d_len;
-    unsigned char *vs_inst;     size_t vs_inst_len;
-    unsigned char *fs_inst;     size_t fs_inst_len;
-    unsigned char *vs_shadow;   size_t vs_shadow_len;
-    unsigned char *fs_shadow;   size_t fs_shadow_len;
-    unsigned char *vs_rect;     size_t vs_rect_len;
-    unsigned char *fs_rect;     size_t fs_rect_len;
-} ivp_shader_cache_t;
-
-ivp_result_t ivp_shader_cache_load(ivp_shader_cache_t *cache,
-                                   SDL_GPUShaderFormat format);
-void         ivp_shader_cache_free(ivp_shader_cache_t *cache);
+void  ivp_gpu_instance_buf_upload(ivp_gpu_instance_buf_t *b, ivp_gpu_device_t *dev);
+/* Draw `mesh` once per staged instance; the pipeline is already bound. */
+void  ivp_gpu_instance_buf_draw(const ivp_gpu_instance_buf_t *b,
+                                const ivp_gpu_mesh_t *mesh, ivp_gpu_pass_t *pass);
 
 #ifdef __cplusplus
 }

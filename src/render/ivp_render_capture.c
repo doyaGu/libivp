@@ -1,8 +1,7 @@
 /* ivp_render_capture.c -- Screenshot capture (PNG)
  *
- * SDL GPU cannot read back a swapchain texture, so the frame that is being
- * captured renders into a texture owned by the renderer; that texture is
- * blitted to the swapchain and downloaded to a transfer buffer.
+ * The backend reads the captured frame back (ivp_gpu_capture_begin /
+ * ivp_gpu_capture_take); this file writes it as a PNG.
  */
 
 #include "ivp_render_internal.h"
@@ -119,106 +118,22 @@ bool ivp_render_capture_pending(const ivp_renderer_t *r)
     return r && r->capture_path[0] != '\0';
 }
 
-SDL_GPUTexture *ivp_capture_target(ivp_renderer_t *r)
+bool ivp_capture_begin(ivp_renderer_t *r)
 {
-    if (!r->capture_path[0]) return NULL;
-    int pw, ph;
-    SDL_GetWindowSizeInPixels(r->window, &pw, &ph);
-    if (r->capture_tex && (r->capture_w != pw || r->capture_h != ph)) {
-        SDL_ReleaseGPUTexture(r->gpu.device, r->capture_tex);
-        r->capture_tex = NULL;
-    }
-    if (!r->capture_tex) {
-        SDL_GPUTextureCreateInfo ci = {0};
-        ci.type                 = SDL_GPU_TEXTURETYPE_2D;
-        ci.format               = r->gpu.swapchain_format;
-        ci.width                = (Uint32)pw;
-        ci.height               = (Uint32)ph;
-        ci.layer_count_or_depth = 1;
-        ci.num_levels           = 1;
-        ci.sample_count         = SDL_GPU_SAMPLECOUNT_1;
-        ci.usage                = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET |
-                                  SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        r->capture_tex = SDL_CreateGPUTexture(r->gpu.device, &ci);
-        if (!r->capture_tex) {
-            fprintf(stderr, "capture texture failed: %s\n", SDL_GetError());
-            r->capture_path[0] = '\0';
-            return NULL;
-        }
-        r->capture_w = pw;
-        r->capture_h = ph;
-    }
-    return r->capture_tex;
-}
-
-void ivp_capture_record(ivp_renderer_t *r)
-{
-    if (!r->capture_tex || !r->capture_path[0]) return;
-
-    SDL_GPUBlitInfo blit = {0};
-    blit.source.texture       = r->capture_tex;
-    blit.source.w             = (Uint32)r->capture_w;
-    blit.source.h             = (Uint32)r->capture_h;
-    blit.destination.texture  = r->swapchain_tex;
-    blit.destination.w        = (Uint32)r->capture_w;
-    blit.destination.h        = (Uint32)r->capture_h;
-    blit.load_op              = SDL_GPU_LOADOP_DONT_CARE;
-    blit.filter               = SDL_GPU_FILTER_NEAREST;
-    SDL_BlitGPUTexture(r->cmd, &blit);
-
-    SDL_GPUTransferBufferCreateInfo tci = {0};
-    tci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-    tci.size  = (Uint32)(r->capture_w * r->capture_h * 4);
-    r->capture_tb = SDL_CreateGPUTransferBuffer(r->gpu.device, &tci);
-    if (!r->capture_tb) {
-        fprintf(stderr, "capture buffer failed: %s\n", SDL_GetError());
+    if (!r->capture_path[0]) return false;
+    if (!ivp_gpu_capture_begin(r->gpu)) {
         r->capture_path[0] = '\0';
-        return;
+        return false;
     }
-    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(r->cmd);
-    SDL_GPUTextureRegion src = {0};
-    src.texture = r->capture_tex;
-    src.w = (Uint32)r->capture_w;
-    src.h = (Uint32)r->capture_h;
-    src.d = 1;
-    SDL_GPUTextureTransferInfo dst = {0};
-    dst.transfer_buffer = r->capture_tb;
-    SDL_DownloadFromGPUTexture(cp, &src, &dst);
-    SDL_EndGPUCopyPass(cp);
+    return true;
 }
 
-void ivp_capture_finish(ivp_renderer_t *r, SDL_GPUFence *fence)
+void ivp_capture_finish(ivp_renderer_t *r)
 {
-    if (!r->capture_tb) return;
-    bool ok = false;
-    if (fence && SDL_WaitForGPUFences(r->gpu.device, true, &fence, 1)) {
-        const unsigned char *px = (const unsigned char *)
-            SDL_MapGPUTransferBuffer(r->gpu.device, r->capture_tb, false);
-        size_t n = (size_t)r->capture_w * (size_t)r->capture_h;
-        unsigned char *rgb = px ? (unsigned char *)malloc(n * 3) : NULL;
-        if (rgb) {
-            bool bgr = r->gpu.swapchain_format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM ||
-                       r->gpu.swapchain_format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB;
-            for (size_t i = 0; i < n; i++) {
-                rgb[3*i + 0] = px[4*i + (bgr ? 2 : 0)];
-                rgb[3*i + 1] = px[4*i + 1];
-                rgb[3*i + 2] = px[4*i + (bgr ? 0 : 2)];
-            }
-            ok = ivp_png_write_rgb(r->capture_path, rgb, r->capture_w, r->capture_h);
-            free(rgb);
-        }
-        if (px) SDL_UnmapGPUTransferBuffer(r->gpu.device, r->capture_tb);
-    }
+    int w = 0, h = 0;
+    unsigned char *rgb = ivp_gpu_capture_take(r->gpu, &w, &h);
+    bool ok = rgb && ivp_png_write_rgb(r->capture_path, rgb, w, h);
     if (!ok) fprintf(stderr, "screenshot to %s failed\n", r->capture_path);
-    SDL_ReleaseGPUTransferBuffer(r->gpu.device, r->capture_tb);
-    r->capture_tb = NULL;
+    free(rgb);
     r->capture_path[0] = '\0';
-}
-
-void ivp_capture_destroy(ivp_renderer_t *r)
-{
-    if (r->capture_tb) SDL_ReleaseGPUTransferBuffer(r->gpu.device, r->capture_tb);
-    if (r->capture_tex) SDL_ReleaseGPUTexture(r->gpu.device, r->capture_tex);
-    r->capture_tb = NULL;
-    r->capture_tex = NULL;
 }

@@ -499,7 +499,8 @@ if (IVP_BUILD_RENDER)
 
     set(IVP_RENDER_SOURCES
         src/render/ivp_render_camera.c
-        src/render/ivp_render_gpu.c
+        src/render/ivp_render_sdlgpu.c
+        src/render/ivp_render_stream.c
         src/render/ivp_render_draw.c
         src/render/ivp_render_hud.c
         src/render/ivp_render_core.c
