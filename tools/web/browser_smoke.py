@@ -12,7 +12,9 @@ canvas is taken. A page fails when it
   * does not show the frames in time,
   * throws, aborts, logs a console error, or causes a WebGL error,
   * leaves the canvas empty: fewer than --min-drawn of its pixels differ
-    from their row's background colour (the sky is a vertical gradient).
+    from their row's background colour (the sky is a vertical gradient),
+  * has a drawing buffer other than its CSS size times devicePixelRatio
+    (--device-scale-factor 2 emulates a Retina screen).
 
 The index page must load cleanly and link exactly the example pages.
 
@@ -253,8 +255,9 @@ class Chrome:
 class Page:
     """A fresh tab with the console, the log and exceptions reported."""
 
-    def __init__(self, chrome):
+    def __init__(self, chrome, device_scale=1.0):
         self.chrome = chrome
+        self.device_scale = device_scale
         self.target = chrome.call("Target.createTarget",
                                   {"url": "about:blank"})["targetId"]
         self.session = chrome.call("Target.attachToTarget",
@@ -266,7 +269,7 @@ class Page:
             chrome.call(method, session=self.session)
         chrome.call("Emulation.setDeviceMetricsOverride",
                     {"width": VIEWPORT[0], "height": VIEWPORT[1],
-                     "deviceScaleFactor": 1, "mobile": False},
+                     "deviceScaleFactor": device_scale, "mobile": False},
                     session=self.session)
 
     def navigate(self, url):
@@ -314,7 +317,9 @@ class Page:
             "Page.captureScreenshot",
             {"format": "png",
              "clip": {"x": rect[0], "y": rect[1], "width": rect[2],
-                      "height": rect[3], "scale": SHOT_SCALE}},
+                      "height": rect[3],
+                      # the same image size at any devicePixelRatio
+                      "scale": SHOT_SCALE / self.device_scale}},
             session=self.session, timeout=60)
         return base64.b64decode(shot["data"])
 
@@ -411,13 +416,16 @@ def drawn_share(png, tolerance=12):
 # ── Checks ─────────────────────────────────────────────────────────────────
 
 FRAMES_JS = "(window.Module && Module.ivpFrames) | 0"
+CANVAS_JS = ("(function () { var c = document.getElementById('canvas');"
+             " return [c.width, c.height, c.clientWidth, c.clientHeight,"
+             " window.devicePixelRatio]; })()")
 STATUS_JS = ("(function () { var s = document.getElementById('status');"
              " return s && s.className === 'error' ? s.textContent : ''; })()")
 
 
 def check_example(chrome, url, args, shot_path):
     """(ok, summary, console lines) for one example page."""
-    page = Page(chrome)
+    page = Page(chrome, args.device_scale_factor)
     try:
         ok, summary = check_page(page, url, args, shot_path)
     except ChromeError as exc:  # a hung page stops answering
@@ -444,6 +452,12 @@ def check_page(page, url, args, shot_path):
                 frames, args.frames, args.timeout)
         time.sleep(0.1)
     elapsed = time.monotonic() - start
+    canvas = page.evaluate(CANVAS_JS)
+    if (abs(canvas[0] - round(canvas[2] * canvas[4])) > 1
+            or abs(canvas[1] - round(canvas[3] * canvas[4])) > 1):
+        return False, ("canvas buffer %dx%d for %gx%g CSS pixels at"
+                       " devicePixelRatio %g: not at device resolution"
+                       % tuple(canvas))
     png = page.screenshot("#canvas")
     if page.poll():
         return False, describe(page.problems)
@@ -488,6 +502,9 @@ def main():
     ap.add_argument("--build-dir", required=True)
     ap.add_argument("--chrome", default=None,
                     help="Chrome or Chromium executable (default: search)")
+    ap.add_argument("--device-scale-factor", type=float, default=1.0,
+                    help="devicePixelRatio of the emulated screen (default 1;"
+                         " 2 is a Retina screen)")
     ap.add_argument("--frames", type=int, default=30,
                     help="frames each page must show (default 30)")
     ap.add_argument("--timeout", type=float, default=60.0,
@@ -545,8 +562,8 @@ def main():
 
 def run_checks(chrome, base, names, pages, args):
     version = chrome.call("Browser.getVersion")
-    print("%s, %s, %d frames per page" % (
-        version.get("product"), "WebGL through SwiftShader", args.frames))
+    print("%s, WebGL through SwiftShader, devicePixelRatio %g, %d frames per page"
+          % (version.get("product"), args.device_scale_factor, args.frames))
     failed = []
     problems = check_index(chrome, base + "index.html", pages, args.timeout)
     print("%-4s index.html%s" % ("FAIL" if problems else "ok",
