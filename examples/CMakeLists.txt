@@ -52,24 +52,44 @@ if (TARGET ivp_render_shaders)
     add_dependencies(ivp_example_runtime ivp_render_shaders)
 endif ()
 
+# ── Browser build (Emscripten) ───────────────────────────────────────────────
+# Each example becomes example_<name>.html (+ .js, .wasm) from web/shell.html.
+# The renderer waits for the browser's next animation frame inside the
+# example's own loop (Asyncify).  Every call on the way there is a direct
+# call (main, demo_run, demo_run_viewer, demo_viewer_end_frame,
+# ivp_renderer_end_frame), so indirect calls are left uninstrumented.  The
+# examples also run headless under node (`node example_<name>.js --headless`).
+if (EMSCRIPTEN)
+    set(IVP_EXAMPLE_SHELL ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html)
+    set(IVP_EXAMPLE_WEB_LINK_OPTIONS
+        --shell-file ${IVP_EXAMPLE_SHELL}
+        -sENVIRONMENT=web,node
+        -sASYNCIFY_IGNORE_INDIRECT=1
+        -sASYNCIFY_STACK_SIZE=65536
+    )
+endif ()
+
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
     set_property(GLOBAL APPEND PROPERTY IVP_EXAMPLE_TARGETS ${NAME})
     add_executable(${NAME} ${SOURCE})
     target_link_libraries(${NAME} PRIVATE ivp_example_interaction ivp_example_inspect)
     add_dependencies(${NAME} ivp_example_runtime)
-    if (UNIX AND NOT APPLE AND NOT MSVC)
-        target_link_libraries(${NAME} PRIVATE m)
+    if (NOT MSVC)
+        if (UNIX AND NOT APPLE)
+            target_link_libraries(${NAME} PRIVATE m)
+        endif ()
         # Apply floating-point strictness and relax example-specific warnings
+        ivp_apply_strict_fp(${NAME})
         target_compile_options(${NAME} PRIVATE
-                -ffp-contract=off -fno-fast-math -frounding-math
                 -Wno-conversion -Wno-double-promotion -Wno-sign-conversion
         )
-    elseif (NOT MSVC)
-        target_compile_options(${NAME} PRIVATE
-                -ffp-contract=off -fno-fast-math -frounding-math
-                -Wno-conversion -Wno-double-promotion -Wno-sign-conversion
-        )
+    endif ()
+    if (EMSCRIPTEN)
+        set_target_properties(${NAME} PROPERTIES
+            SUFFIX ".html"
+            LINK_DEPENDS ${IVP_EXAMPLE_SHELL})
+        target_link_options(${NAME} PRIVATE ${IVP_EXAMPLE_WEB_LINK_OPTIONS})
     endif ()
 endfunction()
 

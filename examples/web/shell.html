@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IVP example</title>
+<style>
+  :root {
+    --bg: #1d2128;
+    --bar: #262b33;
+    --text: #e6e8eb;
+    --muted: #9aa3ad;
+    --accent: #7fb2ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+    padding: 8px 16px;
+    background: var(--bar);
+  }
+  header a { color: var(--accent); text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+  #title { font-weight: 600; }
+  #hint { color: var(--muted); font-size: 13px; }
+  main { position: relative; flex: 1; min-height: 0; }
+  /* SDL takes the window size from the canvas's CSS size and follows it */
+  #canvas { display: block; width: 100%; height: 100%; outline: none; }
+  #status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    text-align: center;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  #status.error { color: #ff8a80; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <a href="index.html">&larr; All examples</a>
+  <span id="title">IVP example</span>
+  <span id="hint">Right drag: orbit &middot; middle drag: pan &middot; wheel: zoom &middot;
+    left click: select, hold to drag &middot; F1&ndash;F5: views and panel</span>
+</header>
+<main>
+  <canvas id="canvas" tabindex="-1"></canvas>
+  <div id="status">Loading&hellip;</div>
+</main>
+<script>
+  var canvas = document.getElementById('canvas');
+  var statusEl = document.getElementById('status');
+  var titleEl = document.getElementById('title');
+
+  /* Right drag orbits the camera, so keep the context menu away */
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  canvas.addEventListener('pointerdown', function () { canvas.focus(); });
+
+  /* SDL sets the page title from the window title */
+  new MutationObserver(function () { titleEl.textContent = document.title; })
+    .observe(document.querySelector('title'), { childList: true });
+
+  function showError(text) {
+    statusEl.textContent = text;
+    statusEl.className = 'error';
+    statusEl.style.display = '';
+  }
+
+  var Module = {
+    canvas: canvas,
+    print: function (text) { console.log(text); },
+    printErr: function (text) { console.error(text); },
+    setStatus: function (text) {
+      if (statusEl.className !== 'error') {
+        statusEl.textContent = text;
+        statusEl.style.display = text ? '' : 'none';
+      }
+    },
+    onRuntimeInitialized: function () { Module.setStatus(''); },
+    onAbort: function (what) { showError('The example stopped: ' + what); }
+  };
+  window.addEventListener('error', function (e) {
+    if (!statusEl.className) showError('The example stopped: ' + e.message);
+  });
+  if (typeof WebAssembly !== 'object') showError('This browser has no WebAssembly.');
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
