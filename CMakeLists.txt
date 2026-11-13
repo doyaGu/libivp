@@ -59,6 +59,11 @@ function(ivp_apply_strict_fp TARGET_NAME)
             target_compile_options(${TARGET_NAME} PRIVATE
                     -ffp-contract=off -fno-fast-math)
         endif ()
+    elseif (EMSCRIPTEN)
+        # WebAssembly only rounds to nearest, and clang rejects
+        # -frounding-math for it (-Wunsupported-floating-point-opt).
+        target_compile_options(${TARGET_NAME} PRIVATE
+                -ffp-contract=off -fno-fast-math)
     else ()
         target_compile_options(${TARGET_NAME} PRIVATE
                 -ffp-contract=off -fno-fast-math -frounding-math)
