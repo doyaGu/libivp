@@ -1,5 +1,5 @@
 #version 300 es
-/* 2D HUD lines in window pixels. */
+/* 2D HUD lines in window units. */
 layout(std140) uniform U { mat4 proj; };
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec3 aCol;

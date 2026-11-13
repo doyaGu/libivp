@@ -115,8 +115,13 @@ ivp_result_t ivp_renderer_create(ivp_renderer_t **out,
         return IVP_ERR_RENDER_SDL_INIT;
     }
 
+    /* Draw at the display's resolution (Retina, scaled desktops, the
+     * browser's devicePixelRatio).  Everything above the backend works in
+     * window units: the camera, the HUD layout and the mouse; only the
+     * targets and the viewport are in device pixels. */
     SDL_Window *win = SDL_CreateWindow(cfg.title, cfg.width, cfg.height,
                                        SDL_WINDOW_RESIZABLE |
+                                       SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                        ivp_gpu_window_flags(cfg.msaa_samples));
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -405,8 +410,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r)
     /* A capture frame is read back after it is submitted */
     bool capturing = ivp_capture_begin(r);
 
-    ivp_gpu_pass_t *pass = ivp_gpu_main_pass_begin(r->gpu, r->clear_col,
-                                                   r->width, r->height);
+    ivp_gpu_pass_t *pass = ivp_gpu_main_pass_begin(r->gpu, r->clear_col);
     if (!pass) {
         ivp_gpu_frame_cancel(r->gpu);
         return;

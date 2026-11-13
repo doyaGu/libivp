@@ -70,6 +70,7 @@ struct ivp_gpu_device {
     SDL_GPUTexture       *swapchain_tex;
     SDL_GPUFence         *frame_fences[RING_FRAMES];
     int                   frame_ring;   /* buffer slot of this frame */
+    int                   frame_w, frame_h;   /* targets, device pixels */
     ivp_gpu_pass_t        pass;
 
     /* Screenshot: the frame renders into capture_tex, which is blitted to
@@ -384,6 +385,8 @@ ivp_gpu_frame_status_t ivp_gpu_frame_begin(ivp_gpu_device_t *dev)
     ensure_depth(dev, pw, ph);
     ensure_msaa(dev, pw, ph);
     if (!dev->depth_texture) return IVP_GPU_FRAME_SKIP;
+    dev->frame_w = pw;
+    dev->frame_h = ph;
 
     /* Wait on the fence of the frame that last used this buffer slot, so
      * its transfer buffers are safe to reuse before we upload into them. */
@@ -822,8 +825,7 @@ ivp_gpu_pass_t *ivp_gpu_shadow_pass_begin(ivp_gpu_device_t *dev,
 }
 
 ivp_gpu_pass_t *ivp_gpu_main_pass_begin(ivp_gpu_device_t *dev,
-                                        const float clear[4],
-                                        int width, int height)
+                                        const float clear[4])
 {
     SDL_GPUColorTargetInfo ct = {0};
     SDL_GPUDepthStencilTargetInfo dt = {0};
@@ -857,7 +859,7 @@ ivp_gpu_pass_t *ivp_gpu_main_pass_begin(ivp_gpu_device_t *dev,
     SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(dev->cmd, &ct, 1, &dt);
     if (!rp) return NULL;
 
-    SDL_GPUViewport vp = { 0, 0, (float)width, (float)height, 0.0f, 1.0f };
+    SDL_GPUViewport vp = { 0, 0, (float)dev->frame_w, (float)dev->frame_h, 0.0f, 1.0f };
     SDL_SetGPUViewport(rp, &vp);
 
     dev->pass.dev = dev;

@@ -138,11 +138,11 @@ void ivp_gpu_shadow_map_destroy(ivp_gpu_device_t *dev, ivp_gpu_shadow_map_t *map
 ivp_gpu_pass_t *ivp_gpu_shadow_pass_begin(ivp_gpu_device_t *dev,
                                           ivp_gpu_shadow_map_t *map);
 /* The window pass (or the capture target), colour cleared to `clear` and
- * depth to 1, with a width x height viewport.  NULL on failure: cancel the
- * frame. */
+ * depth to 1, with the viewport covering the whole target in device pixels
+ * (more than the window's size on a high-density display).  NULL on
+ * failure: cancel the frame. */
 ivp_gpu_pass_t *ivp_gpu_main_pass_begin(ivp_gpu_device_t *dev,
-                                        const float clear[4],
-                                        int width, int height);
+                                        const float clear[4]);
 void ivp_gpu_pass_end(ivp_gpu_pass_t *pass);
 
 void ivp_gpu_bind_pipeline(ivp_gpu_pass_t *pass, ivp_gpu_pipeline_t *pipe);

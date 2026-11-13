@@ -51,6 +51,9 @@ typedef enum ivp_text_align {
 #define IVP_RENDER_HUD_FONT_H             7
 
 typedef struct ivp_render_config {
+    /* Window size in window units (points); on a high-density display
+     * (Retina, a scaled desktop, a browser's devicePixelRatio) the frame
+     * is drawn with that many more device pixels. */
     int         width;              /* default: 1280 */
     int         height;             /* default: 720  */
     const char *title;              /* default: "IVP Example" */
@@ -99,6 +102,7 @@ void ivp_renderer_end_frame(ivp_renderer_t *r);
 
 double       ivp_renderer_get_time(const ivp_renderer_t *r);
 float        ivp_renderer_get_dt(const ivp_renderer_t *r);
+/* Window size in window units, the space of the 2D HUD and of mouse events. */
 void         ivp_renderer_get_size(const ivp_renderer_t *r, int *w, int *h);
 const float *ivp_renderer_get_vp_matrix(const ivp_renderer_t *r);
 const float *ivp_renderer_get_view_matrix(const ivp_renderer_t *r);
@@ -296,7 +300,7 @@ void ivp_render_set_ambient(ivp_renderer_t *r, float ambient);
 
 /* ── 2D HUD text ───────────────────────────────────────────────────────── */
 
-/* Filled 2D rectangle in window pixels (origin top left), alpha blended.
+/* Filled 2D rectangle in window units (origin top left), alpha blended.
  * Drawn in call order together with the text, under the 2D lines. */
 void ivp_render_draw_rect(ivp_renderer_t *r, float x, float y, float w, float h,
                           const float color[3], float alpha);

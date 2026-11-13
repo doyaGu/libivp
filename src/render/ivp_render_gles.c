@@ -69,6 +69,7 @@ struct ivp_gpu_device {
     unsigned                  enabled_attribs;   /* bit per attribute location */
     const ivp_gpu_pipeline_t *bound;
     ivp_gpu_pass_t            pass;
+    int                       frame_w, frame_h;   /* drawable, device pixels */
 };
 
 /* Size of the largest uniform block (tri3d_inst: two mat4 and two vec4). */
@@ -237,6 +238,8 @@ ivp_gpu_frame_status_t ivp_gpu_frame_begin(ivp_gpu_device_t *dev)
     int pw, ph;
     SDL_GetWindowSizeInPixels(dev->window, &pw, &ph);
     if (pw <= 0 || ph <= 0) return IVP_GPU_FRAME_SKIP;
+    dev->frame_w = pw;
+    dev->frame_h = ph;
     dev->bound = NULL;
     return IVP_GPU_FRAME_READY;
 }
@@ -423,11 +426,10 @@ ivp_gpu_pass_t *ivp_gpu_shadow_pass_begin(ivp_gpu_device_t *dev,
 }
 
 ivp_gpu_pass_t *ivp_gpu_main_pass_begin(ivp_gpu_device_t *dev,
-                                        const float clear[4],
-                                        int width, int height)
+                                        const float clear[4])
 {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, width, height);
+    glViewport(0, 0, dev->frame_w, dev->frame_h);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
