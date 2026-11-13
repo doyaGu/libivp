@@ -58,12 +58,11 @@ typedef struct ls_ctx {
 } ls_ctx_t;
 
 /* debug_sphere_output (ivp_surbuild_ledge_soup.cxx:60), only called from an
- * IVP_IF(0) block in create_compact_ledgetree() */
-static int ivp_debug_sf_indent = 0;
+ * IVP_IF(0) block in create_compact_ledgetree().  The reference's indent,
+ * terminal-node flag and one-terminal-child counter are never read, so only
+ * the tree depth tracking and the child checks are kept. */
 static int ivp_debug_sf_treedepth = 0;
 static int ivp_debug_sf_max_treedepth = 0;
-static int ivp_debug_sf_n_nodes_with_one_terminal = 0;
-static bool ivp_debug_sf_last_node_was_terminal = false;
 
 static void ls_debug_sphere_output(const ls_sphere_t *sphere)
 {
@@ -75,21 +74,11 @@ static void ls_debug_sphere_output(const ls_sphere_t *sphere)
         IVP_ASSERT(sphere->child_1); /* prevent nodes with one single child */
         IVP_ASSERT(sphere->child_2);
 
-        int n_terminal_children = 0;
-
         ls_debug_sphere_output(sphere->child_1);
-        if (ivp_debug_sf_last_node_was_terminal) n_terminal_children++;
-
         ls_debug_sphere_output(sphere->child_2);
-        if (ivp_debug_sf_last_node_was_terminal) n_terminal_children++;
-
-        if (n_terminal_children == 1) ivp_debug_sf_n_nodes_with_one_terminal++;
-
-        ivp_debug_sf_last_node_was_terminal = false;
     } else {
         IVP_ASSERT(!sphere->child_1); /* prevent nodes with one single child */
         IVP_ASSERT(!sphere->child_2);
-        ivp_debug_sf_last_node_was_terminal = true;
     }
     ivp_debug_sf_treedepth--;
 }
@@ -694,7 +683,6 @@ ivp_compact_surface_t *ivp_ledge_soup_compile_ex(ivp_ledge_soup_t *soup,
     /* 5. create_compact_ledgetree */
     {
         IVP_IF(0) {
-            ivp_debug_sf_indent = 0;
             ls_debug_sphere_output(root);
         }
         ivp_compact_ledgetree_node_t *work =
