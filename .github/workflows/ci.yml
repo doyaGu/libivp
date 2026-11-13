@@ -233,12 +233,26 @@ jobs:
           --build-dir build
           --parallel 2
           --result-file build/verification/wasm-examples-headless.json
+      - name: Run wasm browser smoke suite
+        # The runner image's Google Chrome, found when configuring
+        run: >-
+          python tools/run_verification.py
+          --suite wasm-browser-smoke
+          --build-dir build
+          --result-file build/verification/wasm-browser-smoke.json
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: verification-wasm
           path: build/verification/*.json
+          if-no-files-found: warn
+      - name: Upload the browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-screenshots
+          path: build/browser_smoke_screenshots
           if-no-files-found: warn
       - name: Collect the example pages
         run: |
