@@ -25,6 +25,10 @@
 typedef struct arena_block_header {
     char  *next;
     size_t total;
+#if UINTPTR_MAX == UINT32_MAX
+    /* 32-bit targets (WebAssembly) keep the 16-byte header, so blocks lay out alike */
+    uint32_t padding[2];
+#endif
 } arena_block_header_t;
 
 _Static_assert(sizeof(arena_block_header_t) == IVP_ARENA_BLOCK_HEADER_SIZE,
