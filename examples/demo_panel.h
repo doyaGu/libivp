@@ -99,7 +99,7 @@ static inline void demo_panel_layout(demo_panel_t *p)
     p->h = p->n ? tallest : DEMO_PANEL_HEAD_H + DEMO_PANEL_PAD;
 }
 
-/* Slider track of a float row, in window pixels. */
+/* Slider track of a float row, in window units. */
 static inline void demo_panel_track(const demo_panel_t *p, const demo_param_t *q,
                                     float *x0, float *x1, float *y)
 {

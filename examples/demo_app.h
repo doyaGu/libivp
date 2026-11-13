@@ -1661,7 +1661,7 @@ static inline void demo_apply_overlays(demo_viewer_t *v, demo_world_t *w)
     }
 }
 
-/* `--mouse X Y`: pretend the mouse is at window pixel (X, Y), for hover
+/* `--mouse X Y`: pretend the mouse is at window coordinates (X, Y), for hover
  * outlines in screenshots. Returns false when the option is absent. */
 static inline bool demo_mouse_arg(int argc, char **argv, float *x, float *y)
 {
