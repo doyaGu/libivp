@@ -60,7 +60,7 @@ target_link_libraries(my_app PRIVATE ivp)
 | `IVP_ENABLE_SCENARIO_TESTS` | OFF | Scenario JSONL producer and invariant tests |
 | `IVP_ENABLE_PARITY_TESTS` | OFF | Compare scenario output with the reference JSONL |
 | `IVP_BUILD_EXAMPLES` | OFF | Graphical examples (enables the render module) |
-| `IVP_BUILD_RENDER` | OFF | SDL3 GPU render module |
+| `IVP_BUILD_RENDER` | OFF | Render module: SDL3 GPU natively, WebGL2 under Emscripten |
 | `IVP_ENABLE_ASAN` / `IVP_ENABLE_UBSAN` | OFF | Sanitizers |
 
 Existing CMake caches using `IVP_REFERENCE_INTERNAL_STATE` are migrated to the
@@ -72,6 +72,26 @@ new default in a previously configured build.
 Library code is compiled with `-ffp-contract=off -fno-fast-math
 -frounding-math` (`/fp:strict` on MSVC). Don't build it with fast-math or
 FMA contraction: results would no longer match the reference.
+
+### WebAssembly
+
+With Emscripten the library, the tests and the examples build for
+WebAssembly; the tests and the examples' headless checks run under node.
+
+```bash
+emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
+cmake --build build-wasm
+ctest --test-dir build-wasm -L unit -LE threading      # under node
+python3 -m http.server -d build-wasm/examples 8000      # http://localhost:8000/
+```
+
+The wasm build is single-threaded: an environment with
+`parallel_worker_count` above 1, or a world scheduler with more than one
+worker, fails to create. `IVP_ENABLE_CHECKPOINTS` is not supported there
+(Emscripten's `mmap` commits the whole reserved region at once).
+WebAssembly has only round-to-nearest, so `-frounding-math` is left out, and
+results are not compared with the reference: libm differs, and some layouts
+differ on a 32-bit target.
 
 ## Example
 
@@ -180,7 +200,8 @@ cmake --build build
 ```
 
 Building them needs `glslangValidator`. `examples/README.md` lists the
-examples and their controls.
+examples and their controls. They also run in a browser (WebAssembly and
+WebGL2; see WebAssembly above).
 
 ## Layout
 

@@ -23,6 +23,28 @@ Building needs `glslangValidator` (the shaders) and fetches SDL3 unless it is
 installed. The renderer prefers Metal shaders on macOS; the SPIR-V path is
 built but has not been run.
 
+## In the browser
+
+With Emscripten every example becomes a page, `example_<name>.html` (with
+its `.js` and `.wasm`), and `index.html` lists them with the gallery's cards.
+The renderer draws with WebGL2 there, and the build fetches and builds SDL3
+statically; `glslangValidator` is not needed.
+
+```bash
+emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
+cmake --build build-wasm
+python3 -m http.server -d build-wasm/examples 8000      # open http://localhost:8000/
+node build-wasm/examples/example_shapes.js --headless   # self-check under node
+python3 tools/smoke_test_examples.py --build-dir build-wasm   # all of them
+```
+
+Browsers do not run WebAssembly from `file://` pages, so serve the directory
+over HTTP. The keys and the mouse work as in a window: the page passes F1-F5,
+Tab, Space and the arrow keys to the example instead of the browser, and
+right drag orbits. There is no gallery executable (a page cannot start
+processes), and `--screenshot` is not available. In a page the example's loop
+waits for the browser's next frame (Asyncify), so a hidden tab pauses it.
+
 ## Driving
 
 `vehicle`, `offroad`, `boat`, `airboat`, `jetski`, `wheelcar` and `rolling_ball` share one input model (`demo_drive.h`). The
