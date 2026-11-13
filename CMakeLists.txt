@@ -445,8 +445,14 @@ if (IVP_BUILD_RENDER)
                 GIT_TAG release-3.4.0
                 GIT_SHALLOW TRUE
         )
-        set(SDL_SHARED ON CACHE BOOL "" FORCE)
-        set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+        if (EMSCRIPTEN)
+            # wasm modules link everything statically
+            set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+            set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        else ()
+            set(SDL_SHARED ON CACHE BOOL "" FORCE)
+            set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+        endif ()
         set(SDL_TEST OFF CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(SDL3)
     endif ()

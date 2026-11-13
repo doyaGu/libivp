@@ -26,11 +26,17 @@ else ()
     set(IVP_EXAMPLE_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR})
 endif ()
 
+# The GLES backend compiles its shaders into the library.
 set(IVP_EXAMPLE_RUNTIME_COMMANDS
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${IVP_EXAMPLE_BIN_DIR}/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_BINARY_DIR}/shaders ${IVP_EXAMPLE_BIN_DIR}/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${IVP_EXAMPLE_BIN_DIR}
 )
+if (TARGET ivp_render_shaders)
+    list(APPEND IVP_EXAMPLE_RUNTIME_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${IVP_EXAMPLE_BIN_DIR}/shaders
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_BINARY_DIR}/shaders ${IVP_EXAMPLE_BIN_DIR}/shaders
+    )
+endif ()
 if (TARGET SDL3::SDL3-shared)
     list(APPEND IVP_EXAMPLE_RUNTIME_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -42,7 +48,9 @@ add_custom_target(ivp_example_runtime ALL
     COMMENT "Staging shaders / SDL3 next to the examples"
     VERBATIM
 )
-add_dependencies(ivp_example_runtime ivp_render_shaders)
+if (TARGET ivp_render_shaders)
+    add_dependencies(ivp_example_runtime ivp_render_shaders)
+endif ()
 
 # ── Helper function to add examples ──────────────────────────────────────────
 function(ivp_add_example NAME SOURCE)
