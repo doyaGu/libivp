@@ -436,8 +436,21 @@ endif ()
 if (IVP_BUILD_RENDER)
     include(FetchContent)
 
-    # ── SDL3: prefer installed package, fallback to FetchContent ─────────
-    find_package(SDL3 QUIET CONFIG)
+    # ── SDL3 ─────────────────────────────────────────────────────────────
+    if (EMSCRIPTEN)
+        # Emscripten's SDL3 port, the version the emsdk release pins.  Its
+        # sdl3-config.cmake exists only once the port has been built, so
+        # declare the target here rather than through find_package.  (SDL
+        # built from source with FetchContent would inherit -std=c17, and
+        # its EM_ASM blocks need a gnu dialect.)
+        add_library(SDL3::SDL3 INTERFACE IMPORTED)
+        set_target_properties(SDL3::SDL3 PROPERTIES
+                INTERFACE_COMPILE_OPTIONS "-sUSE_SDL=3"
+                INTERFACE_LINK_LIBRARIES "-sUSE_SDL=3")
+    else ()
+        # Prefer an installed package, fall back to FetchContent
+        find_package(SDL3 QUIET CONFIG)
+    endif ()
     if (NOT TARGET SDL3::SDL3)
         FetchContent_Declare(
                 SDL3
@@ -445,14 +458,8 @@ if (IVP_BUILD_RENDER)
                 GIT_TAG release-3.4.0
                 GIT_SHALLOW TRUE
         )
-        if (EMSCRIPTEN)
-            # wasm modules link everything statically
-            set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-            set(SDL_STATIC ON CACHE BOOL "" FORCE)
-        else ()
-            set(SDL_SHARED ON CACHE BOOL "" FORCE)
-            set(SDL_STATIC OFF CACHE BOOL "" FORCE)
-        endif ()
+        set(SDL_SHARED ON CACHE BOOL "" FORCE)
+        set(SDL_STATIC OFF CACHE BOOL "" FORCE)
         set(SDL_TEST OFF CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(SDL3)
     endif ()
