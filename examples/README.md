@@ -45,8 +45,10 @@ The headless self-checks skip the renderer. `tools/web/browser_smoke.py`
 opens every page in headless Chrome with software WebGL (SwiftShader, as on
 CI machines) and fails a page that throws, logs a console or WebGL error,
 does not show 30 frames, or leaves the canvas blank; `--screenshots DIR`
-keeps a PNG of each canvas. When CMake finds Chrome or Chromium it runs as
-the ctest `test_browser_smoke` (label `browser`).
+keeps a PNG of each canvas. `--device-scale-factor 2` emulates a Retina
+screen and also checks that the canvas draws at the device's resolution.
+When CMake finds Chrome or Chromium it runs as the ctest `test_browser_smoke`
+(label `browser`), at devicePixelRatio 2.
 
 Browsers do not run WebAssembly from `file://` pages, so serve the directory
 over HTTP. The keys and the mouse work as in a window: the page passes F1-F5,
@@ -100,10 +102,10 @@ world transform rather than integrating its current velocities for display.
 | Option | |
 |---|---|
 | `--headless [N]`, `-H [N]` | N frames (default 600) at 1/60 s, no window; prints stats and `self-check PASSED` / `FAILED`, exit code 0 / 1. `IVP_EXAMPLE_HEADLESS=N` does the same |
-| `--screenshot FILE [N]` | render N frames (default 60) at a fixed 1/60 s step, save the last as a PNG, exit |
+| `--screenshot FILE [N]` | render N frames (default 60) at a fixed 1/60 s step, save the last as a PNG at the display's resolution (2560x1440 for the default window on a Retina screen), exit |
 | `--overlays` | start with F2-F4 and the F5 panel on and the first dynamic body selected |
 | `--no-shadows` | start with the shadow map off |
-| `--mouse X Y` | pretend the mouse is at window pixel (X, Y): hover outline and details in a screenshot |
+| `--mouse X Y` | pretend the mouse is at window coordinates (X, Y): hover outline and details in a screenshot |
 
 ## The examples
 
