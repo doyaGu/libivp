@@ -1103,11 +1103,18 @@ if (IVP_BUILD_TESTS)
     if (IVP_BUILD_EXAMPLES AND Python3_Interpreter_FOUND)
         set(IVP_SMOKE_SCRIPT ${IVP_REPO_ROOT}/tools/smoke_test_examples.py)
         if (EXISTS ${IVP_SMOKE_SCRIPT})
+            # The WebAssembly build runs the examples' .js under node, the
+            # toolchain's emulator.
+            set(IVP_SMOKE_NODE_ARGS)
+            if (EMSCRIPTEN AND CMAKE_CROSSCOMPILING_EMULATOR)
+                set(IVP_SMOKE_NODE_ARGS --node ${CMAKE_CROSSCOMPILING_EMULATOR})
+            endif ()
             add_test(
                     NAME test_smoke_examples
                     COMMAND ${Python3_EXECUTABLE} ${IVP_SMOKE_SCRIPT}
                     --build-dir ${CMAKE_BINARY_DIR}
                     --timeout 30
+                    ${IVP_SMOKE_NODE_ARGS}
             )
             set_tests_properties(test_smoke_examples PROPERTIES
                     LABELS "smoke"

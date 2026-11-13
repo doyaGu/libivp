@@ -4,6 +4,9 @@
 Each example_* binary under <build-dir>/examples is started with
 `--headless`; it passes when it exits with 0 and prints
 "self-check PASSED". No window or GPU is needed.
+
+A WebAssembly build (Emscripten) has example_*.js instead, which run under
+node (--node, default "node").
 """
 
 import argparse
@@ -14,24 +17,29 @@ import sys
 
 
 def find_examples(build_dir):
+    """Example name -> path of the native binary or of the wasm build's .js."""
     found = {}
     for sub in ("examples", os.path.join("examples", "Debug"),
                 os.path.join("examples", "Release")):
         for path in glob.glob(os.path.join(build_dir, sub, "example_*")):
             name = os.path.basename(path)
-            if name.endswith((".a", ".lib", ".pdb", ".dSYM")):
+            if name.endswith(".js"):
+                found.setdefault(name[:-3], path)
+                continue
+            if name.endswith((".a", ".lib", ".pdb", ".dSYM", ".wasm", ".html")):
                 continue
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 found.setdefault(name, path)
     return dict(sorted(found.items()))
 
 
-def run_one(path, frames, timeout):
+def run_one(path, frames, timeout, node):
     env = dict(os.environ)
     env.pop("IVP_EXAMPLE_HEADLESS", None)
+    command = [node, path] if path.endswith(".js") else [path]
     try:
         proc = subprocess.run(
-            [path, "--headless"] + ([str(frames)] if frames else []),
+            command + ["--headless"] + ([str(frames)] if frames else []),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=timeout, env=env, cwd=os.path.dirname(path))
     except subprocess.TimeoutExpired as exc:
@@ -53,6 +61,8 @@ def main():
                     help="seconds allowed per example")
     ap.add_argument("--only", nargs="*", default=None,
                     help="example names to run (default: all)")
+    ap.add_argument("--node", default="node",
+                    help="node executable for a WebAssembly build's example_*.js")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -65,7 +75,7 @@ def main():
 
     failed = []
     for name, path in examples.items():
-        ok, why, out = run_one(path, args.frames, args.timeout)
+        ok, why, out = run_one(path, args.frames, args.timeout, args.node)
         print("%-4s %s%s" % ("ok" if ok else "FAIL", name,
                              "" if ok else "  (%s)" % why))
         if not ok or args.verbose:
