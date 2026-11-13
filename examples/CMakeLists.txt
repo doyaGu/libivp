@@ -151,7 +151,28 @@ ivp_add_example(example_maxforce example_maxforce.c)
 ivp_add_example(example_ring example_ring.c)
 ivp_add_example(example_push example_push.c)
 
-# ── The launcher: its headless check lists the executables next to it ────────
 get_property(IVP_ALL_EXAMPLES GLOBAL PROPERTY IVP_EXAMPLE_TARGETS)
-ivp_add_example(example_gallery example_gallery.c)
-add_dependencies(example_gallery ${IVP_ALL_EXAMPLES})
+if (EMSCRIPTEN)
+    # ── The browser index: the gallery's cards as a page of links ────────────
+    # (a page cannot start processes, so there is no gallery executable)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    string(REPLACE ";" "," IVP_ALL_EXAMPLES_LIST "${IVP_ALL_EXAMPLES}")
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/index.html
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/web/make_index.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/example_gallery.c
+                ${CMAKE_CURRENT_BINARY_DIR}/index.html
+                ${IVP_ALL_EXAMPLES_LIST}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/example_gallery.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/web/make_index.py
+        COMMENT "Writing the browser examples' index.html"
+        VERBATIM
+    )
+    add_custom_target(ivp_example_index ALL
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/index.html)
+else ()
+    # ── The launcher: its headless check lists the executables next to it ────
+    ivp_add_example(example_gallery example_gallery.c)
+    add_dependencies(example_gallery ${IVP_ALL_EXAMPLES})
+endif ()
