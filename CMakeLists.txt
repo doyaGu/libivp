@@ -451,55 +451,97 @@ if (IVP_BUILD_RENDER)
         FetchContent_MakeAvailable(SDL3)
     endif ()
 
-    # ── ivp_render static library ────────────────────────────────────────
-    find_program(GLSLANG_VALIDATOR_EXECUTABLE glslangValidator)
-    if (NOT GLSLANG_VALIDATOR_EXECUTABLE)
-        message(FATAL_ERROR "IVP_BUILD_RENDER=ON requires glslangValidator in PATH")
+    # ── GPU backend ──────────────────────────────────────────────────────
+    # SDL3 GPU natively.  Its GPU API has no web backend, so the Emscripten
+    # build draws with OpenGL ES 3.0 (WebGL2) instead.
+    if (EMSCRIPTEN)
+        set(IVP_RENDER_BACKEND GLES3)
+    else ()
+        set(IVP_RENDER_BACKEND SDL_GPU)
+    endif ()
+    message(STATUS "Render backend: ${IVP_RENDER_BACKEND}")
+
+    if (IVP_RENDER_BACKEND STREQUAL "SDL_GPU")
+        find_program(GLSLANG_VALIDATOR_EXECUTABLE glslangValidator)
+        if (NOT GLSLANG_VALIDATOR_EXECUTABLE)
+            message(FATAL_ERROR "IVP_BUILD_RENDER=ON requires glslangValidator in PATH")
+        endif ()
+
+        set(IVP_SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders)
+        set(IVP_SHADER_BIN_DIR ${CMAKE_BINARY_DIR}/shaders)
+        file(MAKE_DIRECTORY ${IVP_SHADER_BIN_DIR})
+
+        # Every shader exists twice: GLSL compiled to SPIR-V, and hand-written
+        # MSL copied next to it.  Names are <name>.<vert|frag>.
+        set(IVP_SHADER_NAMES
+            line3d.vert line2d.vert line.frag
+            tri3d_inst.vert tri3d_inst.frag
+            shadow.vert shadow.frag
+            hud_rect.vert hud_rect.frag
+        )
+        set(IVP_SHADER_OUTPUTS)
+        foreach (SHADER ${IVP_SHADER_NAMES})
+            string(REGEX REPLACE ".*\\.(vert|frag)$" "\\1" SHADER_STAGE ${SHADER})
+            add_custom_command(
+                OUTPUT ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
+                COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S ${SHADER_STAGE}
+                        ${IVP_SHADER_SRC_DIR}/${SHADER}.glsl
+                        -o ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
+                DEPENDS ${IVP_SHADER_SRC_DIR}/${SHADER}.glsl
+                COMMENT "Compiling ${SHADER}.glsl -> SPIR-V"
+                VERBATIM
+            )
+            add_custom_command(
+                OUTPUT ${IVP_SHADER_BIN_DIR}/${SHADER}.msl
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${IVP_SHADER_SRC_DIR}/${SHADER}.msl
+                        ${IVP_SHADER_BIN_DIR}/${SHADER}.msl
+                DEPENDS ${IVP_SHADER_SRC_DIR}/${SHADER}.msl
+                COMMENT "Staging ${SHADER}.msl"
+                VERBATIM
+            )
+            list(APPEND IVP_SHADER_OUTPUTS
+                ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
+                ${IVP_SHADER_BIN_DIR}/${SHADER}.msl)
+        endforeach ()
+
+        add_custom_target(ivp_render_shaders ALL DEPENDS ${IVP_SHADER_OUTPUTS})
+        set(IVP_RENDER_BACKEND_SOURCES src/render/ivp_render_sdlgpu.c)
+    else ()
+        # GLSL ES 3.00 sources compiled into the library as strings
+        set(IVP_GLES_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/es3)
+        set(IVP_GLES_SHADER_NAMES
+            line3d.vert line2d.vert line.frag
+            tri3d_inst.vert tri3d_inst.frag
+            shadow.vert shadow.frag
+            hud_rect.vert hud_rect.frag
+        )
+        set(IVP_GLES_SHADER_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/render/ivp_render_gles_shaders.h)
+        set(IVP_GLES_SHADER_FILES)
+        foreach (SHADER ${IVP_GLES_SHADER_NAMES})
+            list(APPEND IVP_GLES_SHADER_FILES ${IVP_GLES_SHADER_DIR}/${SHADER}.glsl)
+        endforeach ()
+        string(REPLACE ";" "," IVP_GLES_SHADER_LIST "${IVP_GLES_SHADER_NAMES}")
+        add_custom_command(
+            OUTPUT ${IVP_GLES_SHADER_HEADER}
+            COMMAND ${CMAKE_COMMAND}
+                    -DSHADER_DIR=${IVP_GLES_SHADER_DIR}
+                    -DNAMES=${IVP_GLES_SHADER_LIST}
+                    -DOUTPUT=${IVP_GLES_SHADER_HEADER}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/IVPEmbedShaders.cmake
+            DEPENDS ${IVP_GLES_SHADER_FILES}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/IVPEmbedShaders.cmake
+            COMMENT "Embedding the GLSL ES shaders"
+            VERBATIM
+        )
+        set(IVP_RENDER_BACKEND_SOURCES
+            src/render/ivp_render_gles.c ${IVP_GLES_SHADER_HEADER})
     endif ()
 
-    set(IVP_SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders)
-    set(IVP_SHADER_BIN_DIR ${CMAKE_BINARY_DIR}/shaders)
-    file(MAKE_DIRECTORY ${IVP_SHADER_BIN_DIR})
-
-    # Every shader exists twice: GLSL compiled to SPIR-V, and hand-written MSL
-    # copied next to it.  Names are <name>.<vert|frag>.
-    set(IVP_SHADER_NAMES
-        line3d.vert line2d.vert line.frag
-        tri3d_inst.vert tri3d_inst.frag
-        shadow.vert shadow.frag
-        hud_rect.vert hud_rect.frag
-    )
-    set(IVP_SHADER_OUTPUTS)
-    foreach (SHADER ${IVP_SHADER_NAMES})
-        string(REGEX REPLACE ".*\\.(vert|frag)$" "\\1" SHADER_STAGE ${SHADER})
-        add_custom_command(
-            OUTPUT ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
-            COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -S ${SHADER_STAGE}
-                    ${IVP_SHADER_SRC_DIR}/${SHADER}.glsl
-                    -o ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
-            DEPENDS ${IVP_SHADER_SRC_DIR}/${SHADER}.glsl
-            COMMENT "Compiling ${SHADER}.glsl -> SPIR-V"
-            VERBATIM
-        )
-        add_custom_command(
-            OUTPUT ${IVP_SHADER_BIN_DIR}/${SHADER}.msl
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${IVP_SHADER_SRC_DIR}/${SHADER}.msl
-                    ${IVP_SHADER_BIN_DIR}/${SHADER}.msl
-            DEPENDS ${IVP_SHADER_SRC_DIR}/${SHADER}.msl
-            COMMENT "Staging ${SHADER}.msl"
-            VERBATIM
-        )
-        list(APPEND IVP_SHADER_OUTPUTS
-            ${IVP_SHADER_BIN_DIR}/${SHADER}.spv
-            ${IVP_SHADER_BIN_DIR}/${SHADER}.msl)
-    endforeach ()
-
-    add_custom_target(ivp_render_shaders ALL DEPENDS ${IVP_SHADER_OUTPUTS})
-
+    # ── ivp_render static library ────────────────────────────────────────
     set(IVP_RENDER_SOURCES
         src/render/ivp_render_camera.c
-        src/render/ivp_render_sdlgpu.c
         src/render/ivp_render_stream.c
         src/render/ivp_render_draw.c
         src/render/ivp_render_hud.c
@@ -509,9 +551,9 @@ if (IVP_BUILD_RENDER)
         src/render/ivp_render_solid.c
         src/render/ivp_render_capture.c
         src/render/ivp_render_shadow.c
+        ${IVP_RENDER_BACKEND_SOURCES}
     )
     add_library(ivp_render STATIC ${IVP_RENDER_SOURCES})
-    add_dependencies(ivp_render ivp_render_shaders)
     target_include_directories(ivp_render
         PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render
@@ -521,9 +563,21 @@ if (IVP_BUILD_RENDER)
     if (NOT MSVC)
         target_link_libraries(ivp_render PRIVATE m)
     endif ()
-    target_compile_definitions(ivp_render PRIVATE
-        IVP_RENDER_SHADER_DIR_FALLBACK="${IVP_SHADER_BIN_DIR}"
-    )
+    if (IVP_RENDER_BACKEND STREQUAL "SDL_GPU")
+        add_dependencies(ivp_render ivp_render_shaders)
+        target_compile_definitions(ivp_render PRIVATE
+            IVP_RENDER_SHADER_DIR_FALLBACK="${IVP_SHADER_BIN_DIR}"
+        )
+    else ()
+        target_include_directories(ivp_render PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/render)
+        if (EMSCRIPTEN)
+            # WebGL2, and Asyncify: ivp_renderer_end_frame waits for the
+            # browser's next animation frame inside the caller's loop.
+            target_link_options(ivp_render INTERFACE
+                -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sASYNCIFY=1)
+        endif ()
+    endif ()
 
     ivp_apply_strict_fp(ivp_render)
 
