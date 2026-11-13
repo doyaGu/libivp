@@ -193,3 +193,61 @@ jobs:
           name: verification-examples-${{ runner.os }}
           path: build/verification/*.json
           if-no-files-found: warn
+
+  # The browser build: the library, the unit tests and the examples compiled
+  # to WebAssembly (single-threaded, WebGL2 renderer). Tests and the examples'
+  # headless self-checks run under node; the example pages are kept as an
+  # artifact (serve the directory over HTTP to open them).
+  wasm:
+    name: wasm (Emscripten)
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 7.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 --branch "$EMSDK_VERSION" \
+            https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+      - name: Configure
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DIVP_BUILD_EXAMPLES=ON
+      - name: Build
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          cmake --build build --parallel
+      - name: Run wasm unit suite
+        run: >-
+          python tools/run_verification.py
+          --suite wasm-unit
+          --build-dir build
+          --parallel 4
+          --result-file build/verification/wasm-unit.json
+      - name: Run wasm headless-example suite
+        run: >-
+          python tools/run_verification.py
+          --suite wasm-examples-headless
+          --build-dir build
+          --parallel 2
+          --result-file build/verification/wasm-examples-headless.json
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-wasm
+          path: build/verification/*.json
+          if-no-files-found: warn
+      - name: Collect the example pages
+        run: |
+          mkdir -p web-examples
+          cp build/examples/index.html build/examples/example_*.html \
+             build/examples/example_*.js build/examples/example_*.wasm web-examples/
+      - name: Upload the example pages
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-examples
+          path: web-examples
+          if-no-files-found: error
