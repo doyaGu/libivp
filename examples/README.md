@@ -20,8 +20,9 @@ check fails when an example has no card, so a new example needs an entry in the
 card list of `example_gallery.c`.
 
 Building needs `glslangValidator` (the shaders) and fetches SDL3 unless it is
-installed. The renderer prefers Metal shaders on macOS; the SPIR-V path is
-built but has not been run.
+installed. The renderer prefers Metal shaders on macOS. The SPIR-V (Vulkan)
+path has been run on macOS through MoltenVK and Mesa KosmicKrisp, not yet on
+Linux or Windows.
 
 ## In the browser
 
