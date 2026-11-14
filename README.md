@@ -89,7 +89,7 @@ python3 -m http.server -d build-wasm/examples 8000      # http://localhost:8000/
 
 The wasm build is single-threaded: an environment with
 `parallel_worker_count` above 1, or a world scheduler with more than one
-worker, fails to create. `IVP_ENABLE_CHECKPOINTS` is not supported there
+worker, fails to create. CMake refuses `IVP_ENABLE_CHECKPOINTS` there
 (Emscripten's `mmap` commits the whole reserved region at once).
 WebAssembly has only round-to-nearest, so `-frounding-math` is left out, and
 results are not compared with the reference: libm differs, and some layouts

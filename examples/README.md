@@ -46,7 +46,9 @@ opens every page in headless Chrome with software WebGL (SwiftShader, as on
 CI machines) and fails a page that throws, logs a console or WebGL error,
 does not show 30 frames, or leaves the canvas blank; `--screenshots DIR`
 keeps a PNG of each canvas. `--device-scale-factor 2` emulates a Retina
-screen and also checks that the canvas draws at the device's resolution.
+screen and also checks that the canvas draws at the device's resolution. One
+page is also shrunk until its canvas has no height and must keep answering
+and draw again when the height comes back.
 When CMake finds Chrome or Chromium it runs as the ctest `test_browser_smoke`
 (label `browser`), at devicePixelRatio 2.
 
