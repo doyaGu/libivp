@@ -4,7 +4,7 @@
  * API and should not be included by code outside src/render/.
  *
  * The renderer draws through this interface only.  One backend implements
- * it, chosen at configure time (IVP_RENDER_BACKEND):
+ * it, chosen by the platform when configuring:
  *   ivp_render_sdlgpu.c  SDL3 GPU (Metal, Vulkan, D3D12): the native default
  *   ivp_render_gles.c    OpenGL ES 3.0 / WebGL2: the Emscripten build
  *
