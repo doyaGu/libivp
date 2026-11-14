@@ -127,6 +127,11 @@ if (EMSCRIPTEN)
     if (IVP_ENABLE_TSAN)
         message(FATAL_ERROR "IVP_ENABLE_TSAN is not supported by Emscripten")
     endif ()
+    # A memory region reserves a large address range up front; Emscripten's
+    # mmap allocates and clears all of it at once.
+    if (IVP_ENABLE_CHECKPOINTS)
+        message(FATAL_ERROR "IVP_ENABLE_CHECKPOINTS is not supported by Emscripten")
+    endif ()
     # The default 64 KiB stack is too small for the great matrix and 3DS
     # import frames, and larger scenes outgrow the initial 16 MiB heap.
     # EXIT_RUNTIME makes main's return value the node process exit code.
