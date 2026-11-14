@@ -16,7 +16,9 @@ canvas is taken. A page fails when it
   * has a drawing buffer other than its CSS size times devicePixelRatio
     (--device-scale-factor 2 emulates a Retina screen).
 
-The index page must load cleanly and link exactly the example pages.
+The index page must load cleanly and link exactly the example pages, and the
+first example must keep running while its canvas has no height (a page
+shorter than its header) and draw again when the height comes back.
 
 The pixel check catches a canvas left blank. It cannot tell a scene with
 some of its bodies missing from one that has few of them: scenes differ too
@@ -471,6 +473,54 @@ def check_page(page, url, args, shot_path):
     return True, summary
 
 
+def check_zero_height(chrome, url, args):
+    """Problems when a page's canvas loses its height and gets it back.
+
+    A page shorter than its header leaves the canvas no height. The example
+    then has nothing to draw into, and its loop must still give the browser
+    its turns, or the tab hangs and never sees the size come back.
+    """
+    page = Page(chrome, args.device_scale_factor)
+
+    def resize(height):
+        chrome.call("Emulation.setDeviceMetricsOverride",
+                    {"width": VIEWPORT[0], "height": height,
+                     "deviceScaleFactor": args.device_scale_factor,
+                     "mobile": False}, session=page.session)
+
+    def frames_after(least):
+        start = time.monotonic()
+        while True:
+            frames = page.evaluate(FRAMES_JS) or 0
+            if frames >= least or time.monotonic() - start > args.timeout:
+                return frames
+            time.sleep(0.1)
+
+    try:
+        page.navigate(url)
+        before = frames_after(10)
+        if before < 10:
+            return ["showed %d frames before the resize" % before]
+        resize(30)
+        time.sleep(0.5)
+        try:
+            page.evaluate(CANVAS_JS)
+        except ChromeError:
+            return ["the page stops answering while its canvas has no height"]
+        resize(VIEWPORT[1])
+        resumed = page.evaluate(FRAMES_JS) or 0
+        after = frames_after(resumed + 10)
+        page.poll()
+        problems = list(dict.fromkeys(page.problems))
+        if after < resumed + 10:
+            problems.append("no frames after the canvas got its height back")
+        return problems
+    except ChromeError as exc:
+        return [str(exc)]
+    finally:
+        page.close()
+
+
 def check_index(chrome, url, pages, timeout):
     """Problems with the index page: errors, missing or extra links."""
     page = Page(chrome)
@@ -570,6 +620,14 @@ def run_checks(chrome, base, names, pages, args):
                                  "".join("\n     | " + p for p in problems)))
     if problems:
         failed.append("index.html")
+    if names:
+        problems = check_zero_height(
+            chrome, base + "example_%s.html" % names[0], args)
+        print("%-4s zero-height canvas (%s)%s" % (
+            "FAIL" if problems else "ok", names[0],
+            "".join("\n     | " + p for p in problems)))
+        if problems:
+            failed.append("zero-height canvas")
     for name in names:
         shot = (os.path.join(args.screenshots, "example_%s.png" % name)
                 if args.screenshots else None)
@@ -583,7 +641,7 @@ def run_checks(chrome, base, names, pages, args):
         if not ok:
             failed.append(name)
     print("%d/%d example pages passed" % (len(names) - len([
-        f for f in failed if f != "index.html"]), len(names)))
+        f for f in failed if f in names]), len(names)))
     return failed
 
 
