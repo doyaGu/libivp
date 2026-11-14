@@ -555,7 +555,10 @@ int main(int argc, char **argv)
         ivp_renderer_end_frame(r);
         frame++;
         if (shot && frame >= shot_frames) {
-            printf("[gallery] screenshot %s\n", shot);
+            if (ivp_render_capture_written(r))
+                printf("[gallery] screenshot %s\n", shot);
+            else
+                fprintf(stderr, "[gallery] screenshot not written\n");
             break;
         }
     }

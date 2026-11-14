@@ -1726,7 +1726,7 @@ static inline int demo_run_viewer(demo_app_t *app, const char *shot_path, int sh
         demo_viewer_end_frame(v, app->controls);
         frame++;
         if (shot_path && frame >= shot_frames) {
-            if (ivp_render_capture_pending(v->renderer))
+            if (!ivp_render_capture_written(v->renderer))
                 fprintf(stderr, "[%s] screenshot not written\n", app->cfg.tag);
             else
                 printf("[%s] screenshot %s\n", app->cfg.tag, shot_path);
