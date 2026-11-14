@@ -223,12 +223,14 @@ void ivp_gpu_wait_idle(ivp_gpu_device_t *dev)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 #ifdef __EMSCRIPTEN__
-/* Return to the browser until it shows the next frame (needs Asyncify): the
+/* Return to the browser until its next animation frame (needs Asyncify): the
  * canvas is presented when control goes back to the event loop, and frames
- * follow the display like vsync.  Module.ivpFrames counts the frames shown,
- * for tools/web/browser_smoke.py. */
-EM_ASYNC_JS(void, ivp_gles_wait_animation_frame, (void), {
-    Module['ivpFrames'] = (Module['ivpFrames'] || 0) + 1;
+ * follow the display like vsync.  Every pass of the example's loop must come
+ * here, drawn or not, or the loop never gives the browser a turn and the tab
+ * hangs.  `shown` counts the frame in Module.ivpFrames, for
+ * tools/web/browser_smoke.py. */
+EM_ASYNC_JS(void, ivp_gles_wait_animation_frame, (int shown), {
+    if (shown) Module['ivpFrames'] = (Module['ivpFrames'] || 0) + 1;
     await new Promise(function(resolve) { requestAnimationFrame(resolve); });
 });
 #endif
@@ -237,7 +239,13 @@ ivp_gpu_frame_status_t ivp_gpu_frame_begin(ivp_gpu_device_t *dev)
 {
     int pw, ph;
     SDL_GetWindowSizeInPixels(dev->window, &pw, &ph);
-    if (pw <= 0 || ph <= 0) return IVP_GPU_FRAME_SKIP;
+    if (pw <= 0 || ph <= 0) {
+#ifdef __EMSCRIPTEN__
+        /* a canvas of no height (a page shorter than its header) */
+        ivp_gles_wait_animation_frame(0);
+#endif
+        return IVP_GPU_FRAME_SKIP;
+    }
     dev->frame_w = pw;
     dev->frame_h = ph;
     dev->bound = NULL;
@@ -248,7 +256,7 @@ void ivp_gpu_frame_end(ivp_gpu_device_t *dev)
 {
 #ifdef __EMSCRIPTEN__
     (void)dev;
-    ivp_gles_wait_animation_frame();
+    ivp_gles_wait_animation_frame(1);
 #else
     SDL_GL_SwapWindow(dev->window);
 #endif
@@ -257,6 +265,9 @@ void ivp_gpu_frame_end(ivp_gpu_device_t *dev)
 void ivp_gpu_frame_cancel(ivp_gpu_device_t *dev)
 {
     (void)dev;
+#ifdef __EMSCRIPTEN__
+    ivp_gles_wait_animation_frame(0);
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
