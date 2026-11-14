@@ -109,6 +109,7 @@ bool ivp_png_write_rgb(const char *path, const unsigned char *rgb, int w, int h)
 void ivp_render_request_capture(ivp_renderer_t *r, const char *path)
 {
     if (!r) return;
+    r->capture_written = false;
     if (!path) { r->capture_path[0] = '\0'; return; }
     snprintf(r->capture_path, sizeof(r->capture_path), "%s", path);
 }
@@ -116,6 +117,11 @@ void ivp_render_request_capture(ivp_renderer_t *r, const char *path)
 bool ivp_render_capture_pending(const ivp_renderer_t *r)
 {
     return r && r->capture_path[0] != '\0';
+}
+
+bool ivp_render_capture_written(const ivp_renderer_t *r)
+{
+    return r && r->capture_written;
 }
 
 bool ivp_capture_begin(ivp_renderer_t *r)
@@ -136,4 +142,5 @@ void ivp_capture_finish(ivp_renderer_t *r)
     if (!ok) fprintf(stderr, "screenshot to %s failed\n", r->capture_path);
     free(rgb);
     r->capture_path[0] = '\0';
+    r->capture_written = ok;
 }

@@ -195,6 +195,7 @@ struct ivp_renderer {
 
     /* Screenshot (ivp_render_capture.c) */
     char                     capture_path[512];
+    bool                     capture_written;   /* the last request's outcome */
 
     /* A frame is being recorded (between begin_frame and end_frame) */
     bool                     frame_active;

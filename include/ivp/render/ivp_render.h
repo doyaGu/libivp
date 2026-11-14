@@ -389,6 +389,10 @@ typedef struct ivp_render_stats {
  * written when ivp_renderer_end_frame returns; NULL cancels a pending request. */
 void ivp_render_request_capture(ivp_renderer_t *r, const char *png_path);
 bool ivp_render_capture_pending(const ivp_renderer_t *r);
+/* True when the last requested frame was written to its file: false while
+ * the request is pending, after the write failed, and when the backend
+ * cannot capture (the OpenGL ES backend in a browser). */
+bool ivp_render_capture_written(const ivp_renderer_t *r);
 
 void ivp_render_stats_get(const ivp_renderer_t *r, ivp_render_stats_t *stats);
 
