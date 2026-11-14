@@ -398,10 +398,12 @@ static void draw(gallery_t *g, ivp_renderer_t *r, const layout_t *l, int win_w, 
                                          IVP_TEXT_ALIGN_RIGHT);
     }
 
-    /* header and footer plates over the scrolled cards */
+    /* header and footer plates over the scrolled cards: rectangles, which are
+     * drawn in call order with the card text (a panel would go under it), and
+     * opaque, so no card text shows through */
     const float plate[3] = { 0.04f, 0.06f, 0.10f };
-    ivp_render_draw_panel(r, 0.0f, 0.0f, (float)win_w, TOP_Y - 6.0f, plate, 0.96f);
-    ivp_render_draw_panel(r, 0.0f, (float)win_h - BOTTOM_H, (float)win_w, BOTTOM_H, plate, 0.96f);
+    ivp_render_draw_rect(r, 0.0f, 0.0f, (float)win_w, TOP_Y - 6.0f, plate, 1.0f);
+    ivp_render_draw_rect(r, 0.0f, (float)win_h - BOTTOM_H, (float)win_w, BOTTOM_H, plate, 1.0f);
     ivp_render_draw_text_scaled(r, MARGIN, 10.0f, "libivp examples", c_title, 3);
     {
         char s[128];
