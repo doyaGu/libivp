@@ -204,9 +204,9 @@
       "type": "command",
       "command": ["tools/parity/check.sh"],
       "output_assertions": [
-        {"count": 2, "text": "=== 25/48 identical; 23/23 expected differences ==="},
-        {"count": 2, "text": "=== 10/48 identical; 38/38 expected differences ==="},
-        {"count": 2, "text": "=== 48/48 identical ==="},
+        {"count": 2, "text": "=== 25/49 identical; 24/24 expected differences ==="},
+        {"count": 2, "text": "=== 10/49 identical; 39/39 expected differences ==="},
+        {"count": 2, "text": "=== 49/49 identical ==="},
         {"count": 1, "text": "PARITY OK"}
       ],
       "platforms": ["Darwin"],

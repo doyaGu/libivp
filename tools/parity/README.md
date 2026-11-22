@@ -3,13 +3,13 @@
 本工具同时检查 libivp 的三个构建域：
 
 - **reference-development（默认配置）：**使用
-  `IVP_STABLE_INTERNAL_STATE=OFF`，Release/Debug 必须 48/48 逐位一致。
+  `IVP_STABLE_INTERNAL_STATE=OFF`，Release/Debug 必须 49/49 逐位一致。
 - **mainline：**使用 `IVP_STABLE_INTERNAL_STATE=ON`，必须恰好只有
-  `mainline_expected_differences.txt` 登记的 23 个场景不同；多一个或少一个都失败。
+  `mainline_expected_differences.txt` 登记的 24 个场景不同；多一个或少一个都失败。
   Debug 主线另外只允许 `mainline_debug_text_differences.txt` 登记的场景在调试文本上
   不同（JSONL 仍须逐位一致），同样多一个或少一个都失败。
 - **edit-locality：**主线加 `IVP_EDIT_LOCALITY=ON`，必须恰好只有
-  `edit_locality_expected_differences.txt` 登记的 38 个场景不同。
+  `edit_locality_expected_differences.txt` 登记的 39 个场景不同。
 
 三个域都对照同一个原版引擎（默认 `../ivp`）。Release 对照
 `-ffp-contract=off` 原版；Debug 对照不定义 `NDEBUG`、定义 `DEBUG` 的原版。
@@ -23,7 +23,7 @@ Qhull 8.0.2 `libqhull_r`，构建放在 `build/parity_reentrant`。两种 Qhull 
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照引擎固定为 `43a8f4b`。原版默认开启软件 x87 模拟，libivp 不移植这一项；
+对照固定为 `0c78833`（引擎与 `43a8f4b` 相同，其后只改了 x87 测试和 runner）。原版默认开启软件 x87 模拟，libivp 不移植这一项；
 脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）把它关闭，Qhull 按
 `PARITY_REENTRANT_QHULL`（默认 `OFF`）与 libivp 一致。需要克隆到与
 本仓库同级的 `../ivp`：

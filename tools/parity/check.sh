@@ -21,7 +21,7 @@
 # Builds go to $IVP_PARITY_DIR (default build/parity); the reference sources
 # are taken from $IVP_REF_SRC (default ../ivp).  Exit code 1 if any
 # comparison violates its policy.  The reference-development build uses the
-# same Qhull as the reference and must be 48/48 identical.
+# same Qhull as the reference and must be 49/49 identical.
 # The mainline build must differ in exactly the scenarios
 # listed by mainline_expected_differences.txt, and the mainline build with
 # IVP_EDIT_LOCALITY in exactly those of
