@@ -186,7 +186,8 @@ enum {
     SCENARIO_GALTON           = 205,
     SCENARIO_FAST_IMPACTS     = 206,
     SCENARIO_SPAWN_REMOVE     = 207,
-    SCENARIO_LONG_RANGE       = 208
+    SCENARIO_LONG_RANGE       = 208,
+    SCENARIO_HULL_BUDGET      = 209
 };
 
 static const char *scenario_name_from_id(int scenario_id)
@@ -237,6 +238,7 @@ static const char *scenario_name_from_id(int scenario_id)
         case SCENARIO_GRID_TERRAIN: return "grid_terrain";
         case SCENARIO_HULL_PILE: return "hull_pile";
         case SCENARIO_GALTON: return "galton";
+        case SCENARIO_HULL_BUDGET: return "hull_budget";
         case SCENARIO_FAST_IMPACTS: return "fast_impacts";
         case SCENARIO_SPAWN_REMOVE: return "spawn_remove";
         case SCENARIO_LONG_RANGE: return "long_range";
@@ -3429,6 +3431,38 @@ static int run_galton(FILE *out, int steps, double dt, invariant_result_t *inv)
     return 0;
 }
 
+/* hull_budget: a slab dropped flat onto a bed of 400 small pegs (one static
+ * ledge soup).  The slab's hull manager holds a synapse for every peg, and
+ * about 400 of them run out together several times while the slab lands.
+ * One hull check dispatches at most 100 (+2) of them and defers the rest to
+ * the next PSI (IVP_Hull_Manager::get_synapse_check_count); checking all of
+ * them at once lands the slab differently from step 58 on. */
+static int run_hull_budget(FILE *out, int steps, double dt, invariant_result_t *inv)
+{
+    geo_scene_t sc;
+    if (!geo_scene_init(&sc, dt)) return 1;
+
+    enum { PEGS_PER_ROW = 20 };
+    ivp_compact_ledge_t *ledges[1 + PEGS_PER_ROW * PEGS_PER_ROW];
+    int n = 0;
+    ledges[n++] = geo_box_ledge(3.0, 0.05, 3.0, 0.0, 1.0, 0.0);     /* floor */
+    for (int i = 0; i < PEGS_PER_ROW; ++i)                         /* peg bed */
+        for (int j = 0; j < PEGS_PER_ROW; ++j)
+            ledges[n++] = geo_box_ledge(0.04, 0.04, 0.04, -1.9 + 0.2 * (double)i, 0.91,
+                                        -1.9 + 0.2 * (double)j);
+    const ivp_surman_t *bed = geo_scene_surman(&sc, geo_compile_soup(ledges, n, false));
+    const ivp_quatr_t q_ident = ivp_quatr_identity();
+    geo_scene_add(&sc, geo_static(&sc, bed, 0.5, 0.3, q_ident, 0.0, 0.0, 0.0), "bed");
+    geo_scene_add(&sc, geo_box(&sc, 0.4, 0.2, 2.05, 0.05, 2.05, 4.0, 5.607, 11.207, 5.607, q_ident,
+                               0.0, 0.3, 0.0), "slab");
+
+    int rc = geo_run(&sc, out, SCENARIO_HULL_BUDGET, steps, dt);
+    if (rc) return rc;
+    geo_check_contained(&sc, inv, "hull_budget", 1.0);
+    geo_scene_destroy(&sc);
+    return 0;
+}
+
 /* fast_impacts: fast and fast spinning projectiles (ball, box, hull,
  * dumbbell compound, needle) inside a closed room of thin plates */
 static int run_fast_impacts(FILE *out, int steps, double dt, invariant_result_t *inv)
@@ -6272,6 +6306,7 @@ static int parse_scenario_name(const char *name, int *scenario_out)
     else if (!strcmp(name, "grid_terrain"))   *scenario_out = SCENARIO_GRID_TERRAIN;
     else if (!strcmp(name, "hull_pile"))      *scenario_out = SCENARIO_HULL_PILE;
     else if (!strcmp(name, "galton"))         *scenario_out = SCENARIO_GALTON;
+    else if (!strcmp(name, "hull_budget"))    *scenario_out = SCENARIO_HULL_BUDGET;
     else if (!strcmp(name, "fast_impacts"))   *scenario_out = SCENARIO_FAST_IMPACTS;
     else if (!strcmp(name, "spawn_remove"))   *scenario_out = SCENARIO_SPAWN_REMOVE;
     else if (!strcmp(name, "long_range"))     *scenario_out = SCENARIO_LONG_RANGE;
@@ -6294,7 +6329,7 @@ static void print_usage(const char *exe)
             "slider_limits|constraint_break|attacher|actuator_extra|"
             "airboat|fake_jetski|"
             "raycast_car_drive|check_dist_events|golem_beam|"
-            "concave_static|compound_dynamic|convex_hulls|grid_terrain|hull_pile|galton|fast_impacts|"
+            "concave_static|compound_dynamic|convex_hulls|grid_terrain|hull_pile|galton|hull_budget|fast_impacts|"
             "spawn_remove|long_range|universe_evict|merge_objects|object_attach|merge_buoyancy|anchor_follow "
             "[--steps N] [--dt seconds] [--output file.jsonl] [--check-invariants] [--assert-continue] "
             "[--benchmark [--samples N] [--warmup N] [--min-sample-ms MS]]\n"
@@ -6484,6 +6519,7 @@ int main(int argc, char **argv)
         case SCENARIO_GRID_TERRAIN:   rc = run_grid_terrain(out, steps, dt, inv);   break;
         case SCENARIO_HULL_PILE:      rc = run_hull_pile(out, steps, dt, inv);      break;
         case SCENARIO_GALTON:         rc = run_galton(out, steps, dt, inv);         break;
+        case SCENARIO_HULL_BUDGET:    rc = run_hull_budget(out, steps, dt, inv);    break;
         case SCENARIO_FAST_IMPACTS:   rc = run_fast_impacts(out, steps, dt, inv);   break;
         case SCENARIO_SPAWN_REMOVE:   rc = run_spawn_remove(out, steps, dt, inv);   break;
         case SCENARIO_LONG_RANGE:     rc = run_long_range(out, steps, dt, inv);     break;
