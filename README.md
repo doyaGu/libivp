@@ -10,7 +10,7 @@ The port follows the reference engine line by line and is checked against
 it bit for bit:
 
 - The default build (`IVP_STABLE_INTERNAL_STATE=OFF`)
-  reproduces the reference engine exactly in all 48 parity scenarios, in
+  reproduces the reference engine exactly in all 49 parity scenarios, in
   Release and Debug.
 - The optional **mainline build** (`IVP_STABLE_INTERNAL_STATE=ON`) keeps the reference physics but no longer
   depends on incidental container order or allocator history. Each of its
@@ -185,7 +185,7 @@ and allocation-history sensitivity. Scheduling one world on a different
 worker does not change its result, but independently reconstructed worlds
 need not match. Select `IVP_STABLE_INTERNAL_STATE=ON` when equivalent search
 slots must agree despite those histories; it deliberately differs from the
-reference in the 23 registered scenarios. Keep the default when reference
+reference in the 24 registered scenarios. Keep the default when reference
 parity is the goal.
 
 ### Graphical examples
@@ -235,7 +235,7 @@ out next to this repository, a C++17 compiler and Python 3:
 ```bash
 git clone https://github.com/doyaGu/ivp.git ../ivp
 tools/regen_reference.sh     # build the reference, write tools/testdata/ref_*.jsonl
-tools/parity/check.sh        # reference-development 48/48 + mainline difference gate
+tools/parity/check.sh        # reference-development 49/49 + mainline difference gate
 ```
 
 `tools/parity/README.md` describes the checks and how to chase a
