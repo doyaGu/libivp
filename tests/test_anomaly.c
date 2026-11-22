@@ -3,6 +3,7 @@
 #include <ivp/dynamics/ivp_environment.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_core.h>
+#include <ivp/collision/ivp_hull_mgr.h>
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_quat.h>
 #include <math.h>
@@ -265,6 +266,64 @@ IVP_TEST(anomaly_collision_cap_per_object) {
     ivp_environment_destroy(env);
 }
 
+/* IVP_Hull_Manager::get_synapse_check_count: one hull check dispatches at
+ * most 100 synapses (or fewer with a lower anomaly limit) and defers the
+ * rest to the next PSI.  The counter is decremented after each dispatch, so
+ * the limit n dispatches n + 2 synapses (reference legacy_defects
+ * hull_check_budget). */
+typedef struct recording_hull_event {
+    ivp_listener_hull_t base;
+    bool fired;
+} recording_hull_event_t;
+
+static void recording_hull_limit_exceeded(ivp_listener_hull_t *lh, ivp_hull_mgr_t *hm, float value) {
+    (void)value;
+    ((recording_hull_event_t *)lh)->fired = true;
+    ivp_hull_mgr_remove_synapse(hm, lh);
+}
+
+static void recording_hull_deleted(ivp_listener_hull_t *lh, ivp_hull_mgr_t *hm) {
+    ivp_hull_mgr_remove_synapse(hm, lh);
+}
+
+static const ivp_listener_hull_vt_t recording_hull_vt = {
+    IVP_HULL_ELEM_POLYGON, recording_hull_limit_exceeded, recording_hull_deleted, NULL
+};
+
+IVP_TEST(anomaly_hull_check_budget) {
+    const int expected_first_pass[] = { 102, 7 };
+    for (int scenario = 0; scenario < 2; scenario++) {
+        ivp_environment_t *env = create_test_env();
+        IVP_ASSERT_TRUE(env != NULL);
+        if (scenario == 1) env->anomaly_manager.config.max_collision_checks_per_psi = 5;
+
+        recording_hull_event_t events[105];
+        ivp_hull_mgr_t hm;
+        IVP_ASSERT_EQ(ivp_hull_mgr_init(&hm, NULL), IVP_OK);
+        const ivp_time_t now = env->current_time;
+        const int event_count = expected_first_pass[scenario] + 3;
+
+        ivp_hull_mgr_increase_hull_by_x(&hm, now, 1.0f, 1.0f, 1.0f);
+        for (int i = 0; i < event_count; i++) {
+            ivp_listener_hull_init(&events[i].base, &recording_hull_vt);
+            events[i].fired = false;
+            ivp_hull_mgr_insert_synapse(&hm, &events[i].base, now, 0.5);
+        }
+
+        ivp_hull_mgr_check_hull_synapses(&hm, env);
+        /* equal keys are dispatched in reverse insertion order */
+        for (int i = 0; i < event_count; i++) IVP_ASSERT_EQ(events[i].fired, i >= 3);
+
+        ivp_hull_mgr_increase_hull_by_x(&hm, now + 1.0, 1.0f, 1.0f, 1.0f);
+        ivp_hull_mgr_check_hull_synapses(&hm, env);
+        IVP_ASSERT_TRUE(!ivp_minlist_has_elements(&hm.sorted_synapses));
+        IVP_ASSERT_TRUE(events[0].fired && events[1].fired && events[2].fired);
+
+        ivp_hull_mgr_destroy(&hm);
+        ivp_environment_destroy(env);
+    }
+}
+
 int main(void) {
     IVP_REGISTER(anomaly_detect_nan_velocity);
     IVP_REGISTER(anomaly_detect_nan_position);
@@ -275,6 +334,7 @@ int main(void) {
     IVP_REGISTER(anomaly_auto_correct_zeros_nan);
     IVP_REGISTER(anomaly_auto_correct_clamps_speed);
     IVP_REGISTER(anomaly_collision_cap_per_object);
+    IVP_REGISTER(anomaly_hull_check_budget);
 
     IVP_RUN_ALL();
 }
