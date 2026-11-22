@@ -48,7 +48,8 @@ typedef struct ivp_anomaly_config {
     ivp_real_t max_speed;          /* max_velocity [m/s] (default: 2000) */
     float      max_angular_velocity_per_psi; /* [rad per PSI] (default: PI/2) */
     int        max_collisions_per_psi;       /* per core (default: 70000) */
-    int        max_collision_checks_per_psi; /* hull manager budget (default: 1000) */
+    int        max_collision_checks_per_psi; /* hull synapse checks per PSI (default: 1000;
+                                              * the hull manager checks at most 100) */
     /* libivp extras: ivp_anomaly_check_object() / count_collision() */
     ivp_real_t max_angular_speed;  /* max angular speed [rad/s] (default: 100) */
     ivp_real_t energy_gain_ratio;  /* max allowed energy gain per PSI (default: 10.0) */

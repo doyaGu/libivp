@@ -102,10 +102,21 @@ void ivp_hull_mgr_increase_hull_by_x(ivp_hull_mgr_t *hm, ivp_time_t t_now, float
     IVP_ASSERT(hm->hull_value_next_psi >= 0.0f);
 }
 
+/* IVP_Hull_Manager::get_synapse_check_count: the retail hull pass checks at
+ * most 100 synapses per PSI and defers the rest to the next one; dispatching
+ * more in the same PSI can reverse the order of edge contacts with equal
+ * event times.  A lower anomaly limit still applies. */
+static int ivp_hull_mgr_synapse_check_count(const struct ivp_environment *env)
+{
+    const int hull_check_budget = 100;
+    const int anomaly_limit = ivp_env_get_max_collision_checks_per_psi(env);
+    return anomaly_limit < hull_check_budget ? anomaly_limit : hull_check_budget;
+}
+
 void ivp_hull_mgr_check_hull_synapses(ivp_hull_mgr_t *hm, struct ivp_environment *env)
 {
     float syn_val;
-    int maxcnt = ivp_env_get_max_collision_checks_per_psi(env);
+    int maxcnt = ivp_hull_mgr_synapse_check_count(env);
 #ifdef IVP_BENCHMARK_DIAGNOSTICS
     ivp_recheck_diagnostics_t *counts = ivp_recheck_diagnostics_mutable();
     uint64_t callbacks = 0;
