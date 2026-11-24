@@ -3,6 +3,34 @@
 #include <ivp/base/ivp_assert.h>
 #include "dynamics/ivp_env_internal.h"
 
+#if defined(_MSC_VER) && defined(_M_IX86)
+#include <float.h>
+#endif
+
+/* The Win32 CRT uses the hardware x87 stack for scalar math. Match the
+ * original IVP time manager's precision within the step and preserve the
+ * caller's floating-point control state when it returns. */
+static unsigned int time_manager_enter_precision(void)
+{
+    unsigned int saved = 0;
+#if defined(_MSC_VER) && defined(_M_IX86)
+    unsigned int current;
+    _controlfp_s(&saved, 0, 0);
+    _controlfp_s(&current, _PC_64, _MCW_PC);
+#endif
+    return saved;
+}
+
+static void time_manager_leave_precision(unsigned int saved)
+{
+#if defined(_MSC_VER) && defined(_M_IX86)
+    unsigned int current;
+    _controlfp_s(&current, saved, _MCW_PC);
+#else
+    (void)saved;
+#endif
+}
+
 /* environment hooks (ivp_environment.c) */
 void ivp_environment_set_current_time_internal(struct ivp_environment *env, ivp_time_t time);
 void ivp_environment_set_delta_psi_time_internal(struct ivp_environment *env, double psi_time);
@@ -62,6 +90,7 @@ int ivp_time_manager_get_event_count(const ivp_time_manager_t *tm)
 
 void ivp_time_manager_event_loop(ivp_time_manager_t *tm, struct ivp_environment *env, ivp_time_t time)
 {
+    unsigned int precision = time_manager_enter_precision();
     ivp_env_start_pcount(env);
 
     /* IVP_Event_Manager_Standard::simulate_time_events */
@@ -80,11 +109,13 @@ void ivp_time_manager_event_loop(ivp_time_manager_t *tm, struct ivp_environment 
     ivp_environment_set_current_time_internal(env, time);
 
     ivp_env_stop_pcount(env);
+    time_manager_leave_precision(precision);
 }
 
 void ivp_time_manager_simulate_variable_time_step(ivp_time_manager_t *tm, struct ivp_environment *env,
                                                   float delta)
 {
+    unsigned int precision = time_manager_enter_precision();
     ivp_env_start_pcount(env);
 
     /* IVP_Event_Manager::simulate_variable_time_step */
@@ -105,6 +136,7 @@ void ivp_time_manager_simulate_variable_time_step(ivp_time_manager_t *tm, struct
     }
 
     ivp_env_stop_pcount(env);
+    time_manager_leave_precision(precision);
 }
 
 void ivp_time_manager_rebase_for_psi(ivp_time_manager_t *tm, ivp_time_t time_of_last_psi)

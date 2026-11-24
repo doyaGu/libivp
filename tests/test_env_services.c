@@ -14,6 +14,7 @@
 #include <ivp/dynamics/ivp_universe_manager.h>
 #include <ivp/utility/ivp_active_value.h>
 #include <ivp/dynamics/ivp_time_manager.h>
+#include <float.h>
 #include <ivp/builder/ivp_build_surface.h>
 #include <ivp/geometry/ivp_surman.h>
 #include <ivp/collision/ivp_collision_core.h>
@@ -464,6 +465,50 @@ IVP_TEST(user_time_event_fires_between_psis)
     ivp_environment_destroy(env);
 }
 
+#if defined(_MSC_VER) && defined(_M_IX86)
+typedef struct {
+    ivp_time_event_t event;
+    unsigned int precision;
+    bool fired;
+} precision_event_t;
+
+static void record_event_precision(ivp_time_event_t *event, ivp_environment_t *env)
+{
+    precision_event_t *probe = (precision_event_t *)event;
+    (void)env;
+    probe->fired = _controlfp_s(&probe->precision, 0, 0) == 0;
+}
+
+IVP_TEST(time_manager_restores_host_precision)
+{
+    ivp_environment_t *envs[2] = {make_env(), make_env()};
+    IVP_ASSERT_TRUE(envs[0] && envs[1]);
+    precision_event_t probes[2] = {0};
+    bool restored[2] = {false, false};
+    for (int i = 0; i < 2; i++) {
+        ivp_time_event_init(&probes[i].event, record_event_precision);
+        ivp_time_manager_insert_event(ivp_environment_get_time_manager(envs[i]),
+                                      &probes[i].event, 0.001);
+    }
+
+    unsigned int saved, current;
+    IVP_ASSERT_EQ(_controlfp_s(&saved, 0, 0), 0);
+    IVP_ASSERT_EQ(_controlfp_s(&current, _PC_24, _MCW_PC), 0);
+    ivp_environment_simulate_until(envs[0], 0.003);
+    restored[0] = _controlfp_s(&current, 0, 0) == 0 && (current & _MCW_PC) == _PC_24;
+    ivp_environment_simulate_variable_time_step(envs[1], 0.01);
+    restored[1] = _controlfp_s(&current, 0, 0) == 0 && (current & _MCW_PC) == _PC_24;
+    IVP_ASSERT_EQ(_controlfp_s(&current, saved, _MCW_PC), 0);
+
+    for (int i = 0; i < 2; i++) {
+        ivp_environment_destroy(envs[i]);
+        IVP_ASSERT_TRUE(restored[i]);
+        IVP_ASSERT_TRUE(probes[i].fired);
+        IVP_ASSERT_EQ(probes[i].precision & _MCW_PC, _PC_64);
+    }
+}
+#endif
+
 IVP_TEST(replay_clock_preserves_event_queue)
 {
     ivp_environment_t *env = make_env();
@@ -531,6 +576,9 @@ int main(void)
     IVP_REGISTER(universe_manager_evicts_unreferenced_objects);
     IVP_REGISTER(active_value_manager_refreshed_each_psi);
     IVP_REGISTER(user_time_event_fires_between_psis);
+#if defined(_MSC_VER) && defined(_M_IX86)
+    IVP_REGISTER(time_manager_restores_host_precision);
+#endif
     IVP_REGISTER(replay_clock_preserves_event_queue);
     IVP_REGISTER(shared_replay_random_state);
     IVP_RUN_ALL();
