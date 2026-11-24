@@ -199,6 +199,10 @@ void ivp_core_calc_at_matrix(const ivp_core_t *core, ivp_time_t t, ivp_transform
 
 void ivp_core_push_ws(ivp_core_t *core, const ivp_vec3r_t *pos_ws, const ivp_vec3r_t *impulse_ws);
 void ivp_core_async_push_ws(ivp_core_t *core, const ivp_vec3r_t *pos_ws, const ivp_vec3r_t *impulse_ws);
+/* Queue a push with the core-space point and both impulse frames already
+ * computed. The reference stores both impulses as binary32 vectors. */
+void ivp_core_async_push_core(ivp_core_t *core, const ivp_vec3f_t *point_cs,
+                             const ivp_vec3f_t *impulse_cs, const ivp_vec3f_t *impulse_ws);
 void ivp_core_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws);
 void ivp_core_async_center_push(ivp_core_t *core, const ivp_vec3r_t *impulse_ws);
 void ivp_core_rot_push_cs(ivp_core_t *core, const ivp_vec3r_t *torque_impulse_cs);

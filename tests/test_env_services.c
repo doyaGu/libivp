@@ -464,6 +464,63 @@ IVP_TEST(user_time_event_fires_between_psis)
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(replay_clock_preserves_event_queue)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_TRUE(env != NULL);
+    for (int i = 0; i < 3; i++) ivp_environment_simulate_one_psi(env);
+    ivp_time_manager_t *tm = ivp_environment_get_time_manager(env);
+    int event_count = ivp_time_manager_get_event_count(tm);
+    IVP_ASSERT_TRUE(event_count > 0);
+
+    ivp_environment_reset_replay_clock(env, 1.0 / 66.0);
+    IVP_ASSERT_EQ(tm->base_time, 0.0);
+    IVP_ASSERT_EQ(ivp_environment_get_time(env), 0.0);
+    IVP_ASSERT_EQ(env->pl->time_of_last_psi, 0.0);
+    IVP_ASSERT_EQ(ivp_environment_get_next_psi_time(env), 1.0 / 66.0);
+    IVP_ASSERT_EQ(ivp_time_manager_get_event_count(tm), event_count);
+    ivp_environment_destroy(env);
+}
+
+IVP_TEST(shared_replay_random_state)
+{
+    ivp_environment_config_t cfg;
+    ivp_environment_config_init(&cfg);
+    ivp_random_state_t state;
+    ivp_random_state_seed(&state, 0);
+    IVP_ASSERT_EQ(state.seed, 1);
+    cfg.random_state = &state;
+    ivp_environment_t *first = ivp_environment_create(&cfg);
+    ivp_environment_t *second = ivp_environment_create(&cfg);
+    ivp_environment_t *separate = make_env();
+    IVP_ASSERT_TRUE(first && second && separate);
+    IVP_ASSERT_TRUE(make_ball(first, IVP_REAL(0.0), IVP_REAL(0.0)) != NULL);
+    IVP_ASSERT_TRUE(make_ball(second, IVP_REAL(0.0), IVP_REAL(0.0)) != NULL);
+    IVP_ASSERT_TRUE(make_ball(separate, IVP_REAL(0.0), IVP_REAL(0.0)) != NULL);
+
+    IVP_ASSERT_EQ(ivp_random_state_next(&state), 75.0f / 65536.0f);
+    ivp_environment_set_movement_check_countdown(first, 1);
+    ivp_environment_set_movement_check_countdown(second, 1);
+    ivp_environment_set_movement_check_countdown(separate, 1);
+    IVP_ASSERT_EQ(ivp_environment_get_movement_check_countdown(first), 1);
+    ivp_environment_simulate_one_psi(separate);
+    IVP_ASSERT_EQ(state.seed, 75);
+    ivp_environment_simulate_one_psi(first);
+    ivp_environment_simulate_one_psi(second);
+#if IVP_EDIT_LOCALITY
+    IVP_ASSERT_EQ(state.seed, 75);
+#else
+    IVP_ASSERT_TRUE(ivp_environment_get_movement_check_countdown(first) >= 15);
+    IVP_ASSERT_TRUE(ivp_environment_get_movement_check_countdown(second) >= 15);
+    IVP_ASSERT_EQ(state.seed, 421875);
+#endif
+    int seed = state.seed;
+    ivp_environment_destroy(first);
+    ivp_environment_destroy(second);
+    IVP_ASSERT_EQ(state.seed, seed);
+    ivp_environment_destroy(separate);
+}
+
 int main(void)
 {
     IVP_REGISTER(phantom_reports_ball_passing_through);
@@ -474,5 +531,7 @@ int main(void)
     IVP_REGISTER(universe_manager_evicts_unreferenced_objects);
     IVP_REGISTER(active_value_manager_refreshed_each_psi);
     IVP_REGISTER(user_time_event_fires_between_psis);
+    IVP_REGISTER(replay_clock_preserves_event_queue);
+    IVP_REGISTER(shared_replay_random_state);
     IVP_RUN_ALL();
 }

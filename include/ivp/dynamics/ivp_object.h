@@ -280,6 +280,10 @@ void ivp_object_set_pinned(ivp_object_t *obj, bool pinned);
  * exclusive pairs, or the public fields without using those setters. */
 void ivp_object_recheck_collision_filter(ivp_object_t *obj);
 
+/* Insert or remove the object from collision detection without changing
+ * its collision group or layer mask. */
+void ivp_object_enable_collision_detection(ivp_object_t *obj, bool enable);
+
 /* Set collision group. Objects in the same non-zero group skip collision.
  * Existing pairs are re-evaluated immediately. */
 static inline void ivp_object_set_collision_group(ivp_object_t *obj, int group) {

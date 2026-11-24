@@ -345,8 +345,6 @@ void ivp_object_calc_at_matrix(const struct ivp_object *obj, ivp_time_t t, ivp_t
 void ivp_object_async_push_object_ws(struct ivp_object *obj, const ivp_vec3r_t *position_ws, const ivp_vec3f_t *impulse_ws);
 void ivp_object_async_add_rot_speed_object_cs(struct ivp_object *obj, const ivp_vec3f_t *rotation_vec);
 void ivp_object_async_add_speed_object_ws(struct ivp_object *obj, const ivp_vec3f_t *speed_vec);
-void ivp_core_async_push_core(ivp_core_t *core, const ivp_vec3f_t *point_cs, const ivp_vec3f_t *impulse_cs,
-                              const ivp_vec3f_t *impulse_ws);
 
 /* ── Material / events glue ─────────────────────────────────────────────── */
 

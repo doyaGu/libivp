@@ -27,6 +27,15 @@ extern "C" {
 
 struct ivp_environment;
 
+/* The reference generator starts at seed 1. Use the seed function to
+ * restore a saved seed; zero is normalized to 1. */
+typedef struct ivp_random_state {
+    int seed;
+} ivp_random_state_t;
+
+void ivp_random_state_seed(ivp_random_state_t *state, int seed);
+float ivp_random_state_next(ivp_random_state_t *state);
+
 /* ── Environment configuration ──────────────────────────────────────────── */
 
 #define IVP_OBJECTS_INIT_CAPACITY      64
@@ -80,6 +89,11 @@ typedef struct ivp_environment_config {
      * is not required.  A non-NULL performance_counter always takes
      * precedence.  Default: false. */
     bool                            disable_performance_counter;
+    /* NULL (default) keeps a generator in the environment. An application
+     * restoring the reference's shared sequence may supply its own state.
+     * It must outlive the environment and be accessed serially. It cannot
+     * be borrowed by an environment allocated in a checkpoint memory region. */
+    ivp_random_state_t             *random_state;
 } ivp_environment_config_t;
 
 typedef struct ivp_parallel_stats {
@@ -327,6 +341,9 @@ void ivp_environment_destroy_cluster(ivp_environment_t *env, ivp_cluster_t *clus
 
 /* Destroy an object and remove it from the environment. */
 void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj);
+/* Reference delete_silently: release the object without reviving its
+ * collision neighbors. Deletion events still fire. */
+void ivp_environment_destroy_object_silently(ivp_environment_t *env, ivp_object_t *obj);
 
 /* Destroy object by stable handle. Returns true if found and removed. */
 bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle);
@@ -471,6 +488,19 @@ void ivp_environment_set_delta_psi_time(ivp_environment_t *env, ivp_real_t dt);
 void ivp_environment_simulate_until(ivp_environment_t *env, ivp_time_t until_time);
 void ivp_environment_simulate_variable_time_step(ivp_environment_t *env, ivp_real_t delta_time);
 void ivp_environment_reset_time(ivp_environment_t *env);
+/* Rebase live simulation times, then restart the external clock at zero. */
+void ivp_environment_reset_time_to_zero(ivp_environment_t *env);
+ivp_time_t ivp_environment_get_next_psi_time(const ivp_environment_t *env);
+
+/* Restore the clock at the start of an externally recorded replay. Set the
+ * time-manager base, current time and last PSI to zero and record the next
+ * PSI timestamp. Queued events keep their existing relative offsets. Call
+ * only when the environment is idle and already on the replay boundary. */
+void ivp_environment_reset_replay_clock(ivp_environment_t *env, ivp_time_t next_psi_time);
+
+/* Restore the reference movement check schedule at that replay boundary. */
+short ivp_environment_get_movement_check_countdown(const ivp_environment_t *env);
+void ivp_environment_set_movement_check_countdown(ivp_environment_t *env, short countdown);
 
 /* Collision tolerance.  The legacy reference method is named
  * set_global_collision_tolerance, but libivp stores the setting per env so

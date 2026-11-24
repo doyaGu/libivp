@@ -419,12 +419,22 @@ void ivp_environment_set_current_time_internal(struct ivp_environment *env, ivp_
     env->current_time = t;
 }
 
-/* ivp_rand (ivu_os_dep.cxx), one generator per environment */
+void ivp_random_state_seed(ivp_random_state_t *state, int seed)
+{
+    state->seed = seed ? seed : 1;
+}
+
+/* ivp_rand (ivu_os_dep.cxx) */
+float ivp_random_state_next(ivp_random_state_t *state)
+{
+    unsigned int next_seed = (unsigned int)state->seed * 75U;
+    memcpy(&state->seed, &next_seed, sizeof(state->seed));
+    return (float)(state->seed & 0xffff) / (float)0x10000;
+}
+
 float ivp_env_rand(struct ivp_environment *env)
 {
-    unsigned int next_seed = (unsigned int)env->pl->rand_seed * 75U;
-    memcpy(&env->pl->rand_seed, &next_seed, sizeof(int));
-    return (float)(env->pl->rand_seed & 0xffff) / (float)0x10000;
+    return ivp_random_state_next(env->pl->random_state);
 }
 
 /* ── diagnostics (IVP_PerformanceCounter) ──────────────────────────────── */
@@ -2467,6 +2477,36 @@ void ivp_environment_reset_time(ivp_environment_t *env)
     pl->time_of_next_psi = 0.0 + (double)ivp_env_get_delta_psi_time(env);
 }
 
+void ivp_environment_reset_time_to_zero(ivp_environment_t *env)
+{
+    ivp_environment_reset_time(env);
+    ivp_environment_set_current_time_internal(env, 0.0);
+}
+
+ivp_time_t ivp_environment_get_next_psi_time(const ivp_environment_t *env)
+{
+    return env->pl->time_of_next_psi;
+}
+
+void ivp_environment_reset_replay_clock(ivp_environment_t *env, ivp_time_t next_psi_time)
+{
+    ivp_env_pipeline_t *pl = env->pl;
+    pl->time_manager.base_time = 0.0;
+    env->current_time = 0.0;
+    pl->time_of_last_psi = 0.0;
+    pl->time_of_next_psi = next_psi_time;
+}
+
+short ivp_environment_get_movement_check_countdown(const ivp_environment_t *env)
+{
+    return env->pl->next_movement_check;
+}
+
+void ivp_environment_set_movement_check_countdown(ivp_environment_t *env, short countdown)
+{
+    env->pl->next_movement_check = countdown;
+}
+
 /* ── environment lifecycle ─────────────────────────────────────────────── */
 
 static bool env_create_static_object(ivp_environment_t *env);
@@ -2480,6 +2520,9 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
         ivp_environment_config_init(&cfg);
     }
     const ivp_allocator_t *alloc = cfg.allocator ? cfg.allocator : ivp_default_allocator();
+#if IVP_ENABLE_CHECKPOINTS
+    if (cfg.random_state && ivp_memory_region_is_allocator(alloc)) return NULL;
+#endif
     ivp_environment_t *env = (ivp_environment_t *)ivp_alloc(alloc, sizeof(ivp_environment_t));
     if (!env) return NULL;
     memset(env, 0, sizeof(*env));
@@ -2562,7 +2605,8 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* the manager's "current_time" terminal (borrowed) */
     env->mod_current_time = pl->active_value_manager ? ivp_active_value_manager_current_time(pl->active_value_manager) : NULL;
     pl->state = IVP_ES_PSI;
-    pl->rand_seed = 1;
+    ivp_random_state_seed(&pl->local_random_state, 1);
+    pl->random_state = cfg.random_state ? cfg.random_state : &pl->local_random_state;
     ivp_pvec_init_with_allocator(&pl->core_revive_list, env->allocator);
     ivp_pvec_init_with_allocator(&pl->touched_cores, env->allocator);
     ivp_pvec_init_with_allocator(&pl->active_hulls, env->allocator);
@@ -3061,7 +3105,8 @@ static void env_delete_object_now(ivp_environment_t *env, ivp_object_t *obj, boo
     env_reset_object_sequence_if_empty(env);
 }
 
-bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle)
+static bool env_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle,
+                                         bool check_vicinity)
 {
     if (!env || !ivp_object_handle_is_valid(handle)) return false;
     ivp_object_t *obj = ivp_object_system_get_by_handle(env_object_system(env), handle);
@@ -3075,20 +3120,31 @@ bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object
         if (!obj->object_deletion_deferred) {
             if (ivp_pvec_add(&pl->deferred_deletions, obj) < 0) return false;
             obj->object_deletion_deferred = true;
-            obj->check_vicinity_on_deferred_deletion = true;
-        } else {
+            obj->check_vicinity_on_deferred_deletion = check_vicinity;
+        } else if (check_vicinity) {
             obj->check_vicinity_on_deferred_deletion = true;
         }
         return true;
     }
-    env_delete_object_now(env, obj, true);
+    env_delete_object_now(env, obj, check_vicinity);
     return true;
+}
+
+bool ivp_environment_destroy_object_by_handle(ivp_environment_t *env, ivp_object_handle_t handle)
+{
+    return env_destroy_object_by_handle(env, handle, true);
 }
 
 void ivp_environment_destroy_object(ivp_environment_t *env, ivp_object_t *obj)
 {
     if (!env || !obj || obj->owner != env) return;
     (void)ivp_environment_destroy_object_by_handle(env, ivp_environment_get_object_handle(obj));
+}
+
+void ivp_environment_destroy_object_silently(ivp_environment_t *env, ivp_object_t *obj)
+{
+    if (!env || !obj || obj->owner != env) return;
+    (void)env_destroy_object_by_handle(env, ivp_environment_get_object_handle(obj), false);
 }
 
 int ivp_environment_get_object_count(const ivp_environment_t *env)

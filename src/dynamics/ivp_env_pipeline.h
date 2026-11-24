@@ -45,7 +45,8 @@ typedef struct ivp_env_pipeline {
     double                   integrated_energy_damp;
     double                   gravity_scalar;
     ivp_env_state_t          state;
-    int                      rand_seed;
+    ivp_random_state_t       local_random_state;
+    ivp_random_state_t      *random_state;
 
     /* Runtime state that the reference keeps in process-wide statics.  It is
      * environment-owned here so independent worlds are reentrant. */
@@ -158,7 +159,6 @@ void ivp_object_pipeline_destroy(ivp_environment_t *env, ivp_object_t *obj);
 /* IVP_Controller_Phantom (ivp_phantom.c) */
 struct ivp_controller_phantom;
 void ivp_controller_phantom_destroy(struct ivp_controller_phantom *c);
-void ivp_object_enable_collision_detection(ivp_object_t *obj, bool enable);
 void ivp_object_unlink_contact_points(ivp_object_t *obj, bool silent);
 void ivp_object_ensure_in_simulation_now(ivp_object_t *obj);
 void ivp_object_set_pinned_ref(ivp_object_t *obj, bool pinned);
