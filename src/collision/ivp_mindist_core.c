@@ -87,8 +87,7 @@ void ivp_mindist_settings_init(ivp_mindist_settings_t *s)
 
 ivp_real_t ivp_mindist_get_coll_dist(const ivp_mindist_t *md)
 {
-    const ivp_mindist_settings_t *settings = ivp_env_get_mindist_settings(md->env);
-    return (ivp_real_t)settings->coll_dists[md->coll_dist_selector];
+    return ivp_mindist_collision_distance(md);
 }
 
 /* ── object helpers ─────────────────────────────────────────────────────── */
@@ -1223,7 +1222,7 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
         md->coll.te.index = IVP_MINLIST_UNUSED;
     }
     {
-        D coll_dist = ivp_mindist_get_coll_dist(md);
+        D coll_dist = ivp_mindist_collision_distance(md);
         D hull_check_len = coll_dist + (D)ivp_env_get_delta_psi_time(env) * mim.worst_case_speed * 2.1f;
         ivp_mindist_mgr_t *mm = ivp_env_get_mindist_mgr(env);
         if ((D)md->len_numerator > hull_check_len) {
@@ -1258,7 +1257,7 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
     }
     D d_time = (D)ivp_time_diff(mim.t_max, mim.t_now);
     D d_len = d_time * mim.max_coll_speed;
-    D sec_dist = ivp_mindist_get_coll_dist(md) + d_len;
+    D sec_dist = ivp_mindist_collision_distance(md) + d_len;
     IVP_IF(ivp_check_debug_mindist(md)) {   /* ivp_mindist.cxx:1071 */
         ivp_message("%32s  event  len_now %g, sec_dist:%g\n", "update_exact_mindist_events", (double)md->len_numerator,
                     (double)sec_dist);
@@ -1423,7 +1422,7 @@ static void mindist_simulate_time_event(ivp_time_event_t *ev, struct ivp_environ
         if ((md->coll_type & 0x0f) == 0) {
             IVP_ASSERT(md->mindist_status == IVP_MD_EXACT);   /* ivp_mindist.cxx:1438 */
             float md_len = md->len_numerator;
-            float sec_dist = (float)(ivp_mindist_get_coll_dist(md) +
+            float sec_dist = (float)(ivp_mindist_collision_distance(md) +
                                      (D)ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist);
             if (md_len < sec_dist) {
                 ivp_mindist_do_impact(md);

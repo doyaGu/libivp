@@ -15,6 +15,7 @@
 #include <ivp/math/ivp_quat.h>
 #include <ivp/base/ivp_allocator.h>
 #include <ivp/geometry/ivp_surman.h>
+#include <float.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -795,6 +796,65 @@ IVP_TEST(ball_pair_order_follows_host_client_data_compare)
     IVP_ASSERT_TRUE(ball_pair_first_object(ball_ids_ascending, ids) == ascending);
 }
 
+#ifdef IVP_REAL_DOUBLE
+static void record_impact_time(void *context, const ivp_collision_event_t *event)
+{
+    double *time = context;
+    if (*time < 0.0)
+        *time = ivp_environment_get_time(event->environment);
+}
+
+IVP_TEST(ball_face_impact_preserves_collision_distance_precision)
+{
+    ivp_environment_config_t config;
+    ivp_environment_config_init(&config);
+    ivp_vec3r_set_zero(&config.gravity);
+    ivp_environment_t *env = ivp_environment_create(&config);
+    IVP_ASSERT_NOT_NULL(env);
+
+    ivp_compact_surface_t *surface = ivp_build_box_surface(NULL, 4.0f, 0.5f, 4.0f);
+    IVP_ASSERT_NOT_NULL(surface);
+    ivp_surman_polygon_t floor;
+    ivp_surman_polygon_init(&floor, surface);
+    ivp_object_template_t object;
+    ivp_object_template_init(&object);
+    object.type = IVP_OBJECT_POLYGON;
+    object.physical_unmoveable = true;
+    IVP_ASSERT_NOT_NULL(ivp_environment_create_object(env, &object, &floor.base));
+
+    ivp_object_template_init(&object);
+    object.ball_radius = 2.0;
+    object.speed_damp_factor = 0.0;
+    ivp_vec3r_set(&object.position, 0.5, -2.5625, 1.5);
+    ivp_object_t *ball = ivp_environment_create_object(env, &object, NULL);
+    IVP_ASSERT_NOT_NULL(ball);
+    ivp_vec3r_set(&ball->physical_core->speed, 0.0, 8.0, 0.0);
+
+    double time = -1.0;
+    ivp_collision_listener_t listener;
+    ivp_collision_listener_init(&listener, IVP_COLLISION_CB_PRE_COLLISION, &time);
+    listener.pre_collision_fn = record_impact_time;
+    IVP_ASSERT_EQ(ivp_object_add_collision_listener(ball, &listener), 0);
+
+#if defined(_MSC_VER) && defined(_M_IX86)
+    unsigned int saved_control, current_control;
+    IVP_ASSERT_EQ(_controlfp_s(&saved_control, 0, 0), 0);
+    IVP_ASSERT_EQ(_controlfp_s(&current_control, _PC_24, _MCW_PC), 0);
+#endif
+    ivp_environment_simulate_one_psi(env);
+#if defined(_MSC_VER) && defined(_M_IX86)
+    IVP_ASSERT_EQ(_controlfp_s(&current_control, saved_control, _MCW_PC), 0);
+#endif
+
+    ivp_environment_destroy(env);
+    ivp_compact_surface_free(NULL, surface);
+
+    /* The time manager stores the event offset from the first PSI in a float. */
+    const double expected = (float)((2.0625 - (2.0 + (double)0.01f)) / 8.0);
+    IVP_ASSERT_EQ(time, expected);
+}
+#endif
+
 int main(void) {
     /* Range Manager Tests */
     IVP_REGISTER(range_manager_init_defaults);
@@ -808,6 +868,9 @@ int main(void) {
     IVP_REGISTER(collision_filter_callback_false);
     IVP_REGISTER(collision_filter_no_collision_group);
     IVP_REGISTER(ball_pair_order_follows_host_client_data_compare);
+#ifdef IVP_REAL_DOUBLE
+    IVP_REGISTER(ball_face_impact_preserves_collision_distance_precision);
+#endif
 
     /* Compact Ledge Solver Tests */
     IVP_REGISTER(compact_ledge_solver_point_to_ledge);

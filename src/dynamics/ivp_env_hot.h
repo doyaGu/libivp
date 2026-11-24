@@ -66,6 +66,13 @@ static inline ivp_mindist_mgr_t *ivp_env_hot_mindist_mgr(ivp_environment_t *env)
     return &env->pl->mindist_mgr;
 }
 
+/* Keep the distance in the caller's arithmetic. A Win32 scalar return
+ * can otherwise leave subsequent arithmetic on the x87 stack. */
+IVP_FORCEINLINE ivp_real_t ivp_mindist_collision_distance(const ivp_mindist_t *md)
+{
+    return (ivp_real_t)md->env->pl->mindist_settings.coll_dists[md->coll_dist_selector];
+}
+
 static inline ivp_ov_tree_t *ivp_env_hot_ov_tree(ivp_environment_t *env)
 {
     return &env->pl->ov_tree;
