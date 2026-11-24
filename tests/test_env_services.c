@@ -566,6 +566,49 @@ IVP_TEST(shared_replay_random_state)
     ivp_environment_destroy(separate);
 }
 
+typedef struct {
+    int id;
+    int *order;
+} controller_order_probe_t;
+
+static void record_actuator_order(const ivp_event_sim_t *event, ivp_object_t *object, void *context)
+{
+    controller_order_probe_t *probe = context;
+    (void)event;
+    (void)object;
+    *probe->order = *probe->order * 10 + probe->id;
+}
+
+IVP_TEST(independent_controller_removal_preserves_actuator_order)
+{
+    ivp_environment_t *env = make_env();
+    IVP_ASSERT_NOT_NULL(env);
+    ivp_object_t *ball = make_ball(env, IVP_REAL(0.0), IVP_REAL(1.0));
+    IVP_ASSERT_NOT_NULL(ball);
+    int order = 0;
+    controller_order_probe_t probes[] = {{1, &order}, {2, &order}, {3, &order}};
+    ivp_controller_handle_t handles[3];
+    for (int i = 0; i < 3; i++) {
+        handles[i] = ivp_environment_create_core_controller(env, IVP_CP_ACTUATOR,
+                                                            record_actuator_order, &probes[i]);
+        IVP_ASSERT_TRUE(ivp_controller_handle_is_valid(handles[i]));
+        IVP_ASSERT_TRUE(ivp_environment_add_controller_to_core(env, handles[i], ball));
+    }
+    ivp_environment_simulate_one_psi(env);
+    const int initial = order;
+    IVP_ASSERT_TRUE(ivp_environment_remove_controller(env, handles[1]));
+    order = 0;
+    ivp_environment_simulate_one_psi(env);
+    const int next = order;
+    order = 0;
+    ivp_environment_simulate_one_psi(env);
+    ivp_environment_destroy(env);
+
+    IVP_ASSERT_EQ(initial, 321);
+    IVP_ASSERT_EQ(next, 31);
+    IVP_ASSERT_EQ(order, 31);
+}
+
 int main(void)
 {
     IVP_REGISTER(phantom_reports_ball_passing_through);
@@ -581,5 +624,6 @@ int main(void)
 #endif
     IVP_REGISTER(replay_clock_preserves_event_queue);
     IVP_REGISTER(shared_replay_random_state);
+    IVP_REGISTER(independent_controller_removal_preserves_actuator_order);
     IVP_RUN_ALL();
 }

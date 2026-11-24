@@ -1402,7 +1402,11 @@ static void slot_ctrl_detach_all(ivp_environment_t *env,
         if (obj &&
             ivp_ctrl_mgr_core_has_controller(obj->physical_core, &slot->base)) {
             ivp_core_rem_core_controller(obj->physical_core, &slot->base);
-            if (obj->physical_core->sim_unit) ivp_sim_unit_request_union_find(obj->physical_core->sim_unit);
+            /* An independent controller does not connect simulation cores.
+             * Rebuilding the unit would change its equal-priority order. */
+            if (slot->mode == IVP_CONTROLLER_DEPENDENT && obj->physical_core->sim_unit) {
+                ivp_sim_unit_request_union_find(obj->physical_core->sim_unit);
+            }
         }
     }
     (void)ivp_pvec_remove_if_present(
