@@ -17,6 +17,8 @@
 
 #include <ivp/base/ivp_message.h>
 
+#include "qhull_symbols.h"
+
 /* ivu_types.hxx: an unsigned integer as wide as a pointer */
 typedef uintptr_t uintp;
 
