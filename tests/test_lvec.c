@@ -5,6 +5,7 @@
 #include "dynamics/ivp_sim_internal.h"
 #include "solver/ivp_scr_internal.h"
 #include <fenv.h>
+#include <float.h>
 #include <stdint.h>
 
 typedef void (*transform_fn_t)(const ivp_transform_r_t *, const ivp_vec3f_t *,
@@ -620,6 +621,24 @@ IVP_TEST(surface_speed_preserves_scalar_rounding_and_aliases)
     IVP_ASSERT_TRUE(exercise_surface_speed_aliases());
 }
 
+#ifdef IVP_REAL_DOUBLE
+IVP_TEST(triangle_inverse_length_preserves_binary64_precision)
+{
+#if defined(_MSC_VER) && defined(_M_IX86)
+    unsigned int saved_control, current_control;
+    IVP_ASSERT_EQ(_controlfp_s(&saved_control, 0, 0), 0);
+    IVP_ASSERT_EQ(_controlfp_s(&current_control, _PC_24, _MCW_PC), 0);
+#endif
+    const volatile double area[] = {-0.22909351823696511, 3.184356229850664, -0.14557008071278688};
+    const ivp_vec3r_t normal = {{area[0], area[1], area[2]}};
+    const float inverse_length = (float)(1.0 / lvp_real_length(&normal));
+#if defined(_MSC_VER) && defined(_M_IX86)
+    IVP_ASSERT_EQ(_controlfp_s(&current_control, saved_control, _MCW_PC), 0);
+#endif
+    IVP_ASSERT_EQ(inverse_length, 0.31290057301521301f);
+}
+#endif
+
 int main(void)
 {
     IVP_REGISTER(float_matrix_products_match_scalar_rounding);
@@ -632,5 +651,8 @@ int main(void)
     IVP_REGISTER(core_float_views_match_scalar_rounding);
     IVP_REGISTER(scr_pairwise_products_match_scalar_rounding);
     IVP_REGISTER(surface_speed_preserves_scalar_rounding_and_aliases);
+#ifdef IVP_REAL_DOUBLE
+    IVP_REGISTER(triangle_inverse_length_preserves_binary64_precision);
+#endif
     IVP_RUN_ALL();
 }
