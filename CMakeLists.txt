@@ -6,6 +6,10 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+if (MSVC)
+    add_compile_options(/utf-8)
+endif ()
+
 if (CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     # MSVC exposes the C17 <stdatomic.h> implementation behind this switch.
     add_compile_options($<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
@@ -77,7 +81,11 @@ function(ivp_apply_project_warnings TARGET_NAME)
                 # Aligned engine types deliberately contain tail padding.
                 /wd4324
                 # Match the non-MSVC policy for callback-shaped interfaces.
-                /wd4100)
+                /wd4100
+                # IVP_IF deliberately folds out the reference debug checks.
+                /wd4127
+                # C17 flexible array members preserve the compact data layout.
+                /wd4200)
     else ()
         target_compile_options(${TARGET_NAME} PRIVATE
                 -Wall -Wextra -Wpedantic -Werror

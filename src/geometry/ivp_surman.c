@@ -247,7 +247,7 @@ const ivp_compact_surface_t *ivp_surman_get_polygon_surface(const ivp_surman_t *
 /* ── Ball surface manager implementation ────────────────────────────────── */
 
 /* IVP_SurfaceManager_Ball::compact_ledge: zeroed ledge + one triangle */
-static _Alignas(16) const struct {
+static IVP_ALIGN16 const struct {
     ivp_compact_ledge_t ledge;
     ivp_compact_triangle_t tri;
 } s_ball_dummy_ledge = {0};
