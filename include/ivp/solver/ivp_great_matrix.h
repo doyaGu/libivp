@@ -173,8 +173,7 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  *    matches IVP_U_Memory.  A reference-internals build preserves the stale
  *    contents read through overruns and unwritten padding; the stable-internals build
  *    clears the complete reserved span.
- *    Define IVP_GM_VECFPU_SIZE=1 to get the 32-bit reference build instead
- *    (plain scalar helpers, no overruns).
+ *    32-bit builds use scalar rows without a vector block overrun.
  *
  *  - Floating-point contraction: the parity target is the reference built
  *    with -ffp-contract=off (like libivp itself), where every product is
@@ -194,7 +193,11 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  * (IVP_ERR_SINGULAR_MATRIX) where it returns IVP_FAULT. */
 
 #ifndef IVP_GM_VECFPU_SIZE
+#if UINTPTR_MAX == UINT32_MAX
+#define IVP_GM_VECFPU_SIZE 1
+#else
 #define IVP_GM_VECFPU_SIZE 4
+#endif
 #endif
 
 #ifndef IVP_GM_USE_FMA
