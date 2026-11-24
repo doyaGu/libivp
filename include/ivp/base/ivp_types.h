@@ -98,6 +98,12 @@ typedef enum ivp_coord_index {
 
 #define IVP_ALIGN16 IVP_ALIGN(16)
 
+#ifdef __cplusplus
+#define IVP_STATIC_ASSERT(condition, message) static_assert(condition, message)
+#else
+#define IVP_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
+#endif
+
 /* ── Inline hint ────────────────────────────────────────────────────────── */
 
 #if defined(_MSC_VER)

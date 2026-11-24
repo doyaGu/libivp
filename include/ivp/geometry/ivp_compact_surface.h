@@ -36,7 +36,7 @@ typedef struct IVP_ALIGN16 ivp_compact_surface {
 } ivp_compact_surface_t;
 
 /* Size assertion */
-_Static_assert(sizeof(ivp_compact_surface_t) == 48,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_surface_t) == 48,
                "ivp_compact_surface_t must be 48 bytes");
 
 /* ── Bit field accessors ────────────────────────────────────────────────── */

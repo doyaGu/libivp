@@ -62,10 +62,10 @@ typedef struct IVP_ALIGN16 ivp_compact_grid {
 } ivp_compact_grid_t;
 
 /* reference IVP_Compact_Grid offsets (LP64) */
-_Static_assert(offsetof(ivp_compact_grid_t, m_grid_f_object_rot) == 16, "IVP_Compact_Grid::m_grid_f_object");
-_Static_assert(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, n_rows) == 144, "IVP_Compact_Grid::n_rows");
-_Static_assert(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, byte_size) == 160, "IVP_Compact_Grid::byte_size");
-_Static_assert(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, offset_compact_ledge_array) == 176,
+IVP_STATIC_ASSERT(offsetof(ivp_compact_grid_t, m_grid_f_object_rot) == 16, "IVP_Compact_Grid::m_grid_f_object");
+IVP_STATIC_ASSERT(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, n_rows) == 144, "IVP_Compact_Grid::n_rows");
+IVP_STATIC_ASSERT(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, byte_size) == 160, "IVP_Compact_Grid::byte_size");
+IVP_STATIC_ASSERT(sizeof(void *) != 8 || offsetof(ivp_compact_grid_t, offset_compact_ledge_array) == 176,
                "IVP_Compact_Grid::offset_compact_ledge_array");
 
 static inline const ivp_compact_grid_element_t *ivp_compact_grid_get_elements(

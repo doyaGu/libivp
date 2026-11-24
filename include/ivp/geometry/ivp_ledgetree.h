@@ -38,7 +38,7 @@ typedef struct ivp_compact_ledgetree_node {
 } ivp_compact_ledgetree_node_t;
 
 /* Size assertion */
-_Static_assert(sizeof(ivp_compact_ledgetree_node_t) == 28,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_ledgetree_node_t) == 28,
                "ivp_compact_ledgetree_node_t must be 28 bytes");
 
 /* ── Terminal check ─────────────────────────────────────────────────────── */

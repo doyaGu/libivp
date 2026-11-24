@@ -24,7 +24,7 @@ typedef struct ivp_compact_poly_point {
 } ivp_compact_poly_point_t;
 
 /* Size assertion: must be exactly 16 bytes */
-_Static_assert(sizeof(ivp_compact_poly_point_t) == 16,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_poly_point_t) == 16,
                "ivp_compact_poly_point_t must be 16 bytes");
 
 /* ── Construction ───────────────────────────────────────────────────────── */

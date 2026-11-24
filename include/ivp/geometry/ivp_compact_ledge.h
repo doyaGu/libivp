@@ -36,9 +36,9 @@ struct ivp_compact_ledge {
 };
 
 /* Size assertion: must equal sizeof(ivp_compact_triangle_t) */
-_Static_assert(sizeof(ivp_compact_ledge_t) == 16,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_ledge_t) == 16,
                "ivp_compact_ledge_t must be 16 bytes");
-_Static_assert(sizeof(ivp_compact_ledge_t) == sizeof(ivp_compact_triangle_t),
+IVP_STATIC_ASSERT(sizeof(ivp_compact_ledge_t) == sizeof(ivp_compact_triangle_t),
                "ivp_compact_ledge_t must equal ivp_compact_triangle_t in size");
 
 /* ── Bit field accessors for flags_and_size ─────────────────────────────── */

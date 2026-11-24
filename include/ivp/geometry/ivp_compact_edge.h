@@ -34,7 +34,7 @@ typedef struct ivp_compact_edge {
 } ivp_compact_edge_t;
 
 /* Size assertion */
-_Static_assert(sizeof(ivp_compact_edge_t) == 4,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_edge_t) == 4,
                "ivp_compact_edge_t must be 4 bytes");
 
 /* ── Bit field accessors ────────────────────────────────────────────────── */

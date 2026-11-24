@@ -27,7 +27,7 @@ struct ivp_compact_triangle {
 };
 
 /* Size assertion: must be exactly 16 bytes */
-_Static_assert(sizeof(ivp_compact_triangle_t) == 16,
+IVP_STATIC_ASSERT(sizeof(ivp_compact_triangle_t) == 16,
                "ivp_compact_triangle_t must be 16 bytes");
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
