@@ -7,13 +7,18 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 if (MSVC)
+    # Standard C stdio is shared by the Windows and POSIX builds.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_options(/utf-8)
 endif ()
 
-if (CMAKE_C_COMPILER_ID STREQUAL "MSVC")
-    # MSVC exposes the C17 <stdatomic.h> implementation behind this switch.
-    add_compile_options($<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
-endif ()
+function(ivp_enable_c_atomics target)
+    if (CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+        # Visual Studio treats a project that enables CXX as CXX when it
+        # evaluates COMPILE_LANGUAGE options, even for C-only targets.
+        target_compile_options(${target} PRIVATE /experimental:c11atomics)
+    endif ()
+endfunction()
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
@@ -380,6 +385,7 @@ if (IVP_BUILD_TESTS)
     target_compile_definitions(ivp PRIVATE IVP_ENABLE_TEST_CUSTOM_CONTROLLER_API)
 endif ()
 
+ivp_enable_c_atomics(ivp)
 ivp_apply_strict_fp(ivp)
 
 # The reference pipeline port mixes IVP_FLOAT and IVP_DOUBLE on purpose
@@ -655,6 +661,7 @@ if (IVP_BUILD_TESTS)
     # Minimal test framework header is in tests/
     function(ivp_add_test TEST_NAME TEST_SOURCE)
         add_executable(${TEST_NAME} ${TEST_SOURCE})
+        ivp_enable_c_atomics(${TEST_NAME})
         target_link_libraries(${TEST_NAME} PRIVATE ivp)
         target_compile_definitions(${TEST_NAME} PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
         target_include_directories(${TEST_NAME} PRIVATE
