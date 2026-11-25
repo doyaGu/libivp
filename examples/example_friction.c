@@ -63,6 +63,7 @@ typedef struct friction_demo {
     float                       air_vx[2][2];           /* vx of the thrown crates 5 and 25 frames later, ground / global */
     bool                        thrown;
     float                       ice_vx;                 /* the ice crate after 6 s */
+    bool                        ice_stopped;            /* whether it stopped during those 6 s */
 } friction_demo_t;
 
 static float lane_z(int i) { return ((float)i - 0.5f * (float)(N_LANES - 1)) * LANE_W; }
@@ -131,7 +132,6 @@ static void friction_update(demo_app_t *app, demo_viewer_t *v, int frame)
             s->air_vx[1][frame == 398] = crate_vx(s, 4);
             if (frame == 398) s->thrown = true;
         }
-        if (frame == 359) s->ice_vx = crate_vx(s, 2);
     }
     /* the belt crate would otherwise freeze at the turning point, and a frozen core runs no controller */
     ivp_environment_ensure_core_in_simulation(app->world.env, s->crate[5]);
@@ -145,6 +145,10 @@ static void friction_update(demo_app_t *app, demo_viewer_t *v, int frame)
             if (crate_vx(s, 5) < s->min_vx_belt) s->min_vx_belt = crate_vx(s, 5);
             if (p[0] > s->max_x_belt) s->max_x_belt = p[0];
         }
+    }
+    if (!v && frame == 359) {
+        s->ice_vx = crate_vx(s, 2);
+        s->ice_stopped = s->stop_dist[2] >= 0.0f;
     }
 }
 
@@ -218,7 +222,7 @@ static bool friction_check(demo_app_t *app)
                      (double)d1);
     ok &= demo_check(tag, d0 > 0.0f && d1 > 1.5f * d0 && d1 < 2.5f * d0,
                      "half the friction takes about twice the distance (%.1f m / %.1f m)", (double)d1, (double)d0);
-    ok &= demo_check(tag, s->stop_dist[2] < 0.0f && s->ice_vx > 4.0f,
+    ok &= demo_check(tag, !s->ice_stopped && s->ice_vx > 4.0f,
                      "the crate on ice is still sliding after 6 s (%.1f m/s)", (double)s->ice_vx);
     ok &= demo_check(tag, d3 > 0.0f && d3 > 0.7f * d1 && d3 < 1.4f * d1,
                      "the ground friction controller stops the crate like concrete (%.1f m against %.1f m)",
