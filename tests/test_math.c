@@ -278,6 +278,14 @@ IVP_TEST(quat_product_preserves_rotation_accumulation_order)
     IVP_ASSERT_EQ(next.y, -0.79109806389082704);
     IVP_ASSERT_EQ(next.z, 0.088289304779787969);
     IVP_ASSERT_EQ(next.w, 0.60527477129896623);
+
+    const ivp_quatr_t inverse_step = {-step.x, -step.y, -step.z, step.w};
+    ivp_quatr_t quotient = rotation;
+    ivp_quat_set_div_unit_quat(&quotient, &quotient, &inverse_step);
+    IVP_ASSERT_EQ(quotient.x, next.x);
+    IVP_ASSERT_EQ(quotient.y, next.y);
+    IVP_ASSERT_EQ(quotient.z, next.z);
+    IVP_ASSERT_EQ(quotient.w, next.w);
 }
 #endif
 

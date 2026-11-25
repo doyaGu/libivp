@@ -62,18 +62,6 @@ static void qd_normize_correct_step(quatd_t *quat, int steps) {
     quat->w *= factor;
 }
 
-/* IVP_U_Quat::inline_set_mult_quat (ivu_linear_software.hxx order) */
-static inline void qd_mult(quatd_t *res, const quatd_t *q1, const quatd_t *q2) {
-    double xx = q1->w * q2->x + q1->x * q2->w + q1->y * q2->z - q1->z * q2->y;
-    double yy = q1->w * q2->y + q1->y * q2->w + q1->z * q2->x - q1->x * q2->z;
-    double zz = q1->w * q2->z + q1->z * q2->w + q1->x * q2->y - q1->y * q2->x;
-    double ww = q1->w * q2->w - q1->x * q2->x - q1->y * q2->y - q1->z * q2->z;
-    res->x = xx;
-    res->y = yy;
-    res->z = zz;
-    res->w = ww;
-}
-
 /* ── Conversion: quaternion → matrix ────────────────────────────────────── */
 
 void ivp_quat_to_mat3(const ivp_quatr_t *q, ivp_mat3r_t *m) {
@@ -215,12 +203,8 @@ void ivp_quat_from_mat4x4(ivp_quatr_t *q, const double m[4][4]) {
 
 void ivp_quat_set_div_unit_quat(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                 const ivp_quatr_t *q2) {
-    quatd_t a = qd_load(q1);
-    quatd_t b = qd_load(q2);
-    quatd_t inv = { -b.x, -b.y, -b.z, b.w };
-    quatd_t r;
-    qd_mult(&r, &a, &inv);
-    qd_store(out, &r);
+    const ivp_quatr_t inverse = {-q2->x, -q2->y, -q2->z, q2->w};
+    ivp_quat_mult(out, q1, &inverse);
 }
 
 void ivp_quat_set_invert_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
