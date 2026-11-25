@@ -18,6 +18,7 @@
 #include <ivp/diagnostics/ivp_statistic_manager.h>
 #include <ivp/collision/ivp_collision_core.h>
 #include <ivp/geometry/ivp_compact_edge.h>
+#include <ivp/math/ivp_fast_math.h>
 #include "collision/ivp_lvec.h"
 #include "solver/ivp_friction_internal.h"
 #include "dynamics/ivp_env_hot.h"
@@ -93,14 +94,14 @@ static void is_get_world_push_direction_two_friction(impact_solver_t *s, double 
     float length_direction_surf = (float)lvf_real_length_plus_normize(&part_in_direction_surf);
     double part_second_friction = (double)lvf_dot(&part_in_direction_surf, &s->world_direction_second_friction);
     float abs_second_part = (float)fabs(part_second_friction);
-    float angle_2d = (float)asin((double)abs_second_part);
+    float angle_2d = (float)ivp_asind((double)abs_second_part);
     float axis_first_friction = lv_approx5_cos(angle_2d);
     float axis_second_friction = abs_second_part;
     float quad_len_allowed = axis_first_friction * axis_first_friction * s->sin_friction * s->sin_friction +
                              axis_second_friction * axis_second_friction * s->sin_second_friction * s->sin_second_friction;
     if (length_direction_surf * length_direction_surf > quad_len_allowed) {
         float allowed_len = (float)sqrt((double)quad_len_allowed);
-        float length_angle = (float)asin((double)allowed_len);
+        float length_angle = (float)ivp_asind((double)allowed_len);
         float cos_part = lv_approx5_cos(length_angle);
         ivp_vec3f_t world_push_dir_fl;
         lvf_set_multiple(&world_push_dir_fl, s->surf_normal, (D)-cos_part);
@@ -515,7 +516,7 @@ delaying_test:
 static void is_get_cos_sin_for_impact(float friction_val, float percent_energy_conservation, float *cos_val, float *sin_val)
 {
     double impact_fri_fact = (double)friction_val * (1.0f + sqrt((double)percent_energy_conservation));
-    double fri_angle = atan(impact_fri_fact);
+    double fri_angle = ivp_atand(impact_fri_fact);
     double c = (double)lv_approx5_cos((float)fri_angle);
     *cos_val = (float)c;
     *sin_val = (float)(c * impact_fri_fact);
@@ -612,7 +613,7 @@ static double cp_get_rot_speed_uncertainty(ivp_contact_pt_t *cp)
         if (cp->synapse[i].status == IVP_ST_BALL) continue;
         double square = (double)lvf_quad_length(&my_core->rot_speed) * 0.000025;
         if (square > 0.25) square = 0.25;
-        result += (1.0 - cos(sqrt(square))) * (double)my_core->upper_limit_radius *
+        result += (1.0 - ivp_cosd(sqrt(square))) * (double)my_core->upper_limit_radius *
                   ivp_env_get_inv_delta_psi_time(ivp_core_env(my_core));
     }
     return result;

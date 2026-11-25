@@ -6,6 +6,7 @@
 #define IVP_CONTROLLER_REF_MATH_H
 
 #include <ivp/base/ivp_types.h>
+#include <ivp/math/ivp_fast_math.h>
 #include <ivp/math/ivp_quat.h>
 #include <ivp/math/ivp_transform.h>
 #include <math.h>
@@ -70,10 +71,10 @@ static inline void ivp_rm_interpolate_smoothly(const double from[4], const doubl
         sign = -1.0;
     }
     if (cosom < 1.0 - 0.001) {
-        double omega = acos(cosom);
+        double omega = ivp_acosd(cosom);
         double i_sinom = 1.0 / sqrt(1.0 - cosom * cosom);
-        double s0 = sin((1.0 - t) * omega) * i_sinom;
-        double s1 = sin(t * omega) * i_sinom * sign;
+        double s0 = ivp_sind((1.0 - t) * omega) * i_sinom;
+        double s1 = ivp_sind(t * omega) * i_sinom * sign;
         for (int i = 0; i < 4; i++) res[i] = s0 * from[i] + s1 * to[i];
     } else {
         double r[4];

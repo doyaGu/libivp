@@ -10,6 +10,7 @@
 
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
+#include <ivp/math/ivp_fast_math.h>
 #include <ivp/diagnostics/ivp_debug_manager.h>
 #include <ivp/utility/ivp_string.h>
 #include <ivp/collision/ivp_collision_core.h>
@@ -587,13 +588,13 @@ static void core_damp_object(ivp_core_t *core, double delta_time_, const ivp_vec
     if (qlen < 0.5) {
         lvf_set3(&r_factor, 1.0f - rot.k[0], 1.0f - rot.k[1], 1.0f - rot.k[2]);
     } else {
-        lvf_setd3(&r_factor, (D)exp(-(double)rot.k[0]), (D)exp(-(double)rot.k[1]), (D)exp(-(double)rot.k[2]));
+        lvf_setd3(&r_factor, (D)ivp_expd(-(double)rot.k[0]), (D)ivp_expd(-(double)rot.k[1]), (D)ivp_expd(-(double)rot.k[2]));
     }
     double sf = speed_factor * delta_time_;
     if (sf < 0.25) {
         speed_factor = 1.0 - sf;
     } else {
-        speed_factor = exp(-sf);
+        speed_factor = ivp_expd(-sf);
     }
     lvf_set_pairwise_mult(&core->rot_speed, &core->rot_speed, &r_factor);
     ivp_vec3f_t sp = ivp_core_speed_f(core);
@@ -682,8 +683,8 @@ void ivp_core_synchronize_with_rot_z(ivp_core_t *core)
     ivp_core_inline_calc_at_position(core, current_time, &core->m_world_f_core_last_psi.pos);
     {   /* retail RVA 0xCFA0 recomputes the angular speed for equal inertias too */
         double f = (double)(2.0f * core->i_delta_time);
-        lvf_setd3(&core->rot_speed, (D)(f * asin((double)q_core_f_core.x)), (D)(f * asin((double)q_core_f_core.y)),
-                  (D)(f * asin((double)q_core_f_core.z)));
+        lvf_setd3(&core->rot_speed, (D)(f * ivp_asind((double)q_core_f_core.x)), (D)(f * ivp_asind((double)q_core_f_core.y)),
+                  (D)(f * ivp_asind((double)q_core_f_core.z)));
     }
 }
 

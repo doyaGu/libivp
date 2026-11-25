@@ -285,7 +285,7 @@ void ivp_controller_motion(const ivp_event_sim_t *event_sim,
             double c = comps[i];
             if (c > 1.0) c = 1.0;
             if (c < -1.0) c = -1.0;
-            delta_angles_now_cs.k[i] = (float)(2.0 * asin(c));
+            delta_angles_now_cs.k[i] = (float)(2.0 * ivp_asind(c));
         }
         const double torque_factor = (double)(float)state->torque_factor;
         const double acos_quat = (double)state->target_q_world_f_core.x * (double)core->q_world_f_core_next_psi.x +

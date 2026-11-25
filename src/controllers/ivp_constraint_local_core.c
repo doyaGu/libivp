@@ -8,6 +8,7 @@
  * rounded to float (FP()) in every build.
  */
 #include <ivp/controllers/ivp_constraint_types.h>
+#include <ivp/math/ivp_fast_math.h>
 #include <ivp/controllers/ivp_controller_util.h>
 #include <ivp/dynamics/ivp_object.h>
 #include <ivp/dynamics/ivp_environment.h>
@@ -890,13 +891,13 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
 
         double vertical_axisRA_Rrs[3];
         m3_vmult(m_Rrs_f_Rcs, vertical_axisRA_Rcs, vertical_axisRA_Rrs);
-        double angle_Rrs = atan2(vertical_axisRA_Rrs[mapR[1]], vertical_axisRA_Rrs[mapR[2]]);
+        double angle_Rrs = ivp_atan2d(vertical_axisRA_Rrs[mapR[1]], vertical_axisRA_Rrs[mapR[2]]);
 
         double vertical_axisRA_ws[3], vertical_axisRA_Acs[3], vertical_axisRA_Ars[3];
         m3_vmult(m_ws_f_Rcs.rows, vertical_axisRA_Rcs, vertical_axisRA_ws);
         m3_vimult(m_ws_f_Acs.rows, vertical_axisRA_ws, vertical_axisRA_Acs);
         m3_vmult(m_Ars_f_Acs, vertical_axisRA_Acs, vertical_axisRA_Ars);
-        double angle_Ars = atan2(vertical_axisRA_Ars[mapR[1]], vertical_axisRA_Ars[mapR[2]]);
+        double angle_Ars = ivp_atan2d(vertical_axisRA_Ars[mapR[1]], vertical_axisRA_Ars[mapR[2]]);
 
         double diff_axis = angle_Ars - angle_Rrs;
         if (diff_axis > CL_PI) diff_axis -= 2.0 * CL_PI;
@@ -930,8 +931,8 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         double free_axisArs_Rrs[3];
         m3_get_col(m_rs_f_Ars, mapR[2], free_axisArs_Rrs);
         drRA_now_rs[0] = drRA_now_rs[1] = drRA_now_rs[2] = 0.0;
-        drRA_now_rs[mapR[0]] = -atan2(free_axisArs_Rrs[mapR[1]], free_axisArs_Rrs[mapR[2]]);
-        drRA_now_rs[mapR[1]] = atan2(free_axisArs_Rrs[mapR[0]], free_axisArs_Rrs[mapR[2]]);
+        drRA_now_rs[mapR[0]] = -ivp_atan2d(free_axisArs_Rrs[mapR[1]], free_axisArs_Rrs[mapR[2]]);
+        drRA_now_rs[mapR[1]] = ivp_atan2d(free_axisArs_Rrs[mapR[0]], free_axisArs_Rrs[mapR[2]]);
     } else if (rotdims == 0) {
         drRA_now_rs[0] = drRA_now_rs[1] = drRA_now_rs[2] = 0.0;
     }
@@ -1053,7 +1054,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         m3_vimult(m_ws_f_Rcs.rows, fixed_axisArs_ws, fixed_axisArs_Rcs);
         m3_get_row(m_Rrs_f_Rcs, mapR[0], fixed_axisRrs_Rcs);
         float cosv = (float)v3_dot(fixed_axisArs_Rcs, fixed_axisRrs_Rcs);
-        double angleRA = (cosv >= 1.0f) ? 0.0 : (double)(float)acos((double)cosv); /* save_acosf */
+        double angleRA = (cosv >= 1.0f) ? 0.0 : (double)(float)ivp_acosd((double)cosv); /* save_acosf */
         double slowrange = CL_PI - fabs(angleRA);
         if (slowrange < 1.0) {
             for (int k = 0; k < 3; k++) drRA_rs[k] *= slowrange;

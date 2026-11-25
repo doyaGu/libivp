@@ -3949,8 +3949,8 @@ static void c2_add(c2_scene_t *sc, ivp_object_t *obj, const char *type)
 static ivp_quatr_t c2_quat(double ax, double ay, double az, double radians)
 {
     const double half = 0.5 * radians;
-    const double s = sin(half);
-    const double c = cos(half);
+    const double s = ivp_sind(half);
+    const double c = ivp_cosd(half);
     return ivp_quatr_make((ivp_real_t)(ax * s), (ivp_real_t)(ay * s), (ivp_real_t)(az * s), (ivp_real_t)c);
 }
 
