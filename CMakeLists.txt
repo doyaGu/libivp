@@ -687,6 +687,7 @@ if (IVP_BUILD_TESTS)
     target_include_directories(test_base PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_math tests/test_math.c)
+    ivp_apply_strict_fp(test_math)
     ivp_add_test(test_containers tests/test_containers.c)
     ivp_add_test(test_geometry tests/test_geometry.c)
     ivp_add_test(test_geometry_parity tests/test_geometry_parity.c)
