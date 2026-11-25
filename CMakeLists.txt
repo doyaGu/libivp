@@ -61,17 +61,22 @@ option(IVP_BUILD_EXAMPLES "Build graphical examples" OFF)
 find_package(Threads REQUIRED)
 
 function(ivp_apply_strict_fp TARGET_NAME)
-    if (CMAKE_C_COMPILER_ID STREQUAL "MSVC" AND CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "X86")
-        # Win32's strict mode uses the CRT x87 sqrt, which obeys the host's
-        # x87 precision control even for a double operand. Use the same
-        # SSE2 sqrt as the non-emulated C++ engine.
-        target_compile_options(${TARGET_NAME} PRIVATE /fp:precise /Oi)
-    elseif (MSVC)
-        target_compile_options(${TARGET_NAME} PRIVATE /fp:strict /Oi-)
-        if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-            # clang-cl needs the same explicit contraction rules as Clang.
-            target_compile_options(${TARGET_NAME} PRIVATE
-                    -ffp-contract=off -fno-fast-math)
+    if (MSVC)
+        if (CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "X86")
+            # Keep double square roots on SSE2 even when the Win32 caller
+            # selected a smaller x87 significand.
+            if (CMAKE_C_COMPILER_ID MATCHES "Clang")
+                target_compile_options(${TARGET_NAME} PRIVATE
+                        /fp:strict /Oi /clang:-fno-math-errno)
+            else ()
+                target_compile_options(${TARGET_NAME} PRIVATE /fp:precise /Oi)
+            endif ()
+        elseif (CMAKE_C_COMPILER_ID MATCHES "Clang")
+            # The setjmp builtin supplies the frame argument required by
+            # the Win64 CRT. Keep it enabled under strict floating point.
+            target_compile_options(${TARGET_NAME} PRIVATE /fp:strict)
+        else ()
+            target_compile_options(${TARGET_NAME} PRIVATE /fp:strict /Oi-)
         endif ()
     elseif (EMSCRIPTEN)
         # WebAssembly only rounds to nearest, and clang rejects
