@@ -111,6 +111,14 @@ static const ivp_performance_counter_vtable_t scenario_noop_vtable = {
     scenario_counter_destroy, scenario_counter_reset
 };
 
+/* Controller state embeds 16-byte-aligned IVP vector types. */
+static void *scenario_alloc_zeroed(size_t size)
+{
+    void *state = ivp_alloc(ivp_default_allocator(), size);
+    if (state) memset(state, 0, size);
+    return state;
+}
+
 static ivp_environment_t *scenario_create_environment(const ivp_environment_config_t *original)
 {
     ivp_environment_config_t cfg = *original;
@@ -4730,7 +4738,7 @@ typedef struct c2_hover {
 /* HoverAttachment(attacher, core): IVP_Controller_Floating on the core's object */
 static void *c2_hover_create(ivp_attacher_to_cores_t *a, ivp_core_t *core)
 {
-    c2_hover_t *h = (c2_hover_t *)calloc(1, sizeof(*h));
+    c2_hover_t *h = (c2_hover_t *)scenario_alloc_zeroed(sizeof(*h));
     if (!h) return NULL;
     h->object = ivp_attacher_core_object(core);
     h->handle = c2_add_floating(a->environment, &h->floating, h->object, 25.0f, 10.0f, 0.0, 0.4, 0.0, NULL, 1.2f);
@@ -4746,7 +4754,7 @@ static void c2_hover_delete(ivp_attacher_to_cores_t *a, ivp_core_t *core, void *
         ivp_environment_remove_controller_from_core(a->environment, h->handle, h->object);
         ivp_environment_remove_controller(a->environment, h->handle);
     }
-    free(h);
+    ivp_free(ivp_default_allocator(), h, sizeof(*h));
 }
 
 static const ivp_attacher_to_cores_class_t c2_hover_class = { c2_hover_create, c2_hover_delete, NULL };
@@ -5272,7 +5280,7 @@ static int run_raycast_car_drive(FILE *out, int steps, double dt, invariant_resu
 {
     c2_scene_t sc;
     if (!c2_scene_init(&sc, dt)) return 1;
-    c3_raycast_car_t *s = (c3_raycast_car_t *)calloc(1, sizeof(*s));
+    c3_raycast_car_t *s = (c3_raycast_car_t *)scenario_alloc_zeroed(sizeof(*s));
     if (!s) {
         c2_scene_destroy(&sc);
         return 1;
@@ -5397,7 +5405,7 @@ static int run_raycast_car_drive(FILE *out, int steps, double dt, invariant_resu
     ivp_car_destroy(&s->truck);
     ivp_car_destroy(&s->trike);
     c2_scene_destroy(&sc);
-    free(s);
+    ivp_free(ivp_default_allocator(), s, sizeof(*s));
     return rc;
 }
 
@@ -5483,7 +5491,7 @@ static int run_check_dist_events(FILE *out, int steps, double dt, invariant_resu
 {
     c2_scene_t sc;
     if (!c2_scene_init(&sc, dt)) return 1;
-    c3_check_dist_t *s = (c3_check_dist_t *)calloc(1, sizeof(*s));
+    c3_check_dist_t *s = (c3_check_dist_t *)scenario_alloc_zeroed(sizeof(*s));
     if (!s) {
         c2_scene_destroy(&sc);
         return 1;
@@ -5557,7 +5565,7 @@ static int run_check_dist_events(FILE *out, int steps, double dt, invariant_resu
     }
     for (int i = 0; i < 5; i++) ivp_check_dist_detach(&s->cd[i]);
     c2_scene_destroy(&sc);
-    free(s);
+    ivp_free(ivp_default_allocator(), s, sizeof(*s));
     return rc;
 }
 
@@ -5717,7 +5725,7 @@ static int run_golem_beam(FILE *out, int steps, double dt, invariant_result_t *i
 {
     c2_scene_t sc;
     if (!c2_scene_init(&sc, dt)) return 1;
-    c3_golem_beam_t *s = (c3_golem_beam_t *)calloc(1, sizeof(*s));
+    c3_golem_beam_t *s = (c3_golem_beam_t *)scenario_alloc_zeroed(sizeof(*s));
     if (!s) {
         c2_scene_destroy(&sc);
         return 1;
@@ -5775,7 +5783,7 @@ static int run_golem_beam(FILE *out, int steps, double dt, invariant_result_t *i
         }
     }
     c2_scene_destroy(&sc);
-    free(s);
+    ivp_free(ivp_default_allocator(), s, sizeof(*s));
     return rc;
 }
 

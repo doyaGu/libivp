@@ -92,6 +92,24 @@ IVP_TEST(default_alloc_realloc) {
     ivp_free(a, p2, 256);
 }
 
+IVP_TEST(default_allocator_preserves_object_alignment) {
+    const ivp_allocator_t *allocator = ivp_default_allocator();
+    void *blocks[32] = {0};
+    bool aligned = true;
+
+    for (size_t i = 0; i < sizeof(blocks) / sizeof(blocks[0]); ++i) {
+        blocks[i] = ivp_alloc(allocator, i + 1);
+        aligned = aligned && blocks[i] && ((uintptr_t)blocks[i] % 16 == 0);
+    }
+    for (size_t i = 0; i < sizeof(blocks) / sizeof(blocks[0]); ++i) {
+        if (!blocks[i]) continue;
+        void *grown = ivp_realloc(allocator, blocks[i], i + 1, i + 65);
+        aligned = aligned && grown && ((uintptr_t)grown % 16 == 0);
+        ivp_free(allocator, grown ? grown : blocks[i], grown ? i + 65 : i + 1);
+    }
+    IVP_ASSERT_TRUE(aligned);
+}
+
 /* ── Aligned allocation tests ───────────────────────────────────────────── */
 
 IVP_TEST(aligned_alloc_16) {
@@ -551,6 +569,7 @@ int main(void) {
     IVP_REGISTER(message_prefix_preserves_bounded_output);
     IVP_REGISTER(default_alloc_basic);
     IVP_REGISTER(default_alloc_realloc);
+    IVP_REGISTER(default_allocator_preserves_object_alignment);
     IVP_REGISTER(aligned_alloc_16);
     IVP_REGISTER(aligned_alloc_64);
     IVP_REGISTER(aligned_alloc_rejects_overflow);

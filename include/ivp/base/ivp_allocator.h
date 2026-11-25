@@ -1,6 +1,6 @@
 /* ivp_allocator.h — Pluggable memory allocator for IVP C17
  *
- * Provides a vtable-based allocator. Default implementation uses malloc/free.
+ * Provides a vtable-based allocator. The default provides 16-byte alignment.
  * Debug mode supports magic-number validation and aligned allocation.
  */
 #ifndef IVP_ALLOCATOR_H
@@ -29,7 +29,7 @@ typedef struct ivp_allocator {
     void *ctx;  /* user context (e.g. debug counters, pool handle) */
 } ivp_allocator_t;
 
-/* Default allocator (malloc/free). Thread-safe (uses libc). */
+/* Thread-safe default allocator for 16-byte-aligned IVP objects. */
 const ivp_allocator_t *ivp_default_allocator(void);
 
 /* ── Convenience wrappers ───────────────────────────────────────────────── */

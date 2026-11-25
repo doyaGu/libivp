@@ -4,23 +4,60 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Default allocator (malloc/free) ────────────────────────────────────── */
+#if defined(_WIN32) && !defined(_WIN64)
+#include <malloc.h>
+#endif
+
+/* ── Default allocator ────────────────────────────────────── */
+
+enum { IVP_OBJECT_ALIGNMENT = 16 };
 
 static void *default_alloc(size_t size, void *ctx) {
     IVP_UNUSED(ctx);
+#if defined(_WIN32) && !defined(_WIN64)
+    /* The 32-bit Windows CRT only guarantees 8-byte malloc alignment. */
+    return _aligned_malloc(size, IVP_OBJECT_ALIGNMENT);
+#elif UINTPTR_MAX == UINT32_MAX
+    /* A 32-bit C heap can return storage aligned to only 8 bytes. */
+    const size_t mask = IVP_OBJECT_ALIGNMENT - 1;
+    if (size > SIZE_MAX - mask) return NULL;
+    return aligned_alloc(IVP_OBJECT_ALIGNMENT, (size + mask) & ~mask);
+#else
     return malloc(size);
+#endif
 }
 
 static void *default_realloc(void *ptr, size_t old_size, size_t new_size, void *ctx) {
     IVP_UNUSED(ctx);
     IVP_UNUSED(old_size);
+#if defined(_WIN32) && !defined(_WIN64)
+    return _aligned_realloc(ptr, new_size, IVP_OBJECT_ALIGNMENT);
+#elif UINTPTR_MAX == UINT32_MAX
+    if (new_size == 0) {
+        free(ptr);
+        return NULL;
+    }
+    /* realloc does not preserve the extra alignment from aligned_alloc. */
+    void *grown = default_alloc(new_size, ctx);
+    if (!grown) return NULL;
+    if (ptr) {
+        memcpy(grown, ptr, old_size < new_size ? old_size : new_size);
+        free(ptr);
+    }
+    return grown;
+#else
     return realloc(ptr, new_size);
+#endif
 }
 
 static void default_free(void *ptr, size_t size, void *ctx) {
     IVP_UNUSED(ctx);
     IVP_UNUSED(size);
+#if defined(_WIN32) && !defined(_WIN64)
+    _aligned_free(ptr);
+#else
     free(ptr);
+#endif
 }
 
 static const ivp_allocator_t s_default_allocator = {
