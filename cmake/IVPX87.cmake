@@ -79,7 +79,11 @@ function(ivp_configure_x87 target)
     target_link_libraries(ivp_x87_backend PRIVATE libx87::x87)
     ivp_apply_project_warnings(ivp_x87_backend)
     target_link_libraries(${target} PRIVATE ivp_x87_backend)
-    if (NOT IVP_ENABLE_ASAN AND NOT IVP_ENABLE_UBSAN AND NOT IVP_ENABLE_TSAN)
+    # The per-language IPO checks do not check whether the C++ linker
+    # can read the C compiler's bitcode.
+    if (CMAKE_C_COMPILER_ID STREQUAL CMAKE_CXX_COMPILER_ID
+            AND CMAKE_C_COMPILER_VERSION VERSION_EQUAL CMAKE_CXX_COMPILER_VERSION
+            AND NOT IVP_ENABLE_ASAN AND NOT IVP_ENABLE_UBSAN AND NOT IVP_ENABLE_TSAN)
         include(CheckIPOSupported)
         check_ipo_supported(RESULT ivp_x87_ipo_supported LANGUAGES C CXX)
         if (ivp_x87_ipo_supported)
