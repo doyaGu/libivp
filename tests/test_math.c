@@ -259,6 +259,28 @@ IVP_TEST(quat_identity) {
     IVP_ASSERT_NEAR(q.w, 1.0, TOL);
 }
 
+#ifdef IVP_REAL_DOUBLE
+IVP_TEST(quat_product_preserves_rotation_accumulation_order)
+{
+    const ivp_quatr_t rotation = {
+        -0.0056429867518110518, -0.79343145593584674, 0.06638092251423966, 0.60500268971154147
+    };
+    const ivp_quatr_t step = {
+        0.018919216910825789, 0.001352545364666865, 0.01143994808311972, 0.99975465062202795
+    };
+    ivp_quatr_t next = rotation;
+    ivp_quat_mult(&next, &next, &step);
+#if defined(_WIN32) && (defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__))
+    IVP_ASSERT_EQ(next.x, -0.003362023002705032);
+#else
+    IVP_ASSERT_EQ(next.x, -0.0033620230027050311);
+#endif
+    IVP_ASSERT_EQ(next.y, -0.79109806389082704);
+    IVP_ASSERT_EQ(next.z, 0.088289304779787969);
+    IVP_ASSERT_EQ(next.w, 0.60527477129896623);
+}
+#endif
+
 IVP_TEST(quat_mult_identity) {
     ivp_quatr_t a = ivp_quatr_identity();
     ivp_quatr_t b = ivp_quatr_make(IVP_REAL(0.5), IVP_REAL(0.5),
@@ -591,6 +613,9 @@ int main(void) {
     /* Quaternion */
     IVP_REGISTER(quat_identity);
     IVP_REGISTER(quat_mult_identity);
+#ifdef IVP_REAL_DOUBLE
+    IVP_REGISTER(quat_product_preserves_rotation_accumulation_order);
+#endif
     IVP_REGISTER(quat_conjugate);
     IVP_REGISTER(quat_normalize);
     IVP_REGISTER(quat_fast_normalize);

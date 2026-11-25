@@ -77,15 +77,20 @@ static inline void ivp_quatf_set(ivp_quatf_t *out, const ivp_quatr_t *src) {
 /* ── Arithmetic ─────────────────────────────────────────────────────────── */
 
 /* out = q1 * q2 (Hamilton product), IVP_U_Quat::inline_set_mult_quat.
- * Evaluation order matches the reference exactly (ivu_linear_software.hxx;
- * only the Windows PIII header uses the retail order); out may alias q1/q2. */
+ * Preserve the accumulation order of the reference math for this platform.
+ * The output may alias either input. */
 static inline void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                   const ivp_quatr_t *q2) {
     double x1 = (double)q1->x, y1 = (double)q1->y, z1 = (double)q1->z, w1 = (double)q1->w;
     double x2 = (double)q2->x, y2 = (double)q2->y, z2 = (double)q2->z, w2 = (double)q2->w;
+#if defined(_WIN32) && (defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__))
+    double xx = x1*w2 + y1*z2 + w1*x2 - z1*y2;
+    double zz = w1*z2 + x1*y2 + z1*w2 - y1*x2;
+#else
     double xx = w1*x2 + x1*w2 + y1*z2 - z1*y2;
-    double yy = w1*y2 + y1*w2 + z1*x2 - x1*z2;
     double zz = w1*z2 + z1*w2 + x1*y2 - y1*x2;
+#endif
+    double yy = w1*y2 + y1*w2 + z1*x2 - x1*z2;
     double ww = w1*w2 - x1*x2 - y1*y2 - z1*z2;
     out->x = (ivp_real_t)xx; out->y = (ivp_real_t)yy;
     out->z = (ivp_real_t)zz; out->w = (ivp_real_t)ww;
@@ -95,14 +100,8 @@ static inline void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
  * (IVP_U_Quat::inline_set_mult_quat(const IVP_U_Quat*, const IVP_U_Float_Quat*)) */
 static inline void ivp_quat_mult_fq(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                      const ivp_quatf_t *q2) {
-    double x1 = (double)q1->x, y1 = (double)q1->y, z1 = (double)q1->z, w1 = (double)q1->w;
-    double x2 = (double)q2->x, y2 = (double)q2->y, z2 = (double)q2->z, w2 = (double)q2->w;
-    double xx = w1*x2 + x1*w2 + y1*z2 - z1*y2;
-    double yy = w1*y2 + y1*w2 + z1*x2 - x1*z2;
-    double zz = w1*z2 + z1*w2 + x1*y2 - y1*x2;
-    double ww = w1*w2 - x1*x2 - y1*y2 - z1*z2;
-    out->x = (ivp_real_t)xx; out->y = (ivp_real_t)yy;
-    out->z = (ivp_real_t)zz; out->w = (ivp_real_t)ww;
+    const ivp_quatr_t right = {q2->x, q2->y, q2->z, q2->w};
+    ivp_quat_mult(out, q1, &right);
 }
 
 /* res = q1 / q2 = q1 * conj(q2) for unit quaternions (set_div_unit_quat) */
