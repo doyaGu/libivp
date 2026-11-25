@@ -6,21 +6,17 @@ continuous collision detection, impulse-based contact and constraint
 solving, and a controller and actuator system with springs, motors,
 buoyancy, force fields and vehicles.
 
-The port follows the reference engine line by line and is checked against
-it bit for bit:
+The 49 parity scenarios exercise two arithmetic modes:
 
-- The default build (`IVP_STABLE_INTERNAL_STATE=OFF`)
-  reproduces the reference engine exactly in all 49 parity scenarios, in
-  Release and Debug.
-- The optional **mainline build** (`IVP_STABLE_INTERNAL_STATE=ON`) keeps the reference physics but no longer
-  depends on incidental container order or allocator history. Each of its
-  differences from the reference is registered by scenario in
-  `tools/parity/`. Any unregistered difference is a bug.
+- With x87 emulation off and `IVP_STABLE_INTERNAL_STATE=OFF`, libivp
+  is compared bit for bit with the original C++ IVP using native arithmetic
+  on the same platform. The macOS arm64 CI runs this check in Release and Debug.
+- With software x87 arithmetic and transcendentals enabled, compare libivp
+  trajectories across platforms using the same internal-state policy.
 
-Parity is verified on macOS arm64. The library builds and its tests run on
-Linux, macOS and Windows. The default reference policy can depend on addresses
-and allocation history; the optional stable policy removes those dependencies
-within one platform and build configuration. Results can differ across platforms.
+`IVP_STABLE_INTERNAL_STATE=ON` removes dependencies on incidental container
+order and allocator history. In the native arithmetic comparison, its expected
+trajectory differences from the reference are listed in `tools/parity/`.
 
 ## Building
 
@@ -84,13 +80,18 @@ The transcendental setting controls sine, cosine, arcsine, arccosine,
 arctangent, and exponential calls through the IVP math wrappers.
 
 For bitwise trajectory comparisons across targets, use `SOFT` for both
-selections and enable `IVP_STABLE_INTERNAL_STATE`. The default internal
-state keeps the reference hull tolerances and joggle retries. With those
-settings, platforms can produce different mass centers for hulls with
-coplanar faces.
+selections. The convex builder then lets Qhull derive roundoff tolerances
+from the input so that coplanar faces do not trigger platform-dependent
+joggling. `IVP_STABLE_INTERNAL_STATE` additionally controls
+allocation- and history-sensitive behavior inside the solver.
 
-Set both selections to `OFF` for a pure C17 build without libx87. Scenario
-parity tools select `OFF` in both engines when comparing native results.
+Set both selections to `OFF` for a pure C17 build without libx87. Compare
+this mode with the original C++ IVP on the same platform with both
+selections set to `OFF`, floating-point contraction disabled, and
+`IVP_STABLE_INTERNAL_STATE=OFF` in libivp. This keeps the reference
+engine's original hull tolerances. On WebAssembly, compile both scenario
+runners with `-fno-builtin-sin -fno-builtin-cos` to use the same runtime
+libm when initializing scenes.
 
 Existing CMake caches using `IVP_REFERENCE_INTERNAL_STATE` are migrated to the
 inverse `IVP_STABLE_INTERNAL_STATE` value. When both are set, the new option
@@ -214,8 +215,8 @@ and allocation-history sensitivity. Scheduling one world on a different
 worker does not change its result, but independently reconstructed worlds
 need not match. Select `IVP_STABLE_INTERNAL_STATE=ON` when equivalent search
 slots must agree despite those histories; it deliberately differs from the
-reference in the 24 registered scenarios. Keep the default when reference
-parity is the goal.
+reference in the 24 registered native arithmetic scenarios. Use reference
+internal state and disable x87 emulation for native C++ IVP parity.
 
 ### Graphical examples
 

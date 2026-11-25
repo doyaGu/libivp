@@ -23,8 +23,8 @@ Qhull 8.0.2 `libqhull_r`，构建放在 `build/parity_reentrant`。两种 Qhull 
 ## 准备
 
 原版引擎和 runner 都在 `https://github.com/doyaGu/ivp` 的 `master` 上；
-对照固定为 `0c78833`（引擎与 `43a8f4b` 相同，其后只改了 x87 测试和 runner）。原版默认开启软件 x87 模拟，libivp 不移植这一项；
-脚本（`common.sh` 的 `PARITY_REF_CMAKE_OPTIONS`）把它关闭，Qhull 按
+对照固定为 `0c78833`（引擎与 `43a8f4b` 相同，其后只改了 x87 测试和 runner）。
+脚本通过 `common.sh` 的 `PARITY_X87_CMAKE_OPTIONS` 在两端关闭 x87 模拟，Qhull 按
 `PARITY_REENTRANT_QHULL`（默认 `OFF`）与 libivp 一致。需要克隆到与
 本仓库同级的 `../ivp`：
 
