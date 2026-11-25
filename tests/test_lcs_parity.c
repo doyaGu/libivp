@@ -1,9 +1,8 @@
 /* test_lcs_parity.c — bit parity of the ported dense solvers with the
  * reference IVP engine.
  *
- * tests/data/lcs_cases_strict.h (reference built with -ffp-contract=off,
- * matching IVP_GM_USE_FMA 0, the default) or tests/data/lcs_cases.h
- * (default-contraction reference, IVP_GM_USE_FMA 1) holds the outputs of the
+ * The fixtures select the reference matrix row width and contraction
+ * policy. They hold the outputs of the
  * reference IVP_Linear_Constraint_Solver::init_and_solve_lc,
  * IVP_Great_Matrix_Many_Zero::solve_great_matrix_many_zero and ::invert for
  * generated problems (contact stacks, singular / low-rank / sparse /
@@ -14,7 +13,9 @@
 #include "ivp_test.h"
 #include "lcs_parity_gen.h"
 #include <ivp/solver/ivp_great_matrix.h>
-#if IVP_GM_USE_FMA
+#if IVP_GM_VECFPU_SIZE == 1
+#include "data/lcs_cases_scalar_strict.h"
+#elif IVP_GM_USE_FMA
 #include "data/lcs_cases.h"
 #else
 #include "data/lcs_cases_strict.h"
