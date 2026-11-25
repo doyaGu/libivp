@@ -132,9 +132,36 @@ jobs:
           path: build/verification/*.json
           if-no-files-found: warn
 
-  # Bit-exact parity is specific to the macOS arm64 build. Keep the
-  # reference runner pinned and require both libivp policies on pull requests,
-  # main, and manual runs.
+  software-x87-macos:
+    name: Software x87 scenarios (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: |
+          test "$(uname -m)" = arm64
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+            -DIVP_ENABLE_X87_EMULATION=ON -DIVP_X87_ARITHMETIC=SOFT \
+            -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=SOFT \
+            -DIVP_STABLE_INTERNAL_STATE=OFF -DIVP_ENABLE_SCENARIO_TESTS=ON
+      - name: Build scenario runner
+        run: cmake --build build --target test_scenarios --parallel 4
+      - name: Run all software x87 scenarios
+        run: >-
+          ctest --test-dir build --parallel 4 --output-on-failure --no-tests=error
+          -R '^test_scenario_(gen|invariants|self)_'
+      - name: Upload scenario traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-traces-software-x87-macos-arm64
+          path: build/scenario_output/*.jsonl
+          if-no-files-found: error
+
+  # Keep the native C++ reference runner pinned and compare both libivp
+  # internal-state policies on macOS arm64.
   parity:
     runs-on: macos-15
     timeout-minutes: 30
