@@ -6,10 +6,9 @@
  *                   every toggle the upper cube is dropped again onto the
  *                   lower one.
  *   Zone 2 (center): Group filter — same-group objects pass through
- *                   each other, different groups collide normally: of a
- *                   staggered column red, red, blue, blue the second red
- *                   cube falls through the first one, the blue cubes land
- *                   on the reds and fall through each other.
+ *                   each other and different groups collide normally.
+ *                   Three separate columns show red on red, blue on red,
+ *                   and blue on blue.
  *   Zone 3 (right): Layer mask filter — objects on disjoint layers
  *                   ignore each other: of a column green, yellow, yellow,
  *                   green each cube falls through the other colour and
@@ -23,9 +22,6 @@
  *   - the collision_group / layer_mask setters immediately recheck existing
  *     pairs.  The cubes start 4 m apart so the pass-through behavior remains
  *     visually clear.
- * (The pair filter used to be set up but never added to the environment,
- *  and the zone 2 and 3 cubes started 1 m apart, red and blue cubes even
- *  interpenetrating.)
  *
  * Demonstrates: ivp_collision_filter (group, layer_mask, exclusive_pair,
  *               meta), collision_group, layer_mask on objects.
@@ -36,7 +32,12 @@
 
 #define PAIR_TOGGLE_PERIOD 5.0   /* seconds between collision on/off toggle */
 #define CUBE_HS 0.8
-#define N_OBJ 10
+
+static const int zone2_groups[] = {1, 1, 1, 2, 2, 2};
+enum {
+    ZONE2_CUBE_COUNT = sizeof(zone2_groups) / sizeof(zone2_groups[0]),
+    N_OBJ = 2 + ZONE2_CUBE_COUNT + 4
+};
 
 typedef struct filter_demo {
     ivp_object_t               *ground;
@@ -83,7 +84,7 @@ static float zone1_gap(const filter_demo_t *s)
 static int obj_class(const filter_demo_t *s, int i)
 {
     if (i < s->z2_start) return 0;
-    if (i < s->z3_start) return i < s->z2_start + 2 ? 1 : 2;
+    if (i < s->z3_start) return zone2_groups[i - s->z2_start];
     return (i == s->z3_start || i == s->z3_start + 3) ? 3 : 4;
 }
 
@@ -175,13 +176,14 @@ static bool filter_check(demo_app_t *app)
     float gap = zone1_gap(s);
     ok &= demo_check(tag, !s->pair_collision_off && fabsf(gap - stack) < 0.1f,
                      "zone 1, pair collision on: the re-dropped cube rests on the lower one (gap %.3f m)", (double)gap);
-    int r0 = s->z2_start, r1 = r0 + 1, b0 = r0 + 2, b1 = r0 + 3;
-    ok &= demo_check(tag, fabsf(obj_y(s, r1) - obj_y(s, r0)) < 0.2f && fabsf(obj_y(s, b1) - obj_y(s, b0)) < 0.2f,
+    int red = s->z2_start, mixed = red + 2, blue = mixed + 2;
+    ok &= demo_check(tag, fabsf(obj_y(s, red + 1) - obj_y(s, red)) < 0.2f &&
+                          fabsf(obj_y(s, blue + 1) - obj_y(s, blue)) < 0.2f,
                      "zone 2, same group passes through: red at %.2f / %.2f, blue at %.2f / %.2f",
-                     (double)obj_y(s, r0), (double)obj_y(s, r1), (double)obj_y(s, b0), (double)obj_y(s, b1));
-    ok &= demo_check(tag, fabsf(obj_y(s, r0) - obj_y(s, b0) - stack) < 0.15f &&
-                          fabsf(obj_y(s, r0) - obj_y(s, b1) - stack) < 0.15f,
-                     "zone 2, different groups collide: the blue cubes rest on the red ones");
+                     (double)obj_y(s, red), (double)obj_y(s, red + 1),
+                     (double)obj_y(s, blue), (double)obj_y(s, blue + 1));
+    ok &= demo_check(tag, fabsf(obj_y(s, mixed) - obj_y(s, mixed + 1) - stack) < 0.15f,
+                     "zone 2, different groups collide: the blue cube rests on the red cube");
     int g0 = s->z3_start, y0 = g0 + 1, y1 = g0 + 2, g1 = g0 + 3;
     ok &= demo_check(tag, fabsf(obj_y(s, y0) - obj_y(s, g0)) < 0.2f,
                      "zone 3, disjoint layers: the yellow cube fell through the green one (%.2f / %.2f)",
@@ -255,14 +257,14 @@ int main(int argc, char **argv)
     s->next_toggle = PAIR_TOGGLE_PERIOD;
 
     /* ═══ Zone 2 (CENTER, x=0): group filter ════════════════════════════ *
-     * A column, 4 m apart: red, red (group 1), blue, blue (group 2),
-     * staggered 0.4 m left and right.  Straight above each other the two
-     * reds come to rest in the same place, and a blue cube landing on that
-     * doubled support sinks through it (the reference engine too). */
+     * Isolate each pair so the mixed-group cube lands on one support.
+     * Same-group cubes can overlap at rest without affecting that stack. */
     s->z2_start = s->n_obj;
-    for (int i = 0; i < 4; i++) {
-        ivp_object_t *cube = add_cube(&app, 0.6, (i & 1) ? 0.4 : -0.4, -1.3 - 4.0 * i);
-        ivp_object_set_collision_group(cube, i < 2 ? 1 : 2);
+    for (int i = 0; i < ZONE2_CUBE_COUNT; i++) {
+        double x = 3.0 * (i / 2 - 1);
+        double y = -1.3 - 4.0 * (i % 2);
+        ivp_object_t *cube = add_cube(&app, 0.6, x, y);
+        ivp_object_set_collision_group(cube, zone2_groups[i]);
     }
 
     /* ═══ Zone 3 (RIGHT, x=12): layer mask filter ═══════════════════════ *
