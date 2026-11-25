@@ -851,6 +851,11 @@ if (IVP_BUILD_TESTS)
             # -6 + spacing * (i + 1) moves an initial position by an ulp and
             # breaks symmetric ties differently.
             target_compile_options(test_scenarios PRIVATE -ffp-contract=off -fno-fast-math)
+            if (EMSCRIPTEN AND NOT IVP_X87_ARITHMETIC_TRANSCENDENTAL_VALUE)
+                # Use the runtime libm for native scenario inputs. Clang's
+                # constant folding can round sin and cos differently on Wasm.
+                target_compile_options(test_scenarios PRIVATE -fno-builtin-sin -fno-builtin-cos)
+            endif ()
         else ()
             target_compile_options(test_scenarios PRIVATE /fp:strict)
         endif ()
