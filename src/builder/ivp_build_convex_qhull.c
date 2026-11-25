@@ -20,13 +20,14 @@
  * concurrently.  A reference-development build can select the classic
  * dependency; its global Qhull state is serialized by the adapter.
  *
- * Stable construction (IVP_STABLE_INTERNAL_STATE, while the default keeps
- * the reference's options and retry loop):
- *   - qhull "Qs Pp C-0": Qhull derives its roundoff and outside width from
- *     the input.  The reference's "W1e-14 E1.0e-18" claim a precision double
- *     arithmetic does not have at the coordinates' size, so Qhull 2020.2
- *     rejects valid hulls (a rotated box scaled by 100, or 10^4 from the
- *     origin) as "wide merges" and the reference falls back to joggling;
+ * With software x87 arithmetic or stable internal state, Qhull derives its
+ * roundoff and outside width from the input. The reference's fixed
+ * "W1e-14 E1.0e-18" thresholds can trigger platform-dependent joggling
+ * for coplanar faces, which changes facet triangulation and mass centers.
+ * Native arithmetic with reference internal state uses the original flags.
+ *
+ * Stable internal state also changes how failed and oversized hulls are
+ * handled:
  *   - a hull whose triangles do not fit one ledge (2V - 4 above
  *     IVP_BUILD_MAX_TRIANGLES_PER_LEDGE) is no precision problem: the build
  *     stops instead of joggling until the vertex count happens to drop;
@@ -64,7 +65,7 @@
 
 #define PS_MIN_EDGE_LEN 0.01f /* P_MIN_EDGE_LEN */
 
-#if !IVP_STABLE_INTERNAL_STATE
+#if !IVP_STABLE_INTERNAL_STATE && IVP_X87_ARITHMETIC != IVP_X87_SOFT
 #define PS_QHULL_COMMAND "qhull Qs Pp C-0 W1e-14 E1.0e-18"
 #define PS_QHULL_JOGGLE_COMMAND "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18"
 #else
