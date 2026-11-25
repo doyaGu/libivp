@@ -24,21 +24,25 @@ within one platform and build configuration. Results can differ across platforms
 
 ## Building
 
-You need CMake 3.20 or later and a C17 compiler. The default build uses the
+You need CMake 3.20 or later and a C17 compiler. The x87 backend also
+uses a C++11 compiler. The default build uses the
 reference engine's bundled Qhull, kept in `src/builder/qhull_ipion`; with
 `IVP_REENTRANT_QHULL=ON` CMake fetches the pinned Qhull 2020.2 instead. The
 examples also fetch SDL3.
 
 ```bash
+git submodule update --init --recursive
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 ```
 
 To use libivp from another CMake project, add it as a subdirectory and link
-the `ivp` target:
+the `ivp` target. Enable CXX in the parent project when either x87 backend
+is enabled:
 
 ```cmake
+project(my_app LANGUAGES C CXX)
 set(IVP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(libivp)
 target_link_libraries(my_app PRIVATE ivp)
@@ -49,6 +53,9 @@ target_link_libraries(my_app PRIVATE ivp)
 | Option | Default | Description |
 |---|---|---|
 | `IVP_REAL_DOUBLE` | ON | `double` for `ivp_real_t`, like the reference `IVP_DOUBLE` (OFF: `float`) |
+| `IVP_ENABLE_X87_EMULATION` | ON | Use `SOFT` arithmetic when `IVP_X87_ARITHMETIC` is empty |
+| `IVP_X87_ARITHMETIC` | Follows `IVP_ENABLE_X87_EMULATION` | `OFF`, `SOFT` or `HARD` for the restored arithmetic sequences |
+| `IVP_X87_ARITHMETIC_TRANSCENDENTAL` | Follows `IVP_X87_ARITHMETIC` | `OFF`, `SOFT` or `HARD` for the original IVP math wrappers |
 | `IVP_STABLE_INTERNAL_STATE` | OFF | Use history-independent internals; OFF preserves the reference's address- and history-sensitive behavior |
 | `IVP_EDIT_LOCALITY` | OFF | Adding or removing objects changes only the objects they interact with; requires `IVP_STABLE_INTERNAL_STATE=ON` and changes trajectories |
 | `IVP_ENABLE_CHECKPOINTS` | OFF | Memory regions with in-place checkpoints, and rewinding to any recorded step |
@@ -62,6 +69,28 @@ target_link_libraries(my_app PRIVATE ivp)
 | `IVP_BUILD_EXAMPLES` | OFF | Graphical examples (enables the render module) |
 | `IVP_BUILD_RENDER` | OFF | Render module: SDL3 GPU natively, WebGL2 under Emscripten |
 | `IVP_ENABLE_ASAN` / `IVP_ENABLE_UBSAN` | OFF | Sanitizers |
+
+`SOFT` uses libx87, the arithmetic backend shared with the C++ IVP engine. Its
+intermediates use a 64-bit significand and follow the active C rounding
+mode. Scalar `double` results are stored at binary64 precision before
+returning to C on every target. `HARD` requires a 32-bit x86 target and uses
+the host x87 when its precision and rounding allow it. Hardware
+transcendental results follow the executing CPU.
+The arithmetic backend covers inverse square root, vector normalization,
+double-precision vector length, quaternion multiplication and small-angle
+updates. The contact solver uses scalar matrix rows with x87 arithmetic
+enabled, matching the 32-bit reference's row updates.
+The transcendental setting controls sine, cosine, arcsine, arccosine,
+arctangent, and exponential calls through the IVP math wrappers.
+
+For bitwise trajectory comparisons across targets, use `SOFT` for both
+selections and enable `IVP_STABLE_INTERNAL_STATE`. The default internal
+state keeps the reference hull tolerances and joggle retries. With those
+settings, platforms can produce different mass centers for hulls with
+coplanar faces.
+
+Set both selections to `OFF` for a pure C17 build without libx87. Scenario
+parity tools select `OFF` in both engines when comparing native results.
 
 Existing CMake caches using `IVP_REFERENCE_INTERNAL_STATE` are migrated to the
 inverse `IVP_STABLE_INTERNAL_STATE` value. When both are set, the new option
