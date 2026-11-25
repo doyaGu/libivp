@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "base/ivp_simd_internal.h"
+#include "math/ivp_x87.h"
 
 typedef ivp_real_t D;   /* IVP_DOUBLE */
 
@@ -36,6 +37,9 @@ typedef ivp_real_t D;   /* IVP_DOUBLE */
  * square == 0 (NaN) and negative input (32-bit wrap). Inline twin of
  * ivp_isqrt_double. */
 static inline double lv_ref_isqrt(double square, int resolution_steps) {
+#if IVP_X87_ARITHMETIC
+    return ivp_isqrt_double(square, resolution_steps);
+#else
     uint64_t bits;
     memcpy(&bits, &square, sizeof(bits));
     uint32_t ie_h = (uint32_t)(bits >> 32);
@@ -53,6 +57,7 @@ static inline double lv_ref_isqrt(double square, int resolution_steps) {
     if (resolution_steps > 1) inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
     if (resolution_steps > 2) inv_sqrt *= 1.0 + (0.5 - inv_sqrt * inv_sqrt * squareh);
     return inv_sqrt;
+#endif
 }
 
 /* IVP_Fast_Math::isqrt(x, n) (computed in double like the reference) */
@@ -205,18 +210,27 @@ static inline void lvf_cross(ivp_vec3f_t *r, const ivp_vec3f_t *v1, const ivp_ve
 }
 static inline D lvf_real_length(const ivp_vec3f_t *a) { return LV_SQRT(lvf_quad_length(a)); }
 static inline bool lvf_normize(ivp_vec3f_t *a) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3f(a->k, 2, P_DOUBLE_EPS, NULL);
+#else
     D l = lvf_quad_length(a);
     if (l < P_DOUBLE_EPS) return false;
     lvf_mult(a, lv_isqrt(l, 2));
     return true;
+#endif
 }
 static inline bool lvf_fast_normize(ivp_vec3f_t *a) { return lvf_normize(a); }
 static inline D lvf_real_length_plus_normize(ivp_vec3f_t *a) {
+#if IVP_X87_ARITHMETIC
+    double length;
+    return ivp_x87_normalize3f(a->k, 3, P_DOUBLE_EPS, &length) ? (D)length : 0;
+#else
     D q = lvf_quad_length(a);
     if (q < P_DOUBLE_EPS) return 0.0f;
     D f = lv_isqrt(q, 3);
     lvf_mult(a, f);
     return f * q;
+#endif
 }
 static inline void lvf_cross_and_normize(ivp_vec3f_t *r, const ivp_vec3f_t *v1, const ivp_vec3f_t *v2) {
     lvf_cross(r, v1, v2);
@@ -342,23 +356,36 @@ static inline void lvp_cross(ivp_vec3r_t *r, const ivp_vec3r_t *v1, const ivp_ve
 static inline D lvp_real_length(const ivp_vec3r_t *a) { return LV_SQRT(lvp_quad_length(a)); }
 static inline D lvp_fast_real_length(const ivp_vec3r_t *a) { return LV_SQRT(lvp_quad_length(a)); }
 static inline bool lvp_normize(ivp_vec3r_t *a) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3r(a->k, 3, P_DOUBLE_EPS, NULL);
+#else
     D l = lvp_quad_length(a);
     if (l < P_DOUBLE_EPS) return false;
     lvp_mult(a, lv_isqrt(l, 3));
     return true;
+#endif
 }
 static inline bool lvp_fast_normize(ivp_vec3r_t *a) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3r(a->k, 2, P_DOUBLE_EPS, NULL);
+#else
     D l = lvp_quad_length(a);
     if (l < P_DOUBLE_EPS) return false;
     lvp_mult(a, lv_isqrt(l, 2));
     return true;
+#endif
 }
 static inline D lvp_real_length_plus_normize(ivp_vec3r_t *a) {
+#if IVP_X87_ARITHMETIC
+    double length;
+    return ivp_x87_normalize3r(a->k, 3, P_DOUBLE_EPS, &length) ? (D)length : 0;
+#else
     D q = lvp_quad_length(a);
     if (q < P_DOUBLE_EPS) return 0.0;
     D f = lv_isqrt(q, 3);
     lvp_mult(a, f);
     return f * q;
+#endif
 }
 static inline void lvp_set_orthogonal_part(ivp_vec3r_t *r, const ivp_vec3r_t *v, const ivp_vec3r_t *n) {
     D part = lvp_dot(n, v);

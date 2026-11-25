@@ -10,6 +10,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/base/ivp_assert.h>
 #include <math.h>
+#include "math/ivp_x87.h"
 
 #define IVP_QUAT_DELTA 1e-6f /* error tolerance (ivu_quat.cxx) */
 
@@ -201,6 +202,16 @@ void ivp_quat_from_mat4x4(ivp_quatr_t *q, const double m[4][4]) {
 
 /* ── Arithmetic ─────────────────────────────────────────────────────────── */
 
+#if IVP_X87_ARITHMETIC
+void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1, const ivp_quatr_t *q2) {
+    const ivp_real_t left[4] = {q1->x, q1->y, q1->z, q1->w};
+    const ivp_real_t right[4] = {q2->x, q2->y, q2->z, q2->w};
+    ivp_real_t product[4];
+    ivp_x87_quat_mult(product, left, right);
+    *out = (ivp_quatr_t){product[0], product[1], product[2], product[3]};
+}
+#endif
+
 void ivp_quat_set_div_unit_quat(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                 const ivp_quatr_t *q2) {
     const ivp_quatr_t inverse = {-q2->x, -q2->y, -q2->z, q2->w};
@@ -276,9 +287,9 @@ void ivp_quat_normize_correct_step(ivp_quatr_t *q, int steps) {
 void ivp_quat_set_rotation(ivp_quatr_t *q, double rot_x, double rot_y, double rot_z) {
     double f = .5;
     quatd_t r;
-    r.x = sin(rot_x * f);
-    r.y = sin(rot_y * f);
-    r.z = sin(rot_z * f);
+    r.x = ivp_sind(rot_x * f);
+    r.y = ivp_sind(rot_y * f);
+    r.z = ivp_sind(rot_z * f);
     double qlen_set = r.x * r.x + r.y * r.y + r.z * r.z;
     r.w = (qlen_set < 1.0) ? sqrt(1.0 - qlen_set) : 0.0;
     qd_store(q, &r);
@@ -288,9 +299,9 @@ void ivp_quat_set_fast_multiple(ivp_quatr_t *q, const ivp_vec3r_t *angles,
                                 double factor) {
     double f = factor * .5;
     quatd_t r;
-    r.x = sin((double)angles->k[0] * f);
-    r.y = sin((double)angles->k[1] * f);
-    r.z = sin((double)angles->k[2] * f);
+    r.x = ivp_sind((double)angles->k[0] * f);
+    r.y = ivp_sind((double)angles->k[1] * f);
+    r.z = ivp_sind((double)angles->k[2] * f);
     double n = r.x * r.x + r.y * r.y + r.z * r.z;
     r.w = sqrt(1.0 - ((n > 1.0) ? 1.0 : n));
     qd_store(q, &r);
@@ -301,9 +312,9 @@ void ivp_quat_set_fast_multiple_with_clip(ivp_quatr_t *q,
                                            ivp_real_t factor) {
     double f = (double)factor * .5;
     quatd_t r;
-    r.x = sin((double)angles->k[0] * f);  /* IVP_Inline_Math::ivp_sinf (double) */
-    r.y = sin((double)angles->k[1] * f);
-    r.z = sin((double)angles->k[2] * f);
+    r.x = ivp_sind((double)angles->k[0] * f);  /* IVP_Inline_Math::ivp_sinf (double) */
+    r.y = ivp_sind((double)angles->k[1] * f);
+    r.z = ivp_sind((double)angles->k[2] * f);
 
     double qlen = r.x * r.x + r.y * r.y + r.z * r.z;
     if (qlen > 1.0) { /* reverse quat needed */
@@ -317,14 +328,23 @@ void ivp_quat_set_fast_multiple_with_clip(ivp_quatr_t *q,
     qd_store(q, &r);
 }
 
+#if !IVP_X87_ARITHMETIC
 /* ivp_very_fast_sin (ivu_quat.cxx): IVP_DOUBLE in/out, float 1/6 constant */
 static inline double ivp_very_fast_sin(double x) {
     return x - x * x * x * (double)(1.0f / 6.0f);
 }
 
+
+#endif
+
 void ivp_quat_set_very_fast_multiple(ivp_quatr_t *q,
                                       const ivp_vec3f_t *angles,
                                       ivp_real_t factor) {
+#if IVP_X87_ARITHMETIC
+    ivp_real_t rotation[4];
+    ivp_x87_quat_set_very_fast_multiple(rotation, angles->k, (double)factor);
+    *q = (ivp_quatr_t){rotation[0], rotation[1], rotation[2], rotation[3]};
+#else
     double f = (double)factor * .5;
     quatd_t r;
     r.x = ivp_very_fast_sin((double)angles->k[0] * f);
@@ -332,13 +352,14 @@ void ivp_quat_set_very_fast_multiple(ivp_quatr_t *q,
     r.z = ivp_very_fast_sin((double)angles->k[2] * f);
     r.w = sqrt(1.0 - (r.z * r.z + r.y * r.y + r.x * r.x));
     qd_store(q, &r);
+#endif
 }
 
 void ivp_quat_get_angles(const ivp_quatr_t *q, ivp_vec3f_t *angles_out) {
     double f = 2.0;
-    angles_out->k[0] = (float)(f * asin((double)q->x));
-    angles_out->k[1] = (float)(f * asin((double)q->y));
-    angles_out->k[2] = (float)(f * asin((double)q->z));
+    angles_out->k[0] = (float)(f * ivp_asind((double)q->x));
+    angles_out->k[1] = (float)(f * ivp_asind((double)q->y));
+    angles_out->k[2] = (float)(f * ivp_asind((double)q->z));
 }
 
 void ivp_quat_set_from_rotation_vectors(ivp_quatr_t *q,
@@ -435,10 +456,10 @@ void ivp_quat_set_interpolate_smoothly(ivp_quatr_t *out, const ivp_quatr_t *from
     /* the retail threshold 1.0 - 0.001f is a double expression */
     if (cosom < 1.0 - (double)0.001f) {
         /* standard case (slerp) */
-        double omega = acos(cosom);
+        double omega = ivp_acosd(cosom);
         double i_sinom = 1.0 / sqrt(1.0 - cosom * cosom);
-        double scale0 = sin((1.0 - t) * omega) * i_sinom;
-        double scale1 = sin(t * omega) * i_sinom * (double)sign;
+        double scale0 = ivp_sind((1.0 - t) * omega) * i_sinom;
+        double scale1 = ivp_sind(t * omega) * i_sinom * (double)sign;
         res.x = scale0 * from.x + scale1 * to.x;
         res.y = scale0 * from.y + scale1 * to.y;
         res.z = scale0 * from.z + scale1 * to.z;

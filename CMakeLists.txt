@@ -22,6 +22,10 @@ endfunction()
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
+include(cmake/IVPX87.cmake)
+if (IVP_X87_LIBRARY)
+    enable_language(CXX)
+endif ()
 include(cmake/IVPInternalState.cmake)
 option(IVP_ENABLE_CHECKPOINTS
        "Memory regions with in-place checkpoints and rewinding (ivp_memory_region.h, ivp_rewind.h)"
@@ -392,6 +396,7 @@ endif ()
 
 ivp_enable_c_atomics(ivp)
 ivp_apply_strict_fp(ivp)
+ivp_configure_x87(ivp)
 
 # The reference pipeline port mixes IVP_FLOAT and IVP_DOUBLE on purpose
 # (float storage, double arithmetic) exactly like the C++ reference.
@@ -761,6 +766,7 @@ if (IVP_BUILD_TESTS)
     ivp_add_test(test_containers_ext tests/test_containers_ext.c)
     ivp_add_test(test_math_ext tests/test_math_ext.c)
     ivp_add_test(test_math_ref tests/test_math_ref.c)
+    target_include_directories(test_math_ref PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_lvec tests/test_lvec.c)
     target_include_directories(test_lvec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_apply_strict_fp(test_lvec)

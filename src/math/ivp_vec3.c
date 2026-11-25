@@ -12,6 +12,7 @@
 #include <ivp/math/ivp_vec3.h>
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/base/ivp_assert.h>
+#include "math/ivp_x87.h"
 
 /* isqrt resolution of normize(): IVP_U_Float_Point uses 2, IVP_U_Point 3 */
 #ifdef IVP_REAL_DOUBLE
@@ -27,6 +28,7 @@ static inline double vec3r_quad_length_ref(const ivp_vec3r_t *v) {
     return (double)(v->k[0] * v->k[0] + v->k[1] * v->k[1] + v->k[2] * v->k[2]);
 }
 
+#if !IVP_X87_ARITHMETIC
 /* mult(IVP_DOUBLE factor): k = (real)(k * factor) evaluated in double. */
 static inline void vec3r_mult_ref(ivp_vec3r_t *v, double f) {
     double a = (double)v->k[0] * f;
@@ -36,10 +38,15 @@ static inline void vec3r_mult_ref(ivp_vec3r_t *v, double f) {
     v->k[1] = (ivp_real_t)b;
     v->k[2] = (ivp_real_t)c;
 }
+#endif
 
 ivp_real_t ivp_vec3r_length(const ivp_vec3r_t *v) {
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    return ivp_x87_length3d(v->k);
+#else
     /* IVP_Inline_Math::sqrtd(this->quad_length()) */
     return (ivp_real_t)sqrt(vec3r_quad_length_ref(v));
+#endif
 }
 
 ivp_real_t ivp_vec3r_fast_length(const ivp_vec3r_t *v) {
@@ -48,22 +55,34 @@ ivp_real_t ivp_vec3r_fast_length(const ivp_vec3r_t *v) {
 }
 
 ivp_result_t ivp_vec3r_normalize(ivp_vec3r_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3r(v->k, IVP_VEC3R_NORMIZE_STEPS, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = vec3r_quad_length_ref(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     double f = ivp_isqrt_double(length, IVP_VEC3R_NORMIZE_STEPS);
     vec3r_mult_ref(v, f);
     return IVP_OK;
+#endif
 }
 
 ivp_result_t ivp_vec3r_fast_normalize(ivp_vec3r_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3r(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = vec3r_quad_length_ref(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     double f = ivp_isqrt_double(length, 2);
     vec3r_mult_ref(v, f);
     return IVP_OK;
+#endif
 }
 
 ivp_real_t ivp_vec3r_normalize_and_length(ivp_vec3r_t *v) {
+#if IVP_X87_ARITHMETIC
+    double length;
+    return ivp_x87_normalize3r(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? (ivp_real_t)length : IVP_REAL(0.0);
+#else
     double qlength = vec3r_quad_length_ref(v);
     if (qlength < IVP_REF_DOUBLE_EPS) {
         return IVP_REAL(0.0);
@@ -71,6 +90,7 @@ ivp_real_t ivp_vec3r_normalize_and_length(ivp_vec3r_t *v) {
     double f = ivp_isqrt_double(qlength, 3);
     vec3r_mult_ref(v, f);
     return (ivp_real_t)(f * qlength);
+#endif
 }
 
 ivp_result_t ivp_vec3r_cross_and_normalize(ivp_vec3r_t *out,
@@ -268,8 +288,8 @@ ivp_result_t ivp_vec3r_set_crossing(ivp_vec3r_t *out, const ivp_vec4r_t *h0,
 void ivp_vec3r_rotate(ivp_vec3r_t *v, ivp_coord_index_t axis, float angle) {
     static const int hp[5] = {0, 1, 2, 0, 1};
     const int *p = &hp[axis];
-    double c = cos((double)angle);
-    double s = sin((double)angle);
+    double c = ivp_cosd((double)angle);
+    double s = ivp_sind((double)angle);
     double x_new = c * (double)v->k[p[1]] - s * (double)v->k[p[2]];
     v->k[p[2]] = (ivp_real_t)(s * (double)v->k[p[1]] + c * (double)v->k[p[2]]);
     v->k[p[1]] = (ivp_real_t)x_new;
@@ -317,25 +337,38 @@ void ivp_vec3f_mult(ivp_vec3f_t *v, double factor) {
 }
 
 ivp_result_t ivp_vec3f_normize(ivp_vec3f_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3f(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = ivp_vec3f_quad_length(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     ivp_vec3f_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
+#endif
 }
 
 ivp_result_t ivp_vec3f_fast_normize(ivp_vec3f_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3f(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = ivp_vec3f_quad_length(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     ivp_vec3f_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
+#endif
 }
 
 double ivp_vec3f_real_length_plus_normize(ivp_vec3f_t *v) {
+#if IVP_X87_ARITHMETIC
+    double length;
+    return ivp_x87_normalize3f(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? length : 0.0;
+#else
     double qlength = ivp_vec3f_quad_length(v);
     if (qlength < IVP_REF_DOUBLE_EPS) return 0.0;
     double f = ivp_isqrt_double(qlength, 3);
     ivp_vec3f_mult(v, f);
     return f * qlength;
+#endif
 }
 
 /* ── IVP_U_Point ────────────────────────────────────────────────────────── */
@@ -345,39 +378,59 @@ double ivp_vec3d_quad_length(const ivp_vec3d_t *v) {
 }
 
 double ivp_vec3d_real_length(const ivp_vec3d_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_length3d(v->k);
+#else
     return sqrt(ivp_vec3d_quad_length(v));
+#endif
 }
 
 double ivp_vec3d_fast_real_length(const ivp_vec3d_t *v) {
     return ivp_fast_sqrt(ivp_vec3d_quad_length(v));
 }
 
+#if !IVP_X87_ARITHMETIC
 static inline void vec3d_mult(ivp_vec3d_t *v, double factor) {
     v->k[0] *= factor;
     v->k[1] *= factor;
     v->k[2] *= factor;
 }
 
+#endif
+
 ivp_result_t ivp_vec3d_normize(ivp_vec3d_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3d(v->k, 3, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = ivp_vec3d_quad_length(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     vec3d_mult(v, ivp_isqrt_double(length, 3));
     return IVP_OK;
+#endif
 }
 
 ivp_result_t ivp_vec3d_fast_normize(ivp_vec3d_t *v) {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3d(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
+#else
     double length = ivp_vec3d_quad_length(v);
     if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
     vec3d_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
+#endif
 }
 
 double ivp_vec3d_real_length_plus_normize(ivp_vec3d_t *v) {
+#if IVP_X87_ARITHMETIC
+    double length;
+    return ivp_x87_normalize3d(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? length : 0.0;
+#else
     double qlength = ivp_vec3d_quad_length(v);
     if (qlength < IVP_REF_DOUBLE_EPS) return 0.0;
     double f = ivp_isqrt_double(qlength, 3);
     vec3d_mult(v, f);
     return f * qlength;
+#endif
 }
 
 void ivp_vec3d_cross(ivp_vec3d_t *out, const ivp_vec3d_t *v1, const ivp_vec3d_t *v2) {

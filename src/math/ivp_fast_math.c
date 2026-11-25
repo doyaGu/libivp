@@ -114,6 +114,7 @@ bool ivp_invert_2x2_matrix(double a1_in, double b1_in,
 /* No domain guard: like the reference, square > 0 is only asserted (debug
  * builds).  Its release results (0 -> NaN, negative -> exponent wrap) are
  * reproduced. */
+#if !IVP_X87_ARITHMETIC
 double ivp_isqrt_double(double square, int resolution_steps) {
     IVP_ASSERT(ivp_fabsd(square) > (double)0.0f);
     /* Bit-hack initial estimate (matching original IVP); the int
@@ -145,6 +146,7 @@ double ivp_isqrt_double(double square, int resolution_steps) {
     IVP_ASSERT(ivp_fabsd((double)1.0f - inv_sqrt * inv_sqrt * square) < (double)0.001f);
     return inv_sqrt;
 }
+#endif
 
 /* ── IEEE exponent extraction (matching original PFM_LD) ────────────────── */
 

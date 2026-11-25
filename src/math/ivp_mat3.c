@@ -166,8 +166,8 @@ static void m3d_mimult(const mat3d_t *self, const mat3d_t *mb, mat3d_t *m_out) {
 static void m3d_identity_rotate(ivp_coord_index_t axis, float angle, mat3d_t *m_out) {
     static const int pm[5] = {1, 2, 0, 1, 2};
     const int *p = &pm[axis];
-    double SA = sin((double)angle);
-    double CA = cos((double)angle);
+    double SA = ivp_sind((double)angle);
+    double CA = ivp_cosd((double)angle);
     mat3d_t m_rot;
     for (int r = 0; r < 3; r++)
         for (int c = 0; c < 3; c++)
@@ -457,7 +457,7 @@ ivp_result_t ivp_mat3r_get_angles(const ivp_mat3r_t *m, float *alpha,
     if (ivp_vec3d_normize(&v) != IVP_OK) {
         *gamma = 0.0f;
     } else {
-        *gamma = (float)atan2(v.k[0], v.k[2]);
+        *gamma = (float)ivp_atan2d(v.k[0], v.k[2]);
     }
     m3d_identity_rotate(IVP_INDEX_Y, *gamma, &rot);
     m3d_mimult(&rot, &mat, &mat_no_g); /* no gamma */
@@ -467,7 +467,7 @@ ivp_result_t ivp_mat3r_get_angles(const ivp_mat3r_t *m, float *alpha,
     if (ivp_vec3d_normize(&v) != IVP_OK) {
         *beta = 0.0f;
     } else {
-        *beta = (float)-atan2(v.k[1], v.k[2]);
+        *beta = (float)-ivp_atan2d(v.k[1], v.k[2]);
     }
     m3d_identity_rotate(IVP_INDEX_X, *beta, &rot);
     m3d_mimult(&rot, &mat_no_g, &mat_no_g_no_b); /* no gamma no beta */
@@ -478,7 +478,7 @@ ivp_result_t ivp_mat3r_get_angles(const ivp_mat3r_t *m, float *alpha,
         *alpha = 0.0f;
         ivp_debug_printf("very strange: no alpha vec in get_angles!\n");
     } else {
-        *alpha = (float)atan2(v.k[1], v.k[0]);
+        *alpha = (float)ivp_atan2d(v.k[1], v.k[0]);
     }
     return IVP_OK;
 }
@@ -517,8 +517,8 @@ void ivp_mat3r_init_rotation(ivp_mat3r_t *m, ivp_coord_index_t axis, ivp_real_t 
     static const int pm[5] = {1, 2, 0, 1, 2};
     const int *p = &pm[axis];
     double angle = (double)(float)angle_in;
-    double SA = sin(angle);
-    double CA = cos(angle);
+    double SA = ivp_sind(angle);
+    double CA = ivp_cosd(angle);
     memset(m, 0, sizeof(*m));
     m->rows[p[2]].k[p[2]] = IVP_REAL(1.0);
     m->rows[p[0]].k[p[0]] = (ivp_real_t)CA;

@@ -8,6 +8,10 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <ivp/base/ivp_assert.h>
 
+#if defined(_MSC_VER) && defined(_M_IX86) && IVP_X87_ARITHMETIC
+#include <float.h>
+#endif
+
 /* Tolerance for float/double comparisons */
 #ifdef IVP_REAL_DOUBLE
     #define TOL  1e-10
@@ -268,8 +272,28 @@ IVP_TEST(quat_product_preserves_rotation_accumulation_order)
     const ivp_quatr_t step = {
         0.018919216910825789, 0.001352545364666865, 0.01143994808311972, 0.99975465062202795
     };
+#if defined(_MSC_VER) && defined(_M_IX86) && IVP_X87_ARITHMETIC == IVP_X87_HARD
+    unsigned int precision;
+    unsigned int current;
+    _controlfp_s(&precision, 0, 0);
+    _controlfp_s(&current, _PC_64, _MCW_PC);
+#endif
     ivp_quatr_t next = rotation;
     ivp_quat_mult(&next, &next, &step);
+    const ivp_quatr_t inverse_step = {-step.x, -step.y, -step.z, step.w};
+    ivp_quatr_t quotient = rotation;
+    ivp_quat_set_div_unit_quat(&quotient, &quotient, &inverse_step);
+#if defined(_MSC_VER) && defined(_M_IX86) && IVP_X87_ARITHMETIC == IVP_X87_HARD
+    _controlfp_s(&current, precision, _MCW_PC);
+#endif
+
+#if IVP_X87_ARITHMETIC
+    /* C++ IVP restored quaternion product with PC64. */
+    IVP_ASSERT_EQ(next.x, -0x1.b8aac5b0a62d3p-9);
+    IVP_ASSERT_EQ(next.y, -0x1.950ace30ae173p-1);
+    IVP_ASSERT_EQ(next.z, 0x1.69a20bc9da2d4p-4);
+    IVP_ASSERT_EQ(next.w, 0x1.35e69327a5585p-1);
+#else
 #if defined(_WIN32) && (defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__))
     IVP_ASSERT_EQ(next.x, -0.003362023002705032);
 #else
@@ -278,10 +302,8 @@ IVP_TEST(quat_product_preserves_rotation_accumulation_order)
     IVP_ASSERT_EQ(next.y, -0.79109806389082704);
     IVP_ASSERT_EQ(next.z, 0.088289304779787969);
     IVP_ASSERT_EQ(next.w, 0.60527477129896623);
+#endif
 
-    const ivp_quatr_t inverse_step = {-step.x, -step.y, -step.z, step.w};
-    ivp_quatr_t quotient = rotation;
-    ivp_quat_set_div_unit_quat(&quotient, &quotient, &inverse_step);
     IVP_ASSERT_EQ(quotient.x, next.x);
     IVP_ASSERT_EQ(quotient.y, next.y);
     IVP_ASSERT_EQ(quotient.z, next.z);
@@ -497,6 +519,19 @@ IVP_TEST(transform_interpolate_halfturn) {
  * Fast math tests
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+#if defined(_MSC_VER) && defined(_M_IX86) && IVP_X87_ARITHMETIC == IVP_X87_SOFT
+IVP_TEST(software_isqrt_ignores_win32_hardware_precision) {
+    unsigned int previous;
+    unsigned int current;
+    _controlfp_s(&previous, 0, 0);
+    _controlfp_s(&current, _PC_24, _MCW_PC);
+    const volatile double result = ivp_isqrt_double(2.0, 3);
+    _controlfp_s(&current, previous, _MCW_PC);
+
+    IVP_ASSERT_EQ(result, 0x1.6a09e667f3bcdp-1);
+}
+#endif
+
 IVP_TEST(isqrt_float_basic) {
     /* isqrt(4) ≈ 0.5 */
     float val = ivp_isqrt_float(4.0f);
@@ -546,22 +581,32 @@ static void isqrt_count_assert(const char *expr, const char *file, int line,
 IVP_TEST(isqrt_double_domain) {
     IVP_ASSERT_TRUE(ivp_isqrt_double(4.0, 3) == 0.5);
 
-    /* No domain guard, like the reference release build (checked against
-     * IVP_Fast_Math::isqrt): 0 gives NaN (inf * 0 in the Newton step) and a
-     * negative input wraps the exponent hack to -inf.  The reference debug
-     * build asserts square > 0 (ivu_float.hxx): counted, not trapped. */
+    /* Match the reference's exponent seed and Newton steps for out-of-domain
+     * inputs. The native debug assertion is counted without trapping. */
     g_isqrt_assert_count = 0;
     ivp_set_assert_handler(isqrt_count_assert, NULL);
-    bool all_nan = true;
+    bool zero_matches = true;
     for (int steps = 0; steps <= 3; steps++) {
-        if (!isnan(ivp_isqrt_double(0.0, steps))) all_nan = false;
+        const volatile double result = ivp_isqrt_double(0.0, steps);
+#if IVP_X87_ARITHMETIC
+        /* The extended exponent keeps the Newton intermediate finite. */
+        const double values[] = { 0x1.bp+512, 0x1.44p+513, 0x1.e6p+513, 0x1.6c8p+514 };
+        if (result != values[steps]) zero_matches = false;
+#else
+        if (!isnan(result)) zero_matches = false;
+#endif
     }
-    double n = ivp_isqrt_double(-4.0, 0);
+    const volatile double n = ivp_isqrt_double(-4.0, 0);
     ivp_set_assert_handler(NULL, NULL);
-    IVP_ASSERT_TRUE(all_nan);
+    IVP_ASSERT_TRUE(zero_matches);
+#if IVP_X87_ARITHMETIC
+    IVP_ASSERT_TRUE(isinf(n) && n > 0.0);
+    IVP_ASSERT_EQ(g_isqrt_assert_count, 0);
+#else
     IVP_ASSERT_TRUE(isinf(n) && n < 0.0);
 #ifdef IVP_ENABLE_ASSERTS
     IVP_ASSERT_TRUE(g_isqrt_assert_count > 0);
+#endif
 #endif
 }
 
@@ -581,6 +626,18 @@ IVP_TEST(min_max_clamp) {
     IVP_ASSERT_NEAR(ivp_clamp(IVP_REAL(-1.0), IVP_REAL(0.0), IVP_REAL(1.0)), 0.0, TOL);
     IVP_ASSERT_NEAR(ivp_clamp(IVP_REAL(2.0), IVP_REAL(0.0), IVP_REAL(1.0)), 1.0, TOL);
     IVP_ASSERT_NEAR(ivp_clamp(IVP_REAL(0.5), IVP_REAL(0.0), IVP_REAL(1.0)), 0.5, TOL);
+}
+
+IVP_TEST(transcendental_range) {
+    const double angle = 0x1p63;
+    /* FSIN and FCOS leave ST(0) intact at the x87 range boundary. */
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    IVP_ASSERT_EQ(ivp_sind(angle), angle);
+    IVP_ASSERT_EQ(ivp_cosd(angle), angle);
+#else
+    IVP_ASSERT_TRUE(fabs(ivp_sind(angle)) <= 1.0);
+    IVP_ASSERT_TRUE(fabs(ivp_cosd(angle)) <= 1.0);
+#endif
 }
 
 IVP_TEST(trig_wrappers) {
@@ -640,6 +697,9 @@ int main(void) {
     IVP_REGISTER(transform_interpolate_halfturn);
 
     /* Fast math */
+#if defined(_MSC_VER) && defined(_M_IX86) && IVP_X87_ARITHMETIC == IVP_X87_SOFT
+    IVP_REGISTER(software_isqrt_ignores_win32_hardware_precision);
+#endif
     IVP_REGISTER(isqrt_float_basic);
     IVP_REGISTER(isqrt_double_precision);
     IVP_REGISTER(isqrt_various_values);
@@ -648,6 +708,7 @@ int main(void) {
     IVP_REGISTER(fabs_wrapper);
     IVP_REGISTER(min_max_clamp);
     IVP_REGISTER(trig_wrappers);
+    IVP_REGISTER(transcendental_range);
 
     IVP_RUN_ALL();
 }

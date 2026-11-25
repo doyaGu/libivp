@@ -77,8 +77,12 @@ static inline void ivp_quatf_set(ivp_quatf_t *out, const ivp_quatr_t *src) {
 /* ── Arithmetic ─────────────────────────────────────────────────────────── */
 
 /* out = q1 * q2 (Hamilton product), IVP_U_Quat::inline_set_mult_quat.
- * Preserve the accumulation order of the reference math for this platform.
+ * With x87 arithmetic enabled, both the operation order and the
+ * component stores follow the restored IVP routine on every target.
  * The output may alias either input. */
+#if IVP_X87_ARITHMETIC
+void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1, const ivp_quatr_t *q2);
+#else
 static inline void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                   const ivp_quatr_t *q2) {
     double x1 = (double)q1->x, y1 = (double)q1->y, z1 = (double)q1->z, w1 = (double)q1->w;
@@ -96,11 +100,14 @@ static inline void ivp_quat_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
     out->z = (ivp_real_t)zz; out->w = (ivp_real_t)ww;
 }
 
+#endif
+
 /* out = q1 * q2 with a float quaternion
  * (IVP_U_Quat::inline_set_mult_quat(const IVP_U_Quat*, const IVP_U_Float_Quat*)) */
 static inline void ivp_quat_mult_fq(ivp_quatr_t *out, const ivp_quatr_t *q1,
                                      const ivp_quatf_t *q2) {
-    const ivp_quatr_t right = {q2->x, q2->y, q2->z, q2->w};
+    const ivp_quatr_t right = ivp_quatr_make((ivp_real_t)q2->x, (ivp_real_t)q2->y,
+                                             (ivp_real_t)q2->z, (ivp_real_t)q2->w);
     ivp_quat_mult(out, q1, &right);
 }
 

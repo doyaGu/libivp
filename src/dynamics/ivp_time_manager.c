@@ -2,18 +2,20 @@
 #include <ivp/dynamics/ivp_time_manager.h>
 #include <ivp/base/ivp_assert.h>
 #include "dynamics/ivp_env_internal.h"
+#include "math/ivp_x87.h"
 
 #if defined(_MSC_VER) && defined(_M_IX86)
 #include <float.h>
 #endif
 
-/* The Win32 CRT uses the hardware x87 stack for scalar math. Match the
- * original IVP time manager's precision within the step and preserve the
- * caller's floating-point control state when it returns. */
+/* Select the original time manager's precision for the duration of a
+ * step. Native Win32 also needs this setting for the CRT and scalar ABI. */
 static unsigned int time_manager_enter_precision(void)
 {
     unsigned int saved = 0;
-#if defined(_MSC_VER) && defined(_M_IX86)
+#if IVP_X87_ARITHMETIC || IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    saved = ivp_x87_enter_step();
+#elif defined(_MSC_VER) && defined(_M_IX86)
     unsigned int current;
     _controlfp_s(&saved, 0, 0);
     _controlfp_s(&current, _PC_64, _MCW_PC);
@@ -23,7 +25,9 @@ static unsigned int time_manager_enter_precision(void)
 
 static void time_manager_leave_precision(unsigned int saved)
 {
-#if defined(_MSC_VER) && defined(_M_IX86)
+#if IVP_X87_ARITHMETIC || IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    ivp_x87_leave_step((uint16_t)saved);
+#elif defined(_MSC_VER) && defined(_M_IX86)
     unsigned int current;
     _controlfp_s(&current, saved, _MCW_PC);
 #else

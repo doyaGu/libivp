@@ -25,6 +25,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_args }}
       - name: Build
@@ -77,6 +79,8 @@ jobs:
       CC: clang
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Configure
         run: cmake -B build -S . -DIVP_STABLE_INTERNAL_STATE=ON ${{ matrix.cmake_args }}
       - name: Build
@@ -105,6 +109,8 @@ jobs:
       CC: clang
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Configure
         run: >-
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
@@ -134,6 +140,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Check out reference engine
         uses: actions/checkout@v4
         with:
@@ -165,6 +173,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -205,6 +215,8 @@ jobs:
       EMSDK_VERSION: 7.0.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install Emscripten
         run: |
           git clone --depth 1 --branch "$EMSDK_VERSION" \

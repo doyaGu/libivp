@@ -18,10 +18,9 @@ fi
 IVP_JOBS="${IVP_JOBS:-8}"
 PARITY_SCENARIO_LIST="$PARITY_REPO/tools/scenarios.txt"
 
-# reference CMake options: the reentrant Qhull 2020.2 backend and native
-# arithmetic.  The reference defaults to its bundled original Qhull and to the
-# software x87 emulation, which libivp does not port.
-PARITY_REF_CMAKE_OPTIONS="-DIVP_REENTRANT_QHULL=$PARITY_REENTRANT_QHULL -DIVP_ENABLE_X87_EMULATION=OFF -DIVP_X87_ARITHMETIC=OFF -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=OFF"
+# The scenario fixtures compare both engines with native arithmetic.
+PARITY_X87_CMAKE_OPTIONS="-DIVP_ENABLE_X87_EMULATION=OFF -DIVP_X87_ARITHMETIC=OFF -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=OFF"
+PARITY_REF_CMAKE_OPTIONS="-DIVP_REENTRANT_QHULL=$PARITY_REENTRANT_QHULL $PARITY_X87_CMAKE_OPTIONS"
 # the same selection for sources compiled against the reference headers
 PARITY_REF_DEFS="-DIVP_ENABLE_X87_EMULATION=0 -DIVP_X87_ARITHMETIC=0 -DIVP_X87_ARITHMETIC_TRANSCENDENTAL=0"
 

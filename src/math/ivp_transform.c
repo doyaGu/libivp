@@ -55,8 +55,8 @@ static void build_m_rot(ivp_transform_r_t *m_rot, ivp_coord_index_t axis, float 
                         bool invers) {
     static const int pm[5] = {1, 2, 0, 1, 2};
     const int *p = &pm[axis];
-    double SA = sin((double)angle);
-    double CA = cos((double)angle);
+    double SA = ivp_sind((double)angle);
+    double CA = ivp_cosd((double)angle);
     memset(m_rot, 0, sizeof(*m_rot)); /* P_MEM_CLEAR */
     m_rot->rot.rows[p[2]].k[p[2]] = IVP_REAL(1.0);
     m_rot->rot.rows[p[0]].k[p[0]] = (ivp_real_t)CA;
@@ -160,24 +160,24 @@ void ivp_transform_init_rot_multiple(ivp_transform_r_t *t, const ivp_vec3r_t *an
     double a2 = (double)angles->k[2];
     double x, y;
     if (a0 != 0.0) {
-        x = cos(a0 * factor);
-        y = sin(a0 * factor);
+        x = ivp_cosd(a0 * factor);
+        y = ivp_sind(a0 * factor);
     } else {
         x = 1.0;
         y = 0.0;
     }
     double u, w;
     if (a1 != 0.0) {
-        u = cos(a1 * factor);
-        w = sin(a1 * factor);
+        u = ivp_cosd(a1 * factor);
+        w = ivp_sind(a1 * factor);
     } else {
         u = 1.0;
         w = 0.0;
     }
     double c, s;
     if (a2 != 0.0) {
-        c = cos(a2 * factor);
-        s = sin(a2 * factor);
+        c = ivp_cosd(a2 * factor);
+        s = ivp_sind(a2 * factor);
     } else {
         c = 1.0;
         s = 0.0;

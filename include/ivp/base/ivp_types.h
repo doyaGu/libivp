@@ -12,6 +12,11 @@
 #include <stdbool.h>
 #include <float.h>
 
+/* Floating-point backends selected by the IVP CMake target. */
+#define IVP_X87_OFF 0
+#define IVP_X87_SOFT 1
+#define IVP_X87_HARD 2
+
 /* ── ivp_real_t: configurable precision ─────────────────────────────────── */
 
 #ifdef IVP_REAL_DOUBLE

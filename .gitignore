@@ -142,5 +142,6 @@ tools/testdata/ref_*.jsonl
 reference/
 *.cxx
 *.hxx
+!src/math/ivp_x87.cxx
 !tests/data/lcs_ref_harness.cxx
 __pycache__/

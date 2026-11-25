@@ -47,13 +47,20 @@ double ivp_isqrt_double_inline(double x);
 static inline double ivp_fast_sqrt(double x) { return sqrt(x); }
 
 /* ── IVP_Inline_Math double-precision wrappers (reference double build) ─── *
- * In the reference (non-IVP_NO_DOUBLE) build every IVP_Inline_Math trig /
- * sqrt helper takes and returns IVP_DOUBLE and calls the double libm
- * function — including the ones spelled ivp_sinf / ivp_cosf / ivp_sqrtf /
- * ivp_expf.  These wrappers are the C equivalents; they are always double,
- * independent of IVP_REAL_DOUBLE. */
+ * These wrappers use double even when ivp_real_t is float. The original
+ * IVP_Inline_Math transcendental wrappers select libm or libx87 through
+ * IVP_X87_ARITHMETIC_TRANSCENDENTAL. Square root uses libm here. */
 static inline double ivp_fabsd(double f)   { return fabs(f); }
 static inline double ivp_sqrtd(double f)   { return sqrt(f); }  /* also IVP_Inline_Math::ivp_sqrtf */
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+double ivp_sind(double f);
+double ivp_cosd(double f);
+double ivp_acosd(double f);
+double ivp_asind(double f);
+double ivp_atand(double f);
+double ivp_expd(double f);
+double ivp_atan2d(double y, double x);
+#else
 static inline double ivp_sind(double f)    { return sin(f); }   /* also IVP_Inline_Math::ivp_sinf  */
 static inline double ivp_cosd(double f)    { return cos(f); }   /* also IVP_Inline_Math::ivp_cosf  */
 static inline double ivp_acosd(double f)   { return acos(f); }
@@ -61,6 +68,7 @@ static inline double ivp_asind(double f)   { return asin(f); }
 static inline double ivp_atand(double f)   { return atan(f); }
 static inline double ivp_expd(double f)    { return exp(f); }   /* IVP_Inline_Math::ivp_expf */
 static inline double ivp_atan2d(double f1, double f2) { return atan2(f1, f2); }
+#endif
 
 /* ── IVP_Inline_Math float approximations (ivu_linear_macros.hxx) ──────── *
  * All of these are IVP_FLOAT in, IVP_FLOAT out, evaluated in float. */
@@ -72,7 +80,7 @@ static inline float ivp_clampf(float r, float mn, float mx) {
 
 /* IVP_Inline_Math::save_acosf: acos(angle) in double, 0 for angle >= 1. */
 static inline float ivp_save_acosf(float angle) {
-    return angle >= 1.0f ? 0.0f : (float)acos((double)angle);
+    return angle >= 1.0f ? 0.0f : (float)ivp_acosd((double)angle);
 }
 
 /* IVP_Inline_Math::int_div_2 (non-PSXII build: a / 2). */
@@ -113,7 +121,7 @@ bool ivp_invert_2x2_matrix(double a1_in, double b1_in, double a2_in, double b2_i
 
 /* ── Deterministic math wrappers ────────────────────────────────────────── */
 
-/* These wrappers use system libm. */
+/* The real-valued wrappers use the selected double transcendental backend. */
 
 static inline ivp_real_t ivp_sqrt(ivp_real_t x) {
 #ifdef IVP_REAL_DOUBLE
@@ -132,7 +140,9 @@ static inline ivp_real_t ivp_fabs(ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_sin(ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_sind((double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return sin(x);
 #else
     return sinf(x);
@@ -140,7 +150,9 @@ static inline ivp_real_t ivp_sin(ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_cos(ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_cosd((double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return cos(x);
 #else
     return cosf(x);
@@ -148,7 +160,9 @@ static inline ivp_real_t ivp_cos(ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_asin(ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_asind((double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return asin(x);
 #else
     return asinf(x);
@@ -156,7 +170,9 @@ static inline ivp_real_t ivp_asin(ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_acos(ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_acosd((double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return acos(x);
 #else
     return acosf(x);
@@ -164,7 +180,9 @@ static inline ivp_real_t ivp_acos(ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_atan2(ivp_real_t y, ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_atan2d((double)y, (double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return atan2(y, x);
 #else
     return atan2f(y, x);
@@ -172,7 +190,9 @@ static inline ivp_real_t ivp_atan2(ivp_real_t y, ivp_real_t x) {
 }
 
 static inline ivp_real_t ivp_exp(ivp_real_t x) {
-#ifdef IVP_REAL_DOUBLE
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    return (ivp_real_t)ivp_expd((double)x);
+#elif defined(IVP_REAL_DOUBLE)
     return exp(x);
 #else
     return expf(x);

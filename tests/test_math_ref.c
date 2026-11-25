@@ -24,6 +24,7 @@
 #include <ivp/math/ivp_fast_math.h>
 #include <math.h>
 #include <stdio.h>
+#include "math/ivp_x87.h"
 
 static int check_val(double actual, double ref, int mode, double ftol,
                      const char *what, int line) {
@@ -48,7 +49,7 @@ static int check_val(double actual, double ref, int mode, double ftol,
 
 static bool libm_value_matches(double actual, double ref) {
 #ifdef IVP_REAL_DOUBLE
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && !IVP_X87_ARITHMETIC_TRANSCENDENTAL
     return actual == ref;
 #else
     if (actual == ref) return true;
@@ -64,7 +65,7 @@ static bool libm_value_matches(double actual, double ref) {
 #else
     float actual_f = (float)actual;
     float ref_f = (float)ref;
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && !IVP_X87_ARITHMETIC_TRANSCENDENTAL
     return actual_f == ref_f;
 #else
     if (actual_f == ref_f) return true;
@@ -115,6 +116,24 @@ static int check_libm_val(double actual, double ref, double ftol,
 #define M_LIBM_EQ(m, r) do { for (int i_ = 0; i_ < 9; i_++) LIBM_EQ((m).rows[i_ / 3].k[i_ % 3], (r)[i_]); } while (0)
 #define M_LIBM_NEAR(m, r, t) do { for (int i_ = 0; i_ < 9; i_++) LIBM_NEAR((m).rows[i_ / 3].k[i_ % 3], (r)[i_], t); } while (0)
 
+/* These matrix routines combine native projections with the selected
+ * vector normalization. Check the native matrix fixture within rounding
+ * error when its normalization uses x87. Individual vectors have their
+ * own exact x87 fixtures. */
+#if IVP_X87_ARITHMETIC
+#ifdef IVP_REAL_DOUBLE
+#define NORMALIZED_MATRIX_TOLERANCE 4e-15
+#else
+#define NORMALIZED_MATRIX_TOLERANCE 2e-7
+#endif
+#define NORMALIZED_MATRIX_EQ(m, r) \
+    do { for (int i_ = 0; i_ < 9; i_++) \
+        IVP_ASSERT_NEAR((m).rows[i_ / 3].k[i_ % 3], (r)[i_], NORMALIZED_MATRIX_TOLERANCE); \
+    } while (0)
+#else
+#define NORMALIZED_MATRIX_EQ(m, r) M_EQ(m, r)
+#endif
+
 /* Vector semantics of ivp_vec3r_*: IVP_U_Point with IVP_REAL_DOUBLE,
  * IVP_U_Float_Point in the float build. */
 #ifdef IVP_REAL_DOUBLE
@@ -137,6 +156,17 @@ static void set_m(ivp_mat3r_t *m, const float v[9]) {
 
 IVP_TEST(ref_isqrt_double) {
     static const double xs[6] = { 0.01, 0.5, 1.0, 2.0, 3.7, 1e6 };
+#if IVP_X87_ARITHMETIC
+    /* Win32 C++ IVP with PC64, captured at binary64 write-back. */
+    static const double ref[6][4] = {
+        { 0x1.3fee80bc9ba5cp+3, 0x1.3ffffe90a5a31p+3, 0x1.3ffffffffffd8p+3, 0x1.4p+3 },
+        { 0x1.6a058p+0, 0x1.6a09e6536af66p+0, 0x1.6a09e667f3bccp+0, 0x1.6a09e667f3bcdp+0 },
+        { 0x1p+0, 0x1p+0, 0x1p+0, 0x1p+0 },
+        { 0x1.6a058p-1, 0x1.6a09e6536af66p-1, 0x1.6a09e667f3bccp-1, 0x1.6a09e667f3bcdp-1 },
+        { 0x1.0a2cc7101d3d4p-1, 0x1.0a2d168da35a5p-1, 0x1.0a2d168dc6f62p-1, 0x1.0a2d168dc6f62p-1 },
+        { 0x1.0624cfe512482p-10, 0x1.0624dd2f199d1p-10, 0x1.0624dd2f1a9fcp-10, 0x1.0624dd2f1a9fcp-10 },
+    };
+#else
     static const double ref[6][4] = {
         { 0x1.3fee80bc9ba5bp+3, 0x1.3ffffe90a5a3p+3, 0x1.3ffffffffffd9p+3, 0x1.4p+3 },
         { 0x1.6a058p+0, 0x1.6a09e6536af66p+0, 0x1.6a09e667f3bcdp+0, 0x1.6a09e667f3bccp+0 },
@@ -145,22 +175,35 @@ IVP_TEST(ref_isqrt_double) {
         { 0x1.0a2cc7101d3d4p-1, 0x1.0a2d168da35a5p-1, 0x1.0a2d168dc6f62p-1, 0x1.0a2d168dc6f62p-1 },
         { 0x1.0624cfe512482p-10, 0x1.0624dd2f199d1p-10, 0x1.0624dd2f1a9fcp-10, 0x1.0624dd2f1a9fcp-10 },
     };
+#endif
     for (int i = 0; i < 6; i++)
         for (int s = 0; s <= 3; s++)
-            EXACT(ivp_isqrt_double(xs[i], s), ref[i][s]);
+        {
+            const volatile double value = ivp_isqrt_double(xs[i], s);
+            EXACT(value, ref[i][s]);
+        }
 }
 
 IVP_TEST(ref_isqrt_float_and_inline_double) {
     /* IVP_Inline_Math::isqrt_float == IVP_Fast_Math::isqrt(x, 2) (returned
      * unrounded), IVP_Inline_Math::isqrt_double == IVP_Fast_Math::isqrt(x, 3) */
     static const float fx[4] = { 2.0f, 0.37f, 123.5f, 1e-4f };
+#if IVP_X87_ARITHMETIC
+    static const double rf[4] = { 0x1.6a09e667f3bccp-1, 0x1.a4dc850638c50p+0,
+                                  0x1.7093544a82ba3p-4, 0x1.90000054c3ffdp+6 };
+    static const double rd[4] = { 0x1.6a09e667f3bcdp-1, 0x1.a4dc850638c51p+0,
+                                  0x1.7093544a82ba4p-4, 0x1.90000054c4002p+6 };
+#else
     static const double rf[4] = { 0x1.6a09e667f3bcdp-1, 0x1.a4dc850638c51p+0,
                                   0x1.7093544a82ba3p-4, 0x1.90000054c3ffep+6 };
     static const double rd[4] = { 0x1.6a09e667f3bccp-1, 0x1.a4dc850638c51p+0,
                                   0x1.7093544a82ba3p-4, 0x1.90000054c4001p+6 };
+#endif
     for (int i = 0; i < 4; i++) {
-        EXACT(ivp_isqrt_float(fx[i]), rf[i]);
-        EXACT(ivp_isqrt_double_inline((double)fx[i]), rd[i]);
+        const volatile double single_input = ivp_isqrt_float(fx[i]);
+        const volatile double double_input = ivp_isqrt_double_inline((double)fx[i]);
+        EXACT(single_input, rf[i]);
+        EXACT(double_input, rd[i]);
     }
 }
 
@@ -278,8 +321,13 @@ IVP_TEST(ref_quat_normize_and_products) {
 
     ivp_quatr_t r;
     ivp_quat_mult(&r, &a, &b);
+#if IVP_X87_ARITHMETIC
+    static const double mult_ab[4] = { -0x1.fdda9f8887c0ap-2, 0x1.304f903bd5559p-3,
+                                       0x1.cb22b09107b63p-2, 0x1.746158879f02ap-1 };
+#else
     static const double mult_ab[4] = { -0x1.fdda9f8887c0ap-2, 0x1.304f903bd5557p-3,
                                        0x1.cb22b09107b64p-2, 0x1.746158879f029p-1 };
+#endif
     Q_NEAR(r, mult_ab, 1e-6);
     ivp_quat_set_div_unit_quat(&r, &a, &b);
     static const double div_ab[4] = { 0x1.5c5b1168f4f9ep-1, -0x1.06ef675857888p-1,
@@ -466,8 +514,17 @@ IVP_TEST(ref_quat_matrix_conversions) {
 
 /* ═══ IVP_U_Point / IVP_U_Float_Point ═══════════════════════════════════ */
 
+#if IVP_X87_ARITHMETIC
+static const double PT_NORM[3] = { 0x1.b14c08172f743p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf8ap-1 };
+static const double PT_FAST_NORM[3] = { 0x1.b14c08172f743p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf89p-1 };
+static const double FP_NORM[3] = { 0x1.b14c08p-4, -0x1.32eb3p-1, 0x1.963746p-1 };
+static const double FP_NORM_LENGTH = 0x1.6affc2dddff0dp+1;
+#else
 static const double PT_NORM[3] = { 0x1.b14c08172f744p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf8ap-1 };
+#define PT_FAST_NORM PT_NORM
 static const double FP_NORM[3] = { 0x1.b14c0ap-4, -0x1.32eb3p-1, 0x1.963748p-1 };
+static const double FP_NORM_LENGTH = 0x1.6affc1f076d0ep+1;
+#endif
 
 IVP_TEST(ref_point_normize_lengths) {
     const ivp_vec3r_t p = {{ (ivp_real_t)0.3f, (ivp_real_t)-1.7f, (ivp_real_t)2.25f }};
@@ -476,11 +533,11 @@ IVP_TEST(ref_point_normize_lengths) {
     V_EXACT(q, PT_OR_FP(PT_NORM, FP_NORM));
     q = p;
     IVP_ASSERT_EQ(ivp_vec3r_fast_normalize(&q), IVP_OK);
-    V_EXACT(q, PT_OR_FP(PT_NORM, FP_NORM));
+    V_EXACT(q, PT_OR_FP(PT_FAST_NORM, FP_NORM));
     q = p;
     ivp_real_t len = ivp_vec3r_normalize_and_length(&q);
     V_EXACT(q, PT_OR_FP(PT_NORM, FP_NORM));
-    REF_EQ(len, PT_OR_FP(0x1.6affc2dddff0dp+1, 0x1.6affc1f076d0ep+1));
+    REF_EQ(len, PT_OR_FP(0x1.6affc2dddff0dp+1, FP_NORM_LENGTH));
     /* fast_real_length is an exact sqrt (IVP_Fast_Math::sqrt == ::sqrt) */
     REF_EQ(ivp_vec3r_fast_length(&p), PT_OR_FP(0x1.6affc2dddff0dp+1, 0x1.6affc1f076d0fp+1));
     REF_EQ(ivp_vec3r_length(&p), PT_OR_FP(0x1.6affc2dddff0dp+1, 0x1.6affc1f076d0fp+1));
@@ -496,7 +553,7 @@ IVP_TEST(ref_point_normize_lengths) {
     ivp_vec3f_fast_normize(&g);
     V_EXACT(g, FP_NORM);
     g = f;
-    EXACT(ivp_vec3f_real_length_plus_normize(&g), 0x1.6affc1f076d0ep+1);
+    EXACT(ivp_vec3f_real_length_plus_normize(&g), FP_NORM_LENGTH);
     V_EXACT(g, FP_NORM);
 
     ivp_vec3d_t d = {{ 0.3f, -1.7f, 2.25f }};
@@ -506,7 +563,7 @@ IVP_TEST(ref_point_normize_lengths) {
     V_EXACT(e, PT_NORM);
     e = d;
     ivp_vec3d_fast_normize(&e);
-    V_EXACT(e, PT_NORM);
+    V_EXACT(e, PT_FAST_NORM);
     e = d;
     EXACT(ivp_vec3d_real_length_plus_normize(&e), 0x1.6affc2dddff0dp+1);
     V_EXACT(e, PT_NORM);
@@ -584,7 +641,16 @@ IVP_TEST(ref_point_helpers) {
     /* IVP_U_Point variant stores the cross product through IVP_FLOAT */
     static const double pt_cn[3] = { 0x1.438ab62982d46p-5, 0x1.997b874ee9a8dp-1, 0x1.32b0ce0ef29a9p-1 };
     static const double fp_cn[3] = { 0x1.438abep-5, 0x1.997b86p-1, 0x1.32b0cep-1 };
+#if IVP_X87_ARITHMETIC
+    static const double cross_x87[3] = { 0x1.438ab62982d47p-5, 0x1.997b874ee9a8dp-1, 0x1.32b0ce0ef29a9p-1 };
+#ifdef IVP_REAL_DOUBLE
+    V_EXACT(c, cross_x87);
+#else
+    V_LIBM_EQ(c, fp_cn);
+#endif
+#else
     V_EXACT(c, PT_OR_FP(pt_cn, fp_cn));
+#endif
 
     const ivp_vec3r_t t0 = {{ (ivp_real_t)0.1f, (ivp_real_t)0.2f, (ivp_real_t)0.3f }};
     const ivp_vec3r_t t1 = {{ (ivp_real_t)1.5f, (ivp_real_t)-0.5f, (ivp_real_t)0.25f }};
@@ -637,9 +703,13 @@ IVP_TEST(ref_matrix3_orthogonize_handedness) {
         0x1.df16a3c2d7334p-1, -0x1.293447851de38p-2, 0x1.9a92ec00ecdabp-3,
         0x1.447e31bd1370ep-2, 0x1.e2dfb2ef97a9ep-1, -0x1.9c0df4b535f7ep-4,
         -0x1.492c74d2520bp-3, 0x1.41aa16416bf8p-3, 0x1.f2e76244029ccp-1 };
-    M_EQ(m, on);
+    NORMALIZED_MATRIX_EQ(m, on);
     /* handedness: right-handed result (reference det = 0x1.ffff7a4775526p-1) */
+#if IVP_X87_ARITHMETIC
+    IVP_ASSERT_NEAR(ivp_mat3r_determinant(&m), 0x1.ffff7a4775526p-1, 2e-7);
+#else
     REF_NEAR(ivp_mat3r_determinant(&m), 0x1.ffff7a4775526p-1, 1e-6);
+#endif
     IVP_ASSERT_TRUE(ivp_mat3r_determinant(&m) > 0);
 
     /* identity stays identity (old libivp version produced det == -1) */
@@ -716,32 +786,32 @@ IVP_TEST(ref_matrix3_init_normized) {
         -0x1.192d4259dc353p-1, 0x1.b14c08172f744p-4, 0x1.a870de9de2254p-1,
         0x1.4286bc53dd825p-1, -0x1.32eb3029937f9p-1, 0x1.f9a79f5be8d38p-2,
         0x1.192d4259dc353p-1, 0x1.96374686ecf8ap-1, 0x1.0cddb4ea129b9p-2 };
-    M_EQ(nm, cy);
+    NORMALIZED_MATRIX_EQ(nm, cy);
     ivp_mat3r_init_normized_row(&nm, &v, IVP_INDEX_Z);
     static const double rz[9] = {
         0x1.a870de9de2254p-1, 0x1.f9a79f5be8d38p-2, 0x1.0cddb4ea129b9p-2,
         -0x1.192d4259dc353p-1, 0x1.4286bc53dd825p-1, 0x1.192d4259dc353p-1,
         0x1.b14c08172f744p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf8ap-1 };
-    M_EQ(nm, rz);
+    NORMALIZED_MATRIX_EQ(nm, rz);
     ivp_mat3r_init_normized_col2(&nm, &v, IVP_INDEX_X, &vc);
     static const double c2x[9] = {
         0x1.b14c08172f744p-4, 0x1.fcb9b59e5479p-1, 0x1.438ab68ac0f2ep-5,
         -0x1.32eb3029937f9p-1, 0x1.066634f07ce46p-5, 0x1.997b87c5d3a9ap-1,
         0x1.96374686ecf8ap-1, -0x1.bb8309faec75p-4, 0x1.32b0cd6fc6ed9p-1 };
-    M_EQ(nm, c2x);
+    NORMALIZED_MATRIX_EQ(nm, c2x);
     ivp_mat3r_init_normized_row2(&nm, &v, IVP_INDEX_Z, &vc);
     static const double r2z[9] = {
         0x1.fcb9b59e5479p-1, 0x1.066634f07ce46p-5, -0x1.bb8309faec75p-4,
         0x1.438ab68ac0f2ep-5, 0x1.997b87c5d3a9ap-1, 0x1.32b0cd6fc6ed9p-1,
         0x1.b14c08172f744p-4, -0x1.32eb3029937f9p-1, 0x1.96374686ecf8ap-1 };
-    M_EQ(nm, r2z);
+    NORMALIZED_MATRIX_EQ(nm, r2z);
     const ivp_vec3r_t vd = {{ 0.5f, 0.0f, 0.5f }}; /* triggers the fallback branch */
     ivp_mat3r_init_normized_col(&nm, &vd, IVP_INDEX_Z);
     static const double fb[9] = {
         -0x1.a20bd700c2c3ep-2, 0x1.279a74590331dp-1, 0x1.6a09e667f3bccp-1,
         -0x1.a20bd700c2c3ep-1, -0x1.279a74590331dp-1, 0.0,
         0x1.a20bd700c2c3ep-2, -0x1.279a74590331dp-1, 0x1.6a09e667f3bccp-1 };
-    M_EQ(nm, fb);
+    NORMALIZED_MATRIX_EQ(nm, fb);
 }
 
 IVP_TEST(ref_matrix3_rotation_distance_mi2mult) {
@@ -889,7 +959,7 @@ IVP_TEST(ref_matrix_products_rotate_interpolate) {
     LIBM_NEAR(ivp_transform_quad_distance(&m, &m2), 0x1.1fde09bae323ep+5, 1e-4);
 }
 
-int main(void) {
+static int run_math_reference_tests(void) {
     IVP_REGISTER(ref_isqrt_double);
     IVP_REGISTER(ref_isqrt_float_and_inline_double);
     IVP_REGISTER(ref_inline_math_approximations);
@@ -914,4 +984,15 @@ int main(void) {
     IVP_REGISTER(ref_matrix_init_rot_multiple_and_invert);
     IVP_REGISTER(ref_matrix_products_rotate_interpolate);
     IVP_RUN_ALL();
+}
+
+int main(void) {
+#if IVP_X87_ARITHMETIC || IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    const uint16_t precision = ivp_x87_enter_step();
+    const int result = run_math_reference_tests();
+    ivp_x87_leave_step(precision);
+    return result;
+#else
+    return run_math_reference_tests();
+#endif
 }

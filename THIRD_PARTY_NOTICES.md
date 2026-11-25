@@ -3,6 +3,12 @@
 libivp contains or uses the following third-party code.  Copyright and
 license notices are kept with the relevant source or reproduced here.
 
+## libx87
+
+`third_party/libx87` is the x87 arithmetic library used by the C++ IVP engine.
+Its license and the licenses for its bundled SoftFloat sources are kept in
+the submodule.
+
 ## Qhull
 
 - Default build (`IVP_REENTRANT_QHULL=OFF`): `src/builder/qhull_ipion/`
@@ -19,10 +25,9 @@ license notices are kept with the relevant source or reproduced here.
     distance sum in `qh_distplane`, binary64 stores in `qh_backnormal` and
     `qh_sethyperplane_gauss`) and guarded a diagnostic against a null error
     stream.
-  - libivp (doyaGu), 2026-11-09: compiled as C17 instead of C++ so a default
-    libivp build matches the reference engine's default build; the reference
-    engine's optional software x87 arithmetic was removed, IVP's message,
-    memory and integer helpers are provided by `qhull_ivp.h`, a C++
+  - libivp (doyaGu), 2026-11-09: ported the bundled hull builder to C17.
+    The hull builder uses native arithmetic. IVP's message, memory and
+    integer helpers are provided by `qhull_ivp.h`. A C++
     functional cast and a C++ overload declaration were rewritten in C, and
     two unused parameters were named.
 - `IVP_REENTRANT_QHULL=ON`: not vendored.  CMake fetches the immutable
