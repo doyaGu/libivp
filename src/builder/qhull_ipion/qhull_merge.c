@@ -551,7 +551,7 @@ boolT qh_checkzero (boolT testall) {
   >-------------------------------</a><a name="compareangle">-</a>
   
   qh_compareangle( angle1, angle2 )
-    used to order merges by angle
+    used by qsort() to order merges by angle
 */
 static int qh_compareangle(const void *p1, const void *p2) {
   mergeT *a= *((mergeT **)p1), *b= *((mergeT **)p2);
@@ -563,7 +563,7 @@ static int qh_compareangle(const void *p1, const void *p2) {
   >-------------------------------</a><a name="comparemerge">-</a>
   
   qh_comparemerge( merge1, merge2 )
-    used to order merges
+    used by qsort() to order merges
 */
 static int qh_comparemerge(const void *p1, const void *p2) {
   mergeT *a= *((mergeT **)p1), *b= *((mergeT **)p2);
@@ -571,6 +571,7 @@ static int qh_comparemerge(const void *p1, const void *p2) {
   return (a->type - b->type);
 } /* comparemerge */
 
+#if IVP_X87_ARITHMETIC
 static void qh_swap_merges(mergeT **items, int a, int b) {
   mergeT *entry = items[a];
   items[a] = items[b];
@@ -629,11 +630,16 @@ static void qh_sort_merge_range(mergeT **items, int count,
     qh_swap_merges(items, highest, last);
   }
 }
+#endif
 
 static void qh_sort_merge_candidates(int count) {
   mergeT **items = SETaddr_(qh facet_mergeset, mergeT);
   int (*compare)(const void *, const void *) = qh ANGLEmerge ? qh_compareangle : qh_comparemerge;
+#if IVP_X87_ARITHMETIC
   qh_sort_merge_range(items, count, compare);
+#else
+  qsort(items, count, sizeof(mergeT *), compare);
+#endif
 }
 
 /*-<a                             href="qh-c.htm#merge"
