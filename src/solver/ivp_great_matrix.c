@@ -629,18 +629,36 @@ static inline int gm_misalign(int off)
     return off & (GM_ALIGN_ELEMS - 1);
 }
 
+/* The VecFPU alignment mask and block size select the row entries before
+ * arithmetic is applied. A partial block uses the complete row window. */
+static inline int gm_add_row_window(int *target_off, int *source_off, int size, bool aligned)
+{
+    if (!aligned) {
+        int shift = gm_misalign(*source_off);
+        *target_off -= gm_misalign(*target_off);
+        *source_off -= shift;
+        size += GM_SIZE_ADJUST(shift);
+    }
+    return size > 0 ? ivp_gm_aligned_len(size) : 0;
+}
+
+static inline int gm_scale_row_window(int *off, int size, bool aligned)
+{
+    if (!aligned) {
+        int shift = gm_misalign(*off);
+        *off -= shift;
+        size += GM_SIZE_ADJUST(shift);
+    }
+    return size > 0 ? ivp_gm_aligned_len(size) : 0;
+}
+
 /* ── IVP_VecFPU ─────────────────────────────────────────────────────────── */
 
 void ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
                                  const double *source_base, int source_off,
                                  double factor, int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(source_off);
-        target_off -= gm_misalign(target_off);
-        size += GM_SIZE_ADJUST(shift);
-        source_off -= shift;
-    }
+    size = gm_add_row_window(&target_off, &source_off, size, aligned);
     double *t = target_base + target_off;
     const double *s = source_base + source_off;
     /* Blocks never overlap (target and source rows are >= one aligned row
@@ -673,11 +691,7 @@ void ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
 void ivp_vecfpu_multiply_row(double *base, int off, double factor,
                              int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(off);
-        size += GM_SIZE_ADJUST(shift);
-        off -= shift;
-    }
+    size = gm_scale_row_window(&off, size, aligned);
     double *t = base + off;
     for (int i = size; i > 0; i -= GM_BLOCK) {
         for (int k = 0; k < GM_BLOCK; k++) {
@@ -890,19 +904,27 @@ void ivp_gmmz_matrix_out_before_gauss(const ivp_gmmz_t *m)
     }
 }
 
+static inline void gm_add_scaled_row(double *matrix, int target, int source,
+                                     double factor, int count, bool aligned)
+{
+#if IVP_X87_ARITHMETIC
+    count = gm_add_row_window(&target, &source, count, aligned);
+    ivp_x87_add_scaled_row(matrix + target, matrix + source, factor, count);
+#else
+    ivp_vecfpu_add_multiple_row(matrix, target, matrix, source, factor, count, aligned);
+#endif
+}
+
 /* add factor * line `first` to line `second` (entries left of `first` in
  * both lines are zero) */
 void ivp_gmmz_add_multiple_line(ivp_gmmz_t *m, int first, int second, double factor)
 {
     int arl = m->aligned_row_len;
+    gm_add_scaled_row(m->matrix_values, second * arl + first, first * arl + first,
+                      factor, m->columns - first, false);
 #if IVP_X87_ARITHMETIC
-    ivp_x87_add_scaled_row(m->matrix_values + second * arl + first,
-                           m->matrix_values + first * arl + first, factor, m->columns - first);
     ivp_x87_add_scaled_row(m->desired_vector + second, m->desired_vector + first, factor, 1);
 #else
-    ivp_vecfpu_add_multiple_row(m->matrix_values, second * arl + first,
-                                m->matrix_values, first * arl + first,
-                                factor, m->columns - first, false);
     m->desired_vector[second] = GM_FMA(m->desired_vector[first], factor,
                                        m->desired_vector[second]);
 #endif
@@ -1003,7 +1025,7 @@ void ivp_gmmz_exchange_rows(ivp_gmmz_t *m, int a, int b)
     m->desired_vector[b] = h;
 }
 
-#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
+#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4 && !IVP_X87_ARITHMETIC
 #define GMMZ_BATCHED_ROWS_MIN_COLUMNS 64
 
 /* Apply the same pivot row to two target rows while loading each source
@@ -1202,7 +1224,7 @@ static void gmmz_transform_batched_rows(ivp_gmmz_t *m)
 /* Gauss: upper triangle with zeros in the lower part (always pivots) */
 void ivp_gmmz_transform_to_lower_null_triangle(ivp_gmmz_t *m)
 {
-#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
+#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4 && !IVP_X87_ARITHMETIC
     if (m->columns >= GMMZ_BATCHED_ROWS_MIN_COLUMNS) {
         gmmz_transform_batched_rows(m);
         return;
@@ -1639,6 +1661,20 @@ void ivp_incr_lu_destroy(ivp_incr_lu_t *lu, const ivp_allocator_t *alloc)
     memset(lu, 0, sizeof(*lu));
 }
 
+static inline void gm_scale_rows_by_reciprocal(double divisor,
+                                                double *lower, int lower_count,
+                                                double *upper, int upper_count)
+{
+#if IVP_X87_ARITHMETIC
+    ivp_x87_scale_rows_by_reciprocal(divisor, lower, lower_count, upper, upper_count);
+#else
+    const double reciprocal = 1.0 / divisor;
+    ivp_vecfpu_multiply_row(lower, 0, reciprocal, lower_count, true);
+    if (upper_count)
+        ivp_vecfpu_multiply_row(upper, 0, reciprocal, upper_count, true);
+#endif
+}
+
 ivp_result_t ivp_incr_lu_normize_row_L(ivp_incr_lu_t *lu, int row_nr)
 {
     int row_base = row_nr * lu->aligned_row_len;
@@ -1647,12 +1683,8 @@ ivp_result_t ivp_incr_lu_normize_row_L(ivp_incr_lu_t *lu, int row_nr)
     if (fabs(val) < lu->matrix_eps) {
         return IVP_GM_FAULT;
     }
-#if IVP_X87_ARITHMETIC
-    ivp_x87_normalize_lu_lower_row(base, lu->n_sub, row_nr);
-#else
-    double inv_val = 1.0 / val;
-    ivp_vecfpu_multiply_row(lu->L_matrix, row_base, inv_val, lu->n_sub, false);
-#endif
+    const int lower_count = gm_scale_row_window(&row_base, lu->n_sub, false);
+    gm_scale_rows_by_reciprocal(val, lu->L_matrix + row_base, lower_count, NULL, 0);
     base[row_nr] = 1.0;
     return IVP_OK;
 }
@@ -1664,14 +1696,12 @@ ivp_result_t ivp_incr_lu_normize_row(ivp_incr_lu_t *lu, int row_nr)
     if (fabs(val) < lu->matrix_eps) {
         return IVP_GM_FAULT;
     }
-#if IVP_X87_ARITHMETIC
-    ivp_x87_normalize_lu_pivot(lu->L_matrix + row_base, lu->U_matrix + row_base, lu->n_sub, row_nr);
-#else
-    double inv_val = 1.0 / val;
-    ivp_vecfpu_multiply_row(lu->L_matrix, row_base, inv_val, lu->n_sub, false);
-    ivp_vecfpu_multiply_row(lu->U_matrix, row_base + row_nr + 1, inv_val,
-                            lu->n_sub - row_nr - 1, false);
-#endif
+    int lower_off = row_base;
+    int upper_off = row_base + row_nr + 1;
+    const int lower_count = gm_scale_row_window(&lower_off, lu->n_sub, false);
+    const int upper_count = gm_scale_row_window(&upper_off, lu->n_sub - row_nr - 1, false);
+    gm_scale_rows_by_reciprocal(val, lu->L_matrix + lower_off, lower_count,
+                                lu->U_matrix + upper_off, upper_count);
     lu->U_matrix[row_base + row_nr] = 1.0;
     return IVP_OK;
 }
@@ -1705,17 +1735,6 @@ void ivp_incr_lu_pivot_search(ivp_incr_lu_t *lu, int col_nr)
     }
 }
 
-static void ivp_incr_lu_add_scaled_row(double *matrix, int target, int source,
-                                       double factor, int count, bool aligned)
-{
-#if IVP_X87_ARITHMETIC
-    (void)aligned;
-    ivp_x87_add_scaled_row(matrix + target, matrix + source, factor, count);
-#else
-    ivp_vecfpu_add_multiple_row(matrix, target, matrix, source, factor, count, aligned);
-#endif
-}
-
 /* add row to a row more upwards (unused by the reference solvers) */
 void ivp_incr_lu_add_neg_row_upwards(ivp_incr_lu_t *lu, int row_down, int dest_row,
                                      double factor)
@@ -1723,9 +1742,9 @@ void ivp_incr_lu_add_neg_row_upwards(ivp_incr_lu_t *lu, int row_down, int dest_r
     int arl = lu->aligned_row_len;
     int base_a = row_down * arl;
     int base_b = dest_row * arl;
-    ivp_incr_lu_add_scaled_row(lu->U_matrix, base_b + row_down + 1, base_a + row_down + 1,
+    gm_add_scaled_row(lu->U_matrix, base_b + row_down + 1, base_a + row_down + 1,
                               -factor, lu->n_sub - row_down - 1, false);
-    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+    gm_add_scaled_row(lu->L_matrix, base_b, base_a,
                               -factor, lu->n_sub, true);
     lu->L_matrix[base_b + row_down] = 0.0;
 }
@@ -1736,9 +1755,9 @@ void ivp_incr_lu_add_neg_row_to_row(ivp_incr_lu_t *lu, int pivot_row, int dest_r
 {
     int base_a = pivot_row * lu->aligned_row_len;
     int base_b = dest_row * lu->aligned_row_len;
-    ivp_incr_lu_add_scaled_row(lu->U_matrix, base_b + pivot_row + 1, base_a + pivot_row + 1,
+    gm_add_scaled_row(lu->U_matrix, base_b + pivot_row + 1, base_a + pivot_row + 1,
                               -factor, lu->n_sub - pivot_row - 1, false);
-    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+    gm_add_scaled_row(lu->L_matrix, base_b, base_a,
                               -factor, lu->n_sub, false);
     lu->U_matrix[base_b + pivot_row] = 0.0;
 }
@@ -1747,7 +1766,7 @@ void ivp_incr_lu_subtract_row_L(ivp_incr_lu_t *lu, int from, int dest, double fa
 {
     int base_a = from * lu->aligned_row_len;
     int base_b = dest * lu->aligned_row_len;
-    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+    gm_add_scaled_row(lu->L_matrix, base_b, base_a,
                               -factor, lu->n_sub, false);
     lu->L_matrix[base_b + from] = 0.0;
 }
@@ -1949,7 +1968,7 @@ void ivp_incr_lu_add_neg_row_L(ivp_incr_lu_t *lu, int source_row, int dest_row,
 {
     int base_a = source_row * lu->aligned_row_len;
     int base_b = dest_row * lu->aligned_row_len;
-    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+    gm_add_scaled_row(lu->L_matrix, base_b, base_a,
                               -factor, lu->n_sub, false);
 }
 

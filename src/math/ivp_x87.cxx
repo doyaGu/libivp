@@ -1128,19 +1128,14 @@ bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
     return true;
 }
 
-void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot)
+void ivp_x87_scale_rows_by_reciprocal(double divisor,
+                                       double *lower, int lower_count,
+                                       double *upper, int upper_count)
 {
     ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
-    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(lower[pivot]));
-    ivp_x87_scale_row(fp, lower, count, reciprocal);
-}
-
-void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot)
-{
-    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
-    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(upper[pivot]));
-    ivp_x87_scale_row(fp, lower, count, reciprocal);
-    ivp_x87_scale_row(fp, upper + pivot + 1, count - pivot - 1, reciprocal);
+    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(divisor));
+    ivp_x87_scale_row(fp, lower, lower_count, reciprocal);
+    ivp_x87_scale_row(fp, upper, upper_count, reciprocal);
 }
 
 double ivp_x87_normalize_contact_equations(double *matrix, double *desired, int count, int row_stride,

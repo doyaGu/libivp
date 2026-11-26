@@ -121,10 +121,16 @@ IVP_TEST(gmmz_solve_4x4_matches_reference_row_windows)
     gmmz_fill(&m, A, b);
     IVP_ASSERT_EQ(ivp_gmmz_solve(&m), IVP_OK);
 #if IVP_GM_VECFPU_SIZE == 4
-    IVP_ASSERT_TRUE(m.result_vector[0] == -0.13098812544795924);
-    IVP_ASSERT_TRUE(m.result_vector[1] == 0.1288669778974488);
-    IVP_ASSERT_TRUE(m.result_vector[2] == 0.43450593727602038);
-    IVP_ASSERT_TRUE(m.result_vector[3] == 0.52607364934234735);
+    const double expected[] = {
+        -0.13098812544795924, 0.1288669778974488, 0.43450593727602038, 0.52607364934234735
+    };
+    for (int i = 0; i < 4; ++i) {
+#if IVP_X87_ARITHMETIC
+        IVP_ASSERT_NEAR(m.result_vector[i], expected[i], 1e-15);
+#else
+        IVP_ASSERT_EQ(m.result_vector[i], expected[i]);
+#endif
+    }
 #else
     for (int i = 0; i < 4; i++) {
         double r = -b[i];
@@ -133,6 +139,58 @@ IVP_TEST(gmmz_solve_4x4_matches_reference_row_windows)
     }
 #endif
     ivp_gmmz_destroy(&m, NULL);
+}
+
+/* Use exact operands to test the coefficient bounds in either arithmetic backend. */
+IVP_TEST(gauss_row_update_uses_reference_window)
+{
+    double matrix[16];
+    double desired[4] = {1.0, 2.0, 3.0, 4.0};
+    for (int i = 0; i < 16; ++i)
+        matrix[i] = (double)(i + 1);
+
+    ivp_gmmz_t m = {0};
+    m.columns = 4;
+    m.aligned_row_len = 4;
+    m.matrix_values = matrix;
+    m.desired_vector = desired;
+    ivp_gmmz_add_multiple_line(&m, 1, 2, 2.0);
+
+#if IVP_GM_VECFPU_SIZE == 4
+    const double expected[16] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 19, 22, 25, 28, 51, 58, 65, 72
+    };
+#else
+    const double expected[16] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 22, 25, 28, 13, 14, 15, 16
+    };
+#endif
+    for (int i = 0; i < 16; ++i)
+        IVP_ASSERT_EQ(matrix[i], expected[i]);
+    IVP_ASSERT_EQ(desired[2], 7.0);
+}
+
+IVP_TEST(incr_lu_pivot_normalization_uses_reference_window)
+{
+    double lower[16], upper[16];
+    for (int i = 0; i < 16; ++i)
+        lower[i] = upper[i] = (double)(2 * (i + 1));
+    upper[10] = 2.0;
+    ivp_incr_lu_t lu = {0};
+    lu.L_matrix = lower;
+    lu.U_matrix = upper;
+    lu.aligned_row_len = lu.n_sub = 4;
+    lu.matrix_eps = 1.0e-6;
+    IVP_ASSERT_EQ(ivp_incr_lu_normize_row(&lu, 2), IVP_OK);
+
+    for (int i = 0; i < 16; ++i) {
+        const double original = (double)(2 * (i + 1));
+        const double expected_lower = i >= 8 && i <= 11 ? original * 0.5 : original;
+        const bool upper_scaled = i == 11 || (IVP_GM_VECFPU_SIZE == 4 && (i == 12 || i == 13));
+        const double expected_upper = i == 10 ? 1.0 : (upper_scaled ? original * 0.5 : original);
+        IVP_ASSERT_EQ(lower[i], expected_lower);
+        IVP_ASSERT_EQ(upper[i], expected_upper);
+    }
 }
 
 IVP_TEST(gmmz_mult_and_mult_aligned)
@@ -770,13 +828,13 @@ IVP_TEST(gmmz_copy_to_sub_matrix_reads_packed_source)
 #if IVP_X87_ARITHMETIC
 IVP_TEST(incr_lu_normalization_retains_pivot_reciprocal)
 {
-    double lower[] = {3.0, 3.0, 0.0, 1.0};
-    double upper[] = {10.0, 6.0, 0.0, 1.0};
+    double lower[8] = {3.0, 3.0};
+    double upper[8] = {10.0, 6.0};
     ivp_incr_lu_t lu = {0};
     lu.matrix_eps = 1.0e-6;
     lu.L_matrix = lower;
     lu.U_matrix = upper;
-    lu.aligned_row_len = 2;
+    lu.aligned_row_len = ivp_gm_aligned_len(2);
     lu.n_sub = 2;
 
     IVP_ASSERT_EQ(ivp_incr_lu_normize_row(&lu, 0), IVP_OK);
@@ -807,20 +865,19 @@ IVP_TEST(gauss_back_substitution_retains_residual)
 
 IVP_TEST(incr_lu_retains_extended_products_and_reductions)
 {
-    double lower[] = {
-        1.0, -0x1p-55, 0.0,
-        0.0, 1.0, 0.0,
-        0.0, 0.0, 1.0,
-    };
-    double upper[] = {
-        1.0, 1.0, -0x1p-55,
-        0.0, 1.0, 0.0,
-        0.0, 0.0, 1.0,
-    };
+    const int stride = ivp_gm_aligned_len(3);
+    double lower[16] = {0};
+    double upper[16] = {0};
+    for (int row = 0; row < 3; ++row)
+        lower[row * stride + row] = upper[row * stride + row] = 1.0;
+    lower[1] = -0x1p-55;
+    upper[1] = 1.0;
+    upper[2] = -0x1p-55;
     double input[] = {1.0, 1.0, 1.0};
     double multiplied[3], temp[3], result[3];
     ivp_incr_lu_t lu = {0};
-    lu.aligned_row_len = lu.n_sub = 3;
+    lu.aligned_row_len = stride;
+    lu.n_sub = 3;
     lu.L_matrix = lower;
     lu.U_matrix = upper;
     lu.input_vec = input;
@@ -835,9 +892,9 @@ IVP_TEST(incr_lu_retains_extended_products_and_reductions)
 
     const double factor = 1.0 + 0x1p-31;
     upper[2] = 1.0 - 0x1p-31;
-    upper[5] = 1.0;
+    upper[stride + 2] = 1.0;
     ivp_incr_lu_add_neg_row_to_row(&lu, 0, 1, factor);
-    IVP_ASSERT_EQ(upper[5], 0x1p-62);
+    IVP_ASSERT_EQ(upper[stride + 2], 0x1p-62);
 }
 #endif
 
@@ -849,6 +906,8 @@ int main(void)
     IVP_REGISTER(gmmz_solve_singular_consistent_picks_zero);
     IVP_REGISTER(gmmz_solve_inconsistent_faults_and_clears);
     IVP_REGISTER(gmmz_solve_4x4_matches_reference_row_windows);
+    IVP_REGISTER(gauss_row_update_uses_reference_window);
+    IVP_REGISTER(incr_lu_pivot_normalization_uses_reference_window);
     IVP_REGISTER(gmmz_mult_and_mult_aligned);
     IVP_REGISTER(gmmz_check_unequation_line);
     IVP_REGISTER(gmmz_fill_from_bigger_matrix);

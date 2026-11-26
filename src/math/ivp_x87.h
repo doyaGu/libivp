@@ -84,8 +84,9 @@ double ivp_x87_divide_double(double numerator, double denominator);
 double ivp_x87_multiply_double(double left, double right);
 bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
                                        int pivot, int count, double epsilon);
-void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot);
-void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot);
+void ivp_x87_scale_rows_by_reciprocal(double divisor,
+                                       double *lower, int lower_count,
+                                       double *upper, int upper_count);
 double ivp_x87_normalize_contact_equations(double *matrix, double *desired, int count, int row_stride,
                                            double max_diagonal, double max_desired);
 bool ivp_x87_solve_tangent_impulses(double m00_value, double m01_value, double m11_value, const float span[2],
