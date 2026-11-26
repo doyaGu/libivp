@@ -802,12 +802,28 @@ if (IVP_BUILD_TESTS)
     target_include_directories(test_matrix_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_deferred_deletion tests/test_deferred_deletion.c)
     target_include_directories(test_deferred_deletion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    # These generated cases include libm results and their stored output bits
-    # come from the reference platform.  Keep this golden-data comparison on
-    # that platform (macOS arm64); portable solver behavior is covered by
-    # test_great_matrix_port on every platform.
+    # The solver fixtures were generated with native binary64 on macOS arm64.
+    # In an x87 build, compile the native solver for this fixture and test the
+    # linked x87 solver separately through test_great_matrix_port.
     if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-        ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
+        if (IVP_X87_LIBRARY)
+            add_executable(test_lcs_parity
+                    tests/test_lcs_parity.c
+                    src/base/ivp_allocator.c
+                    src/base/ivp_arena.c
+                    src/base/ivp_assert.c
+                    src/base/ivp_message.c
+                    src/solver/ivp_great_matrix.c
+                    src/solver/ivp_linear_constraint_solver.c)
+            target_include_directories(test_lcs_parity PRIVATE include src tests)
+            target_compile_definitions(test_lcs_parity PRIVATE
+                    $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
+            ivp_enable_c_atomics(test_lcs_parity)
+            target_link_libraries(test_lcs_parity PRIVATE m)
+            add_test(NAME test_lcs_parity COMMAND test_lcs_parity)
+        else ()
+            ivp_add_test(test_lcs_parity tests/test_lcs_parity.c)
+        endif ()
         ivp_apply_strict_fp(test_lcs_parity)
         set(IVP_HAS_LCS_PARITY_TEST ON)
     endif ()
