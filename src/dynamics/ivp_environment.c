@@ -2425,9 +2425,23 @@ void ivp_environment_simulate_one_psi_owned(ivp_environment_t *env)
         const ivp_time_t base = tm->base_time;
         const double relative = (double)tm->min_hash.elems[tm->psi_event.index].value;
         const ivp_time_t next_base = base + relative;
-        const double next_relative = (double)(float)ivp_time_diff(next_base + delta, next_base);
-        while (until - next_base > next_relative) until = nextafter(until, -INFINITY);
-        while (!(until - base > relative)) until = nextafter(until, INFINITY);
+        /* Predict the binary64 event time and the binary32 queued delay. */
+        const volatile ivp_time_t next_time = next_base + delta;
+        const volatile float next_relative = (float)ivp_time_diff(next_time, next_base);
+        if (ivp_time_diff(until, next_base) > (double)next_relative) {
+            until = next_base + (double)next_relative;
+            if (ivp_time_diff(until, next_base) > (double)next_relative)
+                until = nextafter(until, -INFINITY);
+        }
+        if (ivp_time_diff(until, base) <= relative) {
+            until = base + relative;
+            if (ivp_time_diff(until, base) <= relative) {
+                /* Advance the relative time too, even if the sum cancels. */
+                until = base + nextafter(relative, INFINITY);
+                if (ivp_time_diff(until, base) <= relative)
+                    until = nextafter(until, INFINITY);
+            }
+        }
         if (until < env->current_time) until = env->current_time;
     }
     env_set_statistics_simulation_time(env, until);
