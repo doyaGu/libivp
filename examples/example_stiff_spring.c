@@ -2,23 +2,23 @@
  *
  * Two side-by-side spring pairs, both start displaced (stretched 1.9 m).
  *   Left:  regular spring (ivp_actuator_spring): an explicit force,
- *          k = 5000 N/m, damping 20 N*s/m on the 2 kg cube.
+ *          k = 5000 N/m, damping 20 N*s/m on the 2 kg block.
  *   Right: stiff spring (ivp_controller_stiff_spring): an implicit
  *          velocity correction with DIMENSIONLESS constants in [0..1]
  *          (constant 0.5 = half of the length error corrected per PSI,
- *          about 0.5 * m / dt^2 = 4400 N/m for this cube at the 1/66 s PSI;
+ *          about 0.5 * m / dt^2 = 4400 N/m for this block at the 1/66 s PSI;
  *          damping 0.3).
  * The initial snap exceeds the 50 m/s anomaly limit and is clamped (anomaly
  * counter).  The explicit spring rings at 8 Hz (omega * dt = 0.76 at this
  * PSI, stable below 2), the implicit one converges within a few PSIs without
- * overshoot.  A heavy 8 kg ball then drops onto each cube: the implicit
+ * overshoot.  A heavy 8 kg ball then drops onto each block: the implicit
  * spring carries it steadily, the explicit one keeps ringing and the ball
- * chatters on its cube (and is usually thrown off).
+ * chatters on its block (and is usually thrown off).
  *
  * (The stiff spring used to get k = 5000 / damping 20 as if it were in N/m:
  *  it then over-corrected the length error 5000 times per PSI and the
  *  damping factor k + d * (1 - k) = -94980 amplified the relative velocity,
- *  so the cube reached more than 1e5 m/s in a few PSIs -- the reference debug
+ *  so the block reached more than 1e5 m/s in a few PSIs -- the reference debug
  *  build rejects that in IVP_Core::core_plausible_check.  The balls also
  *  started right above the ceiling mounts and just landed on them.)
  *
@@ -37,9 +37,12 @@
 #define STIFF_DAMP  0.3        /* dimensionless [0..1] */
 #define REST_LEN    3.0
 #define MAX_SPEED   50.0       /* anomaly limit */
+#define BLOCK_HALF_WIDTH   1.6
+#define BLOCK_HALF_HEIGHT  0.8
+#define BALL_RADIUS        0.6
 
 typedef struct stiff_demo {
-    ivp_object_t            *ground, *anchor_l, *anchor_r, *cube_l, *cube_r, *ball_l, *ball_r;
+    ivp_object_t            *ground, *anchor_l, *anchor_r, *block_l, *block_r, *ball_l, *ball_r;
     ivp_spring_state_t       reg_spring;
     ivp_stiff_spring_state_t stiff_spring;
     float                    max_reg_ext, max_stiff_ext;    /* whole run */
@@ -75,8 +78,8 @@ static void stiff_update(demo_app_t *app, demo_viewer_t *v, int frame)
         track_max(&s->late_reg, reg_ext);
         track_max(&s->late_stiff, stiff_ext);
     }
-    track_max(&s->max_speed_l, demo_object_speed(s->cube_l));
-    track_max(&s->max_speed_r, demo_object_speed(s->cube_r));
+    track_max(&s->max_speed_l, demo_object_speed(s->block_l));
+    track_max(&s->max_speed_r, demo_object_speed(s->block_r));
 }
 
 static void stiff_reset(demo_app_t *app)
@@ -100,8 +103,8 @@ static void stiff_draw(demo_app_t *app, demo_viewer_t *v)
     demo_draw_object(v, s->ground, c_ground);
     demo_draw_object(v, s->anchor_l, c_anchor);
     demo_draw_object(v, s->anchor_r, c_anchor);
-    demo_draw_object(v, s->cube_l, c_reg);
-    demo_draw_object(v, s->cube_r, c_stiff);
+    demo_draw_object(v, s->block_l, c_reg);
+    demo_draw_object(v, s->block_r, c_stiff);
     {
         float a[3], b[3];
         demo_core_point_ws(s->reg_spring.obj_a, &s->reg_spring.anchor_a_os, a);
@@ -157,24 +160,24 @@ static bool stiff_check(demo_app_t *app)
     bool ok = true;
     ok &= demo_check(tag, am->anomalies_detected > 0 && s->max_speed_l <= (float)MAX_SPEED &&
                           s->max_speed_r <= (float)MAX_SPEED,
-                     "initial snap clamped by the anomaly manager (%d anomalies, cube speeds <= %.2f / %.2f m/s)",
+                     "initial snap clamped by the anomaly manager (%d anomalies, block speeds <= %.2f / %.2f m/s)",
                      am->anomalies_detected, (double)s->max_speed_l, (double)s->max_speed_r);
     ok &= demo_check(tag, s->ring_reg > 0.1f && s->ring_stiff < 0.02f,
                      "after the snap the explicit spring rings (%.3f m), the implicit one has converged (%.4f m)",
                      (double)s->ring_reg, (double)s->ring_stiff);
     ok &= demo_check(tag, s->hit_reg > 0.05f && s->hit_stiff > 0.05f,
-                     "the balls hit both cubes (extension %.3f / %.3f m)",
+                     "the balls hit both blocks (extension %.3f / %.3f m)",
                      (double)s->hit_reg, (double)s->hit_stiff);
     ok &= demo_check(tag, s->late_reg < 0.3f && s->late_stiff < 0.1f,
                      "both springs stay bounded after 2 s (max extension %.3f / %.3f m)",
                      (double)s->late_reg, (double)s->late_stiff);
     float stiff_ext = (float)(s->stiff_spring.current_length - s->stiff_spring.rest_length);
     float ball_r_y = (float)s->ball_r->physical_core->pos_world_f_core_last_psi.k[1];
-    float cube_r_y = (float)s->cube_r->physical_core->pos_world_f_core_last_psi.k[1];
-    ok &= demo_check(tag, fabsf(stiff_ext) < 0.05f && demo_object_speed(s->cube_r) < 0.05f &&
-                          fabsf(cube_r_y - 0.8f - 0.6f - ball_r_y) < 0.05f,
-                     "stiff spring carries the ball steadily (extension %.3f m, cube speed %.3f, ball %.2f m above the cube centre)",
-                     (double)stiff_ext, (double)demo_object_speed(s->cube_r), (double)(cube_r_y - ball_r_y));
+    float block_r_y = (float)s->block_r->physical_core->pos_world_f_core_last_psi.k[1];
+    ok &= demo_check(tag, fabsf(stiff_ext) < 0.05f && demo_object_speed(s->block_r) < 0.05f &&
+                          fabsf(block_r_y - (float)(BLOCK_HALF_HEIGHT + BALL_RADIUS) - ball_r_y) < 0.05f,
+                     "stiff spring carries the ball steadily (extension %.3f m, block speed %.3f, ball %.2f m above the block centre)",
+                     (double)stiff_ext, (double)demo_object_speed(s->block_r), (double)(block_r_y - ball_r_y));
     return ok;
 }
 
@@ -221,38 +224,40 @@ int main(int argc, char **argv)
     at.position = ivp_vec3r(IVP_REAL(6.0), IVP_REAL(-12.0), IVP_REAL(0.0));
     s->anchor_r = demo_create_box_templ(w, &at, 0.3, 0.3, 0.3);
 
-    /* ── Hanging cubes (displaced downward to stretch springs) ──────────── */
+    /* ── Hanging blocks (displaced downward to stretch springs) ─────────── */
     ivp_object_template_t ct;
     ivp_object_template_init(&ct);
     ct.mass = IVP_REAL(2.0);
-    set_box_inertia(&ct, IVP_REAL(2.0), IVP_REAL(0.8), IVP_REAL(0.8), IVP_REAL(0.8));
+    /* A wide face and angular damping keep the load on the support as it settles. */
+    set_box_inertia(&ct, ct.mass, (ivp_real_t)BLOCK_HALF_WIDTH,
+                    (ivp_real_t)BLOCK_HALF_HEIGHT, (ivp_real_t)BLOCK_HALF_WIDTH);
+    ct.rot_speed_damp_factor = ivp_vec3r(IVP_REAL(4.0), IVP_REAL(4.0), IVP_REAL(4.0));
     ct.material.friction   = IVP_REAL(0.6);
     ct.material.elasticity = IVP_REAL(0.1);
     ct.position = ivp_vec3r(IVP_REAL(-6.0), IVP_REAL(-6.0), IVP_REAL(0.0));
-    s->cube_l = demo_create_box_templ(w, &ct, 0.8, 0.8, 0.8);
+    s->block_l = demo_create_box_templ(w, &ct, BLOCK_HALF_WIDTH, BLOCK_HALF_HEIGHT, BLOCK_HALF_WIDTH);
     ct.position = ivp_vec3r(IVP_REAL(6.0), IVP_REAL(-6.0), IVP_REAL(0.0));
-    s->cube_r = demo_create_box_templ(w, &ct, 0.8, 0.8, 0.8);
+    s->block_r = demo_create_box_templ(w, &ct, BLOCK_HALF_WIDTH, BLOCK_HALF_HEIGHT, BLOCK_HALF_WIDTH);
 
     /* ── Heavy stress-test balls ────────────────────────────────────────── *
-     * Released right below the ceiling mounts (above them they would just
-     * land on the mounts), 1.2 m above the highest point of the cubes. */
+     * Release the balls between the ceiling mounts and the blocks. */
     ivp_object_template_t bt;
     ivp_object_template_init(&bt);
     bt.mass = IVP_REAL(8.0);
-    set_sphere_inertia(&bt, IVP_REAL(8.0), IVP_REAL(0.6));
+    set_sphere_inertia(&bt, bt.mass, (ivp_real_t)BALL_RADIUS);
     bt.material.friction   = IVP_REAL(0.4);
     bt.material.elasticity = IVP_REAL(0.3);
     bt.position = ivp_vec3r(IVP_REAL(-6.0), IVP_REAL(-10.8), IVP_REAL(0.0));
-    s->ball_l = demo_create_ball_templ(w, &bt, 0.6);
+    s->ball_l = demo_create_ball_templ(w, &bt, BALL_RADIUS);
     bt.position = ivp_vec3r(IVP_REAL(6.0), IVP_REAL(-10.8), IVP_REAL(0.0));
-    s->ball_r = demo_create_ball_templ(w, &bt, 0.6);
+    s->ball_r = demo_create_ball_templ(w, &bt, BALL_RADIUS);
 
     /* ── Regular spring (LEFT) ──────────────────────────────────────────── */
     ivp_spring_state_init(&s->reg_spring);
     {
         ivp_vec3r_t a = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.3), IVP_REAL(0.0));
-        ivp_vec3r_t b = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.8), IVP_REAL(0.0));
-        ivp_spring_state_setup(&s->reg_spring, s->anchor_l, &a, s->cube_l, &b,
+        ivp_vec3r_t b = ivp_vec3r(IVP_REAL(0.0), (ivp_real_t)-BLOCK_HALF_HEIGHT, IVP_REAL(0.0));
+        ivp_spring_state_setup(&s->reg_spring, s->anchor_l, &a, s->block_l, &b,
                                (ivp_real_t)REG_K, (ivp_real_t)REG_DAMP, (ivp_real_t)REST_LEN);
     }
     ivp_environment_add_controller(w->env, 100, ivp_controller_spring, &s->reg_spring);
@@ -261,8 +266,8 @@ int main(int argc, char **argv)
     ivp_stiff_spring_state_init(&s->stiff_spring);
     {
         ivp_vec3r_t a = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(0.3), IVP_REAL(0.0));
-        ivp_vec3r_t b = ivp_vec3r(IVP_REAL(0.0), IVP_REAL(-0.8), IVP_REAL(0.0));
-        ivp_stiff_spring_state_setup(&s->stiff_spring, s->anchor_r, &a, s->cube_r, &b,
+        ivp_vec3r_t b = ivp_vec3r(IVP_REAL(0.0), (ivp_real_t)-BLOCK_HALF_HEIGHT, IVP_REAL(0.0));
+        ivp_stiff_spring_state_setup(&s->stiff_spring, s->anchor_r, &a, s->block_r, &b,
                                      (ivp_real_t)STIFF_K, (ivp_real_t)STIFF_DAMP, (ivp_real_t)REST_LEN);
     }
     ivp_environment_add_controller(w->env, 100, ivp_controller_stiff_spring, &s->stiff_spring);
