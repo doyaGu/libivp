@@ -2647,10 +2647,10 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
      * once from it (retail RVA 0x12A60); later steps do not change it */
     env_set_delta_psi_time_d(env, 1.0 / 66.0);
     const double contact_decay_log = log((double)0.9f);
-#if IVP_X87_ARITHMETIC
-    pl->integrated_energy_damp = (float)ivp_expd(contact_decay_log * pl->delta_psi_time);
-#else
+#if IVP_REFERENCE_NATIVE
     pl->integrated_energy_damp = ivp_expd((double)(float)contact_decay_log * pl->delta_psi_time);
+#else
+    pl->integrated_energy_damp = (float)ivp_expd(contact_decay_log * pl->delta_psi_time);
 #endif
     /* Apply a valid configured step after initializing the contact energy decay. */
     double dt = (double)cfg.delta_psi_time;

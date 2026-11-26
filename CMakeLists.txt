@@ -22,6 +22,15 @@ endfunction()
 
 # ── Options ───────────────────────────────────────────────────────────────────
 option(IVP_REAL_DOUBLE "Use double as ivp_real_t like the reference IVP_DOUBLE (OFF: float)" ON)
+set(IVP_REFERENCE_TARGET "RETAIL" CACHE STRING "Reference IVP build: RETAIL or NATIVE")
+set_property(CACHE IVP_REFERENCE_TARGET PROPERTY STRINGS RETAIL NATIVE)
+if (IVP_REFERENCE_TARGET STREQUAL "RETAIL")
+    set(IVP_REFERENCE_NATIVE OFF)
+elseif (IVP_REFERENCE_TARGET STREQUAL "NATIVE")
+    set(IVP_REFERENCE_NATIVE ON)
+else ()
+    message(FATAL_ERROR "IVP_REFERENCE_TARGET=${IVP_REFERENCE_TARGET}: expected RETAIL or NATIVE")
+endif ()
 include(cmake/IVPX87.cmake)
 if (IVP_X87_LIBRARY)
     enable_language(CXX)
@@ -383,6 +392,7 @@ target_include_directories(ivp
 
 target_compile_definitions(ivp PRIVATE $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
 target_compile_definitions(ivp PUBLIC
+        IVP_REFERENCE_NATIVE=$<BOOL:${IVP_REFERENCE_NATIVE}>
         IVP_STABLE_INTERNAL_STATE=$<BOOL:${IVP_STABLE_INTERNAL_STATE}>
         IVP_EDIT_LOCALITY=$<BOOL:${IVP_EDIT_LOCALITY}>
         IVP_ENABLE_CHECKPOINTS=$<BOOL:${IVP_ENABLE_CHECKPOINTS}>)
@@ -802,11 +812,10 @@ if (IVP_BUILD_TESTS)
     target_include_directories(test_matrix_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     ivp_add_test(test_deferred_deletion tests/test_deferred_deletion.c)
     target_include_directories(test_deferred_deletion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    # The solver fixtures were generated with native binary64 on macOS arm64.
-    # In an x87 build, compile the native solver for this fixture and test the
-    # linked x87 solver separately through test_great_matrix_port.
+    # The fixtures were generated with native binary64 and four-column rows
+    # on macOS arm64; test the library's selected backend with test_great_matrix_port.
     if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-        if (IVP_X87_LIBRARY)
+        if (IVP_X87_LIBRARY OR NOT IVP_REFERENCE_NATIVE)
             add_executable(test_lcs_parity
                     tests/test_lcs_parity.c
                     src/base/ivp_allocator.c
@@ -817,6 +826,7 @@ if (IVP_BUILD_TESTS)
                     src/solver/ivp_linear_constraint_solver.c)
             target_include_directories(test_lcs_parity PRIVATE include src tests)
             target_compile_definitions(test_lcs_parity PRIVATE
+                    IVP_REFERENCE_NATIVE=1
                     $<$<CONFIG:Debug>:IVP_ENABLE_ASSERTS>)
             ivp_enable_c_atomics(test_lcs_parity)
             target_link_libraries(test_lcs_parity PRIVATE m)

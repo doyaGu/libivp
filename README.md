@@ -8,7 +8,8 @@ buoyancy, force fields and vehicles.
 
 The 49 parity scenarios exercise two arithmetic modes:
 
-- With x87 emulation off and `IVP_STABLE_INTERNAL_STATE=OFF`, libivp
+- With `IVP_REFERENCE_TARGET=NATIVE`, x87 emulation off and
+  `IVP_STABLE_INTERNAL_STATE=OFF`, libivp
   is compared bit for bit with the original C++ IVP using native arithmetic
   on the same platform. The macOS arm64 CI runs this check in Release and Debug.
 - With software x87 arithmetic and transcendentals enabled, compare libivp
@@ -52,6 +53,7 @@ target_link_libraries(my_app PRIVATE ivp)
 | `IVP_ENABLE_X87_EMULATION` | ON | Use `SOFT` arithmetic when `IVP_X87_ARITHMETIC` is empty |
 | `IVP_X87_ARITHMETIC` | Follows `IVP_ENABLE_X87_EMULATION` | `OFF`, `SOFT` or `HARD` for the restored arithmetic sequences |
 | `IVP_X87_ARITHMETIC_TRANSCENDENTAL` | Follows `IVP_X87_ARITHMETIC` | `OFF`, `SOFT` or `HARD` for the original IVP math wrappers |
+| `IVP_REFERENCE_TARGET` | RETAIL | Reference build. RETAIL uses scalar solver rows and the Ballance hull merge order. NATIVE follows the host pointer width for solver rows and the native Qhull merge order. |
 | `IVP_STABLE_INTERNAL_STATE` | OFF | Use history-independent internals; OFF preserves the reference's address- and history-sensitive behavior |
 | `IVP_EDIT_LOCALITY` | OFF | Adding or removing objects changes only the objects they interact with; requires `IVP_STABLE_INTERNAL_STATE=ON` and changes trajectories |
 | `IVP_ENABLE_CHECKPOINTS` | OFF | Memory regions with in-place checkpoints, and rewinding to any recorded step |
@@ -74,22 +76,23 @@ the host x87 when its precision and rounding allow it. Hardware
 transcendental results follow the executing CPU.
 The arithmetic backend covers inverse square root, vector normalization,
 double-precision vector length, quaternion multiplication and small-angle
-updates. With x87 arithmetic enabled, the contact and joint solvers use the
-32-bit IVP scalar row updates. Native 64-bit builds use the pinned C++
-reference's four-coefficient VecFPU windows and padded row storage.
+updates. The reference target fixes solver row windows, the bundled Qhull
+merge order and contact energy decay write-backs for either arithmetic backend.
+The 64-bit native reference uses four-coefficient VecFPU windows and padded
+row storage. The retail reference uses scalar rows on every host.
 The transcendental setting controls sine, cosine, arcsine, arccosine,
 arctangent, and exponential calls through the IVP math wrappers.
 
 For bitwise trajectory comparisons across targets, use `SOFT` for both
-selections. The convex builder then lets Qhull derive roundoff tolerances
-from the input so that coplanar faces do not trigger platform-dependent
-joggling. `IVP_STABLE_INTERNAL_STATE` additionally controls
-allocation- and history-sensitive behavior inside the solver.
+selections with the same reference target. `IVP_STABLE_INTERNAL_STATE`
+controls allocation- and history-sensitive behavior inside the solver and
+whether the hull builder derives its Qhull roundoff tolerances from the input.
 
 Set both selections to `OFF` for a pure C17 build without libx87. Compare
-this mode with the original C++ IVP on the same platform with both
-selections set to `OFF`, floating-point contraction disabled, and
-`IVP_STABLE_INTERNAL_STATE=OFF` in libivp. This keeps the reference
+this mode with the original C++ IVP on the same platform using
+`IVP_REFERENCE_TARGET=NATIVE`, both selections set to `OFF`,
+floating-point contraction disabled, and `IVP_STABLE_INTERNAL_STATE=OFF`
+in libivp. This keeps the reference
 engine's original hull tolerances. On WebAssembly, compile both scenario
 runners with `-fno-builtin-sin -fno-builtin-cos` to use the same runtime
 libm when initializing scenes.

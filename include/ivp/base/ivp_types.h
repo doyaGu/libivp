@@ -17,6 +17,11 @@
 #define IVP_X87_SOFT 1
 #define IVP_X87_HARD 2
 
+/* The reference build is independent of the arithmetic backend. */
+#ifndef IVP_REFERENCE_NATIVE
+#define IVP_REFERENCE_NATIVE 0
+#endif
+
 /* ── ivp_real_t: configurable precision ─────────────────────────────────── */
 
 #ifdef IVP_REAL_DOUBLE

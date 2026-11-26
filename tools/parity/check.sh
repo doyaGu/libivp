@@ -56,7 +56,7 @@ EXPECTED_MAINLINE_DEBUG_TEXT="$HERE/mainline_debug_text_differences.txt"
 build_lib() { # <dir> <build type> <stable internals> [edit locality]
   mkdir -p "$1"
   cmake -B "$1" -S "$PARITY_REPO" -DCMAKE_BUILD_TYPE="$2" \
-    $PARITY_X87_CMAKE_OPTIONS \
+    -DIVP_REFERENCE_TARGET=NATIVE $PARITY_X87_CMAKE_OPTIONS \
     -DIVP_ENABLE_SCENARIO_TESTS=ON \
     -DIVP_STABLE_INTERNAL_STATE="$3" \
     -DIVP_REENTRANT_QHULL="$PARITY_REENTRANT_QHULL" \

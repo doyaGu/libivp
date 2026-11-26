@@ -571,7 +571,7 @@ static int qh_comparemerge(const void *p1, const void *p2) {
   return (a->type - b->type);
 } /* comparemerge */
 
-#if IVP_X87_ARITHMETIC
+#if !IVP_REFERENCE_NATIVE
 static void qh_swap_merges(mergeT **items, int a, int b) {
   mergeT *entry = items[a];
   items[a] = items[b];
@@ -635,7 +635,7 @@ static void qh_sort_merge_range(mergeT **items, int count,
 static void qh_sort_merge_candidates(int count) {
   mergeT **items = SETaddr_(qh facet_mergeset, mergeT);
   int (*compare)(const void *, const void *) = qh ANGLEmerge ? qh_compareangle : qh_comparemerge;
-#if IVP_X87_ARITHMETIC
+#if !IVP_REFERENCE_NATIVE
   qh_sort_merge_range(items, count, compare);
 #else
   qsort(items, count, sizeof(mergeT *), compare);

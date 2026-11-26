@@ -367,8 +367,9 @@ IVP_TEST(octagonal_prism_coplanar_merge_preserves_mass_center)
     IVP_ASSERT_TRUE(valid);
     for (int axis = 0; axis < 3; ++axis)
         IVP_ASSERT_NEAR(center[axis], 0.0f, 1e-7f);
-    /* The original Qhull facet order fixes the mass integration order. */
-#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE) && !IVP_TEST_REENTRANT_QHULL && !IVP_STABLE_INTERNAL_STATE
+    /* The retail Qhull facet order fixes the mass integration order. */
+#if !IVP_REFERENCE_NATIVE && IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE) && \
+    !IVP_TEST_REENTRANT_QHULL && !IVP_STABLE_INTERNAL_STATE
     IVP_ASSERT_EQ(center[1], -0x1.e82a16p-32f);
 #endif
 }
