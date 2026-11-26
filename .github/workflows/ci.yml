@@ -179,16 +179,17 @@ jobs:
         env:
           IVP_REF_SRC: ${{ github.workspace }}/reference/ivp
           IVP_JOBS: 3
-        run: >-
-          python tools/run_verification.py
-          --suite parity
-          --result-file build/verification/parity.json
+        run: |
+          test "$(uname -m)" = arm64
+          python tools/run_verification.py --suite parity --result-file build/verification/parity.json
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: verification-parity
-          path: build/verification/*.json
+          path: |
+            build/verification/parity.json
+            build/parity/out/*.txt
           if-no-files-found: warn
 
   # Examples: build with SDL3 and run every one headless (no window, no GPU).
