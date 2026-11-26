@@ -4,6 +4,7 @@
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_sim_internal.h"
 #include "solver/ivp_scr_internal.h"
+#include <ivp/solver/ivp_great_matrix.h>
 #include <fenv.h>
 #include <float.h>
 #include <stdint.h>
@@ -1028,20 +1029,27 @@ IVP_TEST(x87_constraint_rotation_error_preserves_small_axes)
 
 IVP_TEST(x87_constraint_back_substitution_preserves_small_impulses)
 {
-    double matrix[6][6] = {
+    double matrix[6][8] = {
         {-0x1.8072820000000p+1, 0x1.66c7e20000000p+1, -0x1.6105460000000p-4, 0.0, 0x1.a00c1c0000000p-4},
         {0x1.66c7e00000000p+1, -0x1.3f119a0000000p+2, -0x1.f511c40000000p-5, -0x1.a18ebc0000000p-4, 0.0},
         {-0x1.6105460000000p-4, -0x1.f511c40000000p-5, -0x1.8524160000000p+0, -0x1.2897940000000p-2, 0x1.a1eb2c0000000p-2},
         {0.0, -0x1.a18ebc0000000p-4, -0x1.2897940000000p-2, -0x1.ee51e20000000p-2, 0.0},
         {0x1.a00c1c0000000p-4, 0.0, 0x1.a1eb2c0000000p-2, 0.0, -0x1.ec882e0000000p-2},
     };
-    double desired[6] = {0x1.d228a67790856p-7, -0x1.476c2ab6c9c8bp-2, 0x1.60c5c0ae8983bp-33, 0x1.27d5edf00e7e7p-30, 0x1.7ab636d57aaeep-34};
+    double desired[8] = {0x1.d228a67790856p-7, -0x1.476c2ab6c9c8bp-2, 0x1.60c5c0ae8983bp-33, 0x1.27d5edf00e7e7p-30, 0x1.7ab636d57aaeep-34};
     const double expected[5] = {0x1.e6deb34301469p-4, 0x1.0d6196a898323p-3, 0x1.1e2e9931bd447p-33, -0x1.c71945d50a37fp-6, 0x1.9b43b7a96e7e7p-6};
-    double result[6];
+    double result[8];
+    ivp_gmmz_t solver = {0};
+    solver.columns = 5;
+    solver.aligned_row_len = 8;
+    solver.matrix_eps = (double)1e-9f;
+    solver.matrix_values = &matrix[0][0];
+    solver.desired_vector = desired;
+    solver.result_vector = result;
     const uint16_t precision = ivp_x87_enter_step();
-    const bool solved = ivp_x87_solve_constraint_system(5, matrix, desired, result, (double)1e-9f);
+    const ivp_result_t status = ivp_gmmz_solve(&solver);
     ivp_x87_leave_step(precision);
-    IVP_ASSERT_TRUE(solved);
+    IVP_ASSERT_EQ(status, IVP_OK);
     for (int i = 0; i < 5; ++i) {
         IVP_ASSERT_EQ(result[i], expected[i]);
     }

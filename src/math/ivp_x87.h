@@ -118,8 +118,6 @@ void ivp_x87_friction_easing_delta(const ivp_vec3f_t *connection, const ivp_vec3
                                    ivp_vec3f_t *first_delta, ivp_vec3f_t *second_delta);
 void ivp_x87_impact_friction(float friction, float energy_conservation,
                              float *cosine, float *sine);
-bool ivp_x87_solve_constraint_system(int count, double matrix[6][6], double desired[6],
-                                     double result[6], double epsilon);
 double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
                                      float first_surface, float second_surface);
 double ivp_x87_collision_time(double first, double last, double target,

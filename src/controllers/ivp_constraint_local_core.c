@@ -702,35 +702,16 @@ void ivp_constraint_local_core_relax_reference(ivp_constraint_local_core_t *c)
 
 /* ── reference IVP_Great_Matrix_Many_Zero::solve_great_matrix_many_zero ─ */
 
-/* Reference: an IVP_Great_Matrix_Many_Zero on alloca'd arrays (columns =
- * matrix_size, aligned_row_len, MATRIX_EPS 1E-9f) solved with
- * solve_great_matrix_many_zero.  ivp_gmmz_solve reproduces the reference
- * Gauss elimination including the 64-bit IVP_VecFPU row helpers: an
- * elimination step starting at an odd column processes whole blocks of 4
- * doubles from the previous column, which for a 4x4 system (cardan joint:
- * 3 translation + 1 rotation axis) also adds the source's next row to the
- * target's next row.  The arrays carry zeroed slack for those overruns (the
- * reference's uninitialised alloca memory there is never read back into
- * the solution). */
+/* The small joint system uses the same pivoting and elimination as contacts. */
 static bool solve_great_matrix_many_zero(int n, double a[6][6], double b[6], double x[6])
 {
-#if IVP_X87_ARITHMETIC
-    return ivp_x87_solve_constraint_system(n, a, b, x, CL_MATRIX_EPS);
-#else
-    enum { CL_GM_SLACK = 16 };
-    double values[6 * 8 + CL_GM_SLACK];
-    double desired[8 + CL_GM_SLACK];
-    double result[8 + CL_GM_SLACK];
-    memset(values, 0, sizeof(values));
-    memset(desired, 0, sizeof(desired));
-    memset(result, 0, sizeof(result));
-
-    ivp_gmmz_t m;
-    memset(&m, 0, sizeof(m));
+    double values[6 * 6];
+    double desired[6];
+    double result[6];
+    ivp_gmmz_t m = {0};
     m.columns = n;
     m.aligned_row_len = ivp_gm_aligned_len(n);
     m.matrix_eps = CL_MATRIX_EPS;
-    IVP_ASSERT(m.aligned_row_len <= 8);
     m.matrix_values = values;
     m.desired_vector = desired;
     m.result_vector = result;
@@ -744,7 +725,6 @@ static bool solve_great_matrix_many_zero(int n, double a[6][6], double b[6], dou
     }
     for (int i = 0; i < n; i++) x[i] = result[i];
     return true;
-#endif
 }
 
 /* ── core helpers mirroring IVP_Core test pushes ───────────────────────── */
