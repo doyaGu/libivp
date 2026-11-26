@@ -222,6 +222,55 @@ static X87_Float80 ivp_x87_point_square(X87_Arithmetic &fp, const Scalar point[3
     return fp.add(fp.add(fp.multiply(x, x), fp.multiply(y, y)), fp.multiply(z, z));
 }
 
+void ivp_x87_penetration_direction(const ivp_vec3r_t *first, const ivp_vec3r_t *second,
+                                   double epsilon, ivp_vec3f_t *direction)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        X87_Float80 difference = fp.subtract(fp.load(second->k[axis]), fp.load(first->k[axis]));
+        if (axis == 2)
+            difference = fp.load(fp.store_double(difference));
+        direction->k[axis] = fp.store_float(difference);
+    }
+    ivp_x87_normalize3f(direction->k, 2, epsilon, NULL);
+}
+
+static X87_Float80 ivp_x87_gravity_penetration_speed(X87_Arithmetic &fp,
+                                                     const ivp_vec3r_t *gravity, double step)
+{
+    const X87_Float80 acceleration = fp.square_root(ivp_x87_point_square(fp, gravity->k));
+    return fp.multiply(fp.add(acceleration, acceleration), fp.load(step));
+}
+
+double ivp_x87_penetration_speed(const ivp_vec3r_t *gravity, double step)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.store_double(ivp_x87_gravity_penetration_speed(fp, gravity, step));
+}
+
+void ivp_x87_penetration_impulse(const ivp_vec3f_t *direction, float mass, double speed,
+                                 ivp_vec3f_t *impulse)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 factor = fp.multiply(fp.load(mass), fp.load(speed));
+    for (int axis = 0; axis < 3; ++axis)
+        impulse->k[axis] = fp.store_float(fp.multiply(fp.load(direction->k[axis]), factor));
+}
+
+void ivp_x87_penetration_velocity(const ivp_vec3r_t *gravity, double step, ivp_vec3f_t *direction)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 speed = ivp_x87_gravity_penetration_speed(fp, gravity, step);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        X87_Float80 velocity = fp.multiply(fp.load(direction->k[axis]), speed);
+        if (axis == 2)
+            velocity = fp.load(fp.store_double(velocity));
+        direction->k[axis] = fp.store_float(velocity);
+    }
+}
+
 static void ivp_x87_store(X87_Arithmetic &fp, float &out, const X87_Float80 &value)
 {
     out = fp.store_float(value);
@@ -1417,6 +1466,52 @@ float ivp_x87_point_face_distance(const ivp_vec3r_t *normal, const ivp_vec3r_t *
         fp.add(fp.multiply(y, fp.load(face_point->k[1])), fp.multiply(z, fp.load(face_point->k[2]))),
         fp.multiply(x, fp.load(face_point->k[0])));
     return fp.store_float(fp.subtract(point_projection, face_projection));
+}
+
+double ivp_x87_rotational_separation_speed(const ivp_vec3f_t *angular_speed,
+                                           double radius, double inverse_step)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 square = fp.multiply(ivp_x87_point_square(fp, angular_speed->k), fp.load(0.000025));
+    if (fp.compare(square, fp.load(0.25)) == X87_Arithmetic::GREATER)
+        square = fp.load(0.25);
+
+    const X87_Float80 angle = fp.square_root(square);
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC_TRANSCENDENTAL> transcendental;
+    const X87_Float80 cosine = transcendental.cosine(angle);
+#else
+    const X87_Float80 cosine = fp.load(ivp_cosd(fp.store_double(angle)));
+#endif
+    const X87_Float80 displacement = fp.multiply(fp.subtract(fp.load(1.0), cosine), fp.load(radius));
+    return fp.scalar_result(fp.multiply(displacement, fp.load(inverse_step)));
+}
+
+double ivp_x87_impact_iteration_impulse(const double masses[2], double speed)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 m0 = fp.load(masses[0]);
+    const X87_Float80 m1 = fp.load(masses[1]);
+    const X87_Float80 inverse_mass = fp.divide(fp.load(1.0), fp.add(m0, m1));
+    const X87_Float80 momentum = fp.multiply(fp.multiply(fp.load(2.0), m1), fp.load(speed));
+    const X87_Float80 impulse = fp.multiply(fp.multiply(momentum, inverse_mass), m0);
+    return fp.store_double(fp.multiply(impulse, fp.load(0.1f)));
+}
+
+void ivp_x87_impact_friction(float friction, float energy_conservation,
+                             float *cosine, float *sine)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 one = fp.load(1.0f);
+    const X87_Float80 impact_friction = fp.multiply(
+        fp.add(fp.square_root(fp.load(energy_conservation)), one), fp.load(friction));
+    const X87_Float80 angle = fp.arctangent(impact_friction, one);
+    const X87_Float80 square = fp.multiply(angle, angle);
+    const X87_Float80 cosine_value = fp.add(
+        fp.subtract(one, fp.multiply(square, fp.load(0.5f))),
+        fp.multiply(fp.multiply(square, square), fp.load(1.0f / 24.0f)));
+    *cosine = fp.store_float(cosine_value);
+    *sine = fp.store_float(fp.multiply(cosine_value, impact_friction));
 }
 
 static X87_Float80 ivp_x87_square(X87_Arithmetic &fp, const X87_Float80 &value)

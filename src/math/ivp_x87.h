@@ -30,6 +30,12 @@ void ivp_x87_accumulate_world_impulse(const ivp_transform_r_t *transform, const 
                                       const ivp_vec3f_t *impulse, float inverse_mass,
                                       const ivp_vec3f_t *inverse_inertia,
                                       ivp_vec3f_t *linear, ivp_vec3f_t *angular);
+void ivp_x87_penetration_direction(const ivp_vec3r_t *first, const ivp_vec3r_t *second,
+                                   double epsilon, ivp_vec3f_t *direction);
+double ivp_x87_penetration_speed(const ivp_vec3r_t *gravity, double step);
+void ivp_x87_penetration_impulse(const ivp_vec3f_t *direction, float mass, double speed,
+                                 ivp_vec3f_t *impulse);
+void ivp_x87_penetration_velocity(const ivp_vec3r_t *gravity, double step, ivp_vec3f_t *direction);
 double ivp_x87_spring_impulse(const ivp_vec3f_t *direction, const ivp_vec3f_t *relative_speed,
                               float length, float rest_length, float stiffness, float axial_damping,
                               float lateral_damping, double step, double maximum_force, ivp_vec3f_t *impulse);
@@ -110,6 +116,8 @@ void ivp_x87_accumulate_friction_easing(float span[2], const ivp_vec3f_t tangent
 void ivp_x87_friction_easing_delta(const ivp_vec3f_t *connection, const ivp_vec3f_t *first,
                                    const ivp_vec3f_t *second, double factor, float direction,
                                    ivp_vec3f_t *first_delta, ivp_vec3f_t *second_delta);
+void ivp_x87_impact_friction(float friction, float energy_conservation,
+                             float *cosine, float *sine);
 bool ivp_x87_solve_constraint_system(int count, double matrix[6][6], double desired[6],
                                      double result[6], double epsilon);
 double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
@@ -126,6 +134,9 @@ bool ivp_x87_better_vertex_walk_gradient(const ivp_vec3r_t *offset, const ivp_ve
 #endif
 float ivp_x87_point_face_distance(const ivp_vec3r_t *normal, const ivp_vec3r_t *point,
                                   const ivp_vec3f_t *face_point);
+double ivp_x87_rotational_separation_speed(const ivp_vec3f_t *angular_speed,
+                                           double radius, double inverse_step);
+double ivp_x87_impact_iteration_impulse(const double masses[2], double speed);
 double ivp_x87_hull_determinant(double *const rows[], int dimension);
 int ivp_x87_hull_determinant_exceeds(double *const rows[], int dimension, double maximum);
 bool ivp_x87_set_hull_plane_offset(double *const vertices[3], const double origin[3],

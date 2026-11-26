@@ -20,6 +20,7 @@
 #include <ivp/geometry/ivp_compact_edge.h>
 #include <ivp/math/ivp_fast_math.h>
 #include "collision/ivp_lvec.h"
+#include "math/ivp_x87.h"
 #include "solver/ivp_friction_internal.h"
 #include "dynamics/ivp_env_hot.h"
 
@@ -291,11 +292,14 @@ static void is_calc_virt_masses_impact_solver(impact_solver_t *s, const ivp_vec3
     if (s->core[1]->physical_unmoveable) s->virt_mass[1] = s->virt_mass[0] * 100000.0f;
 }
 
-static double is_estimate_push_impulse(impact_solver_t *s)
+static double is_estimate_iteration_impulse(impact_solver_t *s)
 {
     is_calc_virt_masses_impact_solver(s, s->surf_normal);
-    double push_v0 = 0.0;
     double push_v1 = -(double)lvf_dot(&s->relative_world_speed, s->surf_normal);
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_impact_iteration_impulse(s->virt_mass, push_v1);
+#else
+    double push_v0 = 0.0;
     double div_masses = 1.0f / (s->virt_mass[0] + s->virt_mass[1]);
     double u0 = (2.0f * s->virt_mass[1] * push_v1 + push_v0 * (s->virt_mass[0] - s->virt_mass[1]));
     u0 *= div_masses;
@@ -303,7 +307,8 @@ static double is_estimate_push_impulse(impact_solver_t *s)
     IVP_IF(imp_dm(s->core[0])->debug_impact) {
         ivp_debug_printf("start_impulse %.2f\n", diff_v0 * s->virt_mass[0]);
     }
-    return diff_v0 * s->virt_mass[0];
+    return (diff_v0 * s->virt_mass[0]) * 0.1f;
+#endif
 }
 
 static void is_clear_change_values_cores(impact_solver_t *s)
@@ -381,8 +386,14 @@ static void is_do_impact(impact_solver_t *s, ivp_core_t *pushed_cores[2], bool a
     IVP_IF(1) {
         imp_dm(s->core[0])->all_time_impacts += (ivp_real_t)1.0f;
     }
+#if IVP_X87_ARITHMETIC
+    /* Keep the retained energy fraction wide through both subtractions. */
+    const double conservation_steps = (double)pushes_while_system * IVP_INV_HALF_CONSERVATION_STEPS + 1.0;
+    used_conservation = 1.0 - (1.0 / conservation_steps) * (1.0 - (double)s->percent_energy_conservation);
+#else
     used_conservation = (double)(1.0f - (1.0f / ((float)pushes_while_system * IVP_INV_HALF_CONSERVATION_STEPS + 1.0f)) *
                                             (1.0f - s->percent_energy_conservation));
+#endif
     /* retail RVA 0x22ED0 keeps the sum wide through the safety factor */
     s->rescue_speed_impact_solver =
         (float)(((double)imp_settings_for_core(s->core[0])->min_vertical_speed_at_collision +
@@ -421,7 +432,7 @@ static void is_do_impact(impact_solver_t *s, ivp_core_t *pushed_cores[2], bool a
     is_get_relative_speed_vector(s);
     *s->speed = s->relative_world_speed;
     int push_counter = 0;
-    double impulse = is_estimate_push_impulse(s) * 0.1f;
+    double impulse = is_estimate_iteration_impulse(s);
     double speed_parallel_mindist = (double)lvf_dot(&s->relative_world_speed, s->surf_normal);
     if (speed_parallel_mindist > (double)-IMPACT_EPS) {
         ivp_vec3f_t push_dir;
@@ -515,11 +526,15 @@ delaying_test:
 /* IVP_Impact_Solver::get_cos_sin_for_impact */
 static void is_get_cos_sin_for_impact(float friction_val, float percent_energy_conservation, float *cos_val, float *sin_val)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_impact_friction(friction_val, percent_energy_conservation, cos_val, sin_val);
+#else
     double impact_fri_fact = (double)friction_val * (1.0f + sqrt((double)percent_energy_conservation));
     double fri_angle = ivp_atand(impact_fri_fact);
     double c = (double)lv_approx5_cos((float)fri_angle);
     *cos_val = (float)c;
     *sin_val = (float)(c * impact_fri_fact);
+#endif
 }
 
 static void is_get_world_direction_second_friction(impact_solver_t *s, ivp_contact_pt_t *cp)
@@ -611,10 +626,15 @@ static double cp_get_rot_speed_uncertainty(ivp_contact_pt_t *cp)
         ivp_core_t *my_core = cp->tmp_contact_info->contact_core[i];
         if (!my_core) continue;
         if (cp->synapse[i].status == IVP_ST_BALL) continue;
+#if IVP_X87_ARITHMETIC
+        result += ivp_x87_rotational_separation_speed(&my_core->rot_speed, my_core->upper_limit_radius,
+                                                     ivp_env_get_inv_delta_psi_time(ivp_core_env(my_core)));
+#else
         double square = (double)lvf_quad_length(&my_core->rot_speed) * 0.000025;
         if (square > 0.25) square = 0.25;
         result += (1.0 - ivp_cosd(sqrt(square))) * (double)my_core->upper_limit_radius *
                   ivp_env_get_inv_delta_psi_time(ivp_core_env(my_core));
+#endif
     }
     return result;
 }
@@ -1334,6 +1354,7 @@ void ivp_mindist_do_impact(ivp_mindist_t *md)
 /* ── IVP_Mindist::mindist_rescue_push / IVP_Anomaly_Manager::inter_penetration ── */
 
 /* IVP_Anomaly_Manager::get_push_speed_penetration (IVP_FLOAT) */
+#if !IVP_X87_ARITHMETIC
 static float anomaly_get_push_speed_penetration(ivp_object_t *obj0)
 {
     struct ivp_environment *env = obj0->owner;
@@ -1341,6 +1362,7 @@ static float anomaly_get_push_speed_penetration(ivp_object_t *obj0)
     double grav = ivp_env_get_gravity_scalar(env);
     return (float)((grav * 2.0f) * d_time);
 }
+#endif
 
 /* retail RVA 0x2F780: normize the mass center direction (no fallback), query
  * the rescue speed, push both bodies at core0's position, no pinned test */
@@ -1353,12 +1375,21 @@ static void anomaly_solve_inter_penetration_simple(ivp_object_t *obj0, ivp_objec
     const ivp_transform_r_t *m0 = &core0->m_world_f_core_last_psi;
     const ivp_transform_r_t *m1 = &core1->m_world_f_core_last_psi;
     ivp_vec3f_t vec01;
+#if IVP_X87_ARITHMETIC
+    ivp_x87_penetration_direction(&m0->pos, &m1->pos, P_DOUBLE_EPS, &vec01);
+    const double speed_change = ivp_x87_penetration_speed(&env->gravity, d_time);
+#else
     lvf_subtract2_p(&vec01, &m1->pos, &m0->pos);
     (void)lvf_normize(&vec01);
-    double speed_change = (double)anomaly_get_push_speed_penetration(obj0);
+    const double speed_change = (double)anomaly_get_push_speed_penetration(obj0);
+#endif
     if (IVP_MTIS_SIMULATED(core0->movement_state)) {
         ivp_vec3f_t p0;
+#if IVP_X87_ARITHMETIC
+        ivp_x87_penetration_impulse(&vec01, -ivp_core_get_mass_f(core0), speed_change, &p0);
+#else
         lvf_set_multiple(&p0, &vec01, (D)((double)-ivp_core_get_mass_f(core0) * speed_change));
+#endif
         ivp_object_async_push_object_ws(obj0, &m0->pos, &p0);
         ivp_vec3f_t rot_speed_object;
         lvf_setd3(&rot_speed_object, (D)d_time, 0, 0);
@@ -1366,7 +1397,11 @@ static void anomaly_solve_inter_penetration_simple(ivp_object_t *obj0, ivp_objec
     }
     if (IVP_MTIS_SIMULATED(core1->movement_state)) {
         ivp_vec3f_t p1;
+#if IVP_X87_ARITHMETIC
+        ivp_x87_penetration_impulse(&vec01, ivp_core_get_mass_f(core1), speed_change, &p1);
+#else
         lvf_set_multiple(&p1, &vec01, (D)((double)ivp_core_get_mass_f(core1) * speed_change));
+#endif
         ivp_object_async_push_object_ws(obj1, &m0->pos, &p1);
         ivp_vec3f_t rot_speed_object;
         lvf_setd3(&rot_speed_object, (D)d_time, 0, 0);
@@ -1428,10 +1463,14 @@ static void anomaly_inter_penetration(ivp_mindist_t *mindist, ivp_object_t *obj0
     lvm_vmult3(&unmovable_cache->m_world_f_object, &push_direction, &world_push_dir);
     ivp_vec3f_t world_push_vec;
     lvf_set_p(&world_push_vec, &world_push_dir);
-    const double speed_change = (double)anomaly_get_push_speed_penetration(obj0);
     ivp_core_t *moving_core = moving_obj->physical_core;
     if (IVP_MTIS_SIMULATED(moving_core->movement_state)) {
-        lvf_mult(&world_push_vec, (D)speed_change);
+#if IVP_X87_ARITHMETIC
+        ivp_x87_penetration_velocity(&obj0->owner->gravity, ivp_env_get_delta_psi_time(obj0->owner),
+                                     &world_push_vec);
+#else
+        lvf_mult(&world_push_vec, (D)anomaly_get_push_speed_penetration(obj0));
+#endif
         ivp_object_async_add_speed_object_ws(moving_obj, &world_push_vec);
     }
 }

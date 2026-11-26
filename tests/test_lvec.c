@@ -727,6 +727,22 @@ IVP_TEST(x87_edge_face_projection_retains_near_parallel_component)
     IVP_ASSERT_EQ(ivp_x87_edge_face_projection(&edge_rotation, &edge, &face.rot, &normal), 0x1p-60);
 }
 
+IVP_TEST(x87_penetration_response_preserves_gravity_speed)
+{
+    const ivp_vec3r_t gravity = {{0.0, -1.0, 0.0}};
+    const double step = 0x1.000001p-1;
+    ivp_vec3f_t direction = {{0x1.000002p-1f, 0.0f, -0x1.000002p-1f}};
+    ivp_vec3f_t impulse;
+    const double speed = ivp_x87_penetration_speed(&gravity, step);
+    IVP_ASSERT_EQ(speed, 0x1.000001p+0);
+    ivp_x87_penetration_impulse(&direction, 1.0f, speed, &impulse);
+    IVP_ASSERT_EQ(impulse.k[0], 0x1.000004p-1f);
+    IVP_ASSERT_EQ(impulse.k[2], -0x1.000004p-1f);
+    ivp_x87_penetration_velocity(&gravity, step, &direction);
+    IVP_ASSERT_EQ(direction.k[0], impulse.k[0]);
+    IVP_ASSERT_EQ(direction.k[2], impulse.k[2]);
+}
+
 IVP_TEST(x87_spring_impulse_preserves_elastic_residual_after_damping)
 {
     const ivp_vec3f_t direction = {{1.0f, 0.0f, 0.0f}};
@@ -1110,6 +1126,14 @@ IVP_TEST(slow_core_preserves_linear_damping_coefficient)
     IVP_ASSERT_EQ(core.speed.k[2], 0x1.ce3a60p-6f);
 }
 
+IVP_TEST(impact_iteration_impulse_preserves_extended_precision)
+{
+    const double masses[2] = {0x1.5474de4bf00e5p+17, 0x1.be3e401f602a6p+0};
+    const uint16_t precision = ivp_x87_enter_step();
+    const double impulse = ivp_x87_impact_iteration_impulse(masses, 0x1.1fb1c2p-1);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(impulse, 0x1.91304a588fc33p-3);
+}
 #endif
 
 int main(void)
@@ -1136,6 +1160,7 @@ int main(void)
     IVP_REGISTER(x87_tangent_reaction_matrix_preserves_small_angular_terms);
     IVP_REGISTER(x87_vertex_walk_compares_before_storing_gradient);
     IVP_REGISTER(x87_edge_face_projection_retains_near_parallel_component);
+    IVP_REGISTER(x87_penetration_response_preserves_gravity_speed);
     IVP_REGISTER(x87_spring_impulse_preserves_elastic_residual_after_damping);
     IVP_REGISTER(x87_world_impulse_preserves_torque_under_cancellation);
     IVP_REGISTER(x87_inverse_point_transform_preserves_anchor_offset);
@@ -1162,6 +1187,7 @@ int main(void)
     IVP_REGISTER(inverse_rotation_retains_small_axis_components);
     IVP_REGISTER(linear_damping_rounds_after_multiplying_velocity);
     IVP_REGISTER(slow_core_preserves_linear_damping_coefficient);
+    IVP_REGISTER(impact_iteration_impulse_preserves_extended_precision);
 #endif
     IVP_RUN_ALL();
 }
