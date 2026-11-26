@@ -18,6 +18,7 @@
 #include <ivp/dynamics/ivp_core.h>
 #include <ivp/dynamics/ivp_object.h>
 #include "collision/ivp_lvec.h"
+#include "math/ivp_x87.h"
 #include "dynamics/ivp_sim_internal.h"
 #include "dynamics/ivp_env_hot.h"
 #include "dynamics/ivp_env_parallel_tasks.h"
@@ -220,7 +221,11 @@ void ivp_core_inline_calc_at_quaternion(const ivp_core_t *core, ivp_time_t t, iv
 void ivp_core_inline_calc_at_position(const ivp_core_t *core, ivp_time_t t, ivp_vec3r_t *out)
 {
     double d_time = ivp_time_diff(t, core->time_of_last_psi);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_advance_position(&core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, d_time, out);
+#else
     lvp_add_multiple2(out, &core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, (D)d_time);
+#endif
 }
 
 void ivp_core_get_at_position(const ivp_core_t *core, ivp_time_t t, ivp_vec3r_t *out)
@@ -243,7 +248,7 @@ void ivp_core_calc_at_matrix_ref(const ivp_core_t *core, ivp_time_t current_time
         ivp_quat_set_interpolate_smoothly(&res, &core->q_world_f_core_last_psi, &core->q_world_f_core_next_psi,
                                           (ivp_real_t)(d_time * (double)core->i_delta_time));
         ivp_quat_to_mat3(&res, &out->rot);
-        lvp_add_multiple2(&out->pos, &core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, (D)d_time);
+        ivp_core_inline_calc_at_position(core, current_time, &out->pos);
         return;
     }
     *out = core->m_world_f_core_last_psi;
@@ -260,10 +265,16 @@ void ivp_core_calc_at_matrix(const ivp_core_t *core, ivp_time_t t, ivp_transform
 void ivp_core_test_push_core(const ivp_core_t *core, const ivp_vec3f_t *point_cs, const ivp_vec3f_t *impulse_cs,
                              const ivp_vec3f_t *impulse_ws, ivp_vec3f_t *speed_out, ivp_vec3f_t *rot_out)
 {
-    ivp_vec3f_t distances_2d, iri = ivp_core_inv_rot_inertia_f(core);
+    const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_test_push(point_cs, impulse_cs, impulse_ws, ivp_core_get_inv_mass_f(core),
+                      &iri, speed_out, rot_out);
+#else
+    ivp_vec3f_t distances_2d;
     lvf_cross(&distances_2d, point_cs, impulse_cs);
     lvf_set_pairwise_mult(rot_out, &distances_2d, &iri);
     lvf_set_multiple(speed_out, impulse_ws, (D)ivp_core_get_inv_mass_f(core));
+#endif
 }
 
 /* IVP_Core::async_push_core */
@@ -284,13 +295,24 @@ static void core_push_ws_impl(ivp_core_t *core, const ivp_vec3r_t *world_point, 
 {
     const ivp_transform_r_t *m_world_f_core = &core->m_world_f_core_last_psi;
     ivp_vec3f_t impulse_in_world = ivp_vec3f_from_r(impulse_r);
+    const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
+#if IVP_X87_ARITHMETIC
+    if (async) {
+        ivp_vec3f_t angular = ivp_vec3f_from_r(&core->rot_speed_change);
+        ivp_vec3f_t linear = ivp_vec3f_from_r(&core->speed_change);
+        ivp_x87_accumulate_world_impulse(m_world_f_core, world_point, &impulse_in_world,
+                                         ivp_core_get_inv_mass_f(core), &iri, &linear, &angular);
+        lvp_set_f(&core->rot_speed_change, &angular);
+        lvp_set_f(&core->speed_change, &linear);
+        return;
+    }
+#endif
     ivp_vec3f_t point_d_ws;
     lvf_subtract2_p(&point_d_ws, world_point, &m_world_f_core->pos);
     ivp_vec3f_t cross_point_dir;
     lvf_cross(&cross_point_dir, &point_d_ws, &impulse_in_world);
     ivp_vec3f_t tmp;
     lvm_vimult3_f(m_world_f_core, &cross_point_dir, &tmp);
-    ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
     lvf_set_pairwise_mult(&cross_point_dir, &tmp, &iri);
     if (async) {
         ivp_vec3f_t rsc = ivp_vec3f_from_r(&core->rot_speed_change), sc = ivp_vec3f_from_r(&core->speed_change);
@@ -450,6 +472,10 @@ void ivp_core_get_surface_speed_on_test(const ivp_core_t *core, const ivp_vec3f_
                                         const ivp_vec3f_t *center_speed_ws, const ivp_vec3f_t *rot_speed_cs,
                                         ivp_vec3f_t *speed_out_ws)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_surface_speed(&core->m_world_f_core_last_psi.rot, point_cs,
+                          center_speed_ws, rot_speed_cs, speed_out_ws);
+#else
     ivp_vec3f_t speed_cs;
     lvf_cross(&speed_cs, rot_speed_cs, point_cs);
     if (speed_out_ws == center_speed_ws) {
@@ -460,6 +486,7 @@ void ivp_core_get_surface_speed_on_test(const ivp_core_t *core, const ivp_vec3f_
         lvm_vmult3_f(&core->m_world_f_core_last_psi, &speed_cs, &rotated_speed);
         lvf_add2(speed_out_ws, &rotated_speed, center_speed_ws);
     }
+#endif
 }
 
 void ivp_core_get_surface_speed(const ivp_core_t *core, const ivp_vec3f_t *point_cs, ivp_vec3f_t *out_ws)
@@ -489,7 +516,12 @@ void ivp_core_get_diff_surface_speed_of_two_cores_on_test(const ivp_core_t *this
 
 double ivp_core_calc_virt_mass_worst_case(const ivp_core_t *core, const ivp_vec3f_t *core_point)
 {
-    ivp_vec3f_t worst_direction, iri = ivp_core_inv_rot_inertia_f(core);
+    const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(core);
+#if IVP_X87_ARITHMETIC
+    const float inverse_mass = core->pinned ? 1.0f : ivp_core_get_inv_mass_f(core);
+    const double ret = ivp_x87_worst_case_effective_mass(core_point, &iri, inverse_mass);
+#else
+    ivp_vec3f_t worst_direction;
     worst_direction.k[0] = core_point->k[1] * core_point->k[1] + core_point->k[2] * core_point->k[2];
     worst_direction.k[1] = core_point->k[0] * core_point->k[0] + core_point->k[2] * core_point->k[2];
     worst_direction.k[2] = core_point->k[0] * core_point->k[0] + core_point->k[1] * core_point->k[1];
@@ -504,6 +536,7 @@ double ivp_core_calc_virt_mass_worst_case(const ivp_core_t *core, const ivp_vec3
         dv = 1.0 + max_of_coords;
     }
     double ret = 1.0f / dv;
+#endif
     IVP_ASSERT(ret < 1e31f); /* OG test for NaN */
     return ret;
 }
@@ -516,7 +549,11 @@ double ivp_core_calc_correct_virt_mass(const ivp_core_t *core, const ivp_vec3f_t
         ivp_core_test_push_core(core, core_point, direction_core, direction_world, &ret_center_speed, &ret_rot_speed);
         ivp_vec3f_t ret_world_speed;
         ivp_core_get_surface_speed_on_test(core, core_point, &ret_center_speed, &ret_rot_speed, &ret_world_speed);
+#if IVP_X87_ARITHMETIC
+        double speed_after_test_push = ivp_x87_length3f(ret_world_speed.k);
+#else
         double speed_after_test_push = (double)lvf_real_length(&ret_world_speed);
+#endif
         return 1.0f / speed_after_test_push;
     }
     return 1.0;
@@ -581,6 +618,11 @@ void ivp_core_abort_all_async_pushes(ivp_core_t *core)
 /* IVP_Core::damp_object */
 static void core_damp_object(ivp_core_t *core, double delta_time_, const ivp_vec3f_t *rotation_factor, double speed_factor)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_vec3f_t speed = ivp_core_speed_f(core);
+    ivp_x87_damp_velocity(&speed, &core->rot_speed, rotation_factor, speed_factor, delta_time_);
+    ivp_core_set_speed_f(core, &speed);
+#else
     ivp_vec3f_t rot;
     lvf_set_multiple(&rot, rotation_factor, (D)delta_time_);
     double qlen = (double)lvf_quad_length(&rot);
@@ -600,6 +642,7 @@ static void core_damp_object(ivp_core_t *core, double delta_time_, const ivp_vec
     ivp_vec3f_t sp = ivp_core_speed_f(core);
     lvf_mult(&sp, (D)speed_factor);
     ivp_core_set_speed_f(core, &sp);
+#endif
 }
 
 /* IVP_Core::global_damp_core */
@@ -611,7 +654,13 @@ void ivp_core_global_damp_core(ivp_core_t *core, double d_time)
         ivp_vec3f_t add_on, rot_damp_factor;
         lvf_set3(&add_on, s_add_on, s_add_on, s_add_on);
         lvf_add2(&rot_damp_factor, &rdf, &add_on);
-        core_damp_object(core, d_time, &rot_damp_factor, (double)((float)core->speed_damp_factor + s_add_on));
+#if IVP_X87_ARITHMETIC
+        /* The two binary32 coefficients are added before the binary64 call argument. */
+        const double linear_damping = (double)(float)core->speed_damp_factor + (double)s_add_on;
+#else
+        const double linear_damping = (double)((float)core->speed_damp_factor + s_add_on);
+#endif
+        core_damp_object(core, d_time, &rot_damp_factor, linear_damping);
     } else {
         core_damp_object(core, d_time, &rdf, (double)(float)core->speed_damp_factor);
     }
@@ -1118,16 +1167,25 @@ static void cnps_calc_rotation_matrix(ivp_core_t *pc, double delta_sim_time, ivp
     }
     ivp_quat_set_very_fast_multiple(q_core_f_core, &pc->rot_speed, (ivp_real_t)dt);
     ivp_vec3f_t ri = ivp_core_rot_inertia_f(pc), iri = ivp_core_inv_rot_inertia_f(pc);
+#if IVP_X87_ARITHMETIC
+    double gyroscopic_coefficients[3];
+    ivp_x87_gyroscopic_coefficients(&ri, &iri, gyroscopic_coefficients);
+#else
     /* IVP_U_Point diff_other_rot_inertia_div_this((ri1 - ri2) * iri0, ...): float products */
     double d0 = (double)((ri.k[1] - ri.k[2]) * iri.k[0]);
     double d1 = (double)((ri.k[2] - ri.k[0]) * iri.k[1]);
     double d2 = (double)((ri.k[0] - ri.k[1]) * iri.k[2]);
+#endif
     for (int i = 1;; i++) {
+#if IVP_X87_ARITHMETIC
+        ivp_x87_add_gyroscopic_velocity(&pc->rot_speed, gyroscopic_coefficients, dt);
+#else
         ivp_vec3f_t hp;
         lvf_setd3(&hp, (D)((double)(pc->rot_speed.k[1] * pc->rot_speed.k[2]) * d0),
                   (D)((double)(pc->rot_speed.k[2] * pc->rot_speed.k[0]) * d1),
                   (D)((double)(pc->rot_speed.k[0] * pc->rot_speed.k[1]) * d2));
         lvf_add_multiple(&pc->rot_speed, &hp, (D)dt);
+#endif
         if (i >= steps) break;
         ivp_quatr_t rot_matrix;
         ivp_quat_set_very_fast_multiple(&rot_matrix, &pc->rot_speed, (ivp_real_t)dt);
@@ -1137,6 +1195,11 @@ static void cnps_calc_rotation_matrix(ivp_core_t *pc, double delta_sim_time, ivp
 
 static void cnps_calc_psi_rotation_axis(ivp_core_t *core, const ivp_quatr_t *q_core_f_core)
 {
+#if IVP_X87_ARITHMETIC
+    const ivp_vec3r_t rotation = {{q_core_f_core->x, q_core_f_core->y, q_core_f_core->z}};
+    core->abs_omega = ivp_x87_quat_rotation_axis(&rotation, &core->m_world_f_core_last_psi.rot,
+                                               core->i_delta_time, &core->rotation_axis_world_space);
+#else
     double qlen = (double)q_core_f_core->x * (double)q_core_f_core->x + (double)q_core_f_core->y * (double)q_core_f_core->y +
                   (double)q_core_f_core->z * (double)q_core_f_core->z;
     if (qlen > P_DOUBLE_EPS) {
@@ -1153,6 +1216,7 @@ static void cnps_calc_psi_rotation_axis(ivp_core_t *core, const ivp_quatr_t *q_c
         core->abs_omega = 0.0f;
         lvf_set3(&core->rotation_axis_world_space, 1.0f, 0.0f, 0.0f);
     }
+#endif
     core->max_surface_rot_speed = (float)core->max_surface_deviation * core->abs_omega;
 }
 
@@ -1196,7 +1260,11 @@ static void cnps_calc_next_psi_matrix_body(ivp_core_t *core,
     }
     {
         ivp_vec3f_t sp = ivp_core_speed_f(core);
+#if IVP_X87_ARITHMETIC
+        core->current_speed = (float)ivp_x87_length3f(sp.k);
+#else
         core->current_speed = (float)lvf_real_length(&sp);
+#endif
     }
     /* retail RVA 0x1E300 keeps the event's double step through rotation */
     double simulation_delta_time = (double)event_sim->delta_time;
@@ -1210,9 +1278,8 @@ static void cnps_calc_next_psi_matrix_body(ivp_core_t *core,
     }
     {
         ivp_time_t now = ivp_env_get_current_time(env);
-        double d_last_time = ivp_time_diff(now, core->time_of_last_psi);
+        ivp_core_inline_calc_at_position(core, now, &core->pos_world_f_core_last_psi);
         core->time_of_last_psi = now;
-        lvp_add_multiple(&core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, (D)d_last_time);
         ivp_vec3f_t sp = ivp_core_speed_f(core);
         lvp_set_f(&core->delta_world_f_core_psis, &sp);
         core->q_world_f_core_last_psi = core->q_world_f_core_next_psi;

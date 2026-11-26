@@ -1174,14 +1174,18 @@ static void su_init_moving_core_for_psi(ivp_core_t *core, ivp_time_t c_time)
     }
 
     IVP_ASSERT(!core->physical_unmoveable);
-    double d_time = ivp_time_diff(c_time, core->time_of_last_psi);
     ivp_quat_to_mat3(&core->q_world_f_core_next_psi, &core->m_world_f_core_last_psi.rot);
+#if IVP_X87_ARITHMETIC
+    ivp_core_inline_calc_at_position(core, c_time, &core->m_world_f_core_last_psi.pos);
+#else
+    const double d_time = ivp_time_diff(c_time, core->time_of_last_psi);
     core->m_world_f_core_last_psi.pos.k[0] =
         (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[0] + (double)core->delta_world_f_core_psis.k[0] * d_time);
     core->m_world_f_core_last_psi.pos.k[1] =
         (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[1] + (double)core->delta_world_f_core_psis.k[1] * d_time);
     core->m_world_f_core_last_psi.pos.k[2] =
         (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[2] + (double)core->delta_world_f_core_psis.k[2] * d_time);
+#endif
 }
 
 static int su_fast_moving_flag(ivp_core_t *my_core)

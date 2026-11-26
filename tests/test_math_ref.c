@@ -253,6 +253,17 @@ IVP_TEST(ref_res_eps_constant) {
 
 /* ═══ IVP_U_Quat ════════════════════════════════════════════════════════ */
 
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+IVP_TEST(ref_quat_normalize_preserves_extended_precision) {
+    ivp_quatr_t q = {-0x1.3dd0e0p-25, 0x1.751962p-23, -0x1.6a0ae4p-1, 0x1.6a0a3ep-1};
+    IVP_ASSERT_EQ(ivp_quat_normalize(&q), IVP_OK);
+    IVP_ASSERT_TRUE(q.x == -0x1.3dd04a3eb4013p-25);
+    IVP_ASSERT_TRUE(q.y == 0x1.7518b23208462p-23);
+    IVP_ASSERT_TRUE(q.z == -0x1.6a0a3967c316dp-1);
+    IVP_ASSERT_TRUE(q.w == 0x1.6a099368114f0p-1);
+}
+#endif
+
 IVP_TEST(ref_quat_fast_multiple_with_clip) {
     ivp_vec3f_t w = {{ 1.3f, -0.7f, 2.1f }};
     ivp_quatr_t q;
@@ -260,11 +271,19 @@ IVP_TEST(ref_quat_fast_multiple_with_clip) {
     static const double r1[4] = { 0x1.62facf7e43d54p-7, -0x1.7e4a8aaf5ebdep-8,
                                   0x1.1eb492f6bcd16p-6, 0x1.ffe201d2a58dbp-1 };
     Q_LIBM_EQ(q, r1);
+    /* x87 values measured with IVP_U_Quat using the same float inputs. */
     /* |sin(angle/2)|^2 > 1: clipped by (1 - P_RES_EPS) */
     ivp_vec3f_t big = {{ 200.0f, -150.0f, 90.0f }};
     ivp_quat_set_fast_multiple_with_clip(&q, &big, (ivp_real_t)0.02f);
+#if IVP_X87_ARITHMETIC
+    static const double r2[4] = {
+        0x1.2a53193a6dd58p-1, -0x1.4742bb9a9d603p-1,
+        0x1.00fef1329d06ap-1, 0x1.28950325edc17p-13
+    };
+#else
     static const double r2[4] = { 0x1.2a53193a6dd58p-1, -0x1.4742bb9a9d603p-1,
                                   0x1.00fef1329d06ap-1, 0x1.289503240a61cp-13 };
+#endif
     Q_LIBM_EQ(q, r2);
 }
 
@@ -317,25 +336,49 @@ IVP_TEST(ref_quat_normize_and_products) {
     Q_EQ(a, QA);
     ivp_quatr_t b = mkq(-0.3f, 0.6f, 0.1f, 0.7f);
     ivp_quat_normalize(&b);
+#if IVP_X87_ARITHMETIC
+    static const double normalized_b[4] = {
+        -0x1.3b2e391e8a202p-2, 0x1.3b2e391e8a202p-1,
+        0x1.a43da0cef3d2bp-4, 0x1.6fb5ebf018752p-1
+    };
+    Q_EQ(b, normalized_b);
+#else
     Q_EQ(b, QB);
+#endif
 
     ivp_quatr_t r;
     ivp_quat_mult(&r, &a, &b);
 #if IVP_X87_ARITHMETIC
-    static const double mult_ab[4] = { -0x1.fdda9f8887c0ap-2, 0x1.304f903bd5559p-3,
-                                       0x1.cb22b09107b63p-2, 0x1.746158879f02ap-1 };
+    static const double mult_ab[4] = {
+        -0x1.fdda9f8887c0bp-2, 0x1.304f903bd555ap-3,
+        0x1.cb22b09107b62p-2, 0x1.746158879f029p-1
+    };
 #else
     static const double mult_ab[4] = { -0x1.fdda9f8887c0ap-2, 0x1.304f903bd5557p-3,
                                        0x1.cb22b09107b64p-2, 0x1.746158879f029p-1 };
 #endif
     Q_NEAR(r, mult_ab, 1e-6);
     ivp_quat_set_div_unit_quat(&r, &a, &b);
+#if IVP_X87_ARITHMETIC
+    static const double div_ab[4] = {
+        0x1.5c5b1168f4f9ep-1, -0x1.06ef675857888p-1,
+        0x1.204b5c9481162p-2, 0x1.c3209857c8e07p-2
+    };
+#else
     static const double div_ab[4] = { 0x1.5c5b1168f4f9ep-1, -0x1.06ef675857888p-1,
                                       0x1.204b5c9481163p-2, 0x1.c3209857c8e09p-2 };
+#endif
     Q_NEAR(r, div_ab, 1e-6);
     ivp_quat_set_invert_mult(&r, &a, &b);
+#if IVP_X87_ARITHMETIC
+    static const double invmult_ab[4] = {
+        -0x1.55aea14ca40dcp-9, 0x1.b47218bc2bb36p-1,
+        -0x1.204b5c9481162p-2, 0x1.c3209857c8e07p-2
+    };
+#else
     static const double invmult_ab[4] = { -0x1.55aea14ca41p-9, 0x1.b47218bc2bb36p-1,
                                           -0x1.204b5c9481163p-2, 0x1.c3209857c8e09p-2 };
+#endif
     Q_NEAR(r, invmult_ab, 1e-6);
     /* in-place multiply (res aliases q1) */
     ivp_quatr_t ip = a;
@@ -372,17 +415,32 @@ IVP_TEST(ref_quat_interpolate_smoothly) {
     static const double l06[4] = { -0x1.1225054b93e7ap-3, 0x1.1225054b93e7ap-2,
                                    0x1.0f2e258d1862ap-2, 0x1.832446fe12b3ep-1 };
     Q_NEAR(r, l06, 2e-6);
+    /* x87 values measured with IVP_U_Quat using the same float inputs. */
     /* cos(omega) >= 1 - 0.001f: linear + normize_correct_step(3) */
     static const double QC[4] = { 0x1.17eeb13f31cdfp-3, -0x1.089cbab00ca49p-2,
                                   0x1.038168805596dp-1, 0x1.9f357468564e4p-1 };
     ivp_quatr_t c = mkq(QC[0], QC[1], QC[2], QC[3]);
     ivp_quat_set_interpolate_smoothly(&r, &a, &c, (ivp_real_t)0.7f);
+#if IVP_X87_ARITHMETIC
+    static const double c07[4] = {
+        0x1.120297b4fee39p-3, -0x1.07492f39734b2p-2,
+        0x1.03b60c659a186p-1, 0x1.9f89add73f5f1p-1
+    };
+#else
     static const double c07[4] = { 0x1.120297b4fee39p-3, -0x1.07492f39734b2p-2,
                                    0x1.03b60c659a186p-1, 0x1.9f89add73f5f2p-1 };
+#endif
     Q_NEAR(r, c07, 2e-6);
     ivp_quat_set_interpolate_smoothly(&r, &a, &c, (ivp_real_t)-0.5f);
+#if IVP_X87_ARITHMETIC
+    static const double cm05[4] = {
+        0x1.f49608b68a5fcp-4, -0x1.01f3e96fa1deep-2,
+        0x1.04818b2116193p-1, 0x1.a0cf4569f0c64p-1
+    };
+#else
     static const double cm05[4] = { 0x1.f49608b68a5fcp-4, -0x1.01f3e96fa1deep-2,
                                     0x1.04818b2116193p-1, 0x1.a0cf4569f0c65p-1 };
+#endif
     Q_NEAR(r, cm05, 2e-6);
     /* ivp_quat_slerp uses the same reference algorithm */
     ivp_quat_slerp(&r, &a, &b, (ivp_real_t)0.3f);
@@ -402,10 +460,18 @@ IVP_TEST(ref_quat_fast_normize_and_correct_steps) {
     static const double f2[4] = { 0x1.99bcccc5d7d91p-4, -0x1.99bcccc5d7d91p-3,
                                   0x1.334d9a146ce2bp-2, 0x1.dac8873b9230ap-1 };
     Q_EQ(q, f2);
+    /* x87 values measured with IVP_U_Quat using the same float inputs. */
     q = q0;
     ivp_quat_normalize(&q);
+#if IVP_X87_ARITHMETIC
+    static const double n2[4] = {
+        0x1.99bcccc5d7e1ap-4, -0x1.99bcccc5d7e1ap-3,
+        0x1.334d9a146ce91p-2, 0x1.dac8873b923a8p-1
+    };
+#else
     static const double n2[4] = { 0x1.99bcccc5d7e19p-4, -0x1.99bcccc5d7e19p-3,
                                   0x1.334d9a146ce91p-2, 0x1.dac8873b923a7p-1 };
+#endif
     Q_EQ(q, n2);
 
     static const double cs[6][4] = {
@@ -457,44 +523,89 @@ IVP_TEST(ref_quat_matrix_conversions) {
     ivp_quatr_t a = mkq(QA[0], QA[1], QA[2], QA[3]);
     ivp_mat3r_t m;
     ivp_quat_to_mat3(&a, &m);
+    /* x87 values measured with IVP_U_Quat using the same float inputs. */
+#if IVP_X87_ARITHMETIC
+    static const double qa_m[9] = {
+        0x1.6aeda899b90c2p-2, -0x1.c823b27a952bfp-1, -0x1.22df1ca1036f0p-2,
+        0x1.86084356c146cp-1, 0x1.ce16cf4f76e3ep-2, -0x1.dbf8ba03a5317p-2,
+        0x1.15a66c982981ep-1, -0x1.a715f8d7cfc08p-5, 0x1.ad5db51337218p-1
+    };
+#else
     static const double qa_m[9] = {
         0x1.6aeda899b90c2p-2, -0x1.c823b27a952cp-1, -0x1.22df1ca1036fp-2,
         0x1.86084356c146cp-1, 0x1.ce16cf4f76e3ep-2, -0x1.dbf8ba03a5317p-2,
         0x1.15a66c982981ep-1, -0x1.a715f8d7cfc08p-5, 0x1.ad5db51337218p-1 };
+#endif
     M_NEAR(m, qa_m, 1e-6);
     ivp_quatr_t r;
     ivp_quat_from_mat3(&r, &m);
+#if IVP_X87_ARITHMETIC
+    static const double qa_mq[4] = {
+        0x1.042e219937315p-3, -0x1.042e219937315p-2,
+        0x1.042e219937314p-1, 0x1.a049cfc39df5cp-1
+    };
+#else
     static const double qa_mq[4] = { 0x1.042e219937314p-3, -0x1.042e219937314p-2,
                                      0x1.042e219937314p-1, 0x1.a049cfc39df5cp-1 };
+#endif
     Q_NEAR(r, qa_mq, 1e-6);
 
     /* trace < 0 branch (from a normalized (0.7, 0.6, -0.3, 0.1)) */
     ivp_quatr_t b = mkq(0.7f, 0.6f, -0.3f, 0.1f);
     ivp_quat_normalize(&b);
     ivp_quat_to_mat3(&b, &m);
+#if IVP_X87_ARITHMETIC
+    static const double qb2_m[9] = {
+        0x1.af284dbd573dcp-5, 0x1.e50d796788dc6p-1, -0x1.435e509ed8feap-2,
+        0x1.a46102b0dc1d4p-1, -0x1.c4b737f13ff7dp-3, -0x1.0d794402209ebp-1,
+        -0x1.230815bcc5fd8p-1, -0x1.da46139e6c128p-3, -0x1.9435e4ab9cb87p-1
+    };
+#else
     static const double qb2_m[9] = {
         0x1.af284dbd573ep-5, 0x1.e50d796788dc8p-1, -0x1.435e509ed8fecp-2,
         0x1.a46102b0dc1d6p-1, -0x1.c4b737f13ff88p-3, -0x1.0d794402209ebp-1,
         -0x1.230815bcc5fd9p-1, -0x1.da46139e6c127p-3, -0x1.9435e4ab9cb88p-1 };
+#endif
     M_NEAR(m, qb2_m, 1e-6);
     ivp_quat_from_mat3(&r, &m);
+#if IVP_X87_ARITHMETIC
+    static const double qb2_mq[4] = {
+        0x1.6fb5ebf018752p-1, 0x1.3b2e391e8a202p-1,
+        -0x1.3b2e391e8a202p-2, 0x1.a43da0cef3d2bp-4
+    };
+#else
     static const double qb2_mq[4] = { 0x1.6fb5ebf018753p-1, 0x1.3b2e391e8a202p-1,
                                       -0x1.3b2e391e8a202p-2, 0x1.a43da0cef3d2ap-4 };
+#endif
     Q_NEAR(r, qb2_mq, 1e-6);
 
     /* m00 == m11 > m22 tie: the reference picks i = 0 (x branch) */
     static const float tie[9] = { 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, -1.0f };
     set_m(&m, tie);
     ivp_quat_from_mat3(&r, &m);
+#if IVP_X87_ARITHMETIC
+    static const double tie_q[4] = {
+        0x1.6a09e667f3bcdp-1, 0x1.6a09e667f3bcdp-1,
+        0x0.0000000000000p+0, 0x0.0000000000000p+0
+    };
+#else
     static const double tie_q[4] = { 0x1.6a09e667f3bcdp-1, 0x1.6a09e667f3bccp-1, 0.0, 0.0 };
+#endif
     Q_EQ(r, tie_q);
     /* arbitrary (non-orthonormal) matrix: result is normized */
     static const float gen[9] = { -0.25f, 0.5f, 0.125f, 0.375f, -0.25f, 0.75f,
                                   -0.625f, 0.0625f, -0.5f };
     set_m(&m, gen);
     ivp_quat_from_mat3(&r, &m);
+#if IVP_X87_ARITHMETIC
+    static const double gen_q[4] = {
+        0x1.8d36f1dece0bbp-1, 0x1.cf6ac4d945b85p-2,
+        -0x1.08cf4be9deb28p-2, -0x1.6c1d086192357p-2
+    };
+#else
     static const double gen_q[4] = { 0x1.8d36f1dece0bap-1, 0x1.cf6ac4d945b86p-2,
                                      -0x1.08cf4be9deb28p-2, -0x1.6c1d086192357p-2 };
+#endif
     Q_EQ(r, gen_q);
 
     /* 4x4 variants (no normize, column-major convention) */
@@ -965,6 +1076,9 @@ static int run_math_reference_tests(void) {
     IVP_REGISTER(ref_inline_math_approximations);
     IVP_REGISTER(ref_invert_2x2);
     IVP_REGISTER(ref_res_eps_constant);
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    IVP_REGISTER(ref_quat_normalize_preserves_extended_precision);
+#endif
     IVP_REGISTER(ref_quat_fast_multiple_with_clip);
     IVP_REGISTER(ref_quat_very_fast_multiple);
     IVP_REGISTER(ref_quat_set_variants_and_angles);

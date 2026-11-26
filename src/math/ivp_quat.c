@@ -35,6 +35,7 @@ static inline void qd_store(ivp_quatr_t *q, const quatd_t *r) {
     q->w = (ivp_real_t)r->w;
 }
 
+#if !IVP_X87_ARITHMETIC
 static void qd_normize_quat(quatd_t *quat) {
     double square = quat->x * quat->x + quat->y * quat->y +
                     quat->z * quat->z + quat->w * quat->w;
@@ -46,6 +47,7 @@ static void qd_normize_quat(quatd_t *quat) {
         quat->w *= dist;
     }
 }
+#endif
 
 static void qd_normize_correct_step(quatd_t *quat, int steps) {
     double square = quat->x * quat->x + quat->y * quat->y +
@@ -66,6 +68,10 @@ static void qd_normize_correct_step(quatd_t *quat, int steps) {
 /* ── Conversion: quaternion → matrix ────────────────────────────────────── */
 
 void ivp_quat_to_mat3(const ivp_quatr_t *q, ivp_mat3r_t *m) {
+#if IVP_X87_ARITHMETIC
+    const double rotation[4] = {q->x, q->y, q->z, q->w};
+    ivp_x87_quat_to_mat3(rotation, m);
+#else
     quatd_t quat = qd_load(q);
     double wx, wy, wz, xx, yy, yz, xy, xz, zz, x2, y2, z2;
 
@@ -85,6 +91,7 @@ void ivp_quat_to_mat3(const ivp_quatr_t *q, ivp_mat3r_t *m) {
     m->rows[2].k[0] = (ivp_real_t)(xz - wy);
     m->rows[2].k[1] = (ivp_real_t)(yz + wx);
     m->rows[2].k[2] = (ivp_real_t)(1.0 - (xx + yy));
+#endif
 }
 
 void ivp_quat_to_mat4x4(const ivp_quatr_t *q, double m[4][4]) {
@@ -120,6 +127,12 @@ void ivp_quat_to_mat4x4(const ivp_quatr_t *q, double m[4][4]) {
 /* ── Conversion: matrix → quaternion ────────────────────────────────────── */
 
 void ivp_quat_from_mat3(ivp_quatr_t *q, const ivp_mat3r_t *mat) {
+#if IVP_X87_ARITHMETIC
+    double rotation[4];
+    ivp_x87_quat_from_mat3(rotation, mat);
+    const quatd_t quat = {rotation[0], rotation[1], rotation[2], rotation[3]};
+    qd_store(q, &quat);
+#else
     double m[3][3];
     for (int r = 0; r < 3; r++)
         for (int c = 0; c < 3; c++)
@@ -160,6 +173,7 @@ void ivp_quat_from_mat3(ivp_quatr_t *q, const ivp_mat3r_t *mat) {
     }
     qd_normize_quat(&quat);
     qd_store(q, &quat);
+#endif
 }
 
 void ivp_quat_from_mat4x4(ivp_quatr_t *q, const double m[4][4]) {
@@ -220,6 +234,13 @@ void ivp_quat_set_div_unit_quat(ivp_quatr_t *out, const ivp_quatr_t *q1,
 
 void ivp_quat_set_invert_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
                               const ivp_quatr_t *q2) {
+#if IVP_X87_ARITHMETIC
+    const ivp_real_t left[4] = {q1->x, q1->y, q1->z, q1->w};
+    const ivp_real_t right[4] = {q2->x, q2->y, q2->z, q2->w};
+    ivp_real_t rotation[4];
+    ivp_x87_quat_invert_mult(rotation, left, right);
+    *out = (ivp_quatr_t){rotation[0], rotation[1], rotation[2], rotation[3]};
+#else
     quatd_t a = qd_load(q1);
     quatd_t b = qd_load(q2);
     quatd_t q = { -a.x, -a.y, -a.z, a.w };
@@ -231,6 +252,7 @@ void ivp_quat_set_invert_mult(ivp_quatr_t *out, const ivp_quatr_t *q1,
     r.w = q.w * b.w - q.x * b.x - q.y * b.y - q.z * b.z;
     r.x = q.y * b.z + q.w * b.x + q.x * b.w - q.z * b.y;
     qd_store(out, &r);
+#endif
 }
 
 void ivp_quat_invert(ivp_quatr_t *q) {
@@ -247,10 +269,16 @@ void ivp_quat_invert(ivp_quatr_t *q) {
 /* ── Normalization ──────────────────────────────────────────────────────── */
 
 ivp_result_t ivp_quat_normalize(ivp_quatr_t *q) {
+#if IVP_X87_ARITHMETIC
+    double rotation[4] = {q->x, q->y, q->z, q->w};
+    if (!ivp_x87_quat_normalize(rotation)) return IVP_ERR_NORMALIZATION_FAILED;
+    const quatd_t quat = {rotation[0], rotation[1], rotation[2], rotation[3]};
+#else
     quatd_t quat = qd_load(q);
     double square = quat.x * quat.x + quat.y * quat.y + quat.z * quat.z + quat.w * quat.w;
     if (!(square > IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     qd_normize_quat(&quat);
+#endif
     qd_store(q, &quat);
     return IVP_OK;
 }
@@ -310,6 +338,11 @@ void ivp_quat_set_fast_multiple(ivp_quatr_t *q, const ivp_vec3r_t *angles,
 void ivp_quat_set_fast_multiple_with_clip(ivp_quatr_t *q,
                                            const ivp_vec3f_t *angles,
                                            ivp_real_t factor) {
+#if IVP_X87_ARITHMETIC
+    ivp_real_t rotation[4];
+    ivp_x87_quat_set_fast_multiple_with_clip(rotation, angles->k, (double)factor);
+    *q = (ivp_quatr_t){rotation[0], rotation[1], rotation[2], rotation[3]};
+#else
     double f = (double)factor * .5;
     quatd_t r;
     r.x = ivp_sind((double)angles->k[0] * f);  /* IVP_Inline_Math::ivp_sinf (double) */
@@ -326,6 +359,7 @@ void ivp_quat_set_fast_multiple_with_clip(ivp_quatr_t *q,
     }
     r.w = sqrt(1.0 - qlen);
     qd_store(q, &r);
+#endif
 }
 
 #if !IVP_X87_ARITHMETIC
@@ -441,6 +475,9 @@ void ivp_quat_set_from_rotation_vectors(ivp_quatr_t *q,
 
 void ivp_quat_set_interpolate_smoothly(ivp_quatr_t *out, const ivp_quatr_t *from_in,
                                        const ivp_quatr_t *to_in, ivp_real_t t_in) {
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    ivp_x87_quat_interpolate(out, from_in, to_in, t_in);
+#else
     quatd_t from = qd_load(from_in);
     quatd_t to = qd_load(to_in);
     double t = (double)t_in;
@@ -473,6 +510,7 @@ void ivp_quat_set_interpolate_smoothly(ivp_quatr_t *out, const ivp_quatr_t *from
         qd_normize_correct_step(&res, 3);
     }
     qd_store(out, &res);
+#endif
 }
 
 void ivp_quat_set_interpolate_linear(ivp_quatr_t *out, const ivp_quatr_t *from_in,

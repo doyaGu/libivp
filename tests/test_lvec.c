@@ -590,8 +590,16 @@ static bool exercise_surface_speed_aliases(void)
                 center.k[row] = random_float(&random_state);
                 rotation.k[row] = random_float(&random_state);
             }
-            for (int alias = 0; ok && alias < 4; alias++) {
+#if IVP_X87_ARITHMETIC
+            ivp_vec3f_t expected;
+            ivp_core_get_surface_speed_on_test(&core, &point, &center, &rotation, &expected);
+            const int first_alias = 1;
+#else
+            const int first_alias = 0;
+#endif
+            for (int alias = first_alias; ok && alias < 4; alias++) {
                 ivp_vec3f_t p = point, c = center, r = rotation, actual;
+#if !IVP_X87_ARITHMETIC
                 ivp_vec3f_t cross, transformed, expected;
                 scalar_cross(&cross, &rotation, &point);
                 scalar_transform(&core.m_world_f_core_last_psi, &cross,
@@ -605,6 +613,7 @@ static bool exercise_surface_speed_aliases(void)
                     expected.k[1] = transformed.k[1] + center.k[1];
                     expected.k[2] = transformed.k[2] + center.k[2];
                 }
+#endif
                 ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &c : alias == 2 ? &p : &r;
                 ivp_core_get_surface_speed_on_test(&core, &p, &c, &r, out);
                 ok = ok && same_vec_result(out, &expected);
@@ -619,6 +628,20 @@ static bool exercise_surface_speed_aliases(void)
 IVP_TEST(surface_speed_preserves_scalar_rounding_and_aliases)
 {
     IVP_ASSERT_TRUE(exercise_surface_speed_aliases());
+#if IVP_X87_ARITHMETIC
+    ivp_core_t core = {0};
+    for (int axis = 0; axis < 3; ++axis)
+        core.m_world_f_core_last_psi.rot.rows[axis].k[axis] = (D)1;
+    /* (1 + 2^-23)^2 - (1 + 2^-22) leaves a nonzero cross product
+     * only when the products are kept wide through the subtraction. */
+    const ivp_vec3f_t rotation = {{0.0f, 0x1.000002p0f, 1.0f}};
+    const ivp_vec3f_t point = {{0.0f, 0x1.000004p0f, 0x1.000002p0f}};
+    const ivp_vec3f_t center = {{0.0f, 0.0f, 0.0f}};
+    const ivp_vec3f_t expected = {{0x1p-46f, 0.0f, 0.0f}};
+    ivp_vec3f_t velocity;
+    ivp_core_get_surface_speed_on_test(&core, &point, &center, &rotation, &velocity);
+    IVP_ASSERT_TRUE(same_vec_result(&velocity, &expected));
+#endif
 }
 
 #ifdef IVP_REAL_DOUBLE
@@ -639,6 +662,126 @@ IVP_TEST(triangle_inverse_length_preserves_binary64_precision)
 }
 #endif
 
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+IVP_TEST(x87_world_impulse_preserves_torque_under_cancellation)
+{
+    ivp_transform_r_t transform;
+    ivp_transform_identity(&transform);
+    const ivp_vec3r_t point = {{0x1.000002p+0, 1.0, 0.0}};
+    const ivp_vec3f_t impulse = {{1.0f, 0x1.fffffep-1f, 0.0f}};
+    const ivp_vec3f_t inverse_inertia = {{1.0f, 1.0f, 2.0f}};
+    ivp_vec3f_t linear = {{0.0f, 0.0f, 0.0f}};
+    ivp_vec3f_t angular = {{0.0f, 0.0f, -0x1p-23f}};
+    ivp_x87_accumulate_world_impulse(&transform, &point, &impulse, 0.5f, &inverse_inertia, &linear, &angular);
+    IVP_ASSERT_EQ(angular.k[2], -0x1p-46f);
+    IVP_ASSERT_EQ(linear.k[0], 0.5f);
+}
+
+IVP_TEST(x87_inverse_point_transform_preserves_anchor_offset)
+{
+    const double rotation[3][3] = {
+        {-0x1.fffffffffffdcp-1, 0.0, 0x1.777a5bffffff3p-24},
+        {0.0, 1.0, 0.0},
+        {-0x1.777a5bffffff3p-24, 0.0, -0x1.fffffffffffdcp-1}
+    };
+    const double origin[3] = {0x1.6de49ap+9, -0x1.ac6252p+3, -0x1.b4ded2p+9};
+    const double point[3] = {0x1.6cd3aap+9, -0x1.a45292p+3, -0x1.b0e044p+9};
+    double local[3];
+    ivp_x87_inverse_transform_point3d(rotation, origin, point, local);
+    IVP_ASSERT_EQ(local[0], 0x1.10effa24353dap+1);
+    IVP_ASSERT_EQ(local[1], 0x1.01f8p-2);
+    IVP_ASSERT_EQ(local[2], -0x1.ff4700c829000p+2);
+}
+
+IVP_TEST(x87_position_advance_retains_precision_to_writeback)
+{
+    ivp_vec3r_t position = {{0.0, 0.0, -0x1.2fe2ea0000fd7p+5}};
+    const ivp_vec3r_t velocity = {{0.0, 0.0, -0x1.c92dfep-6}};
+    const double elapsed = 0x1.a4689a6970000p+6 - 0x1.a467055980000p+6;
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_advance_position(&position, &velocity, elapsed, &position);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(position.k[2], -0x1.2fe3009b12c68p+5);
+}
+
+#endif
+
+#if IVP_X87_ARITHMETIC
+IVP_TEST(x87_gyroscopic_update_retains_inertia_difference_precision)
+{
+    const ivp_vec3f_t inertia = {{0x1.a7c4c4p-2f, 0x1.c6ba5cp-1f, 0x1.93e218p+0f}};
+    const ivp_vec3f_t inverse_inertia = {{0x1.354d06p+1f, 0x1.203e20p+0f, 0x1.44878cp-1f}};
+    ivp_vec3f_t angular_velocity = {{0x1.5e37a4p+1f, 0x1.95482ap+1f, 0x1.e370d4p+1f}};
+    double coefficients[3];
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_gyroscopic_coefficients(&inertia, &inverse_inertia, coefficients);
+    ivp_x87_add_gyroscopic_velocity(&angular_velocity, coefficients, 0x1.f07c1f07c1f08p-7);
+    ivp_x87_leave_step(precision);
+#ifdef IVP_REAL_DOUBLE
+    IVP_ASSERT_EQ(coefficients[0], -0x1.aa8b151efef80p+0);
+    IVP_ASSERT_EQ(angular_velocity.k[0], 0x1.379310p+1f);
+#else
+    IVP_ASSERT_EQ(coefficients[0], -0x1.aa8b16p+0);
+    IVP_ASSERT_EQ(angular_velocity.k[0], 0x1.37930ep+1f);
+#endif
+    IVP_ASSERT_EQ(angular_velocity.k[1], 0x1.af8b5cp+1f);
+    IVP_ASSERT_EQ(angular_velocity.k[2], 0x1.de63c2p+1f);
+}
+
+IVP_TEST(worst_case_inverse_mass_rounds_after_the_second_reciprocal)
+{
+    const ivp_vec3f_t point = {{0.0f, 1.0f, 0.0f}};
+    const ivp_vec3f_t inertia = {{0x1.d99702p+1f, 0.0f, 0.0f}};
+
+    const uint16_t precision = ivp_x87_enter_step();
+    const float inverse = ivp_x87_worst_case_inverse_mass(&point, &inertia, 0x1p-23f, 1e-19);
+    ivp_x87_leave_step(precision);
+
+    IVP_ASSERT_EQ(inverse, 0x1.d99702p+1f);
+}
+
+IVP_TEST(inverse_rotation_retains_small_axis_components)
+{
+    const double rotation[3][3] = {
+        {-0x1.f838b8def7c8ap-1, 0x1.63a1a5d9422c5p-3, 0x1.777a5bc17ee2dp-24},
+        {0x1.63a1a5d9422ddp-3, 0x1.f838b8def7cabp-1, 0x1.028f334p-52},
+        {-0x1.71c60b453070fp-24, 0x1.04cde2786eafap-26, -0x1.fffffffffffdep-1},
+    };
+    const double world[3] = {0x1.777a5cp-24, 0.0, -1.0};
+    double local[3];
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_inverse_rotate3d(rotation, world, local);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(local[0], -0x1.01718e721p-50);
+    IVP_ASSERT_EQ(local[1], -0x1.43e265cf4p-54);
+    IVP_ASSERT_EQ(local[2], 0x1.0000000000011p+0);
+}
+
+IVP_TEST(linear_damping_rounds_after_multiplying_velocity)
+{
+    ivp_vec3f_t speed = {{-0x1.49048cp-1f, 0.0f, 0.0f}};
+    ivp_vec3f_t angular = {{0.0f, 0.0f, 0.0f}};
+    const ivp_vec3f_t angular_damping = {{0.1f, 0.1f, 0.1f}};
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_damp_velocity(&speed, &angular, &angular_damping, 1.5, 0x1.f07c1f07c1f08p-7);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(speed.k[0], -0x1.418a42p-1f);
+}
+
+IVP_TEST(slow_core_preserves_linear_damping_coefficient)
+{
+    ivp_core_t core = {0};
+    core.movement_state = IVP_MT_SLOW;
+    core.speed_damp_factor = 0.6f;
+    core.speed.k[2] = 0x1.d32ed8p-6f;
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_core_global_damp_core(&core, 0x1.f07c1f07c1f08p-7);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(core.speed.k[2], 0x1.ce3a60p-6f);
+}
+
+#endif
+
 int main(void)
 {
     IVP_REGISTER(float_matrix_products_match_scalar_rounding);
@@ -653,6 +796,18 @@ int main(void)
     IVP_REGISTER(surface_speed_preserves_scalar_rounding_and_aliases);
 #ifdef IVP_REAL_DOUBLE
     IVP_REGISTER(triangle_inverse_length_preserves_binary64_precision);
+#endif
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    IVP_REGISTER(x87_position_advance_retains_precision_to_writeback);
+    IVP_REGISTER(x87_world_impulse_preserves_torque_under_cancellation);
+    IVP_REGISTER(x87_inverse_point_transform_preserves_anchor_offset);
+#endif
+#if IVP_X87_ARITHMETIC
+    IVP_REGISTER(x87_gyroscopic_update_retains_inertia_difference_precision);
+    IVP_REGISTER(worst_case_inverse_mass_rounds_after_the_second_reciprocal);
+    IVP_REGISTER(inverse_rotation_retains_small_axis_components);
+    IVP_REGISTER(linear_damping_rounds_after_multiplying_velocity);
+    IVP_REGISTER(slow_core_preserves_linear_damping_coefficient);
 #endif
     IVP_RUN_ALL();
 }
