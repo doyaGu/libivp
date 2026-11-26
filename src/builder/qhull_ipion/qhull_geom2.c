@@ -86,14 +86,22 @@ realT qh_determinant (realT **rows, int dim, boolT *nearzero) {
     ivp_message( "qhull internal error (qh_determinate): only implemented for dimension >= 2\n");
     qh_errexit (qh_ERRqhull, NULL, NULL);
   }else if (dim == 2) {
+#if IVP_X87_ARITHMETIC && !REALfloat
+    det= ivp_x87_hull_determinant(rows, 2);
+#else
     det= det2_(rows[0][0], rows[0][1],
 		 rows[1][0], rows[1][1]);
+#endif
     if (fabs_(det) < qh NEARzero[1])  /* not really correct, what should this be? */
       *nearzero= True;
   }else if (dim == 3) {
+#if IVP_X87_ARITHMETIC && !REALfloat
+    det= ivp_x87_hull_determinant(rows, 3);
+#else
     det= det3_(rows[0][0], rows[0][1], rows[0][2],
 		 rows[1][0], rows[1][1], rows[1][2],
 		 rows[2][0], rows[2][1], rows[2][2]);
+#endif
     if (fabs_(det) < qh NEARzero[2])  /* not really correct, what should this be? */
       *nearzero= True;
   }else {	
@@ -1138,6 +1146,18 @@ realT qh_maxouter (void) {
       add point that maximizes the determinate
         (use points from maxpoints first)    
 */
+static boolT qh_larger_simplex_determinant(realT det, realT maximum, int dim) {
+#if IVP_X87_ARITHMETIC && !REALfloat
+  /* The previous maximum has a binary64 write-back. An equal rounded
+     determinant can still exceed it before the current candidate is stored. */
+  if (det == maximum && (dim == 2 || dim == 3))
+    return ivp_x87_hull_determinant_exceeds(qh gm_row, dim, maximum);
+#else
+  (void)dim;
+#endif
+  return det > maximum;
+}
+
 void qh_maxsimplex (int dim, setT *maxpoints, pointT *points, int numpoints, setT **simplex) {
   pointT *point, **pointp, *pointtemp, *maxpoint, *minx=NULL, *maxx=NULL;
   boolT nearzero, maxnearzero= False;
@@ -1197,7 +1217,7 @@ void qh_maxsimplex (int dim, setT *maxpoints, pointT *points, int numpoints, set
     FOREACHpoint_(maxpoints) {
       if (!qh_setin (*simplex, point)) {
         det= qh_detsimplex(point, *simplex, k, &nearzero);
-        if ((det= fabs_(det)) > maxdet) {
+        if (qh_larger_simplex_determinant((det= fabs_(det)), maxdet, k)) {
 	  maxdet= det;
           maxpoint= point;
 	  maxnearzero= nearzero;
@@ -1217,7 +1237,7 @@ void qh_maxsimplex (int dim, setT *maxpoints, pointT *points, int numpoints, set
 	  continue;
         if (!qh_setin (*simplex, point)) {
           det= qh_detsimplex(point, *simplex, k, &nearzero);
-          if ((det= fabs_(det)) > maxdet) {
+          if (qh_larger_simplex_determinant((det= fabs_(det)), maxdet, k)) {
 	    maxdet= det;
             maxpoint= point;
 	    maxnearzero= nearzero;

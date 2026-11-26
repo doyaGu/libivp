@@ -4,8 +4,8 @@
  * The files in this directory are the Qhull snapshot the IVP reference
  * engine ships in ivp_compact_builder (Ipion's "ipion 99/07/10" edition of
  * The Geometry Center's Qhull, with the engine's later edits), compiled as
- * C.  They only use the engine for its message output, memory functions and
- * P_FREE.  THIRD_PARTY_NOTICES.md lists the modifications and the license.
+ * C. IVP provides message output, memory helpers, and extended-precision
+ * hull predicates. THIRD_PARTY_NOTICES.md lists the changes and the license.
  */
 #ifndef IVP_QHULL_IPION_IVP_H
 #define IVP_QHULL_IPION_IVP_H
@@ -18,6 +18,10 @@
 #include <ivp/base/ivp_message.h>
 
 #include "qhull_symbols.h"
+
+#if IVP_X87_ARITHMETIC
+#include "../../math/ivp_x87.h"
+#endif
 
 /* ivu_types.hxx: an unsigned integer as wide as a pointer */
 typedef uintptr_t uintp;

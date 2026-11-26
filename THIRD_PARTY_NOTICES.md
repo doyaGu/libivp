@@ -26,10 +26,12 @@ the submodule.
     `qh_sethyperplane_gauss`) and guarded a diagnostic against a null error
     stream.
   - libivp (doyaGu), 2026-11-09: ported the bundled hull builder to C17.
-    The hull builder uses native arithmetic. IVP's message, memory and
-    integer helpers are provided by `qhull_ivp.h`. A C++
-    functional cast and a C++ overload declaration were rewritten in C, and
-    two unused parameters were named.
+    IVP's message, memory and integer helpers are provided by
+    `qhull_ivp.h`. A C++ functional cast and a C++ overload declaration were
+    rewritten in C, and two unused parameters were named.
+  - Codex, 2026-11-24: routed simplex determinants, plane normalization and
+    point-to-plane projections through IVP's x87 arithmetic to reproduce the
+    retail hull builder's initial vertices and facet selection.
 - `IVP_REENTRANT_QHULL=ON`: not vendored.  CMake fetches the immutable
   official Qhull 2020.2 (8.0.2) archive from https://github.com/qhull/qhull,
   which contains its original `COPYING.txt`; that license is reproduced

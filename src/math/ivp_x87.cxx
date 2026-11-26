@@ -248,6 +248,123 @@ static bool ivp_x87_normalize_point(Scalar point[3], int steps, double epsilon, 
     return true;
 }
 
+static X87_Float80 ivp_x87_determinant2(X87_Arithmetic &fp,
+                                        double a, double b, double c, double d)
+{
+    return fp.subtract(fp.multiply(fp.load(a), fp.load(d)), fp.multiply(fp.load(b), fp.load(c)));
+}
+
+static X87_Float80 ivp_x87_hull_determinant_extended(X87_Arithmetic &fp,
+                                                     double *const rows[], int dimension)
+{
+    const double *a = rows[0];
+    const double *b = rows[1];
+    if (dimension == 2)
+        return ivp_x87_determinant2(fp, a[0], a[1], b[0], b[1]);
+
+    const double *c = rows[2];
+    const X87_Float80 x = fp.multiply(fp.load(a[0]), ivp_x87_determinant2(fp, b[1], b[2], c[1], c[2]));
+    const X87_Float80 y = fp.multiply(fp.load(b[0]), ivp_x87_determinant2(fp, a[1], a[2], c[1], c[2]));
+    const X87_Float80 z = fp.multiply(fp.load(c[0]), ivp_x87_determinant2(fp, a[1], a[2], b[1], b[2]));
+    return fp.add(fp.subtract(x, y), z);
+}
+
+double ivp_x87_hull_determinant(double *const rows[], int dimension)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.scalar_result(ivp_x87_hull_determinant_extended(fp, rows, dimension));
+}
+
+int ivp_x87_hull_determinant_exceeds(double *const rows[], int dimension, double maximum)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 determinant = fp.absolute(ivp_x87_hull_determinant_extended(fp, rows, dimension));
+    return fp.compare(determinant, fp.load(maximum)) == X87_Arithmetic::GREATER;
+}
+
+static X87_Float80 ivp_x87_hull_plane_dot(X87_Arithmetic &fp, const double point[3],
+                                          const double normal[3])
+{
+    const X87_Float80 x = fp.multiply(fp.load(point[0]), fp.load(normal[0]));
+    const X87_Float80 y = fp.multiply(fp.load(point[1]), fp.load(normal[1]));
+    const X87_Float80 z = fp.multiply(fp.load(point[2]), fp.load(normal[2]));
+    return fp.add(fp.add(x, y), z);
+}
+
+bool ivp_x87_set_hull_plane_offset(double *const vertices[3], const double origin[3],
+                                   const double normal[3], double tolerance, double *offset)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 plane_offset = fp.negate(ivp_x87_hull_plane_dot(fp, origin, normal));
+    const X87_Float80 maximum = fp.load(tolerance);
+    *offset = fp.store_double(plane_offset);
+
+    // Keep the unrounded offset while checking that the three vertices lie on the plane.
+    for (int vertex = 2; vertex >= 0; --vertex)
+    {
+        if (vertices[vertex] == origin)
+            continue;
+        const X87_Float80 projection = ivp_x87_hull_plane_dot(fp, vertices[vertex], normal);
+        const X87_Float80 distance = fp.absolute(fp.add(plane_offset, projection));
+        if (fp.compare(distance, maximum) == X87_Arithmetic::GREATER)
+            return true;
+    }
+    return false;
+}
+
+double ivp_x87_hull_plane_gauss_offset(const double *point, const double *normal, int dimension)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    double offset = fp.store_double(fp.negate(fp.multiply(fp.load(point[0]), fp.load(normal[0]))));
+    for (int i = 1; i < dimension; ++i)
+    {
+        const X87_Float80 product = fp.multiply(fp.load(point[i]), fp.load(normal[i]));
+        offset = fp.store_double(fp.subtract(fp.load(offset), product));
+    }
+    return offset;
+}
+
+double ivp_x87_hull_plane_distance(const double point[3], const double normal[3], double offset)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.multiply(fp.load(point[0]), fp.load(normal[0]));
+    const X87_Float80 y = fp.multiply(fp.load(point[1]), fp.load(normal[1]));
+    const X87_Float80 z = fp.multiply(fp.load(point[2]), fp.load(normal[2]));
+    return fp.store_double(fp.add(fp.add(fp.add(z, y), x), fp.load(offset)));
+}
+
+int ivp_x87_normalize_hull_plane(double normal[3], unsigned orientation,
+                                 double min_denominator, const double *minimum,
+                                 unsigned *below_minimum, double *length)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.load(normal[0]);
+    const X87_Float80 y = fp.load(normal[1]);
+    const X87_Float80 z = fp.load(normal[2]);
+    const X87_Float80 magnitude = fp.square_root(
+        fp.add(fp.add(fp.multiply(z, z), fp.multiply(y, y)), fp.multiply(x, x)));
+    if (fp.compare(magnitude, fp.load(min_denominator)) != X87_Arithmetic::GREATER)
+        return 0;
+
+    if (minimum && below_minimum)
+    {
+        const X87_Arithmetic::Relation relation = fp.compare(magnitude, fp.load(*minimum));
+        *below_minimum = relation == X87_Arithmetic::LESS || relation == X87_Arithmetic::UNORDERED;
+    }
+    *length = fp.store_double(magnitude);
+    const X87_Float80 divisor = orientation ? magnitude : fp.negate(magnitude);
+    for (int axis = 0; axis < 3; ++axis)
+        normal[axis] = fp.store_double(fp.divide(fp.load(normal[axis]), divisor));
+    return 1;
+}
+
+float ivp_x87_minimum_rotational_inertia(const ivp_vec3f_t *inertia, float factor)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 length = fp.square_root(ivp_x87_point_square(fp, inertia->k));
+    return fp.store_float(fp.multiply(length, fp.load(factor)));
+}
+
 double ivp_x87_length3f(const float point[3])
 {
     ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
@@ -421,6 +538,30 @@ void ivp_x87_accumulate_world_impulse(const ivp_transform_r_t *transform, const 
             speed = fp.load(fp.store_double(speed));
         linear->k[axis] = fp.store_float(speed);
     }
+}
+
+double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
+                                  const double end[3], int axis, double point[3])
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const int first = (axis + 1) % 3;
+    const int second = (axis + 2) % 3;
+    const X87_Float80 edge_first = fp.subtract(fp.load(start[first]), fp.load(end[first]));
+    const X87_Float80 edge_second = fp.subtract(fp.load(start[second]), fp.load(end[second]));
+    const X87_Float80 offset_first = fp.subtract(fp.load(start[first]), fp.load(origin[first]));
+    const X87_Float80 offset_second = fp.subtract(fp.load(start[second]), fp.load(origin[second]));
+    const X87_Float80 numerator = fp.subtract(fp.multiply(offset_first, edge_second),
+                                               fp.multiply(offset_second, edge_first));
+    const X87_Float80 denominator = fp.subtract(fp.multiply(fp.load(direction[first]), edge_second),
+                                                 fp.multiply(fp.load(direction[second]), edge_first));
+    // Write the coordinates before narrowing the ray parameter.
+    const X87_Float80 distance = fp.divide(numerator, denominator);
+    for (int component = 0; component < 3; ++component)
+    {
+        point[component] = fp.store_double(fp.add(fp.load(origin[component]),
+            fp.multiply(distance, fp.load(direction[component]))));
+    }
+    return fp.store_double(distance);
 }
 
 static X87_Float80 ivp_x87_worst_case_effective_mass_extended(X87_Arithmetic &fp,
@@ -864,6 +1005,115 @@ void ivp_x87_quat_set_fast_multiple_with_clip(ivp_real_t out[4], const float ang
     out[1] = static_cast<ivp_real_t>(fp.store_double(y));
     out[2] = static_cast<ivp_real_t>(fp.store_double(z));
     out[3] = static_cast<ivp_real_t>(fp.store_double(fp.square_root(fp.subtract(one, square))));
+}
+
+void ivp_x87_surface_radius_and_deviation(const float mass_center[3], const float center[3],
+                                          float radius, int deviation, float step,
+                                          float *out_radius, float *out_deviation)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 offset[3];
+    for (int axis = 0; axis < 3; ++axis)
+        offset[axis] = fp.subtract(fp.load(mass_center[axis]), fp.load(center[axis]));
+
+    const X87_Float80 squared_shift = fp.add(fp.add(ivp_x87_square(fp, offset[0]),
+                                                     ivp_x87_square(fp, offset[1])),
+                                              ivp_x87_square(fp, offset[2]));
+    const X87_Float80 shift = fp.square_root(squared_shift);
+    const X87_Float80 bound = fp.load(radius);
+    const X87_Float80 scaled_deviation = fp.multiply(
+        fp.multiply(fp.load(static_cast<float>(deviation)), fp.load(step)), bound);
+    *out_radius = fp.store_float(fp.add(bound, shift));
+    *out_deviation = fp.store_float(fp.add(scaled_deviation, shift));
+}
+
+/* Preserve the triangle normal's extended Z component for the signed volume
+ * and squared area. X and Y are rounded to float before either product. */
+void ivp_x87_inertia_mass_triangle(const float p0[3], const float p1[3], const float p2[3],
+                                   double *sum_det, double *sum_squared_area, float sum_mass[3])
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 a[3], b[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        a[i] = ivp_x87_round_double(fp, fp.subtract(fp.load(p2[i]), fp.load(p0[i])));
+        b[i] = ivp_x87_round_double(fp, fp.subtract(fp.load(p1[i]), fp.load(p0[i])));
+    }
+    const X87_Float80 x = fp.load(fp.store_float(fp.subtract(fp.multiply(b[1], a[2]), fp.multiply(b[2], a[1]))));
+    const X87_Float80 y = fp.load(fp.store_float(fp.subtract(fp.multiply(b[2], a[0]), fp.multiply(b[0], a[2]))));
+    const X87_Float80 z = fp.subtract(fp.multiply(b[0], a[1]), fp.multiply(b[1], a[0]));
+    const X87_Float80 det = fp.add(fp.add(fp.multiply(x, fp.load(p0[0])),
+        fp.multiply(z, fp.load(p0[2]))), fp.multiply(y, fp.load(p0[1])));
+    const X87_Float80 squared_area = fp.add(fp.add(ivp_x87_square(fp, z), ivp_x87_square(fp, y)),
+                                          ivp_x87_square(fp, x));
+    *sum_squared_area = fp.store_double(fp.add(squared_area, fp.load(*sum_squared_area)));
+    *sum_det = fp.store_double(fp.add(det, fp.load(*sum_det)));
+
+    const X87_Float80 mass_factor = fp.multiply(det, fp.load(0.25));
+    const float *vertices[3] = {p0, p1, p2};
+    double previous_y = 0.0;
+    for (int vertex = 0; vertex < 3; ++vertex)
+    {
+        X87_Float80 mass[3];
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const X87_Float80 previous = axis == 1 && vertex == 1 ?
+                fp.load(previous_y) : fp.load(sum_mass[axis]);
+            mass[axis] = fp.add(fp.multiply(fp.load(vertices[vertex][axis]), mass_factor), previous);
+            if (axis != 0)
+                mass[axis] = ivp_x87_round_double(fp, mass[axis]);
+        }
+        previous_y = fp.store_double(mass[1]);
+        for (int axis = 0; axis < 3; ++axis)
+            sum_mass[axis] = fp.store_float(mass[axis]);
+    }
+}
+
+/* Binary64 endpoint powers are kept separate from the extended cubic integral
+ * to reproduce cancellation along edges close to the integration axis. */
+void ivp_x87_inertia_edge_integral(float p0_x, float p0_y, float p0_z,
+    float p1_x, double vector_x, double vector_y, double vector_z,
+    bool triangle_area, double fzdy, double fydz, double *area)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x0 = fp.load(p0_x), x1 = fp.load(p1_x);
+    const X87_Float80 slope_y = ivp_x87_round_double(fp, fp.divide(fp.load(vector_y), fp.load(vector_x)));
+    const X87_Float80 offset_y = fp.subtract(fp.load(p0_y), fp.multiply(x0, slope_y));
+    const X87_Float80 stored_y = ivp_x87_round_double(fp, offset_y);
+    X87_Float80 a, b, c;
+    if (triangle_area)
+    {
+        a = fp.multiply(fp.multiply(offset_y, offset_y), fp.load(fzdy));
+        b = fp.multiply(fp.multiply(stored_y, slope_y), fp.load(fzdy));
+        b = fp.add(b, b);
+        c = fp.multiply(fp.multiply(slope_y, slope_y), fp.load(fzdy));
+    }
+    else
+    {
+        const X87_Float80 slope_z = ivp_x87_round_double(fp, fp.divide(fp.load(vector_z), fp.load(vector_x)));
+        const X87_Float80 offset_z = fp.subtract(fp.load(p0_z), fp.multiply(x0, slope_z));
+        const X87_Float80 stored_z = ivp_x87_round_double(fp, offset_z);
+        a = fp.multiply(fp.add(offset_y, fp.multiply(offset_z, fp.load(fydz))), offset_z);
+        b = fp.multiply(fp.multiply(stored_z, slope_z), fp.load(fydz));
+        b = fp.add(fp.add(fp.add(b, b), fp.multiply(slope_z, stored_y)), fp.multiply(stored_z, slope_y));
+        c = fp.multiply(fp.add(fp.multiply(slope_z, fp.load(fydz)), slope_y), slope_z);
+    }
+    const X87_Float80 square1 = fp.multiply(x1, x1);
+    const X87_Float80 square0 = ivp_x87_round_double(fp, fp.multiply(x0, x0));
+    const X87_Float80 integral2 = ivp_x87_round_double(fp, fp.multiply(fp.subtract(square1, square0), fp.load(0.5)));
+    const X87_Float80 cube1 = ivp_x87_round_double(fp, fp.multiply(square1, x1));
+    const X87_Float80 cube0 = ivp_x87_round_double(fp, fp.multiply(square0, x0));
+    const X87_Float80 integral3 = fp.multiply(fp.subtract(cube1, cube0), fp.load(1.0 / 3.0));
+    const X87_Float80 fourth1 = ivp_x87_round_double(fp, fp.multiply(cube1, x1));
+    const X87_Float80 fourth0 = ivp_x87_round_double(fp, fp.multiply(cube0, x0));
+    const X87_Float80 integral4 = ivp_x87_round_double(fp, fp.multiply(fp.subtract(fourth1, fourth0), fp.load(0.25)));
+    const X87_Float80 integral5 = fp.multiply(fp.subtract(fp.multiply(fourth1, x1), fp.multiply(fourth0, x0)), fp.load(0.2f));
+    area[0] = fp.store_double(fp.add(fp.add(fp.add(fp.multiply(fp.subtract(x1, x0), a),
+        fp.multiply(integral3, c)), fp.multiply(integral2, b)), fp.load(area[0])));
+    area[1] = fp.store_double(fp.add(fp.add(fp.add(fp.multiply(integral4, c),
+        fp.multiply(integral3, b)), fp.multiply(integral2, a)), fp.load(area[1])));
+    area[2] = fp.store_double(fp.add(fp.add(fp.add(fp.multiply(integral5, c),
+        fp.multiply(integral4, b)), fp.multiply(integral3, a)), fp.load(area[2])));
 }
 
 static X87_Float80 ivp_x87_quat_sine(X87_Arithmetic &fp, const X87_Float80 &angle)

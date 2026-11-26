@@ -20,11 +20,10 @@
  * concurrently.  A reference-development build can select the classic
  * dependency; its global Qhull state is serialized by the adapter.
  *
- * With software x87 arithmetic or stable internal state, Qhull derives its
- * roundoff and outside width from the input. The reference's fixed
- * "W1e-14 E1.0e-18" thresholds can trigger platform-dependent joggling
- * for coplanar faces, which changes facet triangulation and mass centers.
- * Native arithmetic with reference internal state uses the original flags.
+ * Reference internal state uses the original roundoff and outside-width
+ * thresholds with either arithmetic backend. These thresholds decide
+ * which near-coplanar facets are merged before triangulation.
+ * Stable internal state derives the thresholds from the input points.
  *
  * Stable internal state also changes how failed and oversized hulls are
  * handled:
@@ -55,6 +54,7 @@
 #include "ivp_build_polygon_convex_internal.h"
 #include "geometry/ivp_check_ledge_debug.h"
 #include "ivp_qhull_api.h"
+#include "math/ivp_x87.h"
 
 #include <float.h>
 #include <limits.h>
@@ -65,7 +65,7 @@
 
 #define PS_MIN_EDGE_LEN 0.01f /* P_MIN_EDGE_LEN */
 
-#if !IVP_STABLE_INTERNAL_STATE && IVP_X87_ARITHMETIC != IVP_X87_SOFT
+#if !IVP_STABLE_INTERNAL_STATE
 #define PS_QHULL_COMMAND "qhull Qs Pp C-0 W1e-14 E1.0e-18"
 #define PS_QHULL_JOGGLE_COMMAND "qhull Qs QJ%G C-0 Pp W1e-14 E1.0e-18"
 #else
@@ -688,7 +688,10 @@ ivp_compact_ledge_t *ivp_build_convex_ledge_d(const ivp_allocator_t *alloc,
                                               const double *coords,
                                               int n_points)
 {
-    /* convert_pointsoup_to_compact_ledge (ivp_surbuild_pointsoup.cxx:744) */
+#if IVP_X87_ARITHMETIC
+    /* The pointsoup builder leaves extended precision active in the host. */
+    ivp_x87_select_extended_precision();
+#endif
     if (!coords || n_points < 3) return NULL;
     if (n_points > INT_MAX / 3) return NULL;
     if (!alloc) alloc = ivp_default_allocator();

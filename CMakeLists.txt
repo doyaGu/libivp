@@ -202,6 +202,7 @@ set(IVP_MATH_SOURCES
         src/math/ivp_quat.c
         src/math/ivp_transform.c
         src/math/ivp_fast_math.c
+        src/math/ivp_fpu.c
         src/math/ivp_geometry.c
         src/math/ivp_mapping.c
 )

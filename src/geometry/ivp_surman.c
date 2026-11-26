@@ -13,6 +13,7 @@
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #include <math.h>
+#include "math/ivp_x87.h"
 
 /* ── Polygon: shared helpers ───────────────────────────────────────────── */
 
@@ -21,6 +22,12 @@ void ivp_surman_polygon_surface_radius_and_deviation(const ivp_compact_surface_t
                                                      float *out_radius,
                                                      float *out_deviation)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_surface_radius_and_deviation(surface->mass_center, center, surface->upper_limit_radius,
+                                         ivp_surface_get_max_deviation(surface),
+                                         IVP_COMPACT_SURFACE_DEVIATION_STEP_SIZE,
+                                         out_radius, out_deviation);
+#else
     /* ivp_surman_polygon.cxx:214 get_radius_and_radius_dev_to_given_center */
     double dx = (double)surface->mass_center[0] - (double)center[0];
     double dy = (double)surface->mass_center[1] - (double)center[1];
@@ -31,6 +38,7 @@ void ivp_surman_polygon_surface_radius_and_deviation(const ivp_compact_surface_t
                   IVP_COMPACT_SURFACE_DEVIATION_STEP_SIZE *
                   surface->upper_limit_radius;
     *out_deviation = (float)((double)dev_f + center_shift);
+#endif
 }
 
 /* IVP_SurfaceManager_Polygon_Solver::traverse_cluster (ivp_surman_polygon.cxx:38) */

@@ -16,6 +16,7 @@
 #include "collision/ivp_lvec.h"
 #include "dynamics/ivp_env_pipeline.h"
 #include "dynamics/ivp_env_hot.h"
+#include "math/ivp_x87.h"
 #include "solver/ivp_friction_internal.h"
 #include <ivp/dynamics/ivp_cache_object.h>
 #include <ivp/dynamics/ivp_anchor.h>
@@ -644,7 +645,12 @@ void ivp_object_init_object_core(ivp_object_t *obj, const ivp_object_template_t 
         lvf_set_p(&rot_inertia, &templ->rot_inertia);
     }
     if (templ->auto_check_rot_inertia != IVP_REAL(0.0)) {
-        float min_inertia_value = (float)((double)lvf_real_length(&rot_inertia) * (double)(float)templ->auto_check_rot_inertia);
+#if IVP_X87_ARITHMETIC
+        const float min_inertia_value = ivp_x87_minimum_rotational_inertia(&rot_inertia,
+            (float)templ->auto_check_rot_inertia);
+#else
+        const float min_inertia_value = (float)((double)lvf_real_length(&rot_inertia) * (double)(float)templ->auto_check_rot_inertia);
+#endif
         for (int hh = 0; hh < 3; hh++) {
             if (rot_inertia.k[hh] < min_inertia_value) rot_inertia.k[hh] = min_inertia_value;
         }

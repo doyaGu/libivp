@@ -571,6 +571,77 @@ static int qh_comparemerge(const void *p1, const void *p2) {
   return (a->type - b->type);
 } /* comparemerge */
 
+#if IVP_X87_ARITHMETIC
+static void qh_swap_merges(mergeT **items, int a, int b) {
+  mergeT *entry = items[a];
+  items[a] = items[b];
+  items[b] = entry;
+}
+
+/* The retail hull builder's partition and selection order determines which
+   ridge is merged first when two candidates have the same angle. */
+static void qh_sort_merge_range(mergeT **items, int count,
+                                int (*compare)(const void *, const void *)) {
+  while (count > 8) {
+    int pivot = count / 2;
+    const int last = count - 1;
+    if (compare(&items[0], &items[pivot]) > 0)
+      qh_swap_merges(items, 0, pivot);
+    if (compare(&items[0], &items[last]) > 0)
+      qh_swap_merges(items, 0, last);
+    if (compare(&items[pivot], &items[last]) > 0)
+      qh_swap_merges(items, pivot, last);
+
+    int left = 0, right = last;
+    for (;;) {
+      do {
+        ++left;
+      } while (left < count && (left == pivot || compare(&items[left], &items[pivot]) <= 0));
+      do {
+        --right;
+      } while (right > pivot && compare(&items[right], &items[pivot]) > 0);
+      if (left > right)
+        break;
+      qh_swap_merges(items, left, right);
+      if (right == pivot)
+        pivot = left;
+    }
+    while (right > 0 && (right == pivot || compare(&items[right], &items[pivot]) == 0))
+      --right;
+
+    const int lower_count = right + 1;
+    const int upper_count = count - left;
+    if (lower_count < upper_count) {
+      qh_sort_merge_range(items, lower_count, compare);
+      items += left;
+      count = upper_count;
+    } else {
+      qh_sort_merge_range(items + left, upper_count, compare);
+      count = lower_count;
+    }
+  }
+
+  for (int last = count - 1; last > 0; --last) {
+    int highest = 0;
+    for (int i = 1; i <= last; ++i) {
+      if (compare(&items[i], &items[highest]) > 0)
+        highest = i;
+    }
+    qh_swap_merges(items, highest, last);
+  }
+}
+#endif
+
+static void qh_sort_merge_candidates(int count) {
+  mergeT **items = SETaddr_(qh facet_mergeset, mergeT);
+  int (*compare)(const void *, const void *) = qh ANGLEmerge ? qh_compareangle : qh_comparemerge;
+#if IVP_X87_ARITHMETIC
+  qh_sort_merge_range(items, count, compare);
+#else
+  qsort(items, count, sizeof(mergeT *), compare);
+#endif
+}
+
 /*-<a                             href="qh-c.htm#merge"
   >-------------------------------</a><a name="comparevisit">-</a>
   
@@ -1161,10 +1232,7 @@ void qh_getmergeset(facetT *facetlist) {
     }
   }
   nummerges= qh_setsize (qh facet_mergeset);
-  if (qh ANGLEmerge)
-    qsort(SETaddr_(qh facet_mergeset, mergeT), nummerges,sizeof(mergeT *),qh_compareangle);
-  else
-    qsort(SETaddr_(qh facet_mergeset, mergeT), nummerges,sizeof(mergeT *),qh_comparemerge);
+  qh_sort_merge_candidates(nummerges);
   if (qh POSTmerging) {
     zadd_(Zmergesettot2, nummerges);
   }else {
@@ -1226,10 +1294,7 @@ void qh_getmergeset_initial (facetT *facetlist) {
       ridge->tested= True;
   }
   nummerges= qh_setsize (qh facet_mergeset);
-  if (qh ANGLEmerge)
-    qsort(SETaddr_(qh facet_mergeset, mergeT), nummerges,sizeof(mergeT *),qh_compareangle);
-  else
-    qsort(SETaddr_(qh facet_mergeset, mergeT), nummerges,sizeof(mergeT *),qh_comparemerge);
+  qh_sort_merge_candidates(nummerges);
   if (qh POSTmerging) {
     zadd_(Zmergeinittot2, nummerges);
   }else {

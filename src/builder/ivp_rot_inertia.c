@@ -7,7 +7,7 @@
  *   - IVP_Compact_Ledge_Mass_Center_Solver uses a double hesse vector, but
  *     the vertices relative to the mass center are rounded to float
  *     (transform->vimult4 into an IVP_U_Float_Point) and the edge vector is
- *     their float difference (IVP_U_Point::subtract(float, float));
+ *     stored in IVP_U_Point (double);
  *   - ledges are integrated in reverse get_all_ledges() order.
  *
  * Triangle winding: the reference area normal area(p0, p_prev, p_next) =
@@ -24,6 +24,7 @@
 #include <ivp/base/ivp_assert.h>
 
 #include <math.h>
+#include "math/ivp_x87.h"
 
 #define RI_DOUBLE_EPS 1e-19  /* P_DOUBLE_EPS */
 #define RI_DOUBLE_RES 1e-12  /* P_DOUBLE_RES */
@@ -36,6 +37,7 @@ typedef struct ri_find_mass_center {
     double sum_det;
 } ri_find_mass_center_t;
 
+#if !IVP_X87_ARITHMETIC
 /* IVP_U_Float_Point::add_multiple(v, f): this = float(v*f + this) */
 static inline void fp_add_multiple(float acc[3], const float v[3], double f)
 {
@@ -45,6 +47,8 @@ static inline void fp_add_multiple(float acc[3], const float v[3], double f)
         acc[i] = (float)a;
     }
 }
+
+#endif
 
 static void fmc_integrate_triangle(ri_find_mass_center_t *fmc,
                                    const ivp_compact_ledge_t *ledge,
@@ -56,6 +60,9 @@ static void fmc_integrate_triangle(ri_find_mass_center_t *fmc,
     const float *p1 = ivp_edge_get_start_point(ivp_edge_get_next(edge), ledge)->k;
     const float *p2 = ivp_edge_get_start_point(ivp_edge_get_prev(edge), ledge)->k;
 
+#if IVP_X87_ARITHMETIC
+    ivp_x87_inertia_mass_triangle(p0, p1, p2, &fmc->sum_det, &fmc->qsum_surface, fmc->sum_mass);
+#else
     /* IVP_U_Float_Point::inline_set_vert_to_area_defined_by_three_points(p0, p2, p1) */
     double a0 = (double)p2[0] - (double)p0[0];
     double a1 = (double)p2[1] - (double)p0[1];
@@ -79,6 +86,7 @@ static void fmc_integrate_triangle(ri_find_mass_center_t *fmc,
     fp_add_multiple(fmc->sum_mass, p0, f);
     fp_add_multiple(fmc->sum_mass, p1, f);
     fp_add_multiple(fmc->sum_mass, p2, f);
+#endif
 }
 
 /* ── IVP_Compact_Ledge_Mass_Center_Solver ──────────────────────────────── */
@@ -124,9 +132,7 @@ static void mcs_integrate_triangle(ri_mass_center_solver_t *s,
         fydz = 0.0;
     }
 
-    double area_msum = 0.0;
-    double area_mzsum = 0.0;
-    double area_mzzsum = 0.0;
+    double area[3] = {0.0, 0.0, 0.0};
     for (int l = 0; l < 3; l++) {
         const ivp_compact_edge_t *e = &tri->edges[l];
         const ivp_compact_edge_t *en = ivp_edge_get_next(e);
@@ -139,17 +145,27 @@ static void mcs_integrate_triangle(ri_mass_center_solver_t *s,
             p0f[i] = (float)((double)p0o[i] - s->center[i]);
             p1f[i] = (float)((double)p1o[i] - s->center[i]);
         }
+#if !IVP_X87_ARITHMETIC
         double p0[3] = { (double)p0f[0], (double)p0f[1], (double)p0f[2] };
         double p1[3] = { (double)p1f[0], (double)p1f[1], (double)p1f[2] };
 
-        /* IVP_U_Point::subtract(const IVP_U_Float_Point *, const IVP_U_Float_Point *):
-         * the difference is taken in float, then widened */
-        float vf[3];
-        for (int i = 0; i < 3; i++) vf[i] = p1f[i] - p0f[i];
-        double vec[3] = { (double)vf[0], (double)vf[1], (double)vf[2] };
+#endif
+        double vec[3];
+        for (int i = 0; i < 3; ++i) {
+#if IVP_X87_ARITHMETIC
+            /* IVP_U_Point stores the difference of the two float vertices in double. */
+            vec[i] = (double)p1f[i] - (double)p0f[i];
+#else
+            vec[i] = (double)(p1f[i] - p0f[i]);
+#endif
+        }
         double vlen = sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
         if (fabs(vec[x]) < RI_DOUBLE_RES * vlen) continue;
 
+#if IVP_X87_ARITHMETIC
+        ivp_x87_inertia_edge_integral(p0f[x], p0f[y], p0f[z], p1f[x],
+                                     vec[x], vec[y], vec[z], three_edge_area != 0, fzdy, fydz, area);
+#else
         double lydx = vec[y] / vec[x];
         double ly0 = p0[y] - lydx * p0[x];
 
@@ -176,13 +192,14 @@ static void mcs_integrate_triangle(ri_mass_center_solver_t *s,
         double fa = dx * ka + dx3 * kc + dx2 * kb;
         double k = dx4 * kc + dx3 * kb + dx2 * ka;
         double m = dx5 * kc + dx4 * kb + dx3 * ka;
-        area_msum += fa;
-        area_mzsum += k;
-        area_mzzsum += m;
+        area[0] += fa;
+        area[1] += k;
+        area[2] += m;
+#endif
     }
-    s->msum += area_msum;
-    s->mzsum += area_mzsum;
-    s->mzzsum += area_mzzsum;
+    s->msum += area[0];
+    s->mzsum += area[1];
+    s->mzzsum += area[2];
 }
 
 static void find_center_given_xyz(const ivp_compact_ledge_t *const *ledges, int n_ledges,

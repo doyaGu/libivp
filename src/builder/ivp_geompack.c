@@ -17,6 +17,7 @@
  * (+1024 elements), new memory is zero filled.
  */
 #include "ivp_geompack_internal.h"
+#include "math/ivp_x87.h"
 
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
@@ -1987,7 +1988,10 @@ static void cutfac_(ivp_geompack_t *gp, int		*p,
     long int dof;
     double dir[3];
     int nev, sgn;
-    double rhs[3], dir1[3];
+    double dir1[3];
+#if !IVP_X87_ARITHMETIC
+    double rhs[3];
+#endif
 
 /*     Written and copyright by: */
 /*        Barry Joe, Dept. of Computing Science, Univ. of Alberta */
@@ -2532,6 +2536,9 @@ L70:
     fr = 0;
     imin = 0;
     tmin = 0.;
+#if IVP_X87_ARITHMETIC
+    double cut_point[3] = {0.0, 0.0, 0.0};
+#endif
     k = 1;
     if (gp_abs(dir[1]) > gp_abs(dir[0])) {
 	k = 2;
@@ -2608,9 +2615,6 @@ L70:
 	    dir1[0] = vcl[la * 3 + 1] - vcl[lb * 3 + 1];
 	    dir1[1] = vcl[la * 3 + 2] - vcl[lb * 3 + 2];
 	    dir1[2] = vcl[la * 3 + 3] - vcl[lb * 3 + 3];
-	    rhs[0] = vcl[la * 3 + 1] - vcl[lw * 3 + 1];
-	    rhs[1] = vcl[la * 3 + 2] - vcl[lw * 3 + 2];
-	    rhs[2] = vcl[la * 3 + 3] - vcl[lw * 3 + 3];
 	    cp[0] = dir[1] * dir1[2] - dir[2] * dir1[1];
 	    cp[1] = dir[2] * dir1[0] - dir[0] * dir1[2];
 	    cp[2] = dir[0] * dir1[1] - dir[1] * dir1[0];
@@ -2621,6 +2625,14 @@ L70:
 	    if (gp_abs(cp[2]) > (d__1 = cp[l - 1], gp_abs(d__1))) {
 		l = 3;
 	    }
+#if IVP_X87_ARITHMETIC
+        double intersection[3];
+        t = ivp_x87_intersect_ray_edge(&vcl[lw * 3 + 1], dir, &vcl[la * 3 + 1],
+                                       &vcl[lb * 3 + 1], l - 1, intersection);
+#else
+	    rhs[0] = vcl[la * 3 + 1] - vcl[lw * 3 + 1];
+	    rhs[1] = vcl[la * 3 + 2] - vcl[lw * 3 + 2];
+	    rhs[2] = vcl[la * 3 + 3] - vcl[lw * 3 + 3];
 	    if (l == 1) {
 		t = (rhs[1] * dir1[2] - rhs[2] * dir1[1]) / cp[0];
 	    } else if (l == 2) {
@@ -2628,8 +2640,12 @@ L70:
 	    } else {
 		t = (rhs[0] * dir1[1] - rhs[1] * dir1[0]) / cp[2];
 	    }
+#endif
 	    if (t > ntol) {
 		if (t < tmin || imin == 0) {
+#if IVP_X87_ARITHMETIC
+                    memcpy(cut_point, intersection, sizeof(cut_point));
+#endif
 		    imin = -a;
 		    tmin = t;
 		    isave = i__;
@@ -2665,9 +2681,14 @@ recheck_size_1:
 	    goto recheck_size_1;
 	}
 	lw1 = n;
+#if IVP_X87_ARITHMETIC
+    memcpy(&vcl[n * 3 + 1], cut_point, sizeof(cut_point));
+#else
 	vcl[n * 3 + 1] = vcl[lw * 3 + 1] + tmin * dir[0];
 	vcl[n * 3 + 2] = vcl[lw * 3 + 2] + tmin * dir[1];
 	vcl[n * 3 + 3] = vcl[lw * 3 + 3] + tmin * dir[2];
+#endif
+
 L90:
 	if ((i__1 = facesdata[fl * 3 + 2], gp_abs(i__1)) != (i__2 = facesdata[fl * 3 + 3]
 		, gp_abs(i__2))) {

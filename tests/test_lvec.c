@@ -728,6 +728,17 @@ IVP_TEST(x87_gyroscopic_update_retains_inertia_difference_precision)
     IVP_ASSERT_EQ(angular_velocity.k[2], 0x1.de63c2p+1f);
 }
 
+IVP_TEST(minimum_rotational_inertia_retains_squared_length_precision)
+{
+    const ivp_vec3f_t inertia = {{0x1.041426p+7f, 0x1.0412e0p+7f, 0x1.a6ee24p-1f}};
+
+    const uint16_t precision = ivp_x87_enter_step();
+    const float minimum = ivp_x87_minimum_rotational_inertia(&inertia, 0x1.eb851ep-6f);
+    ivp_x87_leave_step(precision);
+
+    IVP_ASSERT_EQ(minimum, 0x1.611840p+2f);
+}
+
 IVP_TEST(worst_case_inverse_mass_rounds_after_the_second_reciprocal)
 {
     const ivp_vec3f_t point = {{0.0f, 1.0f, 0.0f}};
@@ -738,6 +749,45 @@ IVP_TEST(worst_case_inverse_mass_rounds_after_the_second_reciprocal)
     ivp_x87_leave_step(precision);
 
     IVP_ASSERT_EQ(inverse, 0x1.d99702p+1f);
+}
+
+IVP_TEST(x87_hull_gauss_offset_rounds_after_each_subtraction)
+{
+    const double point[] = {1.0, 1.0 + 0x1p-31, 1.0};
+    const double normal[] = {-1.0, 1.0 - 0x1p-31, 0.0};
+    IVP_ASSERT_EQ(ivp_x87_hull_plane_gauss_offset(point, normal, 3), 0x1p-62);
+
+    const double unit[] = {1.0, 1.0, 1.0};
+    const double cancellation[] = {-1.0, -0x1p-55, 1.0};
+    IVP_ASSERT_EQ(ivp_x87_hull_plane_gauss_offset(unit, cancellation, 3), 0.0);
+}
+
+IVP_TEST(x87_hull_plane_checks_vertices_before_rounding_the_offset)
+{
+    double origin[3] = {-0x1.4000e1fffd200p+1, 0x1.4000e1fffd200p+1, -0x1.4000ee0005c00p+1};
+    double second[3] = {0x1.4000ee0005c00p+1, 0x1.4000e1fffd200p+1, -0x1.4000ee0005c00p+1};
+    double third[3] = {-0x1.4000e60000000p+1, -0x1.4000e60000000p+1, -0x1.4000e60000000p+1};
+    double *vertices[3] = {origin, second, third};
+    const double normal[3] = {0.0, -0x1.99999c28f5be7p-23, -0x1.fffffffffff5cp-1};
+    double offset;
+    const uint16_t precision = ivp_x87_enter_step();
+    const bool degenerate = ivp_x87_set_hull_plane_offset(vertices, origin, normal, 1e-18, &offset);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_FALSE(degenerate);
+    IVP_ASSERT_EQ(offset, -0x1.4000ea0002e00p+1);
+}
+
+IVP_TEST(hull_simplex_compares_before_rounding_the_determinant)
+{
+    double first[2] = {1.0, -0x1p-54};
+    double second[2] = {1.0, 1.0};
+    double *rows[2] = {first, second};
+    const uint16_t precision = ivp_x87_enter_step();
+    volatile double rounded = ivp_x87_hull_determinant(rows, 2);
+    const int exceeds = ivp_x87_hull_determinant_exceeds(rows, 2, rounded);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(rounded, 1.0);
+    IVP_ASSERT_TRUE(exceeds);
 }
 
 IVP_TEST(inverse_rotation_retains_small_axis_components)
@@ -804,7 +854,11 @@ int main(void)
 #endif
 #if IVP_X87_ARITHMETIC
     IVP_REGISTER(x87_gyroscopic_update_retains_inertia_difference_precision);
+    IVP_REGISTER(minimum_rotational_inertia_retains_squared_length_precision);
     IVP_REGISTER(worst_case_inverse_mass_rounds_after_the_second_reciprocal);
+    IVP_REGISTER(x87_hull_gauss_offset_rounds_after_each_subtraction);
+    IVP_REGISTER(x87_hull_plane_checks_vertices_before_rounding_the_offset);
+    IVP_REGISTER(hull_simplex_compares_before_rounding_the_determinant);
     IVP_REGISTER(inverse_rotation_retains_small_axis_components);
     IVP_REGISTER(linear_damping_rounds_after_multiplying_velocity);
     IVP_REGISTER(slow_core_preserves_linear_damping_coefficient);

@@ -17,6 +17,7 @@ uint16_t ivp_x87_enter_step(void);
 void ivp_x87_leave_step(uint16_t saved_precision);
 
 #if IVP_X87_ARITHMETIC
+void ivp_x87_select_extended_precision(void);
 void ivp_x87_gyroscopic_coefficients(const ivp_vec3f_t *inertia, const ivp_vec3f_t *inverse_inertia,
                                      double coefficients[3]);
 void ivp_x87_add_gyroscopic_velocity(ivp_vec3f_t *angular_velocity, const double coefficients[3],
@@ -29,6 +30,8 @@ void ivp_x87_accumulate_world_impulse(const ivp_transform_r_t *transform, const 
                                       const ivp_vec3f_t *impulse, float inverse_mass,
                                       const ivp_vec3f_t *inverse_inertia,
                                       ivp_vec3f_t *linear, ivp_vec3f_t *angular);
+double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
+                                  const double end[3], int axis, double point[3]);
 double ivp_x87_worst_case_effective_mass(const ivp_vec3f_t *point,
                                          const ivp_vec3f_t *inverse_inertia, float inverse_mass);
 float ivp_x87_worst_case_inverse_mass(const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia,
@@ -40,6 +43,16 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
                        const ivp_vec3f_t *world_impulse, float inverse_mass,
                        const ivp_vec3f_t *inverse_inertia, ivp_vec3f_t *linear_speed,
                        ivp_vec3f_t *angular_speed);
+double ivp_x87_hull_determinant(double *const rows[], int dimension);
+int ivp_x87_hull_determinant_exceeds(double *const rows[], int dimension, double maximum);
+bool ivp_x87_set_hull_plane_offset(double *const vertices[3], const double origin[3],
+                                   const double normal[3], double tolerance, double *offset);
+double ivp_x87_hull_plane_gauss_offset(const double *point, const double *normal, int dimension);
+double ivp_x87_hull_plane_distance(const double point[3], const double normal[3], double offset);
+int ivp_x87_normalize_hull_plane(double normal[3], unsigned orientation,
+                                 double min_denominator, const double *minimum,
+                                 unsigned *below_minimum, double *length);
+float ivp_x87_minimum_rotational_inertia(const ivp_vec3f_t *inertia, float factor);
 double ivp_x87_length3f(const float point[3]);
 double ivp_x87_length3d(const double point[3]);
 bool ivp_x87_normalize3f(float point[3], int steps, double epsilon, double *length);
@@ -49,6 +62,15 @@ bool ivp_x87_normalize3d(double point[3], int steps, double epsilon, double *len
 #else
 #define ivp_x87_normalize3r ivp_x87_normalize3f
 #endif
+
+void ivp_x87_surface_radius_and_deviation(const float mass_center[3], const float center[3],
+                                          float radius, int deviation, float step,
+                                          float *out_radius, float *out_deviation);
+void ivp_x87_inertia_mass_triangle(const float p0[3], const float p1[3], const float p2[3],
+                                   double *sum_det, double *sum_squared_area, float sum_mass[3]);
+void ivp_x87_inertia_edge_integral(float p0_x, float p0_y, float p0_z, float p1_x,
+                                   double vector_x, double vector_y, double vector_z,
+                                   bool triangle_area, double fzdy, double fydz, double area[3]);
 
 void ivp_x87_rotate3d(const double rotation[3][3], const double local[3], double world[3]);
 void ivp_x87_inverse_rotate3d(const double rotation[3][3], const double world[3], double local[3]);

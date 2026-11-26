@@ -121,7 +121,11 @@ void qh_distplane (pointT *point, facetT *facet, realT *dist) {
   case 3:
     // Retail RVA 0x4E6A0 sums Z/Y/X before adding the plane offset.
     // Near-coplanar merge choices depend on the cancellation at this boundary.
+#if IVP_X87_ARITHMETIC && !REALfloat
+    *dist= ivp_x87_hull_plane_distance(point, normal, facet->offset);
+#else
     *dist= point[2] * normal[2] + point[1] * normal[1] + point[0] * normal[0] + facet->offset;
+#endif
     break;
   case 4:
     *dist= point[3]*normal[3]+point[2]*normal[2]+point[1]*normal[1]+point[0]*normal[0]+facet->offset;
@@ -764,6 +768,13 @@ void qh_normalize2 (coordT *normal, int dim, boolT toporient,
   realT *colp, *maxp, norm= 0, temp, *norm1, *norm2, *norm3;
   boolT zerodiv;
 
+#if IVP_X87_ARITHMETIC && !REALfloat
+  if (dim == 3 && ivp_x87_normalize_hull_plane(normal, toporient, qh MINdenom,
+                                              minnorm, ismin, &norm)) {
+    wmin_(Wmindenom, norm);
+    return;
+  }
+#endif
   norm1= normal+1;
   norm2= normal+2;
   norm3= normal+3;
@@ -1076,6 +1087,9 @@ void qh_sethyperplane_det (int dim, coordT **rows, coordT *point0,
     normal[2]= det2_(dX(2,0), dY(2,0),
 		     dX(1,0), dY(1,0));
     qh_normalize2 (normal, dim, toporient, NULL, NULL);
+#if IVP_X87_ARITHMETIC && !REALfloat
+    *nearzero= ivp_x87_set_hull_plane_offset(rows, point0, normal, qh DISTround, offset);
+#else
     *offset= -(point0[0]*normal[0] + point0[1]*normal[1]
 	       + point0[2]*normal[2]);
     maxround= qh DISTround;
@@ -1090,6 +1104,7 @@ void qh_sethyperplane_det (int dim, coordT **rows, coordT *point0,
 	}
       }
     }
+#endif
   }else if (dim == 4) {
     normal[0]= - det3_(dY(2,0), dZ(2,0), dW(2,0),
 			dY(1,0), dZ(1,0), dW(1,0),
@@ -1155,7 +1170,6 @@ void qh_sethyperplane_det (int dim, coordT **rows, coordT *point0,
 */
 void qh_sethyperplane_gauss (int dim, coordT **rows, pointT *point0, 
 		boolT toporient, coordT *normal, coordT *offset, boolT *nearzero) {
-  coordT *pointcoord, *normalcoef;
   int k;
   boolT sign= toporient, nearzero2= False;
   
@@ -1178,13 +1192,17 @@ void qh_sethyperplane_gauss (int dim, coordT **rows, pointT *point0,
   if (nearzero2)
     *nearzero= True;
   qh_normalize2(normal, dim, True, NULL, NULL);
-  pointcoord= point0;
-  normalcoef= normal;
-  // RVA 0x50630 writes each offset subtraction to binary64.
-  volatile realT *offset_spill=offset;
+  /* x87 keeps each product live through the subtraction, with a
+     binary64 store after every component. */
+#if IVP_X87_ARITHMETIC && !REALfloat
+  *offset= ivp_x87_hull_plane_gauss_offset(point0, normal, dim);
+#else
+  coordT *pointcoord= point0, *normalcoef= normal;
+  volatile realT *offset_spill= offset;
   *offset_spill= -(*pointcoord++ * *normalcoef++);
   for(k= dim-1; k--; )
     *offset_spill -= *pointcoord++ * *normalcoef++;
+#endif
 } /* sethyperplane_gauss */
 
 
