@@ -95,6 +95,31 @@ private:
 };
 
 #if IVP_X87_ARITHMETIC
+static X87_Float80 ivp_x87_sine(X87_Arithmetic &fp, const X87_Float80 &angle)
+{
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL == IVP_X87_ARITHMETIC
+    return fp.sine(angle);
+#elif IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    (void)fp;
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC_TRANSCENDENTAL> transcendental;
+    return transcendental.sine(angle);
+#else
+    return fp.load(ivp_sind(fp.store_double(angle)));
+#endif
+}
+
+static X87_Float80 ivp_x87_arctangent(X87_Arithmetic &fp, const X87_Float80 &value)
+{
+#if IVP_X87_ARITHMETIC_TRANSCENDENTAL == IVP_X87_ARITHMETIC
+    return fp.arctangent(value, fp.load(1.0));
+#elif IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC_TRANSCENDENTAL> transcendental;
+    return transcendental.arctangent(value, fp.load(1.0));
+#else
+    return fp.load(ivp_atand(fp.store_double(value)));
+#endif
+}
+
 static X87_Float80 ivp_x87_damping_exponential(X87_Arithmetic &fp, const X87_Float80 &value)
 {
 #if IVP_X87_ARITHMETIC_TRANSCENDENTAL
@@ -559,8 +584,8 @@ void ivp_x87_quat_interpolate(ivp_quatr_t *out, const ivp_quatr_t *from,
         const X87_Float80 angle = fp.load(ivp_acosd(stored_cosine));
         const X87_Float80 inverse_sine = fp.divide(one,
             fp.square_root(fp.subtract(one, fp.multiply(cos_angle, cos_angle))));
-        const X87_Float80 first = fp.multiply(inverse_sine, fp.sine(fp.multiply(fp.subtract(one, step), angle)));
-        const X87_Float80 second = fp.multiply(fp.multiply(fp.sine(fp.multiply(angle, step)), sign),
+        const X87_Float80 first = fp.multiply(inverse_sine, ivp_x87_sine(fp, fp.multiply(fp.subtract(one, step), angle)));
+        const X87_Float80 second = fp.multiply(fp.multiply(ivp_x87_sine(fp, fp.multiply(angle, step)), sign),
                                                fp.load(fp.store_double(inverse_sine)));
         for (int component = 0; component < 4; ++component)
             ivp_x87_store(fp, result[component],
@@ -1427,7 +1452,7 @@ void ivp_x87_impact_friction(float friction, float energy_conservation,
     const X87_Float80 one = fp.load(1.0f);
     const X87_Float80 impact_friction = fp.multiply(
         fp.add(fp.square_root(fp.load(energy_conservation)), one), fp.load(friction));
-    const X87_Float80 angle = fp.arctangent(impact_friction, one);
+    const X87_Float80 angle = ivp_x87_arctangent(fp, impact_friction);
     const X87_Float80 square = fp.multiply(angle, angle);
     const X87_Float80 cosine_value = fp.add(
         fp.subtract(one, fp.multiply(square, fp.load(0.5f))),
@@ -1932,9 +1957,9 @@ void ivp_x87_quat_set_fast_multiple_with_clip(ivp_real_t out[4], const float ang
     ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
     const X87_Float80 one = fp.load(1.0);
     const X87_Float80 half_factor = fp.multiply(fp.load(factor), fp.load(0.5));
-    X87_Float80 x = ivp_x87_round_double(fp, fp.sine(fp.multiply(fp.load(angles[0]), half_factor)));
-    X87_Float80 y = ivp_x87_round_double(fp, fp.sine(fp.multiply(fp.load(angles[1]), half_factor)));
-    X87_Float80 z = fp.sine(fp.multiply(half_factor, fp.load(angles[2])));
+    X87_Float80 x = ivp_x87_round_double(fp, ivp_x87_sine(fp, fp.multiply(fp.load(angles[0]), half_factor)));
+    X87_Float80 y = ivp_x87_round_double(fp, ivp_x87_sine(fp, fp.multiply(fp.load(angles[1]), half_factor)));
+    X87_Float80 z = ivp_x87_sine(fp, fp.multiply(half_factor, fp.load(angles[2])));
     X87_Float80 square = fp.add(fp.add(ivp_x87_square(fp, x), ivp_x87_square(fp, y)), ivp_x87_square(fp, z));
     if (fp.compare(square, one) == X87_Arithmetic::GREATER)
     {

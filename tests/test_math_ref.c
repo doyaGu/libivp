@@ -22,6 +22,7 @@
 #include <ivp/math/ivp_quat.h>
 #include <ivp/math/ivp_transform.h>
 #include <ivp/math/ivp_fast_math.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include "math/ivp_x87.h"
@@ -275,6 +276,19 @@ IVP_TEST(ref_quat_fast_multiple_with_clip) {
     /* |sin(angle/2)|^2 > 1: clipped by (1 - P_RES_EPS) */
     ivp_vec3f_t big = {{ 200.0f, -150.0f, 90.0f }};
     ivp_quat_set_fast_multiple_with_clip(&q, &big, (ivp_real_t)0.02f);
+#if IVP_X87_ARITHMETIC && !IVP_X87_ARITHMETIC_TRANSCENDENTAL
+    const double component_tol = sizeof(ivp_real_t) == sizeof(double) ? 8.0 * DBL_EPSILON : FLT_EPSILON;
+    IVP_ASSERT_NEAR(q.x, 0x1.2a53193a6dd58p-1, component_tol);
+    IVP_ASSERT_NEAR(q.y, -0x1.4742bb9a9d603p-1, component_tol);
+    IVP_ASSERT_NEAR(q.z, 0x1.00fef1329d06ap-1, component_tol);
+    /* The clip computes w from a small difference near one. Compare the
+     * squared result at the tolerance of that subtraction. */
+    const double radius = 1.0 - IVP_REF_RES_EPS;
+    IVP_ASSERT_TRUE(q.w > 0.0);
+    const double w_square = 1.0 - radius * radius;
+    const double square_tol = 8.0 * DBL_EPSILON + 2.0 * w_square * component_tol;
+    IVP_ASSERT_NEAR((double)q.w * (double)q.w, w_square, square_tol);
+#else
 #if IVP_X87_ARITHMETIC
     static const double r2[4] = {
         0x1.2a53193a6dd58p-1, -0x1.4742bb9a9d603p-1,
@@ -285,6 +299,7 @@ IVP_TEST(ref_quat_fast_multiple_with_clip) {
                                   0x1.00fef1329d06ap-1, 0x1.289503240a61cp-13 };
 #endif
     Q_LIBM_EQ(q, r2);
+#endif
 }
 
 IVP_TEST(ref_quat_very_fast_multiple) {
