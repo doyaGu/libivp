@@ -16,7 +16,7 @@ extern "C" {
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
-typedef struct IVP_ALIGN16 ivp_vec3f {
+typedef struct IVP_ALIGN16 ivp_vec3f_storage {
     float k[3];
 } ivp_vec3f_t;
 
@@ -24,7 +24,7 @@ typedef struct ivp_vec3d {
     double k[3];
 } ivp_vec3d_t;
 
-typedef struct IVP_ALIGN16 ivp_vec3r {
+typedef struct IVP_ALIGN16 ivp_vec3r_storage {
     ivp_real_t k[3];
 } ivp_vec3r_t;
 
