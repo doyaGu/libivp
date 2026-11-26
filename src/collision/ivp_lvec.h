@@ -214,7 +214,7 @@ static inline bool lvf_normize(ivp_vec3f_t *a) {
     return ivp_x87_normalize3f(a->k, 2, P_DOUBLE_EPS, NULL);
 #else
     D l = lvf_quad_length(a);
-    if (l < P_DOUBLE_EPS) return false;
+    if (!(l >= P_DOUBLE_EPS)) return false;
     lvf_mult(a, lv_isqrt(l, 2));
     return true;
 #endif
@@ -226,7 +226,7 @@ static inline D lvf_real_length_plus_normize(ivp_vec3f_t *a) {
     return ivp_x87_normalize3f(a->k, 3, P_DOUBLE_EPS, &length) ? (D)length : 0;
 #else
     D q = lvf_quad_length(a);
-    if (q < P_DOUBLE_EPS) return 0.0f;
+    if (!(q >= P_DOUBLE_EPS)) return 0.0f;
     D f = lv_isqrt(q, 3);
     lvf_mult(a, f);
     return f * q;
@@ -366,7 +366,7 @@ static inline bool lvp_normize(ivp_vec3r_t *a) {
     return ivp_x87_normalize3r(a->k, 3, P_DOUBLE_EPS, NULL);
 #else
     D l = lvp_quad_length(a);
-    if (l < P_DOUBLE_EPS) return false;
+    if (!(l >= P_DOUBLE_EPS)) return false;
     lvp_mult(a, lv_isqrt(l, 3));
     return true;
 #endif
@@ -376,7 +376,7 @@ static inline bool lvp_fast_normize(ivp_vec3r_t *a) {
     return ivp_x87_normalize3r(a->k, 2, P_DOUBLE_EPS, NULL);
 #else
     D l = lvp_quad_length(a);
-    if (l < P_DOUBLE_EPS) return false;
+    if (!(l >= P_DOUBLE_EPS)) return false;
     lvp_mult(a, lv_isqrt(l, 2));
     return true;
 #endif
@@ -387,7 +387,7 @@ static inline D lvp_real_length_plus_normize(ivp_vec3r_t *a) {
     return ivp_x87_normalize3r(a->k, 3, P_DOUBLE_EPS, &length) ? (D)length : 0;
 #else
     D q = lvp_quad_length(a);
-    if (q < P_DOUBLE_EPS) return 0.0;
+    if (!(q >= P_DOUBLE_EPS)) return 0.0;
     D f = lv_isqrt(q, 3);
     lvp_mult(a, f);
     return f * q;

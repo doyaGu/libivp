@@ -59,7 +59,7 @@ ivp_result_t ivp_vec3r_normalize(ivp_vec3r_t *v) {
     return ivp_x87_normalize3r(v->k, IVP_VEC3R_NORMIZE_STEPS, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = vec3r_quad_length_ref(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     double f = ivp_isqrt_double(length, IVP_VEC3R_NORMIZE_STEPS);
     vec3r_mult_ref(v, f);
     return IVP_OK;
@@ -71,7 +71,7 @@ ivp_result_t ivp_vec3r_fast_normalize(ivp_vec3r_t *v) {
     return ivp_x87_normalize3r(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = vec3r_quad_length_ref(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     double f = ivp_isqrt_double(length, 2);
     vec3r_mult_ref(v, f);
     return IVP_OK;
@@ -84,7 +84,7 @@ ivp_real_t ivp_vec3r_normalize_and_length(ivp_vec3r_t *v) {
     return ivp_x87_normalize3r(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? (ivp_real_t)length : IVP_REAL(0.0);
 #else
     double qlength = vec3r_quad_length_ref(v);
-    if (qlength < IVP_REF_DOUBLE_EPS) {
+    if (!(qlength >= IVP_REF_DOUBLE_EPS)) {
         return IVP_REAL(0.0);
     }
     double f = ivp_isqrt_double(qlength, 3);
@@ -341,7 +341,7 @@ ivp_result_t ivp_vec3f_normize(ivp_vec3f_t *v) {
     return ivp_x87_normalize3f(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = ivp_vec3f_quad_length(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     ivp_vec3f_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
 #endif
@@ -352,7 +352,7 @@ ivp_result_t ivp_vec3f_fast_normize(ivp_vec3f_t *v) {
     return ivp_x87_normalize3f(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = ivp_vec3f_quad_length(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     ivp_vec3f_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
 #endif
@@ -364,7 +364,7 @@ double ivp_vec3f_real_length_plus_normize(ivp_vec3f_t *v) {
     return ivp_x87_normalize3f(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? length : 0.0;
 #else
     double qlength = ivp_vec3f_quad_length(v);
-    if (qlength < IVP_REF_DOUBLE_EPS) return 0.0;
+    if (!(qlength >= IVP_REF_DOUBLE_EPS)) return 0.0;
     double f = ivp_isqrt_double(qlength, 3);
     ivp_vec3f_mult(v, f);
     return f * qlength;
@@ -403,7 +403,7 @@ ivp_result_t ivp_vec3d_normize(ivp_vec3d_t *v) {
     return ivp_x87_normalize3d(v->k, 3, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = ivp_vec3d_quad_length(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     vec3d_mult(v, ivp_isqrt_double(length, 3));
     return IVP_OK;
 #endif
@@ -414,7 +414,7 @@ ivp_result_t ivp_vec3d_fast_normize(ivp_vec3d_t *v) {
     return ivp_x87_normalize3d(v->k, 2, IVP_REF_DOUBLE_EPS, NULL) ? IVP_OK : IVP_ERR_NORMALIZATION_FAILED;
 #else
     double length = ivp_vec3d_quad_length(v);
-    if (length < IVP_REF_DOUBLE_EPS) return IVP_ERR_NORMALIZATION_FAILED;
+    if (!(length >= IVP_REF_DOUBLE_EPS)) return IVP_ERR_NORMALIZATION_FAILED;
     vec3d_mult(v, ivp_isqrt_double(length, 2));
     return IVP_OK;
 #endif
@@ -426,7 +426,7 @@ double ivp_vec3d_real_length_plus_normize(ivp_vec3d_t *v) {
     return ivp_x87_normalize3d(v->k, 3, IVP_REF_DOUBLE_EPS, &length) ? length : 0.0;
 #else
     double qlength = ivp_vec3d_quad_length(v);
-    if (qlength < IVP_REF_DOUBLE_EPS) return 0.0;
+    if (!(qlength >= IVP_REF_DOUBLE_EPS)) return 0.0;
     double f = ivp_isqrt_double(qlength, 3);
     vec3d_mult(v, f);
     return f * qlength;

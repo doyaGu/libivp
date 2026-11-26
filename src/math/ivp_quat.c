@@ -491,7 +491,7 @@ void ivp_quat_set_interpolate_smoothly(ivp_quatr_t *out, const ivp_quatr_t *from
     if (sign < 0.0f) cosom = -cosom;
 
     /* the retail threshold 1.0 - 0.001f is a double expression */
-    if (cosom < 1.0 - (double)0.001f) {
+    if (!(cosom >= 1.0 - (double)0.001f)) {
         /* standard case (slerp) */
         double omega = ivp_acosd(cosom);
         double i_sinom = 1.0 / sqrt(1.0 - cosom * cosom);

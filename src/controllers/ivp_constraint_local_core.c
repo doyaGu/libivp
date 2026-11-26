@@ -204,7 +204,7 @@ static bool v3_normize(double v[3])
     return ivp_x87_normalize3d(v, 3, CL_DOUBLE_EPS, NULL);
 #else
     double q = v3_dot(v, v);
-    if (q < CL_DOUBLE_EPS) return false;
+    if (!(q >= CL_DOUBLE_EPS)) return false;
     double f = ivp_isqrt_double(q, 3);
     v[0] *= f; v[1] *= f; v[2] *= f;
     return true;
@@ -270,7 +270,7 @@ static bool m4_real_invert(ivp_cmatrix_t *m)
     v3_cross(m->rows[2], m->rows[0], r1);
     v3_cross(m->rows[0], m->rows[1], r2);
     double D = v3_dot(m->rows[0], r0);
-    if (fabs(D) < CL_DOUBLE_EPS) return false;
+    if (!(fabs(D) >= CL_DOUBLE_EPS)) return false;
     double DI = 1.0 / D;
     for (int i = 0; i < 3; i++) { r0[i] *= DI; r1[i] *= DI; r2[i] *= DI; }
     m3_set_col(m->rows, 0, r0);
@@ -816,7 +816,7 @@ static double fast_asin(double a)
 /* reference IVP_U_Quat::set_quaternion(const IVP_U_Matrix3 *) + normize_quat */
 static void matrix_to_quat(const m3_t m, double q_out[4] /* x y z w */)
 {
-    double tr = m[0][0] + m[1][1] + m[2][2];
+    double tr = m[2][2] + m[0][0] + m[1][1];
     double x, y, z, w;
     if (tr > 0.0) {
         double s = sqrt(tr + 1.0);
@@ -840,9 +840,9 @@ static void matrix_to_quat(const m3_t m, double q_out[4] /* x y z w */)
         q[k] = (m[k][i] + m[i][k]) * s;
         x = q[0]; y = q[1]; z = q[2]; w = q[3];
     }
-    double len = sqrt(x * x + y * y + z * z + w * w);
-    if (len > 0.0) {
-        double il = 1.0 / len;
+    const double square = x * x + y * y + z * z + w * w;
+    if (square > IVP_REF_DOUBLE_EPS) {
+        double il = 1.0 / sqrt(square);
         x *= il; y *= il; z *= il; w *= il;
     }
     q_out[0] = x; q_out[1] = y; q_out[2] = z; q_out[3] = w;

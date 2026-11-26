@@ -100,6 +100,20 @@ IVP_TEST(vec3_normalize) {
     IVP_ASSERT_NEAR(v.k[1], 0.8, TOL);
 }
 
+IVP_TEST(vec3_normalization_rejects_nan) {
+    ivp_vec3r_t real = {{(ivp_real_t)NAN, IVP_REAL(1.0), IVP_REAL(2.0)}};
+    ivp_vec3f_t single = {{NAN, 1.0f, 2.0f}};
+    ivp_vec3d_t wide = {{NAN, 1.0, 2.0}};
+
+    IVP_ASSERT_EQ(ivp_vec3r_normalize(&real), IVP_ERR_NORMALIZATION_FAILED);
+    IVP_ASSERT_EQ(ivp_vec3f_normize(&single), IVP_ERR_NORMALIZATION_FAILED);
+    IVP_ASSERT_EQ(ivp_vec3d_normize(&wide), IVP_ERR_NORMALIZATION_FAILED);
+    IVP_ASSERT_TRUE(isnan(real.k[0]) && isnan(single.k[0]) && isnan(wide.k[0]));
+    IVP_ASSERT_EQ(real.k[1], IVP_REAL(1.0));
+    IVP_ASSERT_EQ(single.k[1], 1.0f);
+    IVP_ASSERT_EQ(wide.k[1], 1.0);
+}
+
 IVP_TEST(vec3_fast_normalize) {
     ivp_vec3r_t v = ivp_vec3r(IVP_REAL(3.0), IVP_REAL(4.0), IVP_REAL(0.0));
     ivp_vec3r_fast_normalize(&v);
@@ -660,6 +674,7 @@ int main(void) {
     IVP_REGISTER(vec3_quad_length);
     IVP_REGISTER(vec3_length);
     IVP_REGISTER(vec3_normalize);
+    IVP_REGISTER(vec3_normalization_rejects_nan);
     IVP_REGISTER(vec3_fast_normalize);
     IVP_REGISTER(vec3_lerp);
     IVP_REGISTER(vec3_add_scaled);
