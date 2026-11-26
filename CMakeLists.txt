@@ -762,6 +762,8 @@ if (IVP_BUILD_TESTS)
                 IVP_BENCHMARK_DIAGNOSTICS)
     endif ()
     ivp_add_test(test_convex_layout tests/test_convex_layout.c)
+    target_compile_definitions(test_convex_layout PRIVATE
+            IVP_TEST_REENTRANT_QHULL=$<BOOL:${IVP_REENTRANT_QHULL}>)
     ivp_add_test(test_anomaly tests/test_anomaly.c)
     ivp_add_test(test_object_lifecycle tests/test_object_lifecycle.c)
     target_include_directories(test_object_lifecycle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

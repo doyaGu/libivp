@@ -1,12 +1,6 @@
-/* test_convex_layout.c -- reference layout of the convex pointsoup builder
- *
- * The expected values were dumped from the reference IVP
- * (IVP_SurfaceBuilder_Pointsoup::convert_pointsoup_to_compact_surface: qhull
- * 2.6 -> planes_to_template -> IVP_SurfaceBuilder_Polygon_Convex ->
- * IVP_Compact_Ledge_Generator -> IVP_SurfaceBuilder_Ledge_Soup).  Point
- * order, triangle order, edge start points / opposite indices and therefore
- * the float accumulated mass center are layout dependent, so they are
- * checked bit for bit.
+/* Validate compact hull geometry and serialization with either Qhull backend.
+ * The bundled Qhull also uses fixtures captured from the original IVP
+ * pointsoup builder for its point order, edge indices and mass properties.
  */
 #include "ivp_test.h"
 #include <ivp/builder/ivp_build_surface.h>
@@ -47,6 +41,7 @@ static ivp_compact_surface_t *box_pointsoup(double hx, double hy, double hz)
     return ivp_build_convex_surface_d(NULL, c, 8);
 }
 
+#if !IVP_TEST_REENTRANT_QHULL
 /* reference start_point_index(opposite_index) of edges 0..2, triangles 0..11 */
 static const int box_edges[12][3][2] = {
     { { 0, 6 }, { 1, 25 }, { 2, 6 } },     { { 0, 12 }, { 3, 29 }, { 1, -6 } },
@@ -92,8 +87,7 @@ static const int box_0_6_x87_point_sign[8][3] = {
 };
 #endif
 
-/* assertion helper: _fail_count is the IVP_TEST failure counter */
-static void check_box_layout(int *_fail_count, const ivp_compact_ledge_t *l, double h)
+static void check_box_reference_layout(int *_fail_count, const ivp_compact_ledge_t *ledge, double h)
 {
     const int (*point_sign)[3] = box_point_sign;
     const int (*edges)[3][2] = box_edges;
@@ -103,29 +97,54 @@ static void check_box_layout(int *_fail_count, const ivp_compact_ledge_t *l, dou
         edges = box_0_6_x87_edges;
     }
 #endif
-    IVP_ASSERT_EQ(ivp_ledge_get_n_points(l), 8);
-    IVP_ASSERT_EQ(ivp_ledge_get_n_triangles(l), 12);
-    IVP_ASSERT_EQ(ivp_ledge_get_size(l), 336);
-    const ivp_compact_poly_point_t *pa = ivp_ledge_get_point_array(l);
-    for (int i = 0; i < 8; i++) {
-        for (int k = 0; k < 3; k++) {
-            IVP_ASSERT_EQ(f_bits(pa[i].k[k]), f_bits((float)(point_sign[i][k] * h)));
-        }
-        IVP_ASSERT_EQ(f_bits(pa[i].hesse_val), 0u);
+    const ivp_compact_poly_point_t *points = ivp_ledge_get_point_array(ledge);
+    for (int i = 0; i < 8; ++i) {
+        for (int axis = 0; axis < 3; ++axis)
+            IVP_ASSERT_EQ(f_bits(points[i].k[axis]), f_bits((float)(point_sign[i][axis] * h)));
     }
-    const ivp_compact_triangle_t *t = ivp_ledge_get_first_triangle(l);
-    for (int i = 0; i < 12; i++) {
-        IVP_ASSERT_EQ(ivp_tri_get_tri_index(&t[i]), i);
-        IVP_ASSERT_EQ(ivp_tri_get_pierce_index(&t[i]), 11 - i);
-        IVP_ASSERT_EQ(ivp_tri_get_material_index(&t[i]), 0);
-        IVP_ASSERT_EQ(ivp_tri_get_is_virtual(&t[i]), 0);
-        for (int e = 0; e < 3; e++) {
-            IVP_ASSERT_EQ(ivp_edge_get_start_point_index(&t[i].edges[e]), edges[i][e][0]);
-            IVP_ASSERT_EQ(ivp_edge_get_opposite_index(&t[i].edges[e]), edges[i][e][1]);
-            IVP_ASSERT_EQ(ivp_edge_get_is_virtual(&t[i].edges[e]), 0);
+    const ivp_compact_triangle_t *tris = ivp_ledge_get_first_triangle(ledge);
+    for (int i = 0; i < 12; ++i) {
+        IVP_ASSERT_EQ(ivp_tri_get_pierce_index(&tris[i]), 11 - i);
+        for (int edge = 0; edge < 3; ++edge) {
+            IVP_ASSERT_EQ(ivp_edge_get_start_point_index(&tris[i].edges[edge]), edges[i][edge][0]);
+            IVP_ASSERT_EQ(ivp_edge_get_opposite_index(&tris[i].edges[edge]), edges[i][edge][1]);
         }
     }
-    IVP_ASSERT_TRUE(ivp_compact_ledge_check(l));
+}
+#endif
+
+static void check_box_layout(int *_fail_count, const ivp_compact_ledge_t *ledge, double h)
+{
+    IVP_ASSERT_NOT_NULL(ledge);
+    IVP_ASSERT_EQ(ivp_ledge_get_n_points(ledge), 8);
+    IVP_ASSERT_EQ(ivp_ledge_get_n_triangles(ledge), 12);
+    IVP_ASSERT_EQ(ivp_ledge_get_size(ledge), 336);
+    const ivp_compact_poly_point_t *points = ivp_ledge_get_point_array(ledge);
+    const float extent = (float)h;
+    unsigned corners = 0;
+    for (int i = 0; i < 8; ++i) {
+        unsigned corner = 0;
+        for (int axis = 0; axis < 3; ++axis) {
+            const float component = points[i].k[axis];
+            IVP_ASSERT_TRUE(component == extent || component == -extent);
+            corner |= (unsigned)(component > 0.0f) << axis;
+        }
+        corners |= 1u << corner;
+        IVP_ASSERT_EQ(f_bits(points[i].hesse_val), 0u);
+    }
+    IVP_ASSERT_EQ(corners, 0xffu);
+    const ivp_compact_triangle_t *tris = ivp_ledge_get_first_triangle(ledge);
+    for (int i = 0; i < 12; ++i) {
+        IVP_ASSERT_TRUE(ivp_tri_get_pierce_index(&tris[i]) < 12);
+        IVP_ASSERT_EQ(ivp_tri_get_material_index(&tris[i]), 0);
+        IVP_ASSERT_EQ(ivp_tri_get_is_virtual(&tris[i]), 0);
+        for (int edge = 0; edge < 3; ++edge)
+            IVP_ASSERT_EQ(ivp_edge_get_is_virtual(&tris[i].edges[edge]), 0);
+    }
+    IVP_ASSERT_TRUE(ivp_compact_ledge_check(ledge));
+#if !IVP_TEST_REENTRANT_QHULL
+    check_box_reference_layout(_fail_count, ledge, h);
+#endif
 }
 
 IVP_TEST(box_0_6_layout_and_mass_center)
@@ -135,6 +154,12 @@ IVP_TEST(box_0_6_layout_and_mass_center)
     check_box_layout(_fail_count, ivp_surface_get_single_convex(s), 0.6);
 
     /* The reference integral accumulates the triangles in ledge order. */
+#if IVP_TEST_REENTRANT_QHULL
+    for (int axis = 0; axis < 3; ++axis) {
+        IVP_ASSERT_NEAR(s->mass_center[axis], 0.0f, 1e-7f);
+        IVP_ASSERT_NEAR(s->rotation_inertia[axis], 0x1.5b8ea2p-3f, 1e-7f);
+    }
+#else
 #if IVP_X87_ARITHMETIC
     static const uint32_t mass_center[3] = { 0xaf77c866u, 0xb1cd4629u, 0xaf77c866u };
 #else
@@ -144,14 +169,27 @@ IVP_TEST(box_0_6_layout_and_mass_center)
         IVP_ASSERT_EQ(f_bits(s->mass_center[k]), mass_center[k]);
         IVP_ASSERT_EQ(f_bits(s->rotation_inertia[k]), 0x3e2dc751u); /* 0x1.5b8ea2p-3 */
     }
+#endif
     IVP_ASSERT_EQ(f_bits(s->upper_limit_radius), 0x3f850582u); /* 0x1.0a0b04p+0 */
     IVP_ASSERT_EQ(ivp_surface_get_max_deviation(s), 205);
     IVP_ASSERT_EQ(ivp_surface_get_byte_size(s), 412);
     ivp_compact_surface_free(NULL, s);
 }
 
-IVP_TEST(box_0_6_blob_matches_reference)
+IVP_TEST(box_0_6_serialization)
 {
+    ivp_compact_surface_t *surface = box_pointsoup(0.6, 0.6, 0.6);
+    ivp_compact_surface_t *repeat = box_pointsoup(0.6, 0.6, 0.6);
+    IVP_ASSERT_NOT_NULL(surface);
+    IVP_ASSERT_NOT_NULL(repeat);
+    const int size = ivp_surface_get_byte_size(surface);
+    IVP_ASSERT_EQ(size, 412);
+    IVP_ASSERT_EQ(ivp_surface_get_byte_size(repeat), size);
+    IVP_ASSERT_TRUE(ivp_compact_surface_check(surface, (size_t)size));
+    IVP_ASSERT_EQ(memcmp(surface, repeat, (size_t)size), 0);
+    ivp_compact_surface_free(NULL, repeat);
+
+#if !IVP_TEST_REENTRANT_QHULL
     /* complete reference compact surface (header, ledge, ledgetree node),
      * little endian */
     static const char ref_hex[] =
@@ -188,27 +226,25 @@ IVP_TEST(box_0_6_blob_matches_reference)
     const uint16_t probe = 1;
     unsigned char little_endian;
     memcpy(&little_endian, &probe, 1);
-    if (!little_endian) return; /* the blob is stored in native byte order */
-
-    ivp_compact_surface_t *s = box_pointsoup(0.6, 0.6, 0.6);
-    IVP_ASSERT_NOT_NULL(s);
-    int size = ivp_surface_get_byte_size(s);
-    IVP_ASSERT_EQ(size * 2, (int)strlen(ref_hex));
-    const unsigned char *b = (const unsigned char *)s;
-    int first_diff = -1;
-    for (int i = 0; i < size; i++) {
-        unsigned int v = 0;
-        for (int d = 0; d < 2; d++) {
-            char ch = ref_hex[2 * i + d];
-            v = v * 16u + (unsigned int)(ch <= '9' ? ch - '0' : ch - 'a' + 10);
+    if (little_endian) {
+        IVP_ASSERT_EQ(size * 2, (int)strlen(ref_hex));
+        const unsigned char *bytes = (const unsigned char *)surface;
+        int first_diff = -1;
+        for (int i = 0; i < size; ++i) {
+            unsigned int value = 0;
+            for (int digit = 0; digit < 2; ++digit) {
+                const char c = ref_hex[2 * i + digit];
+                value = value * 16u + (unsigned int)(c <= '9' ? c - '0' : c - 'a' + 10);
+            }
+            if (bytes[i] != (unsigned char)value) {
+                first_diff = i;
+                break;
+            }
         }
-        if (b[i] != (unsigned char)v) {
-            first_diff = i;
-            break;
-        }
+        IVP_ASSERT_EQ(first_diff, -1);
     }
-    IVP_ASSERT_EQ(first_diff, -1);
-    ivp_compact_surface_free(NULL, s);
+#endif
+    ivp_compact_surface_free(NULL, surface);
 }
 
 IVP_TEST(box_0_4_mass_center)
@@ -217,6 +253,12 @@ IVP_TEST(box_0_4_mass_center)
     IVP_ASSERT_NOT_NULL(s);
     check_box_layout(_fail_count, ivp_surface_get_single_convex(s), 0.4);
     /* reference mass center (-0x1.42111p-28, 0x1.054442p-28, 0x1.054442p-28) */
+#if IVP_TEST_REENTRANT_QHULL
+    for (int axis = 0; axis < 3; ++axis) {
+        IVP_ASSERT_NEAR(s->mass_center[axis], 0.0f, 1e-7f);
+        IVP_ASSERT_NEAR(s->rotation_inertia[axis], 0x1.34f08ep-4f, 1e-7f);
+    }
+#else
 #if IVP_X87_ARITHMETIC
     static const uint32_t mass_center[3] = { 0xb1807777u, 0x31731110u, 0xaedddddeu };
 #else
@@ -226,6 +268,7 @@ IVP_TEST(box_0_4_mass_center)
         IVP_ASSERT_EQ(f_bits(s->mass_center[k]), mass_center[k]);
         IVP_ASSERT_EQ(f_bits(s->rotation_inertia[k]), 0x3d9a7847u); /* 0x1.34f08ep-4 */
     }
+#endif
     ivp_compact_surface_free(NULL, s);
 }
 
@@ -293,7 +336,6 @@ IVP_TEST(prism16_valid_ledge)
     ivp_compact_ledge_free(NULL, l);
 }
 
-#if IVP_X87_ARITHMETIC
 IVP_TEST(octagonal_prism_coplanar_merge_preserves_mass_center)
 {
     const double diagonal = 0.24748737341529164;
@@ -312,10 +354,18 @@ IVP_TEST(octagonal_prism_coplanar_merge_preserves_mass_center)
     }
     ivp_compact_surface_t *surface = ivp_build_convex_surface_d(NULL, points, 16);
     IVP_ASSERT_NOT_NULL(surface);
+    const ivp_compact_ledge_t *ledge = ivp_surface_get_single_convex(surface);
+    IVP_ASSERT_NOT_NULL(ledge);
+    IVP_ASSERT_EQ(ivp_ledge_get_n_points(ledge), 16);
+    IVP_ASSERT_EQ(ivp_ledge_get_n_triangles(ledge), 28);
+    IVP_ASSERT_TRUE(ivp_compact_ledge_check(ledge));
+    for (int axis = 0; axis < 3; ++axis)
+        IVP_ASSERT_NEAR(surface->mass_center[axis], 0.0f, 1e-7f);
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE) && !IVP_TEST_REENTRANT_QHULL
     IVP_ASSERT_EQ(surface->mass_center[1], -0x1.e82a16p-32f);
+#endif
     ivp_compact_surface_free(NULL, surface);
 }
-#endif
 
 static uint16_t host_control_word;
 static unsigned host_control_writes;
@@ -359,15 +409,13 @@ IVP_TEST(pointsoup_selects_extended_host_precision)
 int main(void)
 {
     IVP_REGISTER(box_0_6_layout_and_mass_center);
-    IVP_REGISTER(box_0_6_blob_matches_reference);
+    IVP_REGISTER(box_0_6_serialization);
     IVP_REGISTER(box_0_4_mass_center);
     IVP_REGISTER(box_builder_uses_pointsoup_layout);
     IVP_REGISTER(triangle_ledge_layout);
     IVP_REGISTER(prism16_valid_ledge);
     IVP_REGISTER(pointsoup_selects_extended_host_precision);
-#if IVP_X87_ARITHMETIC
     IVP_REGISTER(octagonal_prism_coplanar_merge_preserves_mass_center);
-#endif
 
     IVP_RUN_ALL();
 }
