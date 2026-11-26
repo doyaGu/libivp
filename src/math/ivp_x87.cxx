@@ -337,8 +337,7 @@ bool ivp_x87_better_edge_face_gradient(const ivp_vec3r_t *edge, const ivp_vec3r_
     const X87_Float80 ny = fp.load(face_normal->k[1]);
     const X87_Float80 nz = fp.load(face_normal->k[2]);
     const X87_Float80 delta = fp.add(fp.add(fp.multiply(y, ny), fp.multiply(z, nz)), fp.multiply(x, nx));
-    const X87_Arithmetic::Relation sign = fp.compare(delta, fp.load(0.0));
-    if (sign != X87_Arithmetic::LESS && sign != X87_Arithmetic::UNORDERED)
+    if (fp.compare(delta, fp.load(0.0)) != X87_Arithmetic::LESS)
         return false;
 
     const float normal_square = fp.store_float(fp.add(fp.add(fp.multiply(nx, nx), fp.multiply(nz, nz)),
@@ -349,8 +348,7 @@ bool ivp_x87_better_edge_face_gradient(const ivp_vec3r_t *edge, const ivp_vec3r_
     const X87_Float80 inverse_edge = ivp_x87_isqrt(fp, fp.load(edge_square), 2);
     const X87_Float80 value = fp.multiply(fp.multiply(inverse_edge, fp.load(fp.store_double(delta))),
                                           fp.load(inverse_normal));
-    const X87_Arithmetic::Relation relation = fp.compare(value, fp.load(minimum));
-    if (relation != X87_Arithmetic::LESS && relation != X87_Arithmetic::UNORDERED)
+    if (fp.compare(value, fp.load(minimum)) != X87_Arithmetic::LESS)
         return false;
     ivp_x87_store(fp, *gradient, value);
     return true;

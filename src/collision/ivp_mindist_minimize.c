@@ -856,7 +856,7 @@ static ivp_mrc_type_t p_minimize_Leave_KK(mms_t *m, const ivp_compact_edge_t *K,
         if (ivp_x87_better_edge_face_gradient(&e_dir_Fos, &cF->hesse_Fos, min_grad_pos, &grad)) {
 #else
         const D delta_h2 = lvp_dot(&e_dir_Fos, &cF->hesse_Fos);
-        if (delta_h2 >= 0.0f) continue;
+        if (!(delta_h2 < 0.0f)) continue;
         const D inv_hesse_real_length = (D)lv_isqrt_float((float)lvp_quad_length(&cF->hesse_Fos));
         D grad = delta_h2 * (D)lv_isqrt_float((float)lvp_quad_length(&e_dir_Fos));
         grad *= inv_hesse_real_length;

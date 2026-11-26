@@ -52,22 +52,16 @@ static ivp_time_t s3d_calc_nullstelle(solver3d_t *s, ivp_time_t t0, ivp_time_t t
     ivp_transform_r_t A, B;
     int counter = 0;
     for (;;) {
-#if IVP_X87_ARITHMETIC
         const bool adjust_midpoint = (counter & 3) == 3;
         if (adjust_midpoint && counter > 64) return t0;
+#if IVP_X87_ARITHMETIC
         ivp_time_t tt = ivp_x87_collision_time(t0, t1, value, v0, v1, adjust_midpoint);
 #else
-        D dv = v1 - v0;
-        ivp_time_t tt = t0;
-        tt += (double)((value - v0) * (D)ivp_time_diff(t1, t0) / dv);
-        if ((counter & 0x3) == 3) {
-            if (counter > 64) return t0;
-            const D ratio = 0.25f;
-            const D inv_ratio = 1.0f - ratio;
-            D dt0 = (D)ivp_time_diff(t0, tt);
-            D dt1 = (D)ivp_time_diff(t1, tt);
-            D mid2 = dt0 + dt1;
-            tt += (double)(mid2 * (inv_ratio * 0.5f));
+        const double dv = (double)v1 - (double)v0;
+        ivp_time_t tt = t0 + ivp_time_diff(t1, t0) * ((double)value - (double)v0) / dv;
+        if (adjust_midpoint) {
+            const double offset = ivp_time_diff(t0, tt) + ivp_time_diff(t1, tt);
+            tt += offset * 0.375;
         }
 #endif
         ivp_object_calc_at_matrix(a, tt, &A);
@@ -339,12 +333,7 @@ static inline D lvf_fast_real_length(const ivp_vec3f_t *a) { return LV_SQRT(lvf_
 
 static inline D sector_change_projection_limit(float force_distance, float inverse_diameter)
 {
-#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
-    /* Two binary32 significands fit exactly in the solver's binary64 threshold. */
-    return -(double)force_distance * (double)inverse_diameter;
-#else
-    return (D)(-force_distance * inverse_diameter);
-#endif
+    return (D)(-(double)force_distance * (double)inverse_diameter);
 }
 
 /* ── PF ─────────────────────────────────────────────────────────────────── */
@@ -369,13 +358,8 @@ static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compac
         s3d_set_max_deviation(&pf, mim->max_coll_speed);
         float radius = md->sum_extra_radius;
         D sec_dist = ivp_mindist_collision_distance(md) + (D)radius;
-#if IVP_X87_ARITHMETIC
         D real_coll = (D)((double)ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5 * radius);
         D now_len = (D)((double)md->len_numerator + radius);
-#else
-        D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
-        D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
-#endif
         if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->event_time_out, &cache_P,
                                             &cache_F, &now_len, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PF_COLL;
@@ -437,13 +421,8 @@ static void calc_next_event_BF(ivp_mindist_event_solver_t *mim, const ivp_compac
     s3d_set_max_deviation(&pf, mim->max_coll_speed);
     float radius = md->sum_extra_radius;
     D sec_dist = ivp_mindist_collision_distance(md) + (D)radius;
-#if IVP_X87_ARITHMETIC
     D real_coll = (D)((double)ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5 * radius);
     D now_len = (D)((double)md->len_numerator + radius);
-#else
-    D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
-    D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
-#endif
     if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->t_max, &cache_P, &cache_F,
                                         &now_len, &mim->event_time_out)) {
         mim->event_type_out = IVP_COLL_PF_COLL;

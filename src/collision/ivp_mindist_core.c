@@ -1218,8 +1218,9 @@ void ivp_mindist_update_exact_mindist_events(ivp_mindist_t *md, bool allow_hull_
     mim.worst_case_speed = (D)ivp_x87_collision_speed_bound(core0->current_speed, core1->current_speed,
                                                           core0->max_surface_rot_speed, core1->max_surface_rot_speed);
 #else
-    const D surface_speed = (D)(core0->max_surface_rot_speed + core1->max_surface_rot_speed);
-    mim.worst_case_speed = surface_speed + (D)core0->current_speed + (D)core1->current_speed;
+    const double surface_speed = (double)core0->max_surface_rot_speed + (double)core1->max_surface_rot_speed;
+    const double linear_speed = (double)core1->current_speed + (double)core0->current_speed;
+    mim.worst_case_speed = (D)(linear_speed + surface_speed);
 #endif
     mim.event_type_out = IVP_COLL_NONE;
     if (md->coll.te.index != IVP_MINLIST_UNUSED) {
