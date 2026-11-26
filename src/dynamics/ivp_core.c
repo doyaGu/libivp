@@ -649,7 +649,11 @@ void ivp_core_global_damp_core(ivp_core_t *core, double d_time)
         ivp_vec3f_t add_on, rot_damp_factor;
         lvf_set3(&add_on, s_add_on, s_add_on, s_add_on);
         lvf_add2(&rot_damp_factor, &rdf, &add_on);
+#if IVP_X87_ARITHMETIC
         const double linear_damping = (double)(float)core->speed_damp_factor + (double)s_add_on;
+#else
+        const double linear_damping = (double)((float)core->speed_damp_factor + s_add_on);
+#endif
         core_damp_object(core, d_time, &rot_damp_factor, linear_damping);
     } else {
         core_damp_object(core, d_time, &rdf, (double)(float)core->speed_damp_factor);

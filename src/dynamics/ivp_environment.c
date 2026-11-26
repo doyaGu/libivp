@@ -2646,7 +2646,11 @@ ivp_environment_t *ivp_environment_create(const ivp_environment_config_t *config
     /* the constructor sets the binary64 1/66 and computes the energy damping
      * once from it (retail RVA 0x12A60); later steps do not change it */
     env_set_delta_psi_time_d(env, 1.0 / 66.0);
-    pl->integrated_energy_damp = (float)ivp_expd(log(0.9f) * pl->delta_psi_time);
+    double contact_decay_log = log((double)0.9f);
+#if !IVP_X87_ARITHMETIC
+    contact_decay_log = (double)(float)contact_decay_log;
+#endif
+    pl->integrated_energy_damp = (float)ivp_expd(contact_decay_log * pl->delta_psi_time);
     /* Apply a valid configured step after initializing the contact energy decay. */
     double dt = (double)cfg.delta_psi_time;
     if (dt >= (double)IVP_MIN_DELTA_PSI_TIME && dt <= (double)IVP_MAX_DELTA_PSI_TIME) {
