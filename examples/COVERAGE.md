@@ -136,5 +136,5 @@ Feature modules: 71 of 90 headers are used by at least one example; the 19 other
 - `base` (10 headers, 3 touched): allocator, arena, memory regions, assert and message plumbing
 - `containers` (8 headers, 1 touched): arrays, hashes, sets and heaps
 - `solver` (4 headers, 0 touched): impact, contact and friction solvers (reached through any collision)
-- `math` (7 headers, 5 touched): vectors, matrices, quaternions
+- `math` (8 headers, 5 touched): vectors, matrices, quaternions
 - `diagnostics` (5 headers, 0 touched): statistics and debug managers
