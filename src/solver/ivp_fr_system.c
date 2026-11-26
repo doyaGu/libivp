@@ -631,7 +631,7 @@ static void me_get_rot_inertia(const ivp_core_t *core, const ivp_vec3f_t *rot_ve
     ivp_x87_directional_inertia(rot_vec_abs.k, P_DOUBLE_EPS, rot_inertia, inv_rot_inertia);
 #else
     *rot_inertia = (double)lvf_real_length(&rot_vec_abs);
-    if (*rot_inertia < P_DOUBLE_EPS) {
+    if (!(*rot_inertia >= P_DOUBLE_EPS)) {
         *rot_inertia = 1.0;
         *inv_rot_inertia = 1.0;
     } else {
@@ -1904,9 +1904,8 @@ static void frs_calc_solver_desired(fr_solver_t *s, int i,
         dist_velocity, IVP_FR_DESCENDING_SPEEDUP);
 #else
     double dist_velocity = ivp_impact_lt_get_closing_speed(info);
-    double distance_off =
-        (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
-                 info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
+    const double distance_off = (double)ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
+                                (double)info->friction.dist_len;
     m->desired_vector[i] =
         ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
 #endif
