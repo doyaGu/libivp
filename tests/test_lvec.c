@@ -819,6 +819,43 @@ IVP_TEST(worst_case_inverse_mass_rounds_after_the_second_reciprocal)
     IVP_ASSERT_EQ(inverse, 0x1.d99702p+1f);
 }
 
+IVP_TEST(x87_constraint_rotation_error_preserves_small_axes)
+{
+    const double rotation[3][3] = {
+        {0x1.0000000000001p+0, 0x1.2ea8p-52, 0x1.0268c21c992p-37},
+        {-0x1.7b6p-53, 0x1.0p+0, -0x1.efa1701a885p-36},
+        {-0x1.0268c48ap-37, 0x1.efa1625cabdp-36, 0x1.0000000000001p+0},
+    };
+    double error[3];
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_constraint_rotation_error(rotation, error);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(error[0], 0x1.efa16ap-36);
+    IVP_ASSERT_EQ(error[1], 0x1.0268c3534c9p-37);
+    IVP_ASSERT_EQ(error[2], -0x1.ec58p-53);
+}
+
+IVP_TEST(x87_constraint_back_substitution_preserves_small_impulses)
+{
+    double matrix[6][6] = {
+        {-0x1.8072820000000p+1, 0x1.66c7e20000000p+1, -0x1.6105460000000p-4, 0.0, 0x1.a00c1c0000000p-4},
+        {0x1.66c7e00000000p+1, -0x1.3f119a0000000p+2, -0x1.f511c40000000p-5, -0x1.a18ebc0000000p-4, 0.0},
+        {-0x1.6105460000000p-4, -0x1.f511c40000000p-5, -0x1.8524160000000p+0, -0x1.2897940000000p-2, 0x1.a1eb2c0000000p-2},
+        {0.0, -0x1.a18ebc0000000p-4, -0x1.2897940000000p-2, -0x1.ee51e20000000p-2, 0.0},
+        {0x1.a00c1c0000000p-4, 0.0, 0x1.a1eb2c0000000p-2, 0.0, -0x1.ec882e0000000p-2},
+    };
+    double desired[6] = {0x1.d228a67790856p-7, -0x1.476c2ab6c9c8bp-2, 0x1.60c5c0ae8983bp-33, 0x1.27d5edf00e7e7p-30, 0x1.7ab636d57aaeep-34};
+    const double expected[5] = {0x1.e6deb34301469p-4, 0x1.0d6196a898323p-3, 0x1.1e2e9931bd447p-33, -0x1.c71945d50a37fp-6, 0x1.9b43b7a96e7e7p-6};
+    double result[6];
+    const uint16_t precision = ivp_x87_enter_step();
+    const bool solved = ivp_x87_solve_constraint_system(5, matrix, desired, result, (double)1e-9f);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_TRUE(solved);
+    for (int i = 0; i < 5; ++i) {
+        IVP_ASSERT_EQ(result[i], expected[i]);
+    }
+}
+
 IVP_TEST(x87_hull_gauss_offset_rounds_after_each_subtraction)
 {
     const double point[] = {1.0, 1.0 + 0x1p-31, 1.0};
@@ -930,6 +967,8 @@ int main(void)
     IVP_REGISTER(x87_gyroscopic_update_retains_inertia_difference_precision);
     IVP_REGISTER(minimum_rotational_inertia_retains_squared_length_precision);
     IVP_REGISTER(worst_case_inverse_mass_rounds_after_the_second_reciprocal);
+    IVP_REGISTER(x87_constraint_rotation_error_preserves_small_axes);
+    IVP_REGISTER(x87_constraint_back_substitution_preserves_small_impulses);
     IVP_REGISTER(x87_hull_gauss_offset_rounds_after_each_subtraction);
     IVP_REGISTER(x87_hull_plane_checks_vertices_before_rounding_the_offset);
     IVP_REGISTER(hull_simplex_compares_before_rounding_the_determinant);

@@ -248,6 +248,82 @@ static bool ivp_x87_normalize_point(Scalar point[3], int steps, double epsilon, 
     return true;
 }
 
+bool ivp_x87_solve_constraint_system(int count, double matrix[6][6], double desired[6],
+                                     double result[6], double epsilon)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 tolerance = fp.load(epsilon);
+    const X87_Float80 residual_tolerance = fp.multiply(tolerance, fp.load(1000.0f));
+
+    for (int column = 0; column < count; ++column)
+    {
+        int pivot = column;
+        for (int row = count - 1; row > column; --row)
+        {
+            if (fabs(matrix[row][column]) > fabs(matrix[pivot][column]))
+                pivot = row;
+        }
+        if (pivot != column)
+        {
+            for (int i = column; i < count; ++i)
+            {
+                const double coefficient = matrix[column][i];
+                matrix[column][i] = matrix[pivot][i];
+                matrix[pivot][i] = coefficient;
+            }
+            const double value = desired[column];
+            desired[column] = desired[pivot];
+            desired[pivot] = value;
+        }
+
+        const double diagonal = matrix[column][column];
+        if (fabs(diagonal) < epsilon)
+            continue;
+
+        const double inverse = fp.store_double(fp.divide(fp.load(-1.0), fp.load(diagonal)));
+        for (int row = column + 1; row < count; ++row)
+        {
+            const double coefficient = matrix[row][column];
+            if (!(fabs(coefficient) > epsilon))
+                continue;
+            const X87_Float80 factor = fp.load(fp.store_double(fp.multiply(fp.load(coefficient), fp.load(inverse))));
+            for (int i = column; i < count; ++i)
+            {
+                const X87_Float80 product = fp.multiply(fp.load(matrix[column][i]), factor);
+                matrix[row][i] = fp.store_double(fp.add(fp.load(matrix[row][i]), product));
+            }
+            const X87_Float80 product = fp.multiply(fp.load(desired[column]), factor);
+            desired[row] = fp.store_double(fp.add(fp.load(desired[row]), product));
+        }
+    }
+
+    for (int row = count - 1; row >= 0; --row)
+    {
+        X87_Float80 residual = fp.load(desired[row]);
+        for (int column = count - 1; column > row; --column)
+        {
+            const X87_Float80 product = fp.multiply(fp.load(matrix[row][column]), fp.load(result[column]));
+            residual = fp.subtract(residual, product);
+        }
+        const double diagonal = matrix[row][row];
+        if (fabs(diagonal) < epsilon)
+        {
+            if (fp.compare(fp.absolute(residual), residual_tolerance) != X87_Arithmetic::LESS)
+            {
+                for (int i = 0; i < count; ++i)
+                    result[i] = 0.0;
+                return false;
+            }
+            result[row] = 0.0;
+        }
+        else
+        {
+            result[row] = fp.store_double(fp.divide(residual, fp.load(diagonal)));
+        }
+    }
+    return true;
+}
+
 double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
                                      float first_surface, float second_surface)
 {
@@ -1342,6 +1418,36 @@ void ivp_x87_quat_from_mat3(double rotation[4], const ivp_mat3r_t *matrix)
     ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
     ivp_x87_quat_from_rotation(fp, [&](int row, int col) { return matrix->rows[row].k[col]; },
                                rotation);
+}
+
+void ivp_x87_constraint_rotation_error(const double relative_rotation[3][3], double error[3])
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    double rotation[4];
+    ivp_x87_quat_from_rotation(fp, [&](int row, int col) { return relative_rotation[row][col]; },
+                               rotation);
+    const X87_Float80 cubic = fp.load(0.24f), quintic = fp.load(0.58f);
+    // The X polynomial writes its linear term and intermediate powers to binary32.
+    const X87_Float80 x = fp.load(fp.store_float(fp.load(rotation[0])));
+    const X87_Float80 square_x = fp.multiply(fp.load(rotation[0]), x);
+    const X87_Float80 cube_x = fp.multiply(square_x, x);
+    const X87_Float80 fifth_x = fp.multiply(fp.multiply(cube_x, fp.load(fp.store_float(square_x))),
+                                            quintic);
+    error[0] = fp.store_double(fp.add(fp.add(fifth_x,
+        fp.multiply(fp.load(fp.store_float(cube_x)), cubic)), fp.add(x, x)));
+    for (int axis = 1; axis < 3; ++axis)
+    {
+        const X87_Float80 value = fp.load(rotation[axis]);
+        const X87_Float80 square = fp.multiply(value, value);
+        const X87_Float80 cube = fp.multiply(square, value);
+        const X87_Float80 correction = fp.add(fp.multiply(fp.multiply(cube, square), quintic),
+                                              fp.multiply(cube, cubic));
+        error[axis] = fp.store_double(fp.add(fp.add(value, value), correction));
+    }
+
+    if (rotation[3] < 0.0)
+        for (int axis = 0; axis < 3; ++axis)
+            error[axis] = -error[axis];
 }
 
 void ivp_x87_quat_set_fast_multiple_with_clip(ivp_real_t out[4], const float angles[3],

@@ -56,6 +56,8 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
                        const ivp_vec3f_t *world_impulse, float inverse_mass,
                        const ivp_vec3f_t *inverse_inertia, ivp_vec3f_t *linear_speed,
                        ivp_vec3f_t *angular_speed);
+bool ivp_x87_solve_constraint_system(int count, double matrix[6][6], double desired[6],
+                                     double result[6], double epsilon);
 double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
                                      float first_surface, float second_surface);
 double ivp_x87_collision_time(double first, double last, double target,
@@ -107,6 +109,7 @@ void ivp_x87_multiply_rotation3d(const double left[3][3], const double right[3][
 void ivp_x87_multiply_transposed_rotation3d(const double left[3][3], const double right[3][3],
                                             double output[3][3]);
 bool ivp_x87_invert_transform3d(double matrix[3][3], double origin[3], double epsilon);
+void ivp_x87_constraint_rotation_error(const double relative_rotation[3][3], double error[3]);
 void ivp_x87_cross3r(const ivp_vec3r_t *left, const ivp_vec3r_t *right, ivp_vec3r_t *cross);
 void ivp_x87_advance_position(const ivp_vec3r_t *position, const ivp_vec3r_t *velocity,
                               double elapsed, ivp_vec3r_t *out);

@@ -650,6 +650,32 @@ IVP_TEST(constraint_hinge_init) {
     ivp_environment_destroy(env);
 }
 
+IVP_TEST(constraint_hinge_retains_both_bodies_effective_inverse_mass) {
+    ivp_environment_t *env = make_env(DT60, false);
+    const ivp_vec3r_t anchor = { { 0, 0, 0 } };
+    const ivp_vec3r_t hinge_axis = { { 0, 0, 1 } };
+    ivp_object_t *a = make_ball(env, IVP_REAL(1.0), 0, 0, 0);
+    ivp_object_t *b = make_ball(env, IVP_REAL(0x1p24), 0, 0, 0);
+
+    ivp_constraint_state_t state;
+    ivp_constraint_init_hinge(&state, a, &anchor, &hinge_axis, b, &anchor, &hinge_axis);
+    state.core.force_factor = IVP_REAL(1.0);
+    state.core.damp_factor_div_force = IVP_REAL(1.0);
+    b->physical_core->speed.k[0] = IVP_REAL(1.0);
+
+    const ivp_event_sim_t event = { .delta_time = 1, .inverse_delta_time = 1, .environment = env };
+    ivp_constraint_local_core_simulate(&state.core, &event);
+
+    /* The inverse masses sum to 1 + 2^-24; a float matrix loses the second body. */
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    IVP_ASSERT_EQ(state.core.last_impulse[0], IVP_REAL(0x1.fffffep-1));
+#else
+    IVP_ASSERT_EQ(state.core.last_impulse[0], IVP_REAL(1.0));
+#endif
+
+    ivp_environment_destroy(env);
+}
+
 IVP_TEST(constraint_hinge_rotation_axis) {
     ivp_environment_t *env = make_env(DT60, false);
     ivp_object_t *a = make_ball(env, IVP_REAL(1.0), IVP_REAL(0.0), IVP_REAL(0.0), IVP_REAL(0.0));
@@ -2314,6 +2340,7 @@ int main(void) {
     IVP_REGISTER(constraint_ball_socket_fast_matches_generic_bitwise);
     IVP_REGISTER(constraint_ball_socket_world);
     IVP_REGISTER(constraint_hinge_init);
+    IVP_REGISTER(constraint_hinge_retains_both_bodies_effective_inverse_mass);
     IVP_REGISTER(constraint_hinge_rotation_axis);
     IVP_REGISTER(constraint_hinge_limits);
     IVP_REGISTER(constraint_hinge_limits_inactive);

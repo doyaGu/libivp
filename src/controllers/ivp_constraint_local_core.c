@@ -19,6 +19,10 @@
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #include "dynamics/ivp_env_internal.h"
+#if IVP_X87_ARITHMETIC
+#include "dynamics/ivp_sim_internal.h"
+#include "math/ivp_x87.h"
+#endif
 
 /* reference IVP_FLOAT / IVP_U_Float_Point values: float in every build */
 #define FP(x) ((double)(float)(x))
@@ -45,11 +49,15 @@ static void m3_copy_impl(m3_t out, const m3_t a)
 /* out = a * b */
 static void m3_mmult_impl(const m3_t a, const m3_t b, m3_t out)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_multiply_rotation3d(a, b, out);
+#else
     m3_t r;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             r[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
     m3_copy_impl(out, (const double (*)[3])r);
+#endif
 }
 
 /* out = a^T * b (reference mimult3) */
@@ -65,11 +73,15 @@ static void m3_mimult_impl(const m3_t a, const m3_t b, m3_t out)
 /* out = a * b^T (reference mi2mult3) */
 static void m3_mi2mult_impl(const m3_t a, const m3_t b, m3_t out)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_multiply_transposed_rotation3d(a, b, out);
+#else
     m3_t r;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             r[i][j] = a[i][0] * b[j][0] + a[i][1] * b[j][1] + a[i][2] * b[j][2];
     m3_copy_impl(out, (const double (*)[3])r);
+#endif
 }
 
 static void m3_vmult_impl(const m3_t a, const double v[3], double out[3])
@@ -134,10 +146,30 @@ static void v3_cross(const double a[3], const double b[3], double out[3])
     out[0] = r0; out[1] = r1; out[2] = r2;
 }
 
-/* IVP_U_Float_Point::inline_calc_cross_product: float products, double
- * differences, float result (inputs are float-exact) */
+#if IVP_X87_ARITHMETIC
+static ivp_vec3f_t constraint_vec3f(const double v[3])
+{
+    const ivp_vec3f_t value = {{(float)v[0], (float)v[1], (float)v[2]}};
+    return value;
+}
+
+static void constraint_store_vec3f(double out[3], const ivp_vec3f_t *v)
+{
+    for (int i = 0; i < 3; ++i)
+        out[i] = v->k[i];
+}
+#endif
+
+/* IVP_U_Float_Point::inline_calc_cross_product with float inputs and output. */
 static void v3_cross_f(const double v1[3], const double v2[3], double out[3])
 {
+#if IVP_X87_ARITHMETIC
+    const ivp_vec3f_t left = constraint_vec3f(v1);
+    const ivp_vec3f_t right = constraint_vec3f(v2);
+    ivp_vec3f_t cross;
+    ivp_x87_cross3f(&left, &right, &cross);
+    constraint_store_vec3f(out, &cross);
+#else
     double a = (double)((float)v1[1] * (float)v2[2]);
     double a2 = (double)((float)v2[1] * (float)v1[2]);
     double b = (double)((float)v1[2] * (float)v2[0]);
@@ -150,13 +182,18 @@ static void v3_cross_f(const double v1[3], const double v2[3], double out[3])
     out[0] = FP(a);
     out[1] = FP(b);
     out[2] = FP(c);
+#endif
 }
 
-/* IVP_U_Point::subtract(const IVP_U_Float_Point *, const IVP_U_Float_Point *):
- * float - float evaluated in float */
-static inline double fsub(double a, double b)
+/* The x87 solver writes the difference of the two binary32 body responses
+ * directly to the binary64 constraint system. */
+static inline double constraint_velocity_difference(double attached, double reference)
 {
-    return (double)((float)a - (float)b);
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    return attached - reference;
+#else
+    return (double)((float)attached - (float)reference);
+#endif
 }
 
 static double v3_dot(const double a[3], const double b[3])
@@ -167,11 +204,15 @@ static double v3_dot(const double a[3], const double b[3])
 /* reference IVP_U_Point::normize (double build: IVP_Fast_Math::isqrt(length, 3)) */
 static bool v3_normize(double v[3])
 {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_normalize3d(v, 3, CL_DOUBLE_EPS, NULL);
+#else
     double q = v3_dot(v, v);
     if (q < CL_DOUBLE_EPS) return false;
     double f = ivp_isqrt_double(q, 3);
     v[0] *= f; v[1] *= f; v[2] *= f;
     return true;
+#endif
 }
 
 /* out = m * p + vv */
@@ -185,8 +226,12 @@ static void m4_vmult4(const ivp_cmatrix_t *m, const double p[3], double out[3])
 /* out = m^T * (p - vv) */
 static void m4_vimult4(const ivp_cmatrix_t *m, const double p[3], double out[3])
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_inverse_transform_point3d(M3_READ(m->rows), m->vv, p, out);
+#else
     double d[3] = { p[0] - m->vv[0], p[1] - m->vv[1], p[2] - m->vv[2] };
     m3_vimult(m->rows, d, out);
+#endif
 }
 
 /* out = a * b */
@@ -221,6 +266,9 @@ static void m4_mi2mult4(const ivp_cmatrix_t *a, const ivp_cmatrix_t *b, ivp_cmat
 /* reference IVP_U_Matrix::real_invert (determinant algorithm) */
 static bool m4_real_invert(ivp_cmatrix_t *m)
 {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_invert_transform3d(m->rows, m->vv, CL_DOUBLE_EPS);
+#else
     double r0[3], r1[3], r2[3];
     v3_cross(m->rows[1], m->rows[2], r0);
     v3_cross(m->rows[2], m->rows[0], r1);
@@ -236,6 +284,7 @@ static bool m4_real_invert(ivp_cmatrix_t *m)
     m3_vmult(m->rows, m->vv, p);
     m->vv[0] = -p[0]; m->vv[1] = -p[1]; m->vv[2] = -p[2];
     return true;
+#endif
 }
 
 /* reference IVP_U_Matrix3::init_normized3_col */
@@ -419,7 +468,11 @@ void ivp_constraint_template_set_constraint_ws(ivp_constraint_template_t *t,
     if (known_axis_ws) {
         double a[3], r[3];
         vec3r_to_d(known_axis_ws, a);
+#if IVP_X87_ARITHMETIC
+        ivp_x87_inverse_rotate3d(M3_READ(m_ws_f_Ros.rows), a, r);
+#else
         m3_vimult(m_ws_f_Ros.rows, a, r);
+#endif
         if (v3_dot(r, r) > CL_DOUBLE_EPS * CL_DOUBLE_EPS) {
             ivp_vec3r_set(&axis_Ros, (ivp_real_t)r[0], (ivp_real_t)r[1], (ivp_real_t)r[2]);
             axis_ptr = &axis_Ros;
@@ -661,6 +714,9 @@ void ivp_constraint_local_core_relax_reference(ivp_constraint_local_core_t *c)
  * the solution). */
 static bool solve_great_matrix_many_zero(int n, double a[6][6], double b[6], double x[6])
 {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_solve_constraint_system(n, a, b, x, CL_MATRIX_EPS);
+#else
     enum { CL_GM_SLACK = 16 };
     double values[6 * 8 + CL_GM_SLACK];
     double desired[8 + CL_GM_SLACK];
@@ -688,6 +744,7 @@ static bool solve_great_matrix_many_zero(int n, double a[6][6], double b[6], dou
     }
     for (int i = 0; i < n; i++) x[i] = result[i];
     return true;
+#endif
 }
 
 /* ── core helpers mirroring IVP_Core test pushes ───────────────────────── */
@@ -698,9 +755,20 @@ static bool core_static(const ivp_core_t *c)
 }
 
 /* get_surface_speed_on_test: R * (w x p) + v */
-static void surface_speed_on_test(const ivp_cmatrix_t *m_ws_f_cs, const double p_cs[3],
+static void surface_speed_on_test(const ivp_core_t *core, const ivp_cmatrix_t *m_ws_f_cs,
+                                  const double p_cs[3],
                                   const double v_ws[3], const double w_cs[3], double out[3])
 {
+#if IVP_X87_ARITHMETIC
+    (void)m_ws_f_cs;
+    const ivp_vec3f_t position = constraint_vec3f(p_cs);
+    const ivp_vec3f_t linear_speed = constraint_vec3f(v_ws);
+    const ivp_vec3f_t angular_speed = constraint_vec3f(w_cs);
+    ivp_vec3f_t velocity;
+    ivp_core_get_surface_speed_on_test(core, &position, &linear_speed, &angular_speed, &velocity);
+    constraint_store_vec3f(out, &velocity);
+#else
+    (void)core;
     double s_cs[3];
     v3_cross_f(w_cs, p_cs, s_cs);
     m3_vmult(m_ws_f_cs->rows, s_cs, out);
@@ -708,6 +776,7 @@ static void surface_speed_on_test(const ivp_cmatrix_t *m_ws_f_cs, const double p
     out[0] = (double)((float)out[0] + (float)v_ws[0]);
     out[1] = (double)((float)out[1] + (float)v_ws[1]);
     out[2] = (double)((float)out[2] + (float)v_ws[2]);
+#endif
 }
 
 static void core_speeds(const ivp_core_t *c, double v[3], double w[3])
@@ -722,12 +791,22 @@ static void core_speeds(const ivp_core_t *c, double v[3], double w[3])
 static void test_push_core(const ivp_core_t *c, const double p_cs[3], const double imp_cs[3],
                            const double imp_ws[3], double dv_ws[3], double dw_cs[3])
 {
+#if IVP_X87_ARITHMETIC
+    const ivp_vec3f_t position = constraint_vec3f(p_cs);
+    const ivp_vec3f_t local_impulse = constraint_vec3f(imp_cs);
+    const ivp_vec3f_t world_impulse = constraint_vec3f(imp_ws);
+    ivp_vec3f_t linear_speed, angular_speed;
+    ivp_core_test_push_core(c, &position, &local_impulse, &world_impulse, &linear_speed, &angular_speed);
+    constraint_store_vec3f(dv_ws, &linear_speed);
+    constraint_store_vec3f(dw_cs, &angular_speed);
+#else
     double d[3];
     v3_cross_f(p_cs, imp_cs, d);
     for (int k = 0; k < 3; k++) {
         dw_cs[k] = (double)((float)d[k] * (float)c->inv_rot_inertia.k[k]);
         dv_ws[k] = FP(imp_ws[k] * (double)(float)c->inv_mass);
     }
+#endif
 }
 
 static void push_core(ivp_core_t *c, const double p_cs[3], const double imp_cs[3],
@@ -769,6 +848,7 @@ static double float_real_length(const double v[3])
     return sqrt((double)(x * x + y * y + z * z));
 }
 
+#if !IVP_X87_ARITHMETIC
 /* reference IVP_Inline_Math::fast_asin (float polynomial) */
 static double fast_asin(double a)
 {
@@ -813,6 +893,7 @@ static void matrix_to_quat(const m3_t m, double q_out[4] /* x y z w */)
     }
     q_out[0] = x; q_out[1] = y; q_out[2] = z; q_out[3] = w;
 }
+#endif
 
 /* ── PSI solver (reference IVP_Constraint_Local::do_simulation_controller) */
 
@@ -914,6 +995,9 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     if (rotdims == 3) {
         m3_t m_rs_f_Ars;
         m3_mi2mult(m_rs_f_Acs, m_Ars_f_Acs, m_rs_f_Ars);
+#if IVP_X87_ARITHMETIC
+        ivp_x87_constraint_rotation_error(M3_READ(m_rs_f_Ars), drRA_now_rs);
+#else
         double q[4];
         matrix_to_quat(M3_READ(m_rs_f_Ars), q);
         drRA_now_rs[0] = 2.0 * fast_asin(q[0]);
@@ -924,6 +1008,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
             drRA_now_rs[1] = -drRA_now_rs[1];
             drRA_now_rs[2] = -drRA_now_rs[2];
         }
+#endif
     } else if (rotdims == 2) {
         /* hinge */
         m3_t m_rs_f_Ars;
@@ -954,8 +1039,13 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
     m4_vimult4(&c->m_Afs_f_Acs, nullvec, pointA_Acs);
     for (int k = 0; k < 3; k++) { pointR_Rcs[k] = FP(pointR_Rcs[k]); pointA_Acs[k] = FP(pointA_Acs[k]); }
     double pointR_ws[3], pointA_ws[3];
+#if IVP_X87_ARITHMETIC
+    ivp_x87_transform_point3d(M3_READ(m_ws_f_Rcs.rows), m_ws_f_Rcs.vv, pointR_Rcs, pointR_ws);
+    ivp_x87_transform_point3d(M3_READ(m_ws_f_Acs.rows), m_ws_f_Acs.vv, pointA_Acs, pointA_ws);
+#else
     m4_vmult4(&m_ws_f_Rcs, pointR_Rcs, pointR_ws);
     m4_vmult4(&m_ws_f_Acs, pointA_Acs, pointA_ws);
+#endif
 
     double dvRA_fs[3], drRA_rs[3];
     {
@@ -963,12 +1053,12 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         if (coreR) {
             double v[3], w[3];
             core_speeds(coreR, v, w);
-            surface_speed_on_test(&m_ws_f_Rcs, pointR_Rcs, v, w, v_pointR_ws);
+            surface_speed_on_test(coreR, &m_ws_f_Rcs, pointR_Rcs, v, w, v_pointR_ws);
         }
         if (coreA) {
             double v[3], w[3];
             core_speeds(coreA, v, w);
-            surface_speed_on_test(&m_ws_f_Acs, pointA_Acs, v, w, v_pointA_ws);
+            surface_speed_on_test(coreA, &m_ws_f_Acs, pointA_Acs, v, w, v_pointA_ws);
         }
         double v_pointR_fs[3], v_pointA_fs[3];
         m3_vmult(m_fs_f_ws, v_pointR_ws, v_pointR_fs);
@@ -978,9 +1068,13 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         double dvRA_ws[3] = { pointA_ws[0] - pointR_ws[0], pointA_ws[1] - pointR_ws[1],
                               pointA_ws[2] - pointR_ws[2] };
         double dRA_now_fs[3];
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+        ivp_x87_rotate3d(M3_READ(m_fs_f_ws), dvRA_ws, dRA_now_fs);
+#else
         m3_vmult(m_fs_f_ws, dvRA_ws, dRA_now_fs);
+#endif
         double dv_fs[3];
-        for (int k = 0; k < 3; k++) dv_fs[k] = fsub(v_pointA_fs[k], v_pointR_fs[k]);
+        for (int k = 0; k < 3; k++) dv_fs[k] = constraint_velocity_difference(v_pointA_fs[k], v_pointR_fs[k]);
         /* d_time * damp_factor_div_force: IVP_FLOAT * IVP_FLOAT */
         const double ddf = (double)((float)d_time * (float)c->damp_factor_div_force);
         for (int k = 0; k < 3; k++) dvRA_fs[k] = dRA_now_fs[k] + dv_fs[k] * ddf;
@@ -1019,7 +1113,7 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
             for (int k = 0; k < 3; k++) { rR_rs[k] = FP(rR_rs[k]); rA_rs[k] = FP(rA_rs[k]); }
             double drs_rs[3];
             for (int k = 0; k < 3; k++) {
-                drs_rs[k] = fsub(rA_rs[k], rR_rs[k]);
+                drs_rs[k] = constraint_velocity_difference(rA_rs[k], rR_rs[k]);
                 drRA_rs[k] = drRA_now_rs[k] + drs_rs[k] * ddf;
             }
             for (int i = 0; i < 3; i++) {
@@ -1087,21 +1181,23 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         if (!core_static(coreA)) test_push_core(coreA, pointA_Acs, tA_Acs, tA_ws, dvA_ws, drA_Acs);
 
         double dv_pointR_ws[3] = { 0, 0, 0 }, dv_pointA_ws[3] = { 0, 0, 0 };
-        if (coreR) surface_speed_on_test(&m_ws_f_Rcs, pointR_Rcs, dvR_ws, drR_Rcs, dv_pointR_ws);
-        if (coreA) surface_speed_on_test(&m_ws_f_Acs, pointA_Acs, dvA_ws, drA_Acs, dv_pointA_ws);
+        if (coreR) surface_speed_on_test(coreR, &m_ws_f_Rcs, pointR_Rcs, dvR_ws, drR_Rcs, dv_pointR_ws);
+        if (coreA) surface_speed_on_test(coreA, &m_ws_f_Acs, pointA_Acs, dvA_ws, drA_Acs, dv_pointA_ws);
 
         double dv_pointR_fs[3], dv_pointA_fs[3];
         m3_vmult(m_fs_f_ws, dv_pointR_ws, dv_pointR_fs);
         m3_vmult(m_fs_f_ws, dv_pointA_ws, dv_pointA_fs);
         for (int k = 0; k < 3; k++) {
-            testnext_dvRA_fs[i][k] = fsub(FP(dv_pointA_fs[k]), FP(dv_pointR_fs[k]));
+            testnext_dvRA_fs[i][k] = constraint_velocity_difference(
+                FP(dv_pointA_fs[k]), FP(dv_pointR_fs[k]));
         }
         if (!fast_ball_socket) {
             double drR_rs[3], drA_rs[3];
             m3_vmult(m_rs_f_Rcs, drR_Rcs, drR_rs);
             m3_vmult(m_rs_f_Acs, drA_Acs, drA_rs);
             for (int k = 0; k < 3; k++) {
-                testnext_drRA_rs[i][k] = fsub(FP(drA_rs[k]), FP(drR_rs[k]));
+                testnext_drRA_rs[i][k] = constraint_velocity_difference(
+                    FP(drA_rs[k]), FP(drR_rs[k]));
             }
         }
     }
@@ -1134,8 +1230,10 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         m3_vmult(m_rs_f_Rcs, drR_rot_Rcs, drR_rs);
         m3_vmult(m_rs_f_Acs, drA_rot_Acs, drA_rs);
         for (int k = 0; k < 3; k++) {
-            testnext_dvRA_fs[i][k] = fsub(FP(dv_pointA_fs[k]), FP(dv_pointR_fs[k]));
-            testnext_drRA_rs[i][k] = fsub(FP(drA_rs[k]), FP(drR_rs[k]));
+            testnext_dvRA_fs[i][k] = constraint_velocity_difference(
+                FP(dv_pointA_fs[k]), FP(dv_pointR_fs[k]));
+            testnext_drRA_rs[i][k] = constraint_velocity_difference(
+                FP(drA_rs[k]), FP(drR_rs[k]));
         }
     }
 
