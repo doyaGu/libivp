@@ -12,6 +12,7 @@
 #include <ivp/base/ivp_assert.h>
 #include <string.h>
 #include "controllers/ivp_controller_ref.h"
+#include "math/ivp_x87.h"
 
 /* reference IVP_FLOAT members */
 static inline ivp_real_t spring_fl(double v) { return (ivp_real_t)(float)v; }
@@ -263,12 +264,17 @@ void ivp_controller_spring(const ivp_event_sim_t *event_sim,
         return;
     }
 
-    /* IVP_FLOAT arithmetic: (dlen - spring_len) * spring_constant */
-    double force = (double)((dlen - spring_len) * (float)state->stiffness);
-
-    /* spring damping */
     ivp_vec3f_t relative_world_speed;
     ivp_ctl_diff_surface_speed(pc1, pc0, &core_pos1, &core_pos0, &relative_world_speed);
+    const double delta_time = (double)event_sim->delta_time;
+    ivp_vec3f_t force_vector_ws;
+#if IVP_X87_ARITHMETIC
+    state->current_force = (ivp_real_t)ivp_x87_spring_impulse(
+        &dir_ws, &relative_world_speed, dlen, spring_len, (float)state->stiffness,
+        (float)state->damping, (float)state->rel_pos_damp, delta_time, (double)state->max_force, &force_vector_ws);
+#else
+    /* IVP_FLOAT arithmetic: (dlen - spring_len) * spring_constant */
+    double force = (double)((dlen - spring_len) * (float)state->stiffness);
     const double damp_speed = (double)lvf_dot(&dir_ws, &relative_world_speed); /* positive: closing */
     const double damp_s = (double)(float)state->damping;
     const double damp_m = (double)(float)state->rel_pos_damp;
@@ -280,13 +286,12 @@ void ivp_controller_spring(const ivp_event_sim_t *event_sim,
     }
     state->current_force = (ivp_real_t)force;
 
-    const double delta_time = (double)event_sim->delta_time;
-    ivp_vec3f_t force_vector_ws;
     lvf_set_multiple(&force_vector_ws, &dir_ws, (D)(force * delta_time));
     { /* manhattan damping */
         const double manhattan_factor = -delta_time * damp_m;
         lvf_add_multiple(&force_vector_ws, &relative_world_speed, (D)manhattan_factor);
     }
+#endif
 
     if (ivp_controller_object_pushable(state->obj_b)) {
         ivp_ctl_async_push_core_ws(pc1, &pos1_ws, &force_vector_ws);

@@ -712,6 +712,43 @@ void ivp_x87_accumulate_world_impulse(const ivp_transform_r_t *transform, const 
     }
 }
 
+double ivp_x87_spring_impulse(const ivp_vec3f_t *direction, const ivp_vec3f_t *relative_speed,
+                              float length, float rest_length, float stiffness, float axial_damping,
+                              float lateral_damping, double step, double maximum_force, ivp_vec3f_t *impulse)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 stretch = fp.subtract(fp.load(length), fp.load(rest_length));
+    const double elastic = fp.store_double(fp.multiply(stretch, fp.load(stiffness)));
+    const X87_Float80 speed_x = fp.multiply(fp.load(direction->k[0]), fp.load(relative_speed->k[0]));
+    const X87_Float80 speed_y = fp.multiply(fp.load(direction->k[1]), fp.load(relative_speed->k[1]));
+    const X87_Float80 speed_z = fp.multiply(fp.load(direction->k[2]), fp.load(relative_speed->k[2]));
+    const X87_Float80 axial_speed = fp.add(fp.add(speed_z, speed_y), speed_x);
+    X87_Float80 force = fp.subtract(fp.load(elastic), fp.multiply(axial_speed, fp.load(axial_damping)));
+    if (maximum_force > 0.0)
+    {
+        const X87_Float80 limit = fp.load(maximum_force);
+        const X87_Float80 lower_limit = fp.negate(limit);
+        if (fp.compare(force, limit) == X87_Arithmetic::GREATER)
+            force = limit;
+        else if (fp.compare(force, lower_limit) == X87_Arithmetic::LESS)
+            force = lower_limit;
+    }
+    const X87_Float80 axial = fp.multiply(force, fp.load(step));
+    const X87_Float80 lateral = fp.negate(fp.multiply(fp.load(lateral_damping), fp.load(step)));
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        X87_Float80 component = fp.multiply(fp.load(direction->k[axis]), axial);
+        // The Z component stays wide until the lateral damping term is added.
+        if (axis != 2)
+            component = fp.load(fp.store_float(component));
+        component = fp.add(fp.multiply(fp.load(relative_speed->k[axis]), lateral), component);
+        if (axis != 0)
+            component = fp.load(fp.store_double(component));
+        impulse->k[axis] = fp.store_float(component);
+    }
+    return fp.store_double(force);
+}
+
 double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
                                   const double end[3], int axis, double point[3])
 {

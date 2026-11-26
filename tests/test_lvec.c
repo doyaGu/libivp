@@ -695,6 +695,21 @@ IVP_TEST(x87_edge_face_projection_retains_near_parallel_component)
     IVP_ASSERT_EQ(ivp_x87_edge_face_projection(&edge_rotation, &edge, &face.rot, &normal), 0x1p-60);
 }
 
+IVP_TEST(x87_spring_impulse_preserves_elastic_residual_after_damping)
+{
+    const ivp_vec3f_t direction = {{1.0f, 0.0f, 0.0f}};
+    const ivp_vec3f_t relative = {{0x1.000002p+0f, 0.0f, 0.0f}};
+    ivp_vec3f_t impulse;
+    const double force = ivp_x87_spring_impulse(&direction, &relative, 0x1.000002p+0f, 0x1p-25f,
+                                               1.0f, 1.0f, 0.0f, 1.0, 0.0, &impulse);
+    IVP_ASSERT_EQ(force, -0x1p-25);
+    IVP_ASSERT_EQ(impulse.k[0], -0x1p-25f);
+    const double clamped = ivp_x87_spring_impulse(&direction, &relative, 0x1.000002p+0f, 0x1p-25f,
+                                                 1.0f, 1.0f, 0.0f, 0.5, 0x1p-26, &impulse);
+    IVP_ASSERT_EQ(clamped, -0x1p-26);
+    IVP_ASSERT_EQ(impulse.k[0], -0x1p-27f);
+}
+
 IVP_TEST(x87_world_impulse_preserves_torque_under_cancellation)
 {
     ivp_transform_r_t transform;
@@ -958,6 +973,7 @@ int main(void)
     IVP_REGISTER(x87_collision_speed_bound_retains_both_surface_speeds);
     IVP_REGISTER(x87_vertex_walk_compares_before_storing_gradient);
     IVP_REGISTER(x87_edge_face_projection_retains_near_parallel_component);
+    IVP_REGISTER(x87_spring_impulse_preserves_elastic_residual_after_damping);
     IVP_REGISTER(x87_world_impulse_preserves_torque_under_cancellation);
     IVP_REGISTER(x87_inverse_point_transform_preserves_anchor_offset);
     IVP_REGISTER(x87_edge_edge_separation_retains_small_gaps);

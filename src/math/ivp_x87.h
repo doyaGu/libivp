@@ -30,6 +30,9 @@ void ivp_x87_accumulate_world_impulse(const ivp_transform_r_t *transform, const 
                                       const ivp_vec3f_t *impulse, float inverse_mass,
                                       const ivp_vec3f_t *inverse_inertia,
                                       ivp_vec3f_t *linear, ivp_vec3f_t *angular);
+double ivp_x87_spring_impulse(const ivp_vec3f_t *direction, const ivp_vec3f_t *relative_speed,
+                              float length, float rest_length, float stiffness, float axial_damping,
+                              float lateral_damping, double step, double maximum_force, ivp_vec3f_t *impulse);
 double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
                                   const double end[3], int axis, double point[3]);
 double ivp_x87_worst_case_effective_mass(const ivp_vec3f_t *point,
