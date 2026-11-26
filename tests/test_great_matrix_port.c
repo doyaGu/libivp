@@ -5,6 +5,8 @@
  */
 #include "ivp_test.h"
 
+#include "math/ivp_x87.h"
+
 #include <ivp/solver/ivp_great_matrix.h>
 #include <ivp/solver/ivp_linear_constraint_solver.h>
 #include <fenv.h>
@@ -450,12 +452,20 @@ static void gmmz_transform_serial_reference(ivp_gmmz_t *m)
         ivp_gmmz_find_pivot_in_column(m, column);
         double diagonal = m->matrix_values[column * arl + column];
         if (fabs(diagonal) < m->matrix_eps) continue;
+#if IVP_X87_ARITHMETIC
+        double negative_inverse = ivp_x87_divide_double(-1.0, diagonal);
+#else
         double negative_inverse = -1.0 / diagonal;
+#endif
         for (int row = column + 1; row < m->columns; row++) {
             double value = m->matrix_values[row * arl + column];
             if (fabs(value) > m->matrix_eps) {
-                ivp_gmmz_add_multiple_line(
-                    m, column, row, value * negative_inverse);
+#if IVP_X87_ARITHMETIC
+                const double factor = ivp_x87_multiply_double(value, negative_inverse);
+#else
+                const double factor = value * negative_inverse;
+#endif
+                ivp_gmmz_add_multiple_line(m, column, row, factor);
             }
         }
     }
@@ -564,13 +574,23 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
                     expected_out[k] = actual_out[k] = -19.0;
                 }
                 for (int i = n - 1; i >= 0; i--) expected_mult[i] = input[i];
-                for (int i = n - 1; i >= 0; i--)
-                    expected_temp[i] = scalar_dot(lower + i * stride, expected_mult, n);
                 for (int i = n - 1; i >= 0; i--) {
+#if IVP_X87_ARITHMETIC
+                    expected_temp[i] = ivp_x87_dot_product_backward(lower + i * stride, expected_mult, n);
+#else
+                    expected_temp[i] = scalar_dot(lower + i * stride, expected_mult, n);
+#endif
+                }
+                for (int i = n - 1; i >= 0; i--) {
+#if IVP_X87_ARITHMETIC
+                    double result = ivp_x87_back_substitute_lu_row(expected_temp[i], upper + i * stride + i + 1,
+                                                                  expected_temp + i + 1, n - i - 1);
+#else
                     double sum = 0.0;
                     for (int j = n - 1; j > i; j--)
                         sum = scalar_madd(upper[i * stride + j], expected_temp[j], sum);
                     double result = expected_temp[i] - sum;
+#endif
                     expected_temp[i] = result;
                     expected_out[i] = result;
                 }
@@ -747,6 +767,80 @@ IVP_TEST(gmmz_copy_to_sub_matrix_reads_packed_source)
     ivp_gmmz_destroy(&big, NULL);
 }
 
+#if IVP_X87_ARITHMETIC
+IVP_TEST(incr_lu_normalization_retains_pivot_reciprocal)
+{
+    double lower[] = {3.0, 3.0, 0.0, 1.0};
+    double upper[] = {10.0, 6.0, 0.0, 1.0};
+    ivp_incr_lu_t lu = {0};
+    lu.matrix_eps = 1.0e-6;
+    lu.L_matrix = lower;
+    lu.U_matrix = upper;
+    lu.aligned_row_len = 2;
+    lu.n_sub = 2;
+
+    IVP_ASSERT_EQ(ivp_incr_lu_normize_row(&lu, 0), IVP_OK);
+    IVP_ASSERT_EQ(lower[0], 0.3);
+    IVP_ASSERT_EQ(lower[1], 0.3);
+    IVP_ASSERT_EQ(upper[0], 1.0);
+    IVP_ASSERT_EQ(upper[1], 0.6);
+
+    lower[0] = 10.0;
+    lower[1] = 3.0;
+    IVP_ASSERT_EQ(ivp_incr_lu_normize_row_L(&lu, 0), IVP_OK);
+    IVP_ASSERT_EQ(lower[0], 1.0);
+    IVP_ASSERT_EQ(lower[1], 0.3);
+}
+
+IVP_TEST(gauss_back_substitution_retains_residual)
+{
+    const double a[] = {1.0, 1.0 - 0x1p-31, 0.0, 1.0};
+    const double b[] = {1.0, 1.0 + 0x1p-31};
+    ivp_gmmz_t matrix;
+    IVP_ASSERT_EQ(ivp_gmmz_init(&matrix, 2, NULL), IVP_OK);
+    gmmz_fill(&matrix, a, b);
+    IVP_ASSERT_EQ(ivp_gmmz_solve_lower_null_matrix(&matrix), IVP_OK);
+    IVP_ASSERT_EQ(matrix.result_vector[0], 0x1p-62);
+    IVP_ASSERT_EQ(matrix.result_vector[1], b[1]);
+    ivp_gmmz_destroy(&matrix, NULL);
+}
+
+IVP_TEST(incr_lu_retains_extended_products_and_reductions)
+{
+    double lower[] = {
+        1.0, -0x1p-55, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    double upper[] = {
+        1.0, 1.0, -0x1p-55,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    double input[] = {1.0, 1.0, 1.0};
+    double multiplied[3], temp[3], result[3];
+    ivp_incr_lu_t lu = {0};
+    lu.aligned_row_len = lu.n_sub = 3;
+    lu.L_matrix = lower;
+    lu.U_matrix = upper;
+    lu.input_vec = input;
+    lu.mult_vec = multiplied;
+    lu.temp_vec = temp;
+    lu.out_vec = result;
+
+    ivp_incr_lu_solve_lin_equ(&lu);
+    IVP_ASSERT_EQ(result[0], 0x1p-55);
+    IVP_ASSERT_EQ(result[1], 1.0);
+    IVP_ASSERT_EQ(result[2], 1.0);
+
+    const double factor = 1.0 + 0x1p-31;
+    upper[2] = 1.0 - 0x1p-31;
+    upper[5] = 1.0;
+    ivp_incr_lu_add_neg_row_to_row(&lu, 0, 1, factor);
+    IVP_ASSERT_EQ(upper[5], 0x1p-62);
+}
+#endif
+
 int main(void)
 {
     IVP_REGISTER(gmmz_init_layout);
@@ -766,6 +860,11 @@ int main(void)
     IVP_REGISTER(vecfpu_reduction_bitwise_scalar);
     IVP_REGISTER(gmmz_large_transform_matches_serial_reference);
     IVP_REGISTER(incr_lu_solve_bitwise_scalar);
+#if IVP_X87_ARITHMETIC
+    IVP_REGISTER(incr_lu_normalization_retains_pivot_reciprocal);
+    IVP_REGISTER(incr_lu_retains_extended_products_and_reductions);
+    IVP_REGISTER(gauss_back_substitution_retains_residual);
+#endif
     IVP_REGISTER(incr_lu_decompose_increment_decrement);
     IVP_REGISTER(incr_lu_singular_faults);
     IVP_REGISTER(lcs_scalar_cases);

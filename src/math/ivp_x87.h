@@ -36,6 +36,19 @@ double ivp_x87_worst_case_effective_mass(const ivp_vec3f_t *point,
                                          const ivp_vec3f_t *inverse_inertia, float inverse_mass);
 float ivp_x87_worst_case_inverse_mass(const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia,
                                       float inverse_mass, double epsilon);
+void ivp_x87_add_scaled_row(double *target, const double *source, double factor, int count);
+double ivp_x87_dot_product_forward(const double *left, const double *right, int count);
+double ivp_x87_dot_product_backward(const double *left, const double *right, int count);
+double ivp_x87_back_substitute_lu_row(double value, const double *upper, const double *solution, int count);
+double ivp_x87_indexed_dot_product_with_bias(const double *left, const double *right,
+                                             const int *indices, int count, double bias);
+double ivp_x87_dot_product_residual(const double *left, const double *right, int count, double desired);
+double ivp_x87_divide_double(double numerator, double denominator);
+double ivp_x87_multiply_double(double left, double right);
+bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
+                                       int pivot, int count, double epsilon);
+void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot);
+void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot);
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
                            const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
                            ivp_vec3f_t *velocity);

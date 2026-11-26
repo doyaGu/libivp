@@ -792,6 +792,7 @@ if (IVP_BUILD_TESTS)
 
     # Reference-faithful dense solvers (Many_Zero Gauss, LU, LCS)
     ivp_add_test(test_great_matrix_port tests/test_great_matrix_port.c)
+    target_include_directories(test_great_matrix_port PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     # Its scalar differential models must have the same rounding and
     # contraction semantics as the engine, including dynamic fenv tests.
     ivp_apply_strict_fp(test_great_matrix_port)

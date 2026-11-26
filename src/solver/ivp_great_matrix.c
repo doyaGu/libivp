@@ -20,6 +20,7 @@
 #include <math.h>
 
 #include "base/ivp_simd_internal.h"
+#include "math/ivp_x87.h"
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
@@ -894,11 +895,17 @@ void ivp_gmmz_matrix_out_before_gauss(const ivp_gmmz_t *m)
 void ivp_gmmz_add_multiple_line(ivp_gmmz_t *m, int first, int second, double factor)
 {
     int arl = m->aligned_row_len;
+#if IVP_X87_ARITHMETIC
+    ivp_x87_add_scaled_row(m->matrix_values + second * arl + first,
+                           m->matrix_values + first * arl + first, factor, m->columns - first);
+    ivp_x87_add_scaled_row(m->desired_vector + second, m->desired_vector + first, factor, 1);
+#else
     ivp_vecfpu_add_multiple_row(m->matrix_values, second * arl + first,
                                 m->matrix_values, first * arl + first,
                                 factor, m->columns - first, false);
     m->desired_vector[second] = GM_FMA(m->desired_vector[first], factor,
                                        m->desired_vector[second]);
+#endif
 }
 
 void ivp_gmmz_debug_fill_zero(ivp_gmmz_t *m)
@@ -1208,11 +1215,20 @@ void ivp_gmmz_transform_to_lower_null_triangle(ivp_gmmz_t *m)
         if (fabs(diagonal_elem) < m->matrix_eps) {
             continue; /* column_done */
         }
+#if IVP_X87_ARITHMETIC
+        double negativ_inv_diagonal = ivp_x87_divide_double(-1.0, diagonal_elem);
+#else
         double negativ_inv_diagonal = -1.0 / diagonal_elem;
+#endif
         for (int i = j + 1; i < m->columns; i++) {
             double col_down_elem = m->matrix_values[i * arl + j];
             if (fabs(col_down_elem) > m->matrix_eps) {
-                ivp_gmmz_add_multiple_line(m, j, i, col_down_elem * negativ_inv_diagonal);
+#if IVP_X87_ARITHMETIC
+                double factor = ivp_x87_multiply_double(col_down_elem, negativ_inv_diagonal);
+#else
+                double factor = col_down_elem * negativ_inv_diagonal;
+#endif
+                ivp_gmmz_add_multiple_line(m, j, i, factor);
             }
         }
     }
@@ -1243,8 +1259,18 @@ static ivp_result_t gmmz_solve_lower_null_impl(ivp_gmmz_t *m, int vec_min)
     int arl = m->aligned_row_len;
     double *mv = m->matrix_values;
     double *dv = m->desired_vector;
+#if IVP_X87_ARITHMETIC
+    (void)vec_min;
+#endif
     int i;
     for (i = columns - 1; i >= 0; i--) {
+#if IVP_X87_ARITHMETIC
+        if (!ivp_x87_back_substitute_gauss_row(mv + i * arl, dv, i, columns, m->matrix_eps)) {
+            for (int j = columns - 1; j >= 0; j--)
+                m->result_vector[j] = 0.0;
+            return IVP_GM_FAULT;
+        }
+#else
         const double *pointer_in_line = &mv[i * arl + columns - 1];
         double right_side = dv[i];
         int unfused = gm_unfused_terms(columns - 1 - i, vec_min);
@@ -1281,6 +1307,7 @@ static ivp_result_t gmmz_solve_lower_null_impl(ivp_gmmz_t *m, int vec_min)
                 IVP_IF(1) { ivp_debug_printf("\ngauss_failure\n\n"); }
             }
         }
+#endif
     }
     for (i = 0; i < columns; i++) {
         m->result_vector[i] = dv[i];
@@ -1404,7 +1431,11 @@ void ivp_gmmz_mult_aligned(ivp_gmmz_t *m)
 {
     for (int j = 0; j < m->columns; j++) {
         const double *source = &m->matrix_values[j * m->aligned_row_len];
+#if IVP_X87_ARITHMETIC
+        m->result_vector[j] = ivp_x87_dot_product_forward(source, m->desired_vector, m->columns);
+#else
         m->result_vector[j] = gm_reduce_add(0.0, source, m->desired_vector, m->columns);
+#endif
     }
 }
 
@@ -1616,8 +1647,12 @@ ivp_result_t ivp_incr_lu_normize_row_L(ivp_incr_lu_t *lu, int row_nr)
     if (fabs(val) < lu->matrix_eps) {
         return IVP_GM_FAULT;
     }
+#if IVP_X87_ARITHMETIC
+    ivp_x87_normalize_lu_lower_row(base, lu->n_sub, row_nr);
+#else
     double inv_val = 1.0 / val;
     ivp_vecfpu_multiply_row(lu->L_matrix, row_base, inv_val, lu->n_sub, false);
+#endif
     base[row_nr] = 1.0;
     return IVP_OK;
 }
@@ -1629,10 +1664,14 @@ ivp_result_t ivp_incr_lu_normize_row(ivp_incr_lu_t *lu, int row_nr)
     if (fabs(val) < lu->matrix_eps) {
         return IVP_GM_FAULT;
     }
+#if IVP_X87_ARITHMETIC
+    ivp_x87_normalize_lu_pivot(lu->L_matrix + row_base, lu->U_matrix + row_base, lu->n_sub, row_nr);
+#else
     double inv_val = 1.0 / val;
     ivp_vecfpu_multiply_row(lu->L_matrix, row_base, inv_val, lu->n_sub, false);
     ivp_vecfpu_multiply_row(lu->U_matrix, row_base + row_nr + 1, inv_val,
                             lu->n_sub - row_nr - 1, false);
+#endif
     lu->U_matrix[row_base + row_nr] = 1.0;
     return IVP_OK;
 }
@@ -1666,6 +1705,17 @@ void ivp_incr_lu_pivot_search(ivp_incr_lu_t *lu, int col_nr)
     }
 }
 
+static void ivp_incr_lu_add_scaled_row(double *matrix, int target, int source,
+                                       double factor, int count, bool aligned)
+{
+#if IVP_X87_ARITHMETIC
+    (void)aligned;
+    ivp_x87_add_scaled_row(matrix + target, matrix + source, factor, count);
+#else
+    ivp_vecfpu_add_multiple_row(matrix, target, matrix, source, factor, count, aligned);
+#endif
+}
+
 /* add row to a row more upwards (unused by the reference solvers) */
 void ivp_incr_lu_add_neg_row_upwards(ivp_incr_lu_t *lu, int row_down, int dest_row,
                                      double factor)
@@ -1673,11 +1723,10 @@ void ivp_incr_lu_add_neg_row_upwards(ivp_incr_lu_t *lu, int row_down, int dest_r
     int arl = lu->aligned_row_len;
     int base_a = row_down * arl;
     int base_b = dest_row * arl;
-    ivp_vecfpu_add_multiple_row(lu->U_matrix, base_b + row_down + 1,
-                                lu->U_matrix, base_a + row_down + 1,
-                                -factor, lu->n_sub - row_down - 1, false);
-    ivp_vecfpu_add_multiple_row(lu->L_matrix, base_b, lu->L_matrix, base_a,
-                                -factor, lu->n_sub, true);
+    ivp_incr_lu_add_scaled_row(lu->U_matrix, base_b + row_down + 1, base_a + row_down + 1,
+                              -factor, lu->n_sub - row_down - 1, false);
+    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+                              -factor, lu->n_sub, true);
     lu->L_matrix[base_b + row_down] = 0.0;
 }
 
@@ -1687,11 +1736,10 @@ void ivp_incr_lu_add_neg_row_to_row(ivp_incr_lu_t *lu, int pivot_row, int dest_r
 {
     int base_a = pivot_row * lu->aligned_row_len;
     int base_b = dest_row * lu->aligned_row_len;
-    ivp_vecfpu_add_multiple_row(lu->U_matrix, base_b + pivot_row + 1,
-                                lu->U_matrix, base_a + pivot_row + 1,
-                                -factor, lu->n_sub - pivot_row - 1, false);
-    ivp_vecfpu_add_multiple_row(lu->L_matrix, base_b, lu->L_matrix, base_a,
-                                -factor, lu->n_sub, false);
+    ivp_incr_lu_add_scaled_row(lu->U_matrix, base_b + pivot_row + 1, base_a + pivot_row + 1,
+                              -factor, lu->n_sub - pivot_row - 1, false);
+    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+                              -factor, lu->n_sub, false);
     lu->U_matrix[base_b + pivot_row] = 0.0;
 }
 
@@ -1699,8 +1747,8 @@ void ivp_incr_lu_subtract_row_L(ivp_incr_lu_t *lu, int from, int dest, double fa
 {
     int base_a = from * lu->aligned_row_len;
     int base_b = dest * lu->aligned_row_len;
-    ivp_vecfpu_add_multiple_row(lu->L_matrix, base_b, lu->L_matrix, base_a,
-                                -factor, lu->n_sub, false);
+    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+                              -factor, lu->n_sub, false);
     lu->L_matrix[base_b + from] = 0.0;
 }
 
@@ -1849,9 +1897,13 @@ void ivp_incr_lu_exchange_columns_U(ivp_incr_lu_t *lu, int col0, int col1)
 void ivp_incr_lu_mult_vec_with_L(ivp_incr_lu_t *lu)
 {
     for (int i = lu->n_sub - 1; i >= 0; i--) {
-        double sum = ivp_vecfpu_large_dot_product(lu->L_matrix, i * lu->aligned_row_len,
-                                                  lu->mult_vec, 0, lu->n_sub, true);
-        lu->temp_vec[i] = sum;
+#if IVP_X87_ARITHMETIC
+        lu->temp_vec[i] = ivp_x87_dot_product_backward(lu->L_matrix + i * lu->aligned_row_len,
+                                                      lu->mult_vec, lu->n_sub);
+#else
+        lu->temp_vec[i] = ivp_vecfpu_large_dot_product(lu->L_matrix, i * lu->aligned_row_len,
+                                                      lu->mult_vec, 0, lu->n_sub, true);
+#endif
     }
 }
 
@@ -1859,6 +1911,10 @@ void ivp_incr_lu_solve_vec_with_U(ivp_incr_lu_t *lu)
 {
     int arl = lu->aligned_row_len;
     for (int i = lu->n_sub - 1; i >= 0; i--) {
+#if IVP_X87_ARITHMETIC
+        double res = ivp_x87_back_substitute_lu_row(lu->temp_vec[i], lu->U_matrix + i * arl + i + 1,
+                                                  lu->temp_vec + i + 1, lu->n_sub - i - 1);
+#else
         double leftsum = 0.0;
         int j = lu->n_sub - 1;
         /* The reference reduces in descending column order. Do not split
@@ -1873,6 +1929,7 @@ void ivp_incr_lu_solve_vec_with_U(ivp_incr_lu_t *lu)
             leftsum = GM_FMA(lu->U_matrix[i * arl + j], lu->temp_vec[j], leftsum);
         }
         double res = lu->temp_vec[i] - leftsum;
+#endif
         lu->temp_vec[i] = res;
         lu->out_vec[i] = res;
     }
@@ -1892,8 +1949,8 @@ void ivp_incr_lu_add_neg_row_L(ivp_incr_lu_t *lu, int source_row, int dest_row,
 {
     int base_a = source_row * lu->aligned_row_len;
     int base_b = dest_row * lu->aligned_row_len;
-    ivp_vecfpu_add_multiple_row(lu->L_matrix, base_b, lu->L_matrix, base_a,
-                                -factor, lu->n_sub, false);
+    ivp_incr_lu_add_scaled_row(lu->L_matrix, base_b, base_a,
+                              -factor, lu->n_sub, false);
 }
 
 void ivp_incr_lu_debug_print_l_u(const ivp_incr_lu_t *lu)

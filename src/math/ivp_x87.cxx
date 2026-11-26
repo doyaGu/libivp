@@ -717,6 +717,118 @@ static X87_Float80 ivp_x87_point_dot(X87_Arithmetic &fp, const Vector *left, con
                   fp.multiply(fp.load(left->k[0]), fp.load(right->k[0])));
 }
 
+void ivp_x87_add_scaled_row(double *target, const double *source, double factor, int count)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 scale = fp.load(factor);
+    for (int i = 0; i < count; ++i)
+        target[i] = fp.store_double(fp.add(fp.multiply(fp.load(source[i]), scale), fp.load(target[i])));
+}
+
+double ivp_x87_dot_product_forward(const double *left, const double *right, int count)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 sum = fp.load(0.0);
+    for (int i = 0; i < count; ++i)
+        sum = fp.add(sum, fp.multiply(fp.load(left[i]), fp.load(right[i])));
+    return fp.store_double(sum);
+}
+
+static X87_Float80 ivp_x87_accumulate_dot_product_backward(X87_Arithmetic &fp,
+                                                           const double *left, const double *right, int count)
+{
+    X87_Float80 sum = fp.load(0.0);
+    for (int i = count - 1; i >= 0; --i)
+        sum = fp.add(sum, fp.multiply(fp.load(left[i]), fp.load(right[i])));
+    return sum;
+}
+
+double ivp_x87_dot_product_backward(const double *left, const double *right, int count)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.store_double(ivp_x87_accumulate_dot_product_backward(fp, left, right, count));
+}
+
+double ivp_x87_back_substitute_lu_row(double value, const double *upper, const double *solution, int count)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 sum = ivp_x87_accumulate_dot_product_backward(fp, upper, solution, count);
+    return fp.store_double(fp.subtract(fp.load(value), sum));
+}
+
+static void ivp_x87_scale_row(X87_Arithmetic &fp, double *row, int count, const X87_Float80 &scale)
+{
+    for (int i = 0; i < count; ++i)
+        row[i] = fp.store_double(fp.multiply(scale, fp.load(row[i])));
+}
+
+double ivp_x87_indexed_dot_product_with_bias(const double *left, const double *right,
+                                             const int *indices, int count, double bias)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 sum = fp.load(0.0);
+    for (int i = 0; i < count; ++i)
+    {
+        const int index = indices[i];
+        sum = fp.add(sum, fp.multiply(fp.load(left[index]), fp.load(right[index])));
+    }
+    return fp.store_double(fp.add(sum, fp.load(bias)));
+}
+
+double ivp_x87_dot_product_residual(const double *left, const double *right, int count, double desired)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 sum = ivp_x87_accumulate_dot_product_backward(fp, left, right, count);
+    return fp.store_double(fp.subtract(sum, fp.load(desired)));
+}
+
+double ivp_x87_divide_double(double numerator, double denominator)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.store_double(fp.divide(fp.load(numerator), fp.load(denominator)));
+}
+
+double ivp_x87_multiply_double(double left, double right)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.store_double(fp.multiply(fp.load(left), fp.load(right)));
+}
+
+bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
+                                       int pivot, int count, double epsilon)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 residual = fp.load(solution[pivot]);
+    for (int i = count - 1; i > pivot; --i)
+        residual = fp.subtract(residual, fp.multiply(fp.load(upper[i]), fp.load(solution[i])));
+    const X87_Float80 diagonal = fp.load(upper[pivot]);
+    const X87_Float80 eps = fp.load(epsilon);
+    if (fp.compare(fp.absolute(diagonal), eps) == X87_Arithmetic::LESS)
+    {
+        if (fp.compare(fp.absolute(residual), fp.multiply(eps, fp.load(1000.0))) != X87_Arithmetic::LESS)
+            return false;
+        solution[pivot] = 0.0;
+        return true;
+    }
+    solution[pivot] = fp.store_double(fp.divide(residual, diagonal));
+    return true;
+}
+
+void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(lower[pivot]));
+    ivp_x87_scale_row(fp, lower, count, reciprocal);
+}
+
+void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(upper[pivot]));
+    ivp_x87_scale_row(fp, lower, count, reciprocal);
+    ivp_x87_scale_row(fp, upper + pivot + 1, count - pivot - 1, reciprocal);
+}
+
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
                            const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
                            ivp_vec3f_t *velocity)

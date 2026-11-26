@@ -23,9 +23,12 @@
 #include <ivp/solver/ivp_linear_constraint_solver.h>
 #include <ivp/solver/ivp_great_matrix.h>
 #include <ivp/base/ivp_allocator.h>
-#include "base/ivp_arena_internal.h"
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
+
+#include "base/ivp_arena_internal.h"
+#include "math/ivp_x87.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -225,9 +228,14 @@ static void lcs_move_not_necessary_actives_to_inactives(lcs_state_t *s)
 static void lcs_mult_active_x_for_accel(lcs_state_t *s)
 {
     for (int i = s->r_actives; i < s->n_variables; i++) {
-        double sum = 0.0;
         int row_of_A = s->actives_inactives_ignored[i];
         const double *row_vals = &s->full_solver_mat.matrix_values[row_of_A * s->aligned_size];
+#if IVP_X87_ARITHMETIC
+        int ignored = s->actives_inactives_ignored[s->ignored_pos];
+        s->delta_accel[row_of_A] = ivp_x87_indexed_dot_product_with_bias(
+            s->delta_f, row_vals, s->actives_inactives_ignored, s->r_actives, row_vals[ignored]);
+#else
+        double sum = 0.0;
         int real_pos;
         for (int j = 0; j < s->r_actives; j++) {
             real_pos = s->actives_inactives_ignored[j];
@@ -236,15 +244,21 @@ static void lcs_mult_active_x_for_accel(lcs_state_t *s)
         real_pos = s->actives_inactives_ignored[s->ignored_pos];
         sum = LCS_FMA(row_vals[real_pos], 1.0, sum);
         s->delta_accel[row_of_A] = sum;
+#endif
     }
 }
 
 static void lcs_mult_x_with_full_A_minus_b(lcs_state_t *s)
 {
     for (int i = 0; i < s->n_variables; i++) {
+#if IVP_X87_ARITHMETIC
+        s->temp[i] = ivp_x87_dot_product_residual(s->full_A + i * s->aligned_size,
+                                                  s->full_x, s->n_variables, s->full_b[i]);
+#else
         double sum = ivp_vecfpu_large_dot_product(s->full_A, i * s->aligned_size,
                                                   s->full_x, 0, s->n_variables, true);
         s->temp[i] = sum - s->full_b[i];
+#endif
     }
 }
 
@@ -296,6 +310,14 @@ static void lcs_update_step_vars(lcs_state_t *s, double step_size)
     IVP_IF(s->debug_lcs) {
         ivp_debug_printf("deltaa  ");
     }
+#if IVP_X87_ARITHMETIC
+    IVP_IF(s->debug_lcs) {
+        for (i = 0; i < s->n_variables; i++)
+            ivp_debug_printf("%f ", s->delta_accel[i]);
+    }
+    ivp_x87_add_scaled_row(s->accel, s->delta_accel, step_size, s->n_variables);
+    ivp_x87_add_scaled_row(s->full_x, s->delta_f, step_size, s->n_variables);
+#else
     for (i = 0; i < s->n_variables; i++) {
         IVP_IF(s->debug_lcs) {
             ivp_debug_printf("%f ", s->delta_accel[i]);
@@ -303,6 +325,7 @@ static void lcs_update_step_vars(lcs_state_t *s, double step_size)
         s->accel[i] = LCS_FMA(step_size, s->delta_accel[i], s->accel[i]);
         s->full_x[i] = LCS_FMA(step_size, s->delta_f[i], s->full_x[i]);
     }
+#endif
     IVP_IF(s->debug_lcs) {
         ivp_debug_printf("\n");
     }
