@@ -35,6 +35,7 @@ double ivp_x87_spring_impulse(const ivp_vec3f_t *direction, const ivp_vec3f_t *r
                               float lateral_damping, double step, double maximum_force, ivp_vec3f_t *impulse);
 double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
                                   const double end[3], int axis, double point[3]);
+float ivp_x87_reduced_inverse_mass(double first, double second, double epsilon);
 double ivp_x87_worst_case_effective_mass(const ivp_vec3f_t *point,
                                          const ivp_vec3f_t *inverse_inertia, float inverse_mass);
 float ivp_x87_worst_case_inverse_mass(const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia,
@@ -52,6 +53,10 @@ bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
                                        int pivot, int count, double epsilon);
 void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot);
 void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot);
+void ivp_x87_contact_normal_jacobian(const ivp_mat3r_t *rotation, const ivp_vec3f_t *normal,
+    const ivp_vec3f_t *point, bool second_body, ivp_vec3f_t *jacobian);
+void ivp_x87_inverse_transform_contact_point(const ivp_transform_r_t *transform,
+                                             const ivp_vec3r_t *world, ivp_vec3f_t *local);
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
                            const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
                            ivp_vec3f_t *velocity);
@@ -84,6 +89,7 @@ double ivp_x87_hull_plane_distance(const double point[3], const double normal[3]
 int ivp_x87_normalize_hull_plane(double normal[3], unsigned orientation,
                                  double min_denominator, const double *minimum,
                                  unsigned *below_minimum, double *length);
+double ivp_x87_length_squared3f(const float point[3]);
 float ivp_x87_minimum_rotational_inertia(const ivp_vec3f_t *inertia, float factor);
 double ivp_x87_length3f(const float point[3]);
 double ivp_x87_length3d(const double point[3]);
@@ -118,6 +124,8 @@ void ivp_x87_advance_position(const ivp_vec3r_t *position, const ivp_vec3r_t *ve
                               double elapsed, ivp_vec3r_t *out);
 void ivp_x87_interpolate_point(const ivp_vec3r_t *first, const ivp_vec3r_t *last, ivp_real_t fraction,
                                ivp_vec3r_t *out);
+ivp_real_t ivp_x87_edge_contact_fraction(const ivp_vec3r_t *normal, const ivp_vec3r_t *first,
+                                         const ivp_vec3r_t *last, const ivp_vec3r_t *point);
 void ivp_x87_transform_point3d(const double rotation[3][3], const double origin[3],
                                const double point[3], double out[3]);
 #ifdef IVP_REAL_DOUBLE

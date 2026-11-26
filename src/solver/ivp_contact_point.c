@@ -482,6 +482,9 @@ static void cp_ledge_reference(const ivp_object_t *obj, const ivp_compact_edge_t
 static void cp_contact_normal_cross(const ivp_transform_r_t *m, const ivp_vec3f_t *normal,
                                     const ivp_vec3f_t *point, ivp_vec3f_t *cross, bool second_core)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_contact_normal_jacobian(&m->rot, normal, point, second_core, cross);
+#else
     ivp_vec3f_t n;
     lvm_vimult3_f(m, normal, &n);
     const double n0 = (double)normal->k[0], n1 = (double)normal->k[1], n2 = (double)normal->k[2];
@@ -491,6 +494,7 @@ static void cp_contact_normal_cross(const ivp_transform_r_t *m, const ivp_vec3f_
     cross->k[0] = (float)((double)n.k[2] * p1 - (double)n.k[1] * p2);
     cross->k[1] = (float)(nx * p2 - (double)n.k[2] * p0);
     cross->k[2] = (float)((double)n.k[1] * p0 - nx * p1);
+#endif
 }
 
 /* ivp_contact_inverse_mass (ivp_friction.hxx): inverse mass of one contact
@@ -643,8 +647,22 @@ void ivp_contact_pt_calc_virtual_mass_of_mindist(ivp_contact_pt_t *cp)
     }
     ivp_core_t *core[2];
     for (int i = 0; i < 2; i++) core[i] = cp->synapse[i].l_obj->physical_core;
-    double virt_mass_mindist_no_dir;
     ivp_impact_solver_lt_t *tci = cp->tmp_contact_info;
+#if IVP_X87_ARITHMETIC
+    if (core[0]->physical_unmoveable || core[1]->physical_unmoveable) {
+        const int moving = core[0]->physical_unmoveable ? 1 : 0;
+        const ivp_core_t *body = core[moving];
+        const ivp_vec3f_t inverse_inertia = ivp_core_inv_rot_inertia_f(body);
+        const float inverse_mass = body->pinned ? 1.0f : ivp_core_get_inv_mass_f(body);
+        cp->inv_virt_mass_mindist_no_dir = ivp_x87_worst_case_inverse_mass(&tci->contact_point_cs[moving],
+            &inverse_inertia, inverse_mass, P_DOUBLE_EPS);
+    } else {
+        const double first = ivp_core_calc_virt_mass_worst_case(core[0], &tci->contact_point_cs[0]);
+        const double second = ivp_core_calc_virt_mass_worst_case(core[1], &tci->contact_point_cs[1]);
+        cp->inv_virt_mass_mindist_no_dir = ivp_x87_reduced_inverse_mass(first, second, P_DOUBLE_EPS);
+    }
+#else
+    double virt_mass_mindist_no_dir;
     if (core[0]->physical_unmoveable) {
         virt_mass_mindist_no_dir = ivp_core_calc_virt_mass_worst_case(core[1], &tci->contact_point_cs[1]);
     } else if (core[1]->physical_unmoveable) {
@@ -660,6 +678,7 @@ void ivp_contact_pt_calc_virtual_mass_of_mindist(ivp_contact_pt_t *cp)
     cp->inv_virt_mass_mindist_no_dir =
         (virt_mass_mindist_no_dir > P_DOUBLE_EPS) ? (float)(1.0f / virt_mass_mindist_no_dir) : 0.0f;
     IVP_ASSERT(virt_mass_mindist_no_dir < (double)1e30f); /* test for NaN */
+#endif
 }
 
 void ivp_contact_pt_recompute_friction(ivp_contact_pt_t *cp)
@@ -729,18 +748,32 @@ static void p_calc_friction_s_PK(ivp_contact_pt_t *cp, const ivp_vec3r_t *pp, co
     ivp_vec3f_t vec1, vec2;
     lvf_subtract2_p(&vec1, &tp_next, &tp);
     lvf_subtract2_p(&vec2, pp, &tp);
-    double vec1_ql = (double)lvf_quad_length(&vec1);
+#if IVP_X87_ARITHMETIC
+    const double vec1_ql = ivp_x87_length_squared3f(vec1.k);
+#else
+    const double vec1_ql = (double)lvf_quad_length(&vec1);
+#endif
     double i_len = (vec1_ql > P_DOUBLE_EPS) ? (double)lv_isqrt_double((D)vec1_ql) : 0.0;
     ivp_vec3f_t vert_12;
+#if IVP_X87_ARITHMETIC
+    ivp_x87_cross3f(&vec1, &vec2, &vert_12);
+    const double distance = ivp_x87_length3f(vert_12.k) * i_len;
+#else
     lvf_cross(&vert_12, &vec1, &vec2);
-    double distance = (double)lvf_real_length(&vert_12) * i_len;
+    const double distance = (double)lvf_real_length(&vert_12) * i_len;
+#endif
     cp->last_gap_len = (float)distance;
     if (distance * distance > P_DOUBLE_EPS) {
         lvf_set_multiple(&vert_12, &vert_12, (D)(i_len / distance));
     } else {
         lvf_set3(&vert_12, 1.0f, 0.0f, 0.0f);
     }
+#if IVP_X87_ARITHMETIC
+    ivp_x87_cross3f(&vec1, &vert_12, &info->surf_normal);
+    (void)lvf_normize(&info->surf_normal);
+#else
     lvf_cross_and_normize(&info->surf_normal, &vec1, &vert_12);
+#endif
     info->contact_point_ws = *pp;
     info->span_friction_v[0] = vert_12;
     IVP_IF(1) /* ivp_mindist_friction.cxx:206 */
@@ -764,6 +797,9 @@ static void p_calc_friction_s_PK(ivp_contact_pt_t *cp, const ivp_vec3r_t *pp, co
 /* IVP_U_Point::set_interpolate (ivu_linear.cxx) */
 static void lvp_set_interpolate_pp(ivp_vec3r_t *r, const ivp_vec3r_t *p0, const ivp_vec3r_t *p1, D s)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_interpolate_point(p0, p1, s, r);
+#else
     D is = 1.0f - s;
     D a = p0->k[0] * is, a2 = p1->k[0] * s;
     D b = p0->k[1] * is, b2 = p1->k[1] * s;
@@ -771,6 +807,7 @@ static void lvp_set_interpolate_pp(ivp_vec3r_t *r, const ivp_vec3r_t *p0, const 
     r->k[0] = a + a2;
     r->k[1] = b + b2;
     r->k[2] = c + c2;
+#endif
 }
 
 static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t *K, const ivp_compact_edge_t *L,
@@ -788,10 +825,20 @@ static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t
     (void)lvp_fast_normize(&Lvec);
     lvp_subtract2(&Kvec, &Kp_next, &Kp);
     (void)lvp_fast_normize(&Kvec);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_cross3r(&Kvec, &Lvec, &norm);
+#else
     lvp_cross(&norm, &Kvec, &Lvec);
+#endif
     D quad_dist = lvp_quad_length(&norm);
     if (quad_dist > (P_DOUBLE_RES * P_DOUBLE_RES)) {
         ivp_vec3r_t K_area, L_area;
+#if IVP_X87_ARITHMETIC
+        ivp_x87_cross3r(&Kvec, &norm, &K_area);
+        ivp_x87_cross3r(&Lvec, &norm, &L_area);
+        sl = ivp_x87_edge_contact_fraction(&K_area, &Lp, &Lp_next, &Kp);
+        sk = ivp_x87_edge_contact_fraction(&L_area, &Kp, &Kp_next, &Lp);
+#else
         lvp_cross(&K_area, &Kvec, &norm);
         lvp_cross(&L_area, &Lvec, &norm);
         /* ivp_kk_contact_fraction: the retail build divides without the
@@ -804,6 +851,7 @@ static void p_calc_friction_ss_KK(ivp_contact_pt_t *cp, const ivp_compact_edge_t
         b = lvp_dot(&L_area, &Kp_next);
         reciprocal = (D)(1.0 / (double)(a - b));
         sk = (a - lvp_dot(&L_area, &Lp)) * reciprocal;
+#endif
         ivp_vec3r_t world_edge_space0, world_edge_space1;
         lvp_set_interpolate_pp(&world_edge_space0, &Kp, &Kp_next, sk);
         lvp_set_interpolate_pp(&world_edge_space1, &Lp, &Lp_next, sl);
@@ -919,13 +967,20 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
         ivp_cache_ledge_point_remove_reference(&m_cache_1);
     }
     (void)lvf_normize(&info->span_friction_v[0]);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_cross3f(&info->surf_normal, &info->span_friction_v[0], &info->span_friction_v[1]);
+#else
     lvf_cross(&info->span_friction_v[1], &info->surf_normal, &info->span_friction_v[0]);
+#endif
 
     ivp_vec3f_t delta_velocity_ws;
     {
         ivp_core_t *core0 = syn0->l_obj->physical_core;
         if (!core0->physical_unmoveable) {
             const ivp_transform_r_t *m = &core0->m_world_f_core_last_psi;
+#if IVP_X87_ARITHMETIC
+            ivp_x87_inverse_transform_contact_point(m, &info->contact_point_ws, &info->contact_point_cs[0]);
+#else
             /* retail RVA 0x1F860: the contact point is inverse rotated with
              * double offsets, summed y, z, x */
             const double px = info->contact_point_ws.k[0] - m->pos.k[0];
@@ -934,6 +989,7 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
             info->contact_point_cs[0].k[0] = (float)(LVM_E(m, 1, 0) * py + LVM_E(m, 2, 0) * pz + LVM_E(m, 0, 0) * px);
             info->contact_point_cs[0].k[1] = (float)(LVM_E(m, 1, 1) * py + LVM_E(m, 2, 1) * pz + LVM_E(m, 0, 1) * px);
             info->contact_point_cs[0].k[2] = (float)(LVM_E(m, 1, 2) * py + LVM_E(m, 2, 2) * pz + LVM_E(m, 0, 2) * px);
+#endif
             cp_contact_normal_cross(m, &info->surf_normal, &info->contact_point_cs[0],
                                     &info->contact_cross_nomal_cs[0], false);
             ivp_vec3f_t sp = ivp_core_speed_f(core0);

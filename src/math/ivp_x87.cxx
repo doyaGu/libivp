@@ -530,6 +530,12 @@ int ivp_x87_normalize_hull_plane(double normal[3], unsigned orientation,
     return 1;
 }
 
+double ivp_x87_length_squared3f(const float point[3])
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    return fp.scalar_result(ivp_x87_point_square(fp, point));
+}
+
 float ivp_x87_minimum_rotational_inertia(const ivp_vec3f_t *inertia, float factor)
 {
     ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
@@ -773,6 +779,23 @@ double ivp_x87_intersect_ray_edge(const double origin[3], const double direction
     return fp.store_double(distance);
 }
 
+float ivp_x87_reduced_inverse_mass(double first, double second, double epsilon)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 a = fp.load(first);
+    const X87_Float80 b = fp.load(second);
+    const X87_Float80 sum = fp.add(a, b);
+    if (fp.compare(sum, fp.load(epsilon)) != X87_Arithmetic::GREATER)
+        return 0.0f;
+    const X87_Float80 mass = fp.divide(fp.multiply(a, b), sum);
+    IVP_ASSERT(fp.compare(mass, fp.load(static_cast<double>(1e30f))) == X87_Arithmetic::LESS);
+    if (fp.compare(mass, fp.load(epsilon)) != X87_Arithmetic::GREATER)
+        return 0.0f;
+
+    // The cached inverse mass is written directly to binary32.
+    return fp.store_float(fp.divide(fp.load(1.0), mass));
+}
+
 static X87_Float80 ivp_x87_worst_case_effective_mass_extended(X87_Arithmetic &fp,
     const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia, float inverse_mass)
 {
@@ -940,6 +963,52 @@ void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int piv
     const X87_Float80 reciprocal = fp.divide(fp.load(1.0), fp.load(upper[pivot]));
     ivp_x87_scale_row(fp, lower, count, reciprocal);
     ivp_x87_scale_row(fp, upper + pivot + 1, count - pivot - 1, reciprocal);
+}
+
+void ivp_x87_contact_normal_jacobian(const ivp_mat3r_t *rotation, const ivp_vec3f_t *normal,
+    const ivp_vec3f_t *point, bool second_body, ivp_vec3f_t *jacobian)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 local_normal[3];
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 x = fp.multiply(fp.load(rotation->rows[0].k[axis]), fp.load(normal->k[0]));
+        const X87_Float80 y = fp.multiply(fp.load(rotation->rows[1].k[axis]), fp.load(normal->k[1]));
+        const X87_Float80 z = fp.multiply(fp.load(rotation->rows[2].k[axis]), fp.load(normal->k[2]));
+        if (axis == 0)
+            local_normal[axis] = second_body ? fp.add(fp.add(x, y), z) : fp.add(fp.add(z, y), x);
+        else
+            local_normal[axis] = fp.load(fp.store_float(fp.add(fp.add(y, x), z)));
+    }
+
+    const X87_Float80 x = fp.load(point->k[0]);
+    const X87_Float80 y = fp.load(point->k[1]);
+    const X87_Float80 z = fp.load(point->k[2]);
+    // X of the rotated normal stays extended through the Y moment. The two
+    // products of the Z moment are spilled before the subtraction.
+    jacobian->k[0] = fp.store_float(fp.subtract(fp.multiply(local_normal[2], y), fp.multiply(local_normal[1], z)));
+    jacobian->k[1] = fp.store_float(fp.subtract(fp.multiply(local_normal[0], z), fp.multiply(local_normal[2], x)));
+    jacobian->k[2] = fp.store_float(fp.subtract(ivp_x87_round_double(fp, fp.multiply(local_normal[1], x)),
+                                              ivp_x87_round_double(fp, fp.multiply(local_normal[0], y))));
+}
+
+void ivp_x87_inverse_transform_contact_point(const ivp_transform_r_t *transform,
+                                             const ivp_vec3r_t *world, ivp_vec3f_t *local)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 offset[3];
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 value = fp.subtract(fp.load(world->k[axis]), fp.load(transform->pos.k[axis]));
+        offset[axis] = ivp_x87_round_double(fp, value);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 y = fp.multiply(offset[1], fp.load(transform->rot.rows[1].k[axis]));
+        const X87_Float80 z = fp.multiply(offset[2], fp.load(transform->rot.rows[2].k[axis]));
+        const X87_Float80 x = fp.multiply(offset[0], fp.load(transform->rot.rows[0].k[axis]));
+        local->k[axis] = fp.store_float(fp.add(fp.add(y, z), x));
+    }
 }
 
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
@@ -1155,6 +1224,19 @@ void ivp_x87_cross3r(const ivp_vec3r_t *left, const ivp_vec3r_t *right, ivp_vec3
     ivp_x87_cross_extended<false>(fp, left, right, values);
     for (int axis = 0; axis < 3; ++axis)
         ivp_x87_store(fp, cross->k[axis], values[axis]);
+}
+
+ivp_real_t ivp_x87_edge_contact_fraction(const ivp_vec3r_t *normal, const ivp_vec3r_t *first,
+                                         const ivp_vec3r_t *last, const ivp_vec3r_t *point)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 a = ivp_x87_point_dot(fp, normal, first);
+    const X87_Float80 b = ivp_x87_point_dot(fp, normal, last);
+    const X87_Float80 position = ivp_x87_point_dot(fp, normal, point);
+    const X87_Float80 inv_span = fp.divide(fp.load(1.0), fp.subtract(a, b));
+    ivp_real_t fraction;
+    ivp_x87_store(fp, fraction, fp.multiply(fp.subtract(a, position), inv_span));
+    return fraction;
 }
 
 void ivp_x87_advance_position(const ivp_vec3r_t *position, const ivp_vec3r_t *velocity,
