@@ -1797,8 +1797,7 @@ static bool frs_init(fr_solver_t *s, ivp_fr_system_t *fs,
     ivp_gmmz_calc_aligned_row_len(m);
     size_t arl = (size_t)m->aligned_row_len;
     m->matrix_values = (double *)ivp_arena_alloc(
-        arena, (arl * (size_t)m->columns +
-                (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
+        arena, (arl * (size_t)m->columns) * sizeof(double));
     m->desired_vector = (double *)ivp_arena_alloc(
         arena, arl * sizeof(double));
     m->result_vector = (double *)ivp_arena_alloc(
@@ -2321,8 +2320,7 @@ static void frs_solve_linear_equation_and_push(fr_solver_t *s, ivp_fr_system_t *
     actives_matrix.result_vector = (double *)ivp_arena_alloc(
         arena, arl * sizeof(double));
     actives_matrix.matrix_values = (double *)ivp_arena_alloc(
-        arena, ((size_t)total_actives * arl +
-                (size_t)(IVP_GM_VECFPU_SIZE - 1)) * sizeof(double));
+        arena, ((size_t)total_actives * arl) * sizeof(double));
     /* align_matrix_values(): arena memory is 32-byte aligned, nothing moves */
     if (!actives_matrix.desired_vector || !actives_matrix.result_vector || !actives_matrix.matrix_values) return;
     IVP_IF(1)

@@ -1,7 +1,7 @@
 /* ivp_linear_constraint_solver.h — Unilateral linear constraint solver
  *
- * Bit-faithful C17 port of the reference IVP_Linear_Constraint_Solver
- * (ivp_great_matrix.cxx), the complementarity solver the friction system
+ * C17 port of IVP_Linear_Constraint_Solver (ivp_great_matrix.cxx),
+ * the complementarity solver the friction system
  * falls back to when plain Gauss gives negative impulses.
  *
  * Problem: given an n x n matrix A (symmetric positive semi-definite in
@@ -11,9 +11,8 @@
  * by one ("ignored" -> "active" or "inactive"), the active sub-system is
  * kept as an incremental LU (ivp_incr_lu_t) with a Gauss fallback
  * (ivp_gmmz_t), a numerical stability check runs every 7 steps, and it
- * gives up after 250 steps.  All arithmetic is double and reproduces the
- * 64-bit reference release build bit for bit, including its VecFPU row
- * overruns and FMA contraction sites (see ivp_great_matrix.h).
+ * gives up after 250 steps. Coefficients and stored results are binary64.
+ * Gauss elimination and LU update only the coefficients in each row.
  */
 #ifndef IVP_LINEAR_CONSTRAINT_SOLVER_H
 #define IVP_LINEAR_CONSTRAINT_SOLVER_H

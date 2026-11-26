@@ -28,7 +28,7 @@ IVP_TEST(gmmz_init_layout)
     ivp_gmmz_t m;
     IVP_ASSERT_EQ(ivp_gmmz_init(&m, 5, NULL), IVP_OK);
     IVP_ASSERT_EQ(m.columns, 5);
-    IVP_ASSERT_EQ(m.aligned_row_len, IVP_GM_VECFPU_SIZE == 4 ? 8 : 5);
+    IVP_ASSERT_EQ(m.aligned_row_len, 5);
     IVP_ASSERT_TRUE(m.matrix_eps == 1.0e-9);
     for (int i = 0; i < 5 * m.aligned_row_len; i++) IVP_ASSERT_TRUE(m.matrix_values[i] == 0.0);
     ivp_gmmz_destroy(&m, NULL);
@@ -105,11 +105,7 @@ IVP_TEST(gmmz_solve_inconsistent_faults_and_clears)
     ivp_gmmz_destroy(&m, NULL);
 }
 
-/* The 64-bit reference row helpers overrun into the next row: for this
- * 4x4 system the reference returns IVP_OK with a solution whose last row
- * residual is ~0.24.  Values printed by the reference library (identical
- * with and without FP contraction). */
-IVP_TEST(gmmz_solve_4x4_reproduces_reference_overrun)
+IVP_TEST(gmmz_solve_4x4_preserves_the_next_row)
 {
     const double A[16] = {4, 1, 2, 1,
                           1, 5, 1, 2,
@@ -120,18 +116,11 @@ IVP_TEST(gmmz_solve_4x4_reproduces_reference_overrun)
     IVP_ASSERT_EQ(ivp_gmmz_init(&m, 4, NULL), IVP_OK);
     gmmz_fill(&m, A, b);
     IVP_ASSERT_EQ(ivp_gmmz_solve(&m), IVP_OK);
-#if IVP_GM_VECFPU_SIZE == 4
-    IVP_ASSERT_TRUE(m.result_vector[0] == -0.13098812544795924);
-    IVP_ASSERT_TRUE(m.result_vector[1] == 0.1288669778974488);
-    IVP_ASSERT_TRUE(m.result_vector[2] == 0.43450593727602038);
-    IVP_ASSERT_TRUE(m.result_vector[3] == 0.52607364934234735);
-#else
     for (int i = 0; i < 4; i++) {
         double r = -b[i];
         for (int j = 0; j < 4; j++) r += A[i * 4 + j] * m.result_vector[j];
         IVP_ASSERT_NEAR(r, 0.0, 1e-12);
     }
-#endif
     ivp_gmmz_destroy(&m, NULL);
 }
 
@@ -261,15 +250,9 @@ IVP_TEST(vecfpu_unaligned_window)
     for (int i = 0; i < 16; i++) { t[i] = 0.0; s[i] = (double)(i + 1); }
     /* logical range: elements 1..3 */
     ivp_vecfpu_add_multiple_row(t, 1, s, 1, 1.0, 3, false);
-#if IVP_GM_VECFPU_SIZE == 4
-    /* start moves to 0, count 3 + 2 -> two blocks of 4: elements 0..7 */
-    for (int i = 0; i < 8; i++) IVP_ASSERT_TRUE(t[i] == s[i]);
-    for (int i = 8; i < 16; i++) IVP_ASSERT_TRUE(t[i] == 0.0);
-#else
     IVP_ASSERT_TRUE(t[0] == 0.0);
     for (int i = 1; i < 4; i++) IVP_ASSERT_TRUE(t[i] == s[i]);
     IVP_ASSERT_TRUE(t[4] == 0.0);
-#endif
     IVP_ASSERT_TRUE(ivp_vecfpu_large_dot_product(s, 0, s, 0, 3, true) == 14.0);
     ivp_vecfpu_set_row_to_zero(s, 0, 2, true);
     IVP_ASSERT_TRUE(s[0] == 0.0 && s[1] == 0.0);
@@ -386,24 +369,8 @@ IVP_TEST(vecfpu_add_multiple_row_matches_scalar_rounding)
             int size = 1 + (test_case % 23);
             double factor = reduction_value((unsigned int)(test_case + 7));
 
-            int scalar_source_off = source_off;
-            int scalar_target_off = target_off;
-            int scalar_size = size;
-#if IVP_GM_VECFPU_SIZE == 4
-            if (!aligned) {
-                int shift = scalar_source_off & 1;
-                scalar_target_off -= scalar_target_off & 1;
-                scalar_size += shift * 2;
-                scalar_source_off -= shift;
-            }
-#endif
-            int processed = ((scalar_size + IVP_GM_VECFPU_SIZE - 1) /
-                             IVP_GM_VECFPU_SIZE) * IVP_GM_VECFPU_SIZE;
-            for (int i = 0; i < processed; i++) {
-                double value = source[scalar_source_off + i] * factor;
-                value += expected[scalar_target_off + i];
-                expected[scalar_target_off + i] = value;
-            }
+            for (int i = 0; i < size; ++i)
+                expected[target_off + i] += source[source_off + i] * factor;
             ivp_vecfpu_add_multiple_row(actual, target_off, source, source_off,
                                         factor, size, aligned);
             equal &= same_double_array(actual, expected, capacity);
@@ -430,11 +397,7 @@ IVP_TEST(vecfpu_reduction_bitwise_scalar)
             }
             for (int count = 0; count <= 65; count++) {
                 for (int aligned = 0; aligned < 2; aligned++) {
-                    int off_a = 1, off_b = 3, size = count;
-#if IVP_GM_VECFPU_SIZE == 4
-                    if (!aligned) { off_a = 0; off_b = 2; size += 2; }
-#endif
-                    double expected = scalar_dot(a + off_a, b + off_b, size);
+                    double expected = scalar_dot(a + 1, b + 3, count);
                     double actual = ivp_vecfpu_large_dot_product(a, 1, b, 3, count, aligned != 0);
                     equal &= same_double_result(actual, expected);
                 }
@@ -611,9 +574,7 @@ IVP_TEST(incr_lu_solve_bitwise_scalar)
     IVP_ASSERT_TRUE(equal);
 }
 
-/* Matrix whose elimination pivots are all exactly 1 and needs no row
- * exchange, so the reference's row overruns (which scale neighbouring
- * rows by 1/pivot) are harmless and the result is exact. */
+/* The unit pivots keep this sequence of LU updates exact. */
 static const double k_unit_pivot[16] = {1.0,  0.5,  0.0,  0.0,
                                         0.5,  1.25, 0.5,  0.0,
                                         0.0,  0.5,  1.25, 0.5,
@@ -848,7 +809,7 @@ int main(void)
     IVP_REGISTER(gmmz_solve_3x3_needs_pivot);
     IVP_REGISTER(gmmz_solve_singular_consistent_picks_zero);
     IVP_REGISTER(gmmz_solve_inconsistent_faults_and_clears);
-    IVP_REGISTER(gmmz_solve_4x4_reproduces_reference_overrun);
+    IVP_REGISTER(gmmz_solve_4x4_preserves_the_next_row);
     IVP_REGISTER(gmmz_mult_and_mult_aligned);
     IVP_REGISTER(gmmz_check_unequation_line);
     IVP_REGISTER(gmmz_fill_from_bigger_matrix);

@@ -19,7 +19,6 @@
 #include <string.h>
 #include <math.h>
 
-#include "base/ivp_simd_internal.h"
 #include "math/ivp_x87.h"
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
@@ -518,7 +517,7 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  * Reference-faithful port of ivp_great_matrix.cxx
  *   IVP_VecFPU, IVP_Great_Matrix_Many_Zero, IVP_Incr_L_U_Matrix
  * See the comment block in ivp_great_matrix.h for the semantics that are
- * reproduced (64-bit VecFPU windows, FMA contraction sites).
+ * reproduced (scalar row operations and FMA contraction sites).
  * Statement order and operation order follow the reference line by line.
  * The reference's debug code (IVP_IF blocks, #ifdef DEBUG) is ported in
  * place (ivp/base/ivp_assert.h): dead in release builds, live in Debug /
@@ -532,30 +531,7 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
 #define GM_FMA(a, b, c) ((a) * (b) + (c))
 #endif
 
-#define GM_BLOCK IVP_GM_VECFPU_SIZE
-
-/* IVP_VECFPU_MEMSHIFT / IVP_VECFPU_MEM_MASK (align_matrix_values) */
-#if IVP_GM_VECFPU_SIZE == 4
-#define GM_MEMSHIFT 2
-#define GM_MEM_MASK (~(uintptr_t)0xf)
-#else
-#define GM_MEMSHIFT 3
-#define GM_MEM_MASK (~(uintptr_t)0x7)
-#endif
-
 #define GM_P_DOUBLE_MAX 1e20 /* P_DOUBLE_MAX (double build) */
-
-#if IVP_GM_VECFPU_SIZE == 4
-/* IVP_VECFPU_MEM_MASK = ~0xf: an unaligned start moves down to the previous
- * 16-byte boundary (2 doubles) and the count grows by
- * (byte_shift >> IVP_VECFPU_MEMSHIFT) = (8 * elems) >> 2. */
-#define GM_ALIGN_ELEMS 2
-#define GM_SIZE_ADJUST(elems) ((elems) * 2)
-#else
-/* 32-bit build: 8-byte mask, MEMSHIFT 3 -> never shifts. */
-#define GM_ALIGN_ELEMS 1
-#define GM_SIZE_ADJUST(elems) (elems)
-#endif
 
 #define GM_STATIC_FRICTION_TEST_EPS ((double)0.00001f)
 
@@ -624,89 +600,38 @@ static inline double gm_reduce_sub(double sum, const double *a, const double *b,
     return sum;
 }
 
-static inline int gm_misalign(int off)
-{
-    return off & (GM_ALIGN_ELEMS - 1);
-}
-
 /* ── IVP_VecFPU ─────────────────────────────────────────────────────────── */
 
 void ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
                                  const double *source_base, int source_off,
                                  double factor, int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(source_off);
-        target_off -= gm_misalign(target_off);
-        size += GM_SIZE_ADJUST(shift);
-        source_off -= shift;
-    }
-    double *t = target_base + target_off;
-    const double *s = source_base + source_off;
-    /* Blocks never overlap (target and source rows are >= one aligned row
-     * apart), so element order inside a block is immaterial. */
-#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
-    const float64x2_t factors = vdupq_n_f64(factor);
-    for (int i = size; i > 0; i -= GM_BLOCK) {
-        float64x2_t a0 = vmulq_f64(vld1q_f64(s), factors);
-        float64x2_t a1 = vmulq_f64(vld1q_f64(s + 2), factors);
-        a0 = vaddq_f64(a0, vld1q_f64(t));
-        a1 = vaddq_f64(a1, vld1q_f64(t + 2));
-        vst1q_f64(t, a0);
-        vst1q_f64(t + 2, a1);
-        t += GM_BLOCK;
-        s += GM_BLOCK;
-    }
-#else
-    for (int i = size; i > 0; i -= GM_BLOCK) {
-        for (int k = 0; k < GM_BLOCK; k++) {
-            double a = s[k] * factor;
-            a += t[k];
-            t[k] = a;
-        }
-        t += GM_BLOCK;
-        s += GM_BLOCK;
-    }
-#endif
+    (void)aligned;
+    double *target = target_base + target_off;
+    const double *source = source_base + source_off;
+    for (int i = 0; i < size; ++i)
+        target[i] += source[i] * factor;
 }
 
 void ivp_vecfpu_multiply_row(double *base, int off, double factor,
                              int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(off);
-        size += GM_SIZE_ADJUST(shift);
-        off -= shift;
-    }
-    double *t = base + off;
-    for (int i = size; i > 0; i -= GM_BLOCK) {
-        for (int k = 0; k < GM_BLOCK; k++) {
-            double a = t[k] * factor;
-            t[k] = a;
-        }
-        t += GM_BLOCK;
-    }
+    (void)aligned;
+    double *row = base + off;
+    for (int i = 0; i < size; ++i)
+        row[i] *= factor;
 }
 
 void ivp_vecfpu_exchange_rows(double *base1, int off1, double *base2, int off2,
                               int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(off1);
-        size += GM_SIZE_ADJUST(shift);
-        off1 -= shift;
-        off2 -= gm_misalign(off2);
-    }
-    double *t1 = base1 + off1;
-    double *t2 = base2 + off2;
-    for (int i = size; i > 0; i -= GM_BLOCK) {
-        for (int k = 0; k < GM_BLOCK; k++) {
-            double h = t1[k];
-            t1[k] = t2[k];
-            t2[k] = h;
-        }
-        t1 += GM_BLOCK;
-        t2 += GM_BLOCK;
+    (void)aligned;
+    double *first = base1 + off1;
+    double *second = base2 + off2;
+    for (int i = 0; i < size; ++i) {
+        const double value = first[i];
+        first[i] = second[i];
+        second[i] = value;
     }
 }
 
@@ -714,57 +639,32 @@ void ivp_vecfpu_copy_rows(double *target_base, int target_off,
                           const double *source_base, int source_off,
                           int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(source_off);
-        size += GM_SIZE_ADJUST(shift);
-        source_off -= shift;
-        target_off -= gm_misalign(target_off);
-    }
-    double *t = target_base + target_off;
-    const double *s = source_base + source_off;
-    for (int i = size - 1; i >= 0; i -= GM_BLOCK) {
-        for (int j = 0; j < GM_BLOCK; j++) {
-            t[j] = s[j];
-        }
-        t += GM_BLOCK;
-        s += GM_BLOCK;
-    }
+    (void)aligned;
+    double *target = target_base + target_off;
+    const double *source = source_base + source_off;
+    for (int i = 0; i < size; ++i)
+        target[i] = source[i];
 }
 
 void ivp_vecfpu_set_row_to_zero(double *base, int off, int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(off);
-        size += GM_SIZE_ADJUST(shift);
-        off -= shift;
-    }
-    double *t = base + off;
-    for (int i = size - 1; i >= 0; i -= GM_BLOCK) {
-        for (int j = 0; j < GM_BLOCK; j++) {
-            t[j] = 0.0;
-        }
-        t += GM_BLOCK;
-    }
+    (void)aligned;
+    double *row = base + off;
+    for (int i = 0; i < size; ++i)
+        row[i] = 0.0;
 }
 
 double ivp_vecfpu_large_dot_product(const double *base_a, int off_a,
                                     const double *base_b, int off_b,
                                     int size, bool aligned)
 {
-    if (!aligned) {
-        int shift = gm_misalign(off_a);
-        off_b -= gm_misalign(off_b);
-        size += GM_SIZE_ADJUST(shift);
-        off_a -= shift;
-    }
+    (void)aligned;
     if (size <= 0) return 0.0;
-    /* retail 0x35F40 / 0x34340 accumulate the software dot from the last
-     * element (ivp_great_matrix.cxx) */
-    const double *a = base_a + off_a, *b = base_b + off_b;
+    const double *a = base_a + off_a;
+    const double *b = base_b + off_b;
     double sum = 0.0;
-    for (int i = size - 1; i >= 0; i--) {
+    for (int i = size - 1; i >= 0; --i)
         sum = GM_FMA(a[i], b[i], sum);
-    }
     return sum;
 }
 
@@ -941,16 +841,9 @@ void ivp_gmmz_copy_matrix(ivp_gmmz_t *dst, const ivp_gmmz_t *src)
     }
 }
 
-/* align_matrix_values: shift matrix_values to aligned memory (the caller
- * allocated IVP_VECFPU_SIZE - 1 extra values); the debug build also clears
- * the row padding and the padding of desired_vector. */
 void ivp_gmmz_align_matrix_values(ivp_gmmz_t *m)
 {
-    uintptr_t adress = (uintptr_t)m->matrix_values;
-    uintptr_t maximal_shift = (uintptr_t)(IVP_GM_VECFPU_SIZE - 1) << GM_MEMSHIFT;
-    uintptr_t result_adress = (adress + maximal_shift) & GM_MEM_MASK;
-    m->matrix_values = (double *)result_adress;
-
+    (void)m;
     IVP_IF(1) {
         for (int i = 0; i < m->columns; i++) {
             double *x = &m->matrix_values[i * m->aligned_row_len];
@@ -1003,211 +896,9 @@ void ivp_gmmz_exchange_rows(ivp_gmmz_t *m, int a, int b)
     m->desired_vector[b] = h;
 }
 
-#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
-#define GMMZ_BATCHED_ROWS_MIN_COLUMNS 64
-
-/* Apply the same pivot row to two target rows while loading each source
- * block once.  This is only used from column four onward: the reference
- * VecFPU window can write into columns 0..3 of the following row, but those
- * entries are already dead by then and never overlap another target window.
- * Each live element keeps the original rounded multiply followed by add. */
-static void gmmz_add_two_multiple_lines(ivp_gmmz_t *m, int first,
-                                        int second, double factor0,
-                                        double factor1)
-{
-    int arl = m->aligned_row_len;
-    int source_off = first * arl + first;
-    int target_off = second * arl + first;
-    int size = m->columns - first;
-    int shift = gm_misalign(source_off);
-    target_off -= gm_misalign(target_off);
-    size += GM_SIZE_ADJUST(shift);
-    source_off -= shift;
-
-    const double *source = m->matrix_values + source_off;
-    double *target0 = m->matrix_values + target_off;
-    double *target1 = target0 + arl;
-    const float64x2_t factors0 = vdupq_n_f64(factor0);
-    const float64x2_t factors1 = vdupq_n_f64(factor1);
-    for (int remaining = size; remaining > 0; remaining -= GM_BLOCK) {
-        float64x2_t source0 = vld1q_f64(source);
-        float64x2_t source1 = vld1q_f64(source + 2);
-
-        float64x2_t value00 = vmulq_f64(source0, factors0);
-        float64x2_t value01 = vmulq_f64(source1, factors0);
-        value00 = vaddq_f64(value00, vld1q_f64(target0));
-        value01 = vaddq_f64(value01, vld1q_f64(target0 + 2));
-        vst1q_f64(target0, value00);
-        vst1q_f64(target0 + 2, value01);
-
-        float64x2_t value10 = vmulq_f64(source0, factors1);
-        float64x2_t value11 = vmulq_f64(source1, factors1);
-        value10 = vaddq_f64(value10, vld1q_f64(target1));
-        value11 = vaddq_f64(value11, vld1q_f64(target1 + 2));
-        vst1q_f64(target1, value10);
-        vst1q_f64(target1 + 2, value11);
-
-        source += GM_BLOCK;
-        target0 += GM_BLOCK;
-        target1 += GM_BLOCK;
-    }
-    double *desired = m->desired_vector;
-    desired[second] = GM_FMA(desired[first], factor0, desired[second]);
-    desired[second + 1] =
-        GM_FMA(desired[first], factor1, desired[second + 1]);
-}
-
-/* Four target rows are independent once the pivot row is fixed.  Reuse the
- * two source vectors across all four rows without changing the multiply/add
- * sequence of any target element. */
-static void gmmz_add_four_multiple_lines(ivp_gmmz_t *m, int first,
-                                         int second, double factor0,
-                                         double factor1, double factor2,
-                                         double factor3)
-{
-    int arl = m->aligned_row_len;
-    int source_off = first * arl + first;
-    int target_off = second * arl + first;
-    int size = m->columns - first;
-    int shift = gm_misalign(source_off);
-    target_off -= gm_misalign(target_off);
-    size += GM_SIZE_ADJUST(shift);
-    source_off -= shift;
-
-    const double *source = m->matrix_values + source_off;
-    double *target0 = m->matrix_values + target_off;
-    double *target1 = target0 + arl;
-    double *target2 = target1 + arl;
-    double *target3 = target2 + arl;
-    const float64x2_t factors0 = vdupq_n_f64(factor0);
-    const float64x2_t factors1 = vdupq_n_f64(factor1);
-    const float64x2_t factors2 = vdupq_n_f64(factor2);
-    const float64x2_t factors3 = vdupq_n_f64(factor3);
-    for (int remaining = size; remaining > 0; remaining -= GM_BLOCK) {
-        float64x2_t source0 = vld1q_f64(source);
-        float64x2_t source1 = vld1q_f64(source + 2);
-
-        float64x2_t value00 = vmulq_f64(source0, factors0);
-        float64x2_t value01 = vmulq_f64(source1, factors0);
-        value00 = vaddq_f64(value00, vld1q_f64(target0));
-        value01 = vaddq_f64(value01, vld1q_f64(target0 + 2));
-        vst1q_f64(target0, value00);
-        vst1q_f64(target0 + 2, value01);
-
-        float64x2_t value10 = vmulq_f64(source0, factors1);
-        float64x2_t value11 = vmulq_f64(source1, factors1);
-        value10 = vaddq_f64(value10, vld1q_f64(target1));
-        value11 = vaddq_f64(value11, vld1q_f64(target1 + 2));
-        vst1q_f64(target1, value10);
-        vst1q_f64(target1 + 2, value11);
-
-        float64x2_t value20 = vmulq_f64(source0, factors2);
-        float64x2_t value21 = vmulq_f64(source1, factors2);
-        value20 = vaddq_f64(value20, vld1q_f64(target2));
-        value21 = vaddq_f64(value21, vld1q_f64(target2 + 2));
-        vst1q_f64(target2, value20);
-        vst1q_f64(target2 + 2, value21);
-
-        float64x2_t value30 = vmulq_f64(source0, factors3);
-        float64x2_t value31 = vmulq_f64(source1, factors3);
-        value30 = vaddq_f64(value30, vld1q_f64(target3));
-        value31 = vaddq_f64(value31, vld1q_f64(target3 + 2));
-        vst1q_f64(target3, value30);
-        vst1q_f64(target3 + 2, value31);
-
-        source += GM_BLOCK;
-        target0 += GM_BLOCK;
-        target1 += GM_BLOCK;
-        target2 += GM_BLOCK;
-        target3 += GM_BLOCK;
-    }
-    double *desired = m->desired_vector;
-    desired[second] = GM_FMA(desired[first], factor0, desired[second]);
-    desired[second + 1] =
-        GM_FMA(desired[first], factor1, desired[second + 1]);
-    desired[second + 2] =
-        GM_FMA(desired[first], factor2, desired[second + 2]);
-    desired[second + 3] =
-        GM_FMA(desired[first], factor3, desired[second + 3]);
-}
-
-/* Keep the common small-matrix reference loop compact.  This separate large
- * path pays for its extra branching only where source-row reuse is material. */
-__attribute__((noinline))
-static void gmmz_transform_batched_rows(ivp_gmmz_t *m)
-{
-    int arl = m->aligned_row_len;
-    for (int j = 0; j < m->columns; j++) {
-        ivp_gmmz_find_pivot_in_column(m, j);
-        double diagonal_elem = m->matrix_values[j * arl + j];
-        if (fabs(diagonal_elem) < m->matrix_eps) continue;
-        double negativ_inv_diagonal = -1.0 / diagonal_elem;
-        int i = j + 1;
-        for (; j >= IVP_GM_VECFPU_SIZE && i + 3 < m->columns;
-             i += 4) {
-            double value0 = m->matrix_values[i * arl + j];
-            double value1 = m->matrix_values[(i + 1) * arl + j];
-            double value2 = m->matrix_values[(i + 2) * arl + j];
-            double value3 = m->matrix_values[(i + 3) * arl + j];
-            if (fabs(value0) > m->matrix_eps &&
-                fabs(value1) > m->matrix_eps &&
-                fabs(value2) > m->matrix_eps &&
-                fabs(value3) > m->matrix_eps) {
-                gmmz_add_four_multiple_lines(
-                    m, j, i,
-                    value0 * negativ_inv_diagonal,
-                    value1 * negativ_inv_diagonal,
-                    value2 * negativ_inv_diagonal,
-                    value3 * negativ_inv_diagonal);
-                continue;
-            }
-            for (int row = i; row < i + 4; row++) {
-                double value = m->matrix_values[row * arl + j];
-                if (fabs(value) > m->matrix_eps) {
-                    ivp_gmmz_add_multiple_line(
-                        m, j, row, value * negativ_inv_diagonal);
-                }
-            }
-        }
-        for (; j >= IVP_GM_VECFPU_SIZE && i + 1 < m->columns;
-             i += 2) {
-            double value0 = m->matrix_values[i * arl + j];
-            double value1 = m->matrix_values[(i + 1) * arl + j];
-            if (fabs(value0) > m->matrix_eps &&
-                fabs(value1) > m->matrix_eps) {
-                double factor0 = value0 * negativ_inv_diagonal;
-                double factor1 = value1 * negativ_inv_diagonal;
-                gmmz_add_two_multiple_lines(m, j, i, factor0, factor1);
-                continue;
-            }
-            for (int row = i; row < i + 2; row++) {
-                double value = m->matrix_values[row * arl + j];
-                if (fabs(value) > m->matrix_eps) {
-                    ivp_gmmz_add_multiple_line(
-                        m, j, row, value * negativ_inv_diagonal);
-                }
-            }
-        }
-        for (; i < m->columns; i++) {
-            double value = m->matrix_values[i * arl + j];
-            if (fabs(value) > m->matrix_eps) {
-                ivp_gmmz_add_multiple_line(
-                    m, j, i, value * negativ_inv_diagonal);
-            }
-        }
-    }
-}
-#endif
-
 /* Gauss: upper triangle with zeros in the lower part (always pivots) */
 void ivp_gmmz_transform_to_lower_null_triangle(ivp_gmmz_t *m)
 {
-#if IVP_ARM64_NEON && IVP_GM_VECFPU_SIZE == 4
-    if (m->columns >= GMMZ_BATCHED_ROWS_MIN_COLUMNS) {
-        gmmz_transform_batched_rows(m);
-        return;
-    }
-#endif
     int arl = m->aligned_row_len;
     for (int j = 0; j < m->columns; j++) {
         ivp_gmmz_find_pivot_in_column(m, j);

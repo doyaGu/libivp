@@ -1421,7 +1421,7 @@ ivp_result_t ivp_lcs_init_and_solve_strided(const double *A, int a_stride,
     }
     int as = ivp_gm_aligned_len(n);
     double *full_A = (double *)ivp_arena_alloc(
-        &arena, sizeof(double) * ((size_t)as * (size_t)n + (size_t)(IVP_GM_VECFPU_SIZE - 1)));
+        &arena, sizeof(double) * (size_t)as * (size_t)n);
     double *full_b = (double *)ivp_arena_alloc(&arena, sizeof(double) * (size_t)as);
     double *full_x = (double *)ivp_arena_alloc(&arena, sizeof(double) * (size_t)as);
     if (!full_A || !full_b || !full_x) {

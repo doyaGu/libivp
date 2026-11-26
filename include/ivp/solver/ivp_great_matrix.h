@@ -9,7 +9,7 @@
  * Solves Ax = b for dense N×N systems up to IVP_MAX_GREAT_MATRIX_SIZE.
  *
  * The second half of this header (ivp_gmmz_*, ivp_incr_lu_*, ivp_vecfpu_*)
- * is a bit-faithful port of the reference dense solvers; see the comment
+ * is a scalar implementation of the reference dense solvers; see the comment
  * block there.
  */
 #ifndef IVP_GREAT_MATRIX_H
@@ -153,27 +153,9 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  *    side effects (zero-fills, the LCS's extra debug_mat arena allocation,
  *    the result check that overwrites delta_accel).
  *
- *  - On 64-bit hosts the reference compiles with PLATFORM_64BITS, which
- *    selects IVP_VECFPU_SIZE 4, a 16-byte IVP_VECFPU_MEM_MASK and
- *    IVP_VECFPU_MEMSHIFT 2 (the comment says "taken from vphysics retail").
- *    Rows are padded to a multiple of 4 doubles, row helpers work in whole
- *    blocks of 4, and an "unaligned" helper call first moves its start down
- *    to the previous 16-byte boundary (one double) while growing the count
- *    by 8 >> 2 = 2.  The helpers therefore touch up to 4 doubles past the
- *    logical end of a row, i.e. padding and sometimes the first entries of
- *    the NEXT row.  This visibly changes results (a 4x4 Gauss solve can
- *    return a wrong answer); it is reproduced exactly.  Array bases are
- *    treated as 16-byte aligned (the reference arena aligns to 32 bytes), so
- *    the emulation depends on element offsets only, never on addresses.
- *    Arrays allocated by this module (ivp_gmmz_init, ivp_incr_lu_init) carry
- *    the same trailing slack as the reference arena (IVP_U_Memory rounding,
- *    see ivp_gm_arena_next) so that overruns land in owned, zero-initialised
- *    memory.  The friction solver does not use those: like the reference it
- *    takes the arrays from the environment's persistent arena, whose layout
- *    matches IVP_U_Memory.  A reference-internals build preserves the stale
- *    contents read through overruns and unwritten padding; the stable-internals build
- *    clears the complete reserved span.
- *    The x87 arithmetic backend and 32-bit builds use scalar rows.
+ *  - Row operations use the requested coefficient range. Matrix padding
+ *    and the next logical row are outside that range. Matrix allocation
+ *    follows the scalar IVP layout with 32-byte arena alignment.
  *
  *  - Floating-point contraction: the parity target is the reference built
  *    with -ffp-contract=off (like libivp itself), where every product is
@@ -192,20 +174,10 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  * Return codes: IVP_OK where the reference returns IVP_OK, IVP_GM_FAULT
  * (IVP_ERR_SINGULAR_MATRIX) where it returns IVP_FAULT. */
 
-#ifndef IVP_GM_VECFPU_SIZE
-#if IVP_X87_ARITHMETIC != IVP_X87_OFF || UINTPTR_MAX == UINT32_MAX
 #define IVP_GM_VECFPU_SIZE 1
-#else
-#define IVP_GM_VECFPU_SIZE 4
-#endif
-#endif
 
 #ifndef IVP_GM_USE_FMA
 #define IVP_GM_USE_FMA 0
-#endif
-
-#if IVP_GM_VECFPU_SIZE != 4 && IVP_GM_VECFPU_SIZE != 1
-#error "IVP_GM_VECFPU_SIZE must be 4 (64-bit reference) or 1 (32-bit reference)"
 #endif
 
 #define IVP_GM_FAULT IVP_ERR_SINGULAR_MATRIX
@@ -214,28 +186,18 @@ ivp_result_t ivp_great_matrix_determinant(ivp_great_matrix_t *m,
  * double threshold 1.0e-9 (not the float-rounded 1.0f/10E8f). */
 #define IVP_GMMZ_DEFAULT_EPS 1.0e-9
 
-/* Row length rounded up to the vector block size (calc_aligned_row_len). */
+/* Row stride for densely stored coefficients. */
 static inline int ivp_gm_aligned_len(int n) {
-    return (n + IVP_GM_VECFPU_SIZE - 1) & ~(IVP_GM_VECFPU_SIZE - 1);
+    return n;
 }
 
-/* Offset following an allocation of `bytes` at `off` inside an
- * IVP_U_Memory block (64-bit: +0x50-1 then 32-byte mask; 32-bit: 32-byte
- * round-up).  Every gap is >= 48 bytes on 64-bit, which is more than the
- * largest vector-helper overrun (32 bytes). */
+/* Offset following the next 32-byte-aligned arena allocation. */
 static inline size_t ivp_gm_arena_next(size_t off, size_t bytes) {
-#if IVP_GM_VECFPU_SIZE == 4
-    return (off + bytes + (size_t)0x4F) & ~(size_t)0x1F;
-#else
     return (off + bytes + (size_t)0x1F) & ~(size_t)0x1F;
-#endif
 }
 
-/* ── Vector-FPU row helpers (IVP_VecFPU) ─────────────────────────────────
- * Each array is passed as (base, element offset).  `base` is the start of
- * the allocation and is treated as 16-byte aligned; `aligned` mirrors the
- * reference's adress_aligned flag. */
-
+/* Each row range is passed as (base, element offset, size). The legacy
+ * aligned argument is retained for the IVP_VecFPU callers. */
 void   ivp_vecfpu_add_multiple_row(double *target_base, int target_off,
                                    const double *source_base, int source_off,
                                    double factor, int size, bool aligned);
@@ -315,11 +277,7 @@ void ivp_gmmz_fill_from_bigger_matrix(ivp_gmmz_t *m, const ivp_gmmz_t *big,
 ivp_result_t ivp_gmmz_check_unequation_line(const ivp_gmmz_t *m, int linenum);
 void ivp_gmmz_debug_fill_zero(ivp_gmmz_t *m);
 
-/* align_matrix_values: moves matrix_values up to the next vector-block
- * boundary (the caller allocated IVP_GM_VECFPU_SIZE - 1 extra values; arena
- * memory is already aligned and does not move).  Debug builds also clear the
- * row padding (columns..aligned_row_len) and the padding of desired_vector,
- * like the reference's IVP_IF(1) block. */
+/* Clear row and desired-vector padding in debug builds. */
 void ivp_gmmz_align_matrix_values(ivp_gmmz_t *m);
 
 /* Debug output of the reference (printed through ivp_debug_printf /
