@@ -701,9 +701,17 @@ void ivp_constraint_local_core_relax_reference(ivp_constraint_local_core_t *c)
 /* The small joint system uses the same pivoting and elimination as contacts. */
 static bool solve_great_matrix_many_zero(int n, double a[6][6], double b[6], double x[6])
 {
+#if IVP_GM_VECFPU_SIZE == 4
+    /* The largest joint has six columns. Allow for the padded stride and
+     * the final four-column VecFPU window past the last logical row. */
+    double values[6 * 8 + IVP_GM_VECFPU_SIZE] = {0};
+    double desired[8];
+    double result[8];
+#else
     double values[6 * 6];
     double desired[6];
     double result[6];
+#endif
     ivp_gmmz_t m = {0};
     m.columns = n;
     m.aligned_row_len = ivp_gm_aligned_len(n);

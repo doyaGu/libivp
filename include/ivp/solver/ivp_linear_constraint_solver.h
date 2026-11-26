@@ -12,7 +12,8 @@
  * kept as an incremental LU (ivp_incr_lu_t) with a Gauss fallback
  * (ivp_gmmz_t), a numerical stability check runs every 7 steps, and it
  * gives up after 250 steps. Coefficients and stored results are binary64.
- * Gauss elimination and LU update only the coefficients in each row.
+ * Native 64-bit builds preserve the reference VecFPU windows for Gauss
+ * elimination and incremental LU. The x87 backend uses scalar rows.
  */
 #ifndef IVP_LINEAR_CONSTRAINT_SOLVER_H
 #define IVP_LINEAR_CONSTRAINT_SOLVER_H

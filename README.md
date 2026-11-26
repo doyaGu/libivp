@@ -74,8 +74,9 @@ the host x87 when its precision and rounding allow it. Hardware
 transcendental results follow the executing CPU.
 The arithmetic backend covers inverse square root, vector normalization,
 double-precision vector length, quaternion multiplication and small-angle
-updates. The contact solver uses scalar matrix rows with x87 arithmetic
-enabled, matching the 32-bit reference's row updates.
+updates. With x87 arithmetic enabled, the contact and joint solvers use the
+32-bit IVP scalar row updates. Native 64-bit builds use the pinned C++
+reference's four-coefficient VecFPU windows and padded row storage.
 The transcendental setting controls sine, cosine, arcsine, arccosine,
 arctangent, and exponential calls through the IVP math wrappers.
 
