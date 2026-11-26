@@ -355,16 +355,22 @@ IVP_TEST(octagonal_prism_coplanar_merge_preserves_mass_center)
     ivp_compact_surface_t *surface = ivp_build_convex_surface_d(NULL, points, 16);
     IVP_ASSERT_NOT_NULL(surface);
     const ivp_compact_ledge_t *ledge = ivp_surface_get_single_convex(surface);
-    IVP_ASSERT_NOT_NULL(ledge);
-    IVP_ASSERT_EQ(ivp_ledge_get_n_points(ledge), 16);
-    IVP_ASSERT_EQ(ivp_ledge_get_n_triangles(ledge), 28);
-    IVP_ASSERT_TRUE(ivp_compact_ledge_check(ledge));
-    for (int axis = 0; axis < 3; ++axis)
-        IVP_ASSERT_NEAR(surface->mass_center[axis], 0.0f, 1e-7f);
-#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE) && !IVP_TEST_REENTRANT_QHULL
-    IVP_ASSERT_EQ(surface->mass_center[1], -0x1.e82a16p-32f);
-#endif
+    const int point_count = ledge ? ivp_ledge_get_n_points(ledge) : 0;
+    const int triangle_count = ledge ? ivp_ledge_get_n_triangles(ledge) : 0;
+    const bool valid = ivp_compact_surface_check(surface, 0);
+    float center[3];
+    memcpy(center, surface->mass_center, sizeof(center));
     ivp_compact_surface_free(NULL, surface);
+
+    IVP_ASSERT_EQ(point_count, 16);
+    IVP_ASSERT_EQ(triangle_count, 28);
+    IVP_ASSERT_TRUE(valid);
+    for (int axis = 0; axis < 3; ++axis)
+        IVP_ASSERT_NEAR(center[axis], 0.0f, 1e-7f);
+    /* The original Qhull facet order fixes the mass integration order. */
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE) && !IVP_TEST_REENTRANT_QHULL && !IVP_STABLE_INTERNAL_STATE
+    IVP_ASSERT_EQ(center[1], -0x1.e82a16p-32f);
+#endif
 }
 
 static uint16_t host_control_word;
