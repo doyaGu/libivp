@@ -983,9 +983,9 @@ void ivp_contact_pt_recalc_friction_s_vals(ivp_contact_pt_t *cp)
 #else
             /* retail RVA 0x1F860: the contact point is inverse rotated with
              * double offsets, summed y, z, x */
-            const double px = (double)info->contact_point_ws.k[0] - (double)m->pos.k[0];
-            const double py = (double)info->contact_point_ws.k[1] - (double)m->pos.k[1];
-            const double pz = (double)info->contact_point_ws.k[2] - (double)m->pos.k[2];
+            const double px = (double)(info->contact_point_ws.k[0] - m->pos.k[0]);
+            const double py = (double)(info->contact_point_ws.k[1] - m->pos.k[1]);
+            const double pz = (double)(info->contact_point_ws.k[2] - m->pos.k[2]);
             info->contact_point_cs[0].k[0] = (float)(LVM_E(m, 1, 0) * py + LVM_E(m, 2, 0) * pz + LVM_E(m, 0, 0) * px);
             info->contact_point_cs[0].k[1] = (float)(LVM_E(m, 1, 1) * py + LVM_E(m, 2, 1) * pz + LVM_E(m, 0, 1) * px);
             info->contact_point_cs[0].k[2] = (float)(LVM_E(m, 1, 2) * py + LVM_E(m, 2, 2) * pz + LVM_E(m, 0, 2) * px);

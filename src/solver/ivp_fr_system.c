@@ -1905,8 +1905,8 @@ static void frs_calc_solver_desired(fr_solver_t *s, int i,
         dist_velocity, IVP_FR_DESCENDING_SPEEDUP);
 #else
     double dist_velocity = ivp_impact_lt_get_closing_speed(info);
-    const double distance_off = (double)ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
-                                (double)info->friction.dist_len;
+    const double distance_off = (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
+                                         info->friction.dist_len);
     m->desired_vector[i] =
         ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
 #endif
