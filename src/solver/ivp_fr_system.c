@@ -298,21 +298,15 @@ static void cp_static_friction_single(ivp_contact_pt_t *cp, const ivp_sim_es_t *
     const double impulse = ivp_x87_single_contact_impulse(&info->surf_normal, info->contact_cross_nomal_cs,
         linear_speed, angular_speed, desired_gap, ivp_cp_get_gap_length(cp), speedup_factor,
         IVP_FR_DESCENDING_SPEEDUP, info->virtual_mass, es->i_delta_time, &cp->now_friction_pressure);
-    if (impulse > 0.0)
-        ivp_frs_apply_impulse(info, impulse);
 #else
     double closing_speed = ivp_impact_lt_get_closing_speed(info);
     double gap_diff = (double)desired_gap - (double)ivp_cp_get_gap_length(cp); /* retail: double */
     double a = ivp_frs_calc_desired_gap_speed(closing_speed, gap_diff, speedup_factor);
-    double b = (double)info->virtual_mass;
-    double impulse = a * b;
-    if (impulse > 0.0) {
-        cp->now_friction_pressure = (float)(impulse * es->i_delta_time);
-        ivp_frs_apply_impulse(info, impulse);
-    } else {
-        cp->now_friction_pressure = 0.0f;
-    }
+    const double impulse = a * (double)info->virtual_mass;
+    cp->now_friction_pressure = impulse > 0.0 ? (float)(impulse * es->i_delta_time) : 0.0f;
 #endif
+    if (impulse > 0.0)
+        ivp_frs_apply_impulse(info, impulse);
 }
 
 /* IVP_Contact_Point::friction_force_local_constraint_2d_wheel lives in the
@@ -2070,22 +2064,16 @@ static void frs_normize_constraint_equ(fr_solver_t *s)
         double test_val = fabs(m->desired_vector[i]);
         if (test_val > max_val) max_val = test_val;
     }
+    const double matrix_divisor = max_diagonal > P_DOUBLE_EPS ? max_diagonal : 1.0;
+    const double desired_divisor = max_val > P_DOUBLE_EPS ? max_val : 1.0;
 #if IVP_X87_ARITHMETIC
     s->correct_x_factor = ivp_x87_normalize_contact_equations(m->matrix_values, m->desired_vector,
                                                              m->columns, m->aligned_row_len,
-                                                             max_diagonal > P_DOUBLE_EPS ? max_diagonal : 1.0,
-                                                             max_val > P_DOUBLE_EPS ? max_val : 1.0);
+                                                             matrix_divisor, desired_divisor);
 #else
-    double a_norm = (max_diagonal > P_DOUBLE_EPS) ? 1.0f / max_diagonal : 1.0f;
-    s->correct_x_factor = a_norm;
-    double b_norm;
-    if (max_val > P_DOUBLE_EPS) {
-        b_norm = 1.0f / max_val;
-    } else {
-        b_norm = 1.0f;
-        max_val = 1.0f;
-    }
-    s->correct_x_factor *= max_val;
+    const double a_norm = 1.0 / matrix_divisor;
+    const double b_norm = 1.0 / desired_divisor;
+    s->correct_x_factor = a_norm * desired_divisor;
     for (int i = 0; i < m->columns; i++) {
         double *base = &m->matrix_values[i * m->aligned_row_len];
         for (int j = 0; j < m->aligned_row_len; j++) base[j] *= a_norm;

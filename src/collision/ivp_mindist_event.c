@@ -52,16 +52,15 @@ static ivp_time_t s3d_calc_nullstelle(solver3d_t *s, ivp_time_t t0, ivp_time_t t
     ivp_transform_r_t A, B;
     int counter = 0;
     for (;;) {
-#if IVP_X87_ARITHMETIC
         const bool adjust_midpoint = (counter & 3) == 3;
         if (adjust_midpoint && counter > 64) return t0;
+#if IVP_X87_ARITHMETIC
         ivp_time_t tt = ivp_x87_collision_time(t0, t1, value, v0, v1, adjust_midpoint);
 #else
         D dv = v1 - v0;
         ivp_time_t tt = t0;
         tt += (double)((value - v0) * (D)ivp_time_diff(t1, t0) / dv);
-        if ((counter & 0x3) == 3) {
-            if (counter > 64) return t0;
+        if (adjust_midpoint) {
             const D ratio = 0.25f;
             const D inv_ratio = 1.0f - ratio;
             D dt0 = (D)ivp_time_diff(t0, tt);
