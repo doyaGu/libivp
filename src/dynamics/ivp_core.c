@@ -478,14 +478,9 @@ void ivp_core_get_surface_speed_on_test(const ivp_core_t *core, const ivp_vec3f_
 #else
     ivp_vec3f_t speed_cs;
     lvf_cross(&speed_cs, rot_speed_cs, point_cs);
-    if (speed_out_ws == center_speed_ws) {
-        lvm_vmult3_f(&core->m_world_f_core_last_psi, &speed_cs, speed_out_ws);
-        lvf_add(speed_out_ws, center_speed_ws);
-    } else {
-        ivp_vec3f_t rotated_speed;
-        lvm_vmult3_f(&core->m_world_f_core_last_psi, &speed_cs, &rotated_speed);
-        lvf_add2(speed_out_ws, &rotated_speed, center_speed_ws);
-    }
+    ivp_vec3f_t rotated_speed;
+    lvm_vmult3_f(&core->m_world_f_core_last_psi, &speed_cs, &rotated_speed);
+    lvf_add2(speed_out_ws, &rotated_speed, center_speed_ws);
 #endif
 }
 

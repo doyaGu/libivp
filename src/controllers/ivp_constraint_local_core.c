@@ -19,10 +19,8 @@
 #include <ivp/base/ivp_assert.h>
 #include <ivp/base/ivp_message.h>
 #include "dynamics/ivp_env_internal.h"
-#if IVP_X87_ARITHMETIC
 #include "dynamics/ivp_sim_internal.h"
 #include "math/ivp_x87.h"
-#endif
 
 /* reference IVP_FLOAT / IVP_U_Float_Point values: float in every build */
 #define FP(x) ((double)(float)(x))
@@ -146,7 +144,6 @@ static void v3_cross(const double a[3], const double b[3], double out[3])
     out[0] = r0; out[1] = r1; out[2] = r2;
 }
 
-#if IVP_X87_ARITHMETIC
 static ivp_vec3f_t constraint_vec3f(const double v[3])
 {
     const ivp_vec3f_t value = {{(float)v[0], (float)v[1], (float)v[2]}};
@@ -158,7 +155,6 @@ static void constraint_store_vec3f(double out[3], const ivp_vec3f_t *v)
     for (int i = 0; i < 3; ++i)
         out[i] = v->k[i];
 }
-#endif
 
 /* IVP_U_Float_Point::inline_calc_cross_product with float inputs and output. */
 static void v3_cross_f(const double v1[3], const double v2[3], double out[3])
@@ -735,28 +731,15 @@ static bool core_static(const ivp_core_t *c)
 }
 
 /* get_surface_speed_on_test: R * (w x p) + v */
-static void surface_speed_on_test(const ivp_core_t *core, const ivp_cmatrix_t *m_ws_f_cs,
-                                  const double p_cs[3],
+static void surface_speed_on_test(const ivp_core_t *core, const double p_cs[3],
                                   const double v_ws[3], const double w_cs[3], double out[3])
 {
-#if IVP_X87_ARITHMETIC
-    (void)m_ws_f_cs;
     const ivp_vec3f_t position = constraint_vec3f(p_cs);
     const ivp_vec3f_t linear_speed = constraint_vec3f(v_ws);
     const ivp_vec3f_t angular_speed = constraint_vec3f(w_cs);
     ivp_vec3f_t velocity;
     ivp_core_get_surface_speed_on_test(core, &position, &linear_speed, &angular_speed, &velocity);
     constraint_store_vec3f(out, &velocity);
-#else
-    (void)core;
-    double s_cs[3];
-    v3_cross_f(w_cs, p_cs, s_cs);
-    m3_vmult(m_ws_f_cs->rows, s_cs, out);
-    /* inline_vmult3 (float result), IVP_U_Float_Point::add (float) */
-    out[0] = (double)((float)out[0] + (float)v_ws[0]);
-    out[1] = (double)((float)out[1] + (float)v_ws[1]);
-    out[2] = (double)((float)out[2] + (float)v_ws[2]);
-#endif
 }
 
 static void core_speeds(const ivp_core_t *c, double v[3], double w[3])
@@ -771,7 +754,6 @@ static void core_speeds(const ivp_core_t *c, double v[3], double w[3])
 static void test_push_core(const ivp_core_t *c, const double p_cs[3], const double imp_cs[3],
                            const double imp_ws[3], double dv_ws[3], double dw_cs[3])
 {
-#if IVP_X87_ARITHMETIC
     const ivp_vec3f_t position = constraint_vec3f(p_cs);
     const ivp_vec3f_t local_impulse = constraint_vec3f(imp_cs);
     const ivp_vec3f_t world_impulse = constraint_vec3f(imp_ws);
@@ -779,14 +761,6 @@ static void test_push_core(const ivp_core_t *c, const double p_cs[3], const doub
     ivp_core_test_push_core(c, &position, &local_impulse, &world_impulse, &linear_speed, &angular_speed);
     constraint_store_vec3f(dv_ws, &linear_speed);
     constraint_store_vec3f(dw_cs, &angular_speed);
-#else
-    double d[3];
-    v3_cross_f(p_cs, imp_cs, d);
-    for (int k = 0; k < 3; k++) {
-        dw_cs[k] = (double)((float)d[k] * (float)c->inv_rot_inertia.k[k]);
-        dv_ws[k] = FP(imp_ws[k] * (double)(float)c->inv_mass);
-    }
-#endif
 }
 
 static void push_core(ivp_core_t *c, const double p_cs[3], const double imp_cs[3],
@@ -1033,12 +1007,12 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         if (coreR) {
             double v[3], w[3];
             core_speeds(coreR, v, w);
-            surface_speed_on_test(coreR, &m_ws_f_Rcs, pointR_Rcs, v, w, v_pointR_ws);
+            surface_speed_on_test(coreR, pointR_Rcs, v, w, v_pointR_ws);
         }
         if (coreA) {
             double v[3], w[3];
             core_speeds(coreA, v, w);
-            surface_speed_on_test(coreA, &m_ws_f_Acs, pointA_Acs, v, w, v_pointA_ws);
+            surface_speed_on_test(coreA, pointA_Acs, v, w, v_pointA_ws);
         }
         double v_pointR_fs[3], v_pointA_fs[3];
         m3_vmult(m_fs_f_ws, v_pointR_ws, v_pointR_fs);
@@ -1161,8 +1135,8 @@ bool ivp_constraint_local_core_simulate(ivp_constraint_local_core_t *c,
         if (!core_static(coreA)) test_push_core(coreA, pointA_Acs, tA_Acs, tA_ws, dvA_ws, drA_Acs);
 
         double dv_pointR_ws[3] = { 0, 0, 0 }, dv_pointA_ws[3] = { 0, 0, 0 };
-        if (coreR) surface_speed_on_test(coreR, &m_ws_f_Rcs, pointR_Rcs, dvR_ws, drR_Rcs, dv_pointR_ws);
-        if (coreA) surface_speed_on_test(coreA, &m_ws_f_Acs, pointA_Acs, dvA_ws, drA_Acs, dv_pointA_ws);
+        if (coreR) surface_speed_on_test(coreR, pointR_Rcs, dvR_ws, drR_Rcs, dv_pointR_ws);
+        if (coreA) surface_speed_on_test(coreA, pointA_Acs, dvA_ws, drA_Acs, dv_pointA_ws);
 
         double dv_pointR_fs[3], dv_pointA_fs[3];
         m3_vmult(m_fs_f_ws, dv_pointR_ws, dv_pointR_fs);

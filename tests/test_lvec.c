@@ -594,27 +594,15 @@ static bool exercise_surface_speed_aliases(void)
 #if IVP_X87_ARITHMETIC
             ivp_vec3f_t expected;
             ivp_core_get_surface_speed_on_test(&core, &point, &center, &rotation, &expected);
-            const int first_alias = 1;
 #else
-            const int first_alias = 0;
+            ivp_vec3f_t cross, transformed, expected;
+            scalar_cross(&cross, &rotation, &point);
+            scalar_transform(&core.m_world_f_core_last_psi, &cross, &transformed, 0);
+            for (int axis = 0; axis < 3; ++axis)
+                expected.k[axis] = transformed.k[axis] + center.k[axis];
 #endif
-            for (int alias = first_alias; ok && alias < 4; alias++) {
+            for (int alias = 0; ok && alias < 4; alias++) {
                 ivp_vec3f_t p = point, c = center, r = rotation, actual;
-#if !IVP_X87_ARITHMETIC
-                ivp_vec3f_t cross, transformed, expected;
-                scalar_cross(&cross, &rotation, &point);
-                scalar_transform(&core.m_world_f_core_last_psi, &cross,
-                                 &transformed, 0);
-                if (alias == 1) {
-                    expected.k[0] = transformed.k[0] + transformed.k[0];
-                    expected.k[1] = transformed.k[1] + transformed.k[1];
-                    expected.k[2] = transformed.k[2] + transformed.k[2];
-                } else {
-                    expected.k[0] = transformed.k[0] + center.k[0];
-                    expected.k[1] = transformed.k[1] + center.k[1];
-                    expected.k[2] = transformed.k[2] + center.k[2];
-                }
-#endif
                 ivp_vec3f_t *out = alias == 0 ? &actual : alias == 1 ? &c : alias == 2 ? &p : &r;
                 ivp_core_get_surface_speed_on_test(&core, &p, &c, &r, out);
                 ok = ok && same_vec_result(out, &expected);
@@ -629,6 +617,14 @@ static bool exercise_surface_speed_aliases(void)
 IVP_TEST(surface_speed_preserves_scalar_rounding_and_aliases)
 {
     IVP_ASSERT_TRUE(exercise_surface_speed_aliases());
+
+    ivp_core_t translating_core = {0};
+    const ivp_vec3f_t stationary = {{0.0f, 0.0f, 0.0f}};
+    const ivp_vec3f_t translation = {{2.0f, -3.0f, 4.0f}};
+    ivp_vec3f_t speed = translation;
+    ivp_core_get_surface_speed_on_test(&translating_core, &stationary, &speed, &stationary, &speed);
+    IVP_ASSERT_TRUE(same_vec_result(&speed, &translation));
+
 #if IVP_X87_ARITHMETIC
     ivp_core_t core = {0};
     for (int axis = 0; axis < 3; ++axis)
