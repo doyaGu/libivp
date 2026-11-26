@@ -36,10 +36,37 @@ double ivp_x87_spring_impulse(const ivp_vec3f_t *direction, const ivp_vec3f_t *r
 double ivp_x87_intersect_ray_edge(const double origin[3], const double direction[3], const double start[3],
                                   const double end[3], int axis, double point[3]);
 float ivp_x87_reduced_inverse_mass(double first, double second, double epsilon);
+double ivp_x87_contact_gap_velocity(float friction_distance, float gap, double closing_speed,
+                                    double descending_speedup);
+float ivp_x87_accumulate_contact_gap_energy(float energy, float pressure, float previous_gap,
+                                            float current_gap);
+double ivp_x87_mutual_energy(double angular_speed, const double inertia[2], const double inverse_inertia[2],
+                             double linear_speed, const double mass[2], const double inverse_mass[2],
+                             double *rotational_energy, double *translational_energy);
+double ivp_x87_mutual_energy_impulse(double relative_speed, double first_inverse,
+                                     double second_inverse, double energy);
+double ivp_x87_single_contact_impulse(const ivp_vec3f_t *normal, const ivp_vec3f_t jacobian[2],
+    const ivp_vec3f_t linear_speed[2], const ivp_vec3f_t *const angular_speed[2],
+    float desired_gap, float gap, float speedup, float descending_speedup, float effective_mass,
+    double inverse_step, float *pressure);
+void ivp_x87_apply_single_contact_impulse(const ivp_vec3f_t *normal, const ivp_vec3f_t *jacobian,
+    float inverse_mass, const ivp_vec3f_t *inverse_inertia, double impulse, bool first_body,
+    ivp_vec3r_t *linear_speed, ivp_vec3f_t *angular_speed);
+void ivp_x87_accumulate_friction_normal_impulse(const ivp_vec3f_t *normal,
+    const ivp_vec3f_t *angular_jacobian, float inverse_mass, const ivp_vec3f_t *inverse_inertia,
+    double impulse, bool keep_first_inertia_extended, ivp_vec3r_t *linear, ivp_vec3r_t *angular);
+void ivp_x87_directional_inertia(const float weighted_axis[3], double epsilon,
+                                 double *inertia, double *inverse_inertia);
 double ivp_x87_worst_case_effective_mass(const ivp_vec3f_t *point,
                                          const ivp_vec3f_t *inverse_inertia, float inverse_mass);
 float ivp_x87_worst_case_inverse_mass(const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia,
                                       float inverse_mass, double epsilon);
+double ivp_x87_contact_normal_velocity(double previous, bool first_body,
+                                       const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
+                                       const ivp_vec3f_t *normal, const ivp_vec3f_t *angular_jacobian);
+double ivp_x87_accumulate_contact_response(double previous, bool store_angular_response, double sign,
+                                           const ivp_vec3f_t *linear_delta, const ivp_vec3f_t *angular_delta,
+                                           const ivp_vec3f_t *normal, const ivp_vec3f_t *angular_jacobian);
 void ivp_x87_add_scaled_row(double *target, const double *source, double factor, int count);
 double ivp_x87_dot_product_forward(const double *left, const double *right, int count);
 double ivp_x87_dot_product_backward(const double *left, const double *right, int count);
@@ -53,10 +80,24 @@ bool ivp_x87_back_substitute_gauss_row(const double *upper, double *solution,
                                        int pivot, int count, double epsilon);
 void ivp_x87_normalize_lu_lower_row(double *lower, int count, int pivot);
 void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int pivot);
+double ivp_x87_normalize_contact_equations(double *matrix, double *desired, int count, int row_stride,
+                                           double max_diagonal, double max_desired);
+bool ivp_x87_solve_tangent_impulses(double m00_value, double m01_value, double m11_value, const float span[2],
+                                    const ivp_vec3f_t *velocity, double inv_step, ivp_vec3f_t *impulses);
 void ivp_x87_contact_normal_jacobian(const ivp_mat3r_t *rotation, const ivp_vec3f_t *normal,
     const ivp_vec3f_t *point, bool second_body, ivp_vec3f_t *jacobian);
 void ivp_x87_inverse_transform_contact_point(const ivp_transform_r_t *transform,
                                              const ivp_vec3r_t *world, ivp_vec3f_t *local);
+void ivp_x87_reaction_lever_arm(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
+                                const ivp_vec3f_t *direction, float lever_arm[3]);
+double ivp_x87_reaction_normal_diagonal(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
+                                        const ivp_vec3f_t *direction, const float inverse_inertia[3],
+                                        float inverse_mass, float lever_arm[3],
+                                        float weighted_lever_arm[3], double previous);
+double ivp_x87_reaction_tangent_diagonal(const float lever_arm[3], const float weighted_lever_arm[3],
+                                         float inverse_mass, double previous);
+double ivp_x87_reaction_tangent_coupling(const float lever_arm[3], const float weighted_lever_arm[3],
+                                         double previous);
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
                            const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
                            ivp_vec3f_t *velocity);
@@ -64,6 +105,11 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
                        const ivp_vec3f_t *world_impulse, float inverse_mass,
                        const ivp_vec3f_t *inverse_inertia, ivp_vec3f_t *linear_speed,
                        ivp_vec3f_t *angular_speed);
+void ivp_x87_accumulate_friction_easing(float span[2], const ivp_vec3f_t tangent[2],
+                                        const ivp_vec3f_t *delta);
+void ivp_x87_friction_easing_delta(const ivp_vec3f_t *connection, const ivp_vec3f_t *first,
+                                   const ivp_vec3f_t *second, double factor, float direction,
+                                   ivp_vec3f_t *first_delta, ivp_vec3f_t *second_delta);
 bool ivp_x87_solve_constraint_system(int count, double matrix[6][6], double desired[6],
                                      double result[6], double epsilon);
 double ivp_x87_collision_speed_bound(float first_linear, float second_linear,

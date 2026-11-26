@@ -796,6 +796,135 @@ float ivp_x87_reduced_inverse_mass(double first, double second, double epsilon)
     return fp.store_float(fp.divide(fp.load(1.0), mass));
 }
 
+double ivp_x87_contact_gap_velocity(float friction_distance, float gap, double closing_speed,
+                                    double descending_speedup)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 offset = fp.subtract(fp.load(friction_distance), fp.load(gap));
+    const double speedup = friction_distance < gap ? descending_speedup : 1.0;
+    const X87_Float80 correction = fp.multiply(offset, fp.load(speedup));
+    return fp.store_double(fp.add(correction, fp.load(closing_speed)));
+}
+
+float ivp_x87_accumulate_contact_gap_energy(float energy, float pressure, float previous_gap,
+                                            float current_gap)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 gap_change = fp.subtract(fp.load(previous_gap), fp.load(current_gap));
+    const X87_Float80 work = fp.multiply(fp.load(pressure), gap_change);
+    return fp.store_float(fp.add(fp.load(energy), work));
+}
+
+static X87_Float80 ivp_x87_energy_potential(X87_Arithmetic &fp, double relative_speed,
+                                            const double inertia[2], const double inverse[2])
+{
+    const X87_Float80 speed = fp.load(relative_speed);
+    const X87_Float80 first_inverse = fp.load(inverse[0]);
+    const X87_Float80 second_inverse = fp.load(inverse[1]);
+    const X87_Float80 impulse = fp.divide(speed, fp.add(first_inverse, second_inverse));
+    const X87_Float80 second_speed = fp.subtract(speed, fp.multiply(impulse, second_inverse));
+    // The second body's energy is written to binary64 before the subtraction.
+    const X87_Float80 second_inertia = fp.load(inertia[1]);
+    const double second_energy = fp.store_double(fp.multiply(fp.multiply(second_speed, second_speed), second_inertia));
+    const X87_Float80 first_speed = fp.multiply(impulse, first_inverse);
+    const X87_Float80 first_energy = fp.multiply(fp.multiply(first_speed, first_speed), fp.load(inertia[0]));
+    const X87_Float80 initial_energy = fp.multiply(fp.multiply(speed, speed), second_inertia);
+    return fp.multiply(fp.subtract(fp.subtract(initial_energy, first_energy), fp.load(second_energy)),
+                       fp.load(0.5));
+}
+
+double ivp_x87_mutual_energy(double angular_speed, const double inertia[2], const double inverse_inertia[2],
+                             double linear_speed, const double mass[2], const double inverse_mass[2],
+                             double *rotational_energy, double *translational_energy)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    *rotational_energy = fp.store_double(ivp_x87_energy_potential(fp, angular_speed, inertia, inverse_inertia));
+    const X87_Float80 translation = ivp_x87_energy_potential(fp, linear_speed, mass, inverse_mass);
+    *translational_energy = fp.store_double(translation);
+    // The translational energy is still extended when added to the stored rotational energy.
+    return fp.store_double(fp.add(translation, fp.load(*rotational_energy)));
+}
+
+double ivp_x87_mutual_energy_impulse(double relative_speed, double first_inverse,
+                                     double second_inverse, double energy)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 inverse_sum = fp.add(fp.load(first_inverse), fp.load(second_inverse));
+    const X87_Float80 speed = fp.load(relative_speed);
+    const X87_Float80 removed = fp.load(energy);
+    const X87_Float80 discriminant = fp.subtract(fp.multiply(speed, speed),
+        fp.multiply(fp.add(removed, removed), inverse_sum));
+    const X87_Float80 root = fp.square_root(fp.absolute(discriminant));
+    return fp.store_double(fp.multiply(fp.subtract(speed, root), fp.divide(fp.load(1.0), inverse_sum)));
+}
+
+void ivp_x87_apply_single_contact_impulse(const ivp_vec3f_t *normal, const ivp_vec3f_t *jacobian,
+    float inverse_mass, const ivp_vec3f_t *inverse_inertia, double impulse, bool first_body,
+    ivp_vec3r_t *linear_speed, ivp_vec3f_t *angular_speed)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 angular_impulse = fp.load(first_body ? -impulse : impulse);
+    X87_Float80 linear_impulse = fp.multiply(angular_impulse, fp.load(inverse_mass));
+
+    // The first body passes its linear impulse to the vector method as a double.
+    if (first_body)
+        linear_impulse = fp.load(fp.store_double(linear_impulse));
+
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const float lever = fp.store_float(fp.multiply(fp.load(jacobian->k[axis]),
+                                                      fp.load(inverse_inertia->k[axis])));
+        X87_Float80 rotation = fp.add(fp.load(angular_speed->k[axis]), fp.multiply(fp.load(lever), angular_impulse));
+        X87_Float80 translation = fp.add(fp.load(linear_speed->k[axis]),
+                                          fp.multiply(fp.load(normal->k[axis]), linear_impulse));
+
+        // The vector method spills Z. The inlined second body's linear update spills Y and Z.
+        if (axis == 2)
+            rotation = fp.load(fp.store_double(rotation));
+        if (axis == 2 || (!first_body && axis == 1))
+            translation = fp.load(fp.store_double(translation));
+        angular_speed->k[axis] = fp.store_float(rotation);
+        linear_speed->k[axis] = fp.store_float(translation);
+    }
+}
+
+void ivp_x87_accumulate_friction_normal_impulse(const ivp_vec3f_t *normal,
+    const ivp_vec3f_t *angular_jacobian, float inverse_mass, const ivp_vec3f_t *inverse_inertia,
+    double impulse, bool keep_first_inertia_extended, ivp_vec3r_t *linear, ivp_vec3r_t *angular)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 normal_impulse = fp.load(impulse);
+    const X87_Float80 linear_impulse = fp.multiply(normal_impulse, fp.load(inverse_mass));
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        X87_Float80 lever_arm = fp.multiply(fp.load(angular_jacobian->k[axis]),
+                                            fp.load(inverse_inertia->k[axis]));
+        if (axis != 0 || !keep_first_inertia_extended)
+            lever_arm = fp.load(fp.store_float(lever_arm));
+        angular->k[axis] = fp.store_float(fp.add(fp.load(angular->k[axis]),
+                                                fp.multiply(lever_arm, normal_impulse)));
+        // Opposing contact impulses may cancel to a small residual.
+        linear->k[axis] = fp.store_float(fp.add(fp.load(linear->k[axis]),
+                                                fp.multiply(fp.load(normal->k[axis]), linear_impulse)));
+    }
+}
+
+void ivp_x87_directional_inertia(const float weighted_axis[3], double epsilon,
+                                 double *inertia, double *inverse_inertia)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 length = fp.square_root(ivp_x87_point_square(fp, weighted_axis));
+    const X87_Arithmetic::Relation relation = fp.compare(length, fp.load(epsilon));
+    if (relation == X87_Arithmetic::LESS || relation == X87_Arithmetic::UNORDERED)
+    {
+        *inertia = *inverse_inertia = 1.0;
+        return;
+    }
+
+    *inertia = fp.store_double(length);
+    *inverse_inertia = fp.store_double(fp.divide(fp.load(1.0), length));
+}
+
 static X87_Float80 ivp_x87_worst_case_effective_mass_extended(X87_Arithmetic &fp,
     const ivp_vec3f_t *point, const ivp_vec3f_t *inverse_inertia, float inverse_mass)
 {
@@ -851,6 +980,56 @@ static X87_Float80 ivp_x87_point_dot(X87_Arithmetic &fp, const Vector *left, con
     return fp.add(fp.add(fp.multiply(fp.load(left->k[2]), fp.load(right->k[2])),
                          fp.multiply(fp.load(left->k[1]), fp.load(right->k[1]))),
                   fp.multiply(fp.load(left->k[0]), fp.load(right->k[0])));
+}
+
+double ivp_x87_single_contact_impulse(const ivp_vec3f_t *normal, const ivp_vec3f_t jacobian[2],
+    const ivp_vec3f_t linear_speed[2], const ivp_vec3f_t *const angular_speed[2],
+    float desired_gap, float gap, float speedup, float descending_speedup, float effective_mass,
+    double inverse_step, float *pressure)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 closing_speed = fp.load(0.0);
+    if (angular_speed[0])
+        closing_speed = fp.add(ivp_x87_point_dot(fp, linear_speed, normal),
+                               ivp_x87_point_dot(fp, angular_speed[0], jacobian));
+    if (angular_speed[1])
+    {
+        // Only the two-body path reloads the first body's normal velocity from its spill slot.
+        const X87_Float80 second = fp.add(ivp_x87_point_dot(fp, linear_speed + 1, normal),
+                                         ivp_x87_point_dot(fp, angular_speed[1], jacobian + 1));
+        closing_speed = fp.subtract(ivp_x87_round_double(fp, closing_speed), second);
+    }
+
+    const X87_Float80 offset = fp.subtract(fp.load(desired_gap), fp.load(gap));
+    X87_Float80 gain = fp.load(speedup);
+    if (desired_gap < gap)
+        gain = fp.multiply(gain, fp.load(descending_speedup));
+    const X87_Float80 target = fp.add(fp.multiply(offset, gain), closing_speed);
+    const double impulse = fp.store_double(fp.multiply(target, fp.load(effective_mass)));
+    *pressure = impulse > 0.0 ? fp.store_float(fp.multiply(fp.load(impulse), fp.load(inverse_step))) : 0.0f;
+    return impulse;
+}
+
+double ivp_x87_contact_normal_velocity(double previous, bool first_body,
+                                       const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
+                                       const ivp_vec3f_t *normal, const ivp_vec3f_t *angular_jacobian)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 rotation = ivp_x87_round_double(fp, ivp_x87_point_dot(fp, angular_speed, angular_jacobian));
+    const X87_Float80 closing = fp.add(ivp_x87_point_dot(fp, linear_speed, normal), rotation);
+    return fp.store_double(first_body ? closing : fp.subtract(fp.load(previous), closing));
+}
+
+double ivp_x87_accumulate_contact_response(double previous, bool store_angular_response, double sign,
+                                           const ivp_vec3f_t *linear_delta, const ivp_vec3f_t *angular_delta,
+                                           const ivp_vec3f_t *normal, const ivp_vec3f_t *angular_jacobian)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    X87_Float80 angular = ivp_x87_point_dot(fp, angular_delta, angular_jacobian);
+    if (store_angular_response)
+        angular = ivp_x87_round_double(fp, angular);
+    const X87_Float80 projected = fp.add(ivp_x87_point_dot(fp, linear_delta, normal), angular);
+    return fp.store_double(fp.add(fp.load(previous), fp.multiply(fp.load(sign), projected)));
 }
 
 void ivp_x87_add_scaled_row(double *target, const double *source, double factor, int count)
@@ -965,6 +1144,68 @@ void ivp_x87_normalize_lu_pivot(double *lower, double *upper, int count, int piv
     ivp_x87_scale_row(fp, upper + pivot + 1, count - pivot - 1, reciprocal);
 }
 
+double ivp_x87_normalize_contact_equations(double *matrix, double *desired, int count, int row_stride,
+                                           double max_diagonal, double max_desired)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 one = fp.load(1.0);
+    const X87_Float80 matrix_scale = fp.divide(one, fp.load(max_diagonal));
+    const X87_Float80 desired_maximum = fp.load(max_desired);
+    const X87_Float80 desired_scale = ivp_x87_round_double(fp, fp.divide(one, desired_maximum));
+    for (int i = 0; i < count; ++i)
+    {
+        double *row = matrix + i * row_stride;
+        for (int j = 0; j < row_stride; ++j)
+            row[j] = fp.store_double(fp.multiply(matrix_scale, fp.load(row[j])));
+    }
+    for (int i = count - 1; i >= 0; --i)
+        desired[i] = fp.store_double(fp.multiply(fp.load(desired[i]), desired_scale));
+    return fp.store_double(fp.multiply(matrix_scale, desired_maximum));
+}
+
+bool ivp_x87_solve_tangent_impulses(double m00_value, double m01_value, double m11_value, const float span[2],
+                                    const ivp_vec3f_t *velocity, double inv_step, ivp_vec3f_t *impulses)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 step = fp.load(inv_step);
+    const X87_Float80 a = fp.subtract(fp.multiply(fp.load(span[0]), step), fp.load(velocity->k[0]));
+    const X87_Float80 b = fp.subtract(fp.multiply(fp.load(span[1]), step), fp.load(velocity->k[1]));
+    const X87_Float80 m00 = fp.load(m00_value);
+    const X87_Float80 m01 = fp.load(m01_value);
+    const X87_Float80 m11 = fp.load(m11_value);
+    const X87_Float80 det = fp.subtract(fp.multiply(m00, m11), fp.multiply(m01, m01));
+    const X87_Arithmetic::Relation relation = fp.compare(fp.multiply(det, det), fp.load(1e-38));
+    if (relation == X87_Arithmetic::LESS || relation == X87_Arithmetic::UNORDERED)
+        return false;
+
+    const X87_Float80 reciprocal = fp.divide(fp.load(1.0), det);
+    const X87_Float80 inv00 = ivp_x87_round_double(fp, fp.multiply(m11, reciprocal));
+    const X87_Float80 inv01 = ivp_x87_round_double(fp, fp.negate(fp.multiply(m01, reciprocal)));
+    const X87_Float80 inv11 = fp.multiply(reciprocal, m00);
+    impulses->k[0] = fp.store_float(fp.add(fp.multiply(inv01, b), fp.multiply(inv00, a)));
+    impulses->k[1] = fp.store_float(fp.add(fp.multiply(inv11, b), fp.multiply(inv01, a)));
+    return true;
+}
+
+static X87_Float80 ivp_x87_project_reaction_lever_arm(X87_Arithmetic &fp,
+                                                      const ivp_mat3r_t *rotation,
+                                                      const ivp_vec3f_t *point,
+                                                      const ivp_vec3f_t *direction, float lever_arm[3])
+{
+    X87_Float80 cross[3];
+    ivp_x87_cross_extended(fp, point, direction, cross);
+    X87_Float80 projected;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 z = fp.multiply(cross[2], fp.load(rotation->rows[2].k[axis]));
+        const X87_Float80 y = fp.multiply(cross[1], fp.load(rotation->rows[1].k[axis]));
+        const X87_Float80 x = fp.multiply(cross[0], fp.load(rotation->rows[0].k[axis]));
+        projected = fp.add(fp.add(z, y), x);
+        lever_arm[axis] = fp.store_float(projected);
+    }
+    return projected;
+}
+
 void ivp_x87_contact_normal_jacobian(const ivp_mat3r_t *rotation, const ivp_vec3f_t *normal,
     const ivp_vec3f_t *point, bool second_body, ivp_vec3f_t *jacobian)
 {
@@ -1009,6 +1250,58 @@ void ivp_x87_inverse_transform_contact_point(const ivp_transform_r_t *transform,
         const X87_Float80 x = fp.multiply(offset[0], fp.load(transform->rot.rows[0].k[axis]));
         local->k[axis] = fp.store_float(fp.add(fp.add(y, z), x));
     }
+}
+
+void ivp_x87_reaction_lever_arm(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
+                                const ivp_vec3f_t *direction, float lever_arm[3])
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    ivp_x87_project_reaction_lever_arm(fp, rotation, point, direction, lever_arm);
+}
+
+double ivp_x87_reaction_normal_diagonal(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
+                                        const ivp_vec3f_t *direction, const float inverse_inertia[3],
+                                        float inverse_mass, float lever_arm[3],
+                                        float weighted_lever_arm[3], double previous)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 projected_z = ivp_x87_project_reaction_lever_arm(fp, rotation, point, direction, lever_arm);
+    const X87_Float80 x = fp.load(lever_arm[0]);
+    const X87_Float80 y = fp.load(lever_arm[1]);
+    const X87_Float80 z = fp.load(lever_arm[2]);
+    const X87_Float80 weighted_x = fp.multiply(x, fp.load(inverse_inertia[0]));
+    const X87_Float80 weighted_y = fp.multiply(y, fp.load(inverse_inertia[1]));
+    const X87_Float80 weighted_z = fp.multiply(projected_z, fp.load(inverse_inertia[2]));
+    weighted_lever_arm[0] = fp.store_float(weighted_x);
+    weighted_lever_arm[1] = fp.store_float(weighted_y);
+    weighted_lever_arm[2] = fp.store_float(weighted_z);
+
+    // The normal diagonal uses the retained projected Z and the stored X weight.
+    X87_Float80 diagonal = fp.add(fp.multiply(weighted_y, y), fp.load(inverse_mass));
+    diagonal = fp.add(diagonal, fp.multiply(weighted_z, z));
+    diagonal = fp.add(diagonal, fp.multiply(fp.load(weighted_lever_arm[0]), x));
+    return fp.store_double(fp.add(diagonal, fp.load(previous)));
+}
+
+double ivp_x87_reaction_tangent_diagonal(const float lever_arm[3], const float weighted_lever_arm[3],
+                                         float inverse_mass, double previous)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.multiply(fp.load(lever_arm[0]), fp.load(weighted_lever_arm[0]));
+    const X87_Float80 y = fp.multiply(fp.load(lever_arm[1]), fp.load(weighted_lever_arm[1]));
+    const X87_Float80 z = fp.multiply(fp.load(lever_arm[2]), fp.load(weighted_lever_arm[2]));
+    const X87_Float80 diagonal = fp.add(fp.add(fp.add(fp.load(inverse_mass), z), y), x);
+    return fp.store_double(fp.add(diagonal, fp.load(previous)));
+}
+
+double ivp_x87_reaction_tangent_coupling(const float lever_arm[3], const float weighted_lever_arm[3],
+                                         double previous)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.multiply(fp.load(lever_arm[0]), fp.load(weighted_lever_arm[0]));
+    const X87_Float80 y = fp.multiply(fp.load(lever_arm[1]), fp.load(weighted_lever_arm[1]));
+    const X87_Float80 z = fp.multiply(fp.load(lever_arm[2]), fp.load(weighted_lever_arm[2]));
+    return fp.store_double(fp.add(fp.add(fp.add(z, y), x), fp.load(previous)));
 }
 
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
@@ -1061,6 +1354,53 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
     }
     for (int axis = 0; axis < 3; ++axis)
         linear_speed->k[axis] = fp.store_float(linear[axis]);
+}
+
+void ivp_x87_accumulate_friction_easing(float span[2], const ivp_vec3f_t tangent[2],
+                                        const ivp_vec3f_t *delta)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    for (int i = 0; i < 2; ++i)
+    {
+        // Retain the projected displacement through the final spring update.
+        const X87_Float80 projection = ivp_x87_point_dot(fp, &tangent[i], delta);
+        span[i] = fp.store_float(fp.add(projection, fp.load(span[i])));
+    }
+}
+
+void ivp_x87_friction_easing_delta(const ivp_vec3f_t *connection, const ivp_vec3f_t *first,
+                                   const ivp_vec3f_t *second, double factor, float direction,
+                                   ivp_vec3f_t *first_delta, ivp_vec3f_t *second_delta)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const auto project = [&](const ivp_vec3f_t *point) {
+        const X87_Float80 px = fp.multiply(fp.load(connection->k[0]), fp.load(point->k[0]));
+        const X87_Float80 py = fp.multiply(fp.load(connection->k[1]), fp.load(point->k[1]));
+        const X87_Float80 pz = fp.multiply(fp.load(connection->k[2]), fp.load(point->k[2]));
+        return fp.add(fp.add(pz, py), px);
+    };
+    const X87_Float80 projection0 = project(first);
+    const X87_Float80 projection1 = fp.multiply(project(second), fp.load(direction));
+    const X87_Float80 factor0 = fp.load(factor);
+    const X87_Float80 factor1 = fp.multiply(fp.load(direction), factor0);
+    const X87_Float80 half = fp.load(0.5);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 coordinate = fp.load(connection->k[axis]);
+        X87_Float80 part0 = fp.multiply(coordinate, projection0);
+        if (axis != 2)
+            part0 = fp.load(fp.store_float(part0));
+        const X87_Float80 part1 = fp.load(fp.store_float(fp.multiply(coordinate, projection1)));
+        X87_Float80 average = fp.add(part1, part0);
+        if (axis != 1)
+            average = fp.load(fp.store_float(average));
+        average = fp.multiply(average, half);
+        if (axis == 2)
+            average = fp.load(fp.store_double(average));
+        average = fp.load(fp.store_float(average));
+        first_delta->k[axis] = fp.store_float(fp.multiply(fp.subtract(average, part0), factor0));
+        second_delta->k[axis] = fp.store_float(fp.multiply(fp.subtract(average, part1), factor1));
+    }
 }
 
 float ivp_x87_point_face_distance(const ivp_vec3r_t *normal, const ivp_vec3r_t *point,

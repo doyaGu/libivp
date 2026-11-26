@@ -234,7 +234,6 @@ void ivp_friction_mgr_restore_object_contact_order(struct ivp_object *obj);
 /* ── Friction solver statics (ivp_friction_solver.hxx) ───────────────── */
 
 void ivp_frs_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse);
-void ivp_frs_async_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse);
 double ivp_frs_calc_desired_gap_speed(double closing_speed, double gap_diff, float speedup_factor);
 
 /* ── Impact (ivp_impact.cxx / ivp_mindist_impact.cxx) ────────────────── */

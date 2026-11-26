@@ -30,6 +30,7 @@
 #include "solver/ivp_scr_internal.h"
 #include "collision/ivp_lvec.h"
 #include "solver/ivp_friction_internal.h"
+#include "math/ivp_x87.h"
 #include "controllers/ivp_car_wheel_physics.h"
 #include "dynamics/ivp_env_internal.h"
 #include "dynamics/ivp_env_hot.h"
@@ -107,14 +108,24 @@ static inline void vr_add_multiple_f(ivp_vec3r_t *a, const ivp_vec3f_t *v, doubl
 }
 
 
+#if !IVP_X87_ARITHMETIC
 static inline void vr_rot_add_multiple(ivp_vec3f_t *a, const ivp_vec3f_t *v, double f) {
     lvf_add_multiple(a, v, (D)f);
 }
-
-static inline void vrr_add_multiple_f(ivp_vec3r_t *a, const ivp_vec3f_t *v, double f) { vr_add_multiple_f(a, v, f); }
+#endif
 
 void ivp_frs_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse)
 {
+#if IVP_X87_ARITHMETIC
+    for (int body = 0; body < 2; ++body) {
+        ivp_core_t *core = info->contact_core[body];
+        if (!core) continue;
+
+        const ivp_vec3f_t inverse_inertia = ivp_core_inv_rot_inertia_f(core);
+        ivp_x87_apply_single_contact_impulse(&info->surf_normal, &info->contact_cross_nomal_cs[body],
+            ivp_core_get_inv_mass_f(core), &inverse_inertia, impulse, body == 0, &core->speed, &core->rot_speed);
+    }
+#else
     ivp_core_t *c0 = info->contact_core[0];
     if (c0) {
         ivp_vec3f_t hp, iri = ivp_core_inv_rot_inertia_f(c0);
@@ -129,20 +140,32 @@ void ivp_frs_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse)
         vr_rot_add_multiple(&c1->rot_speed, &hp, impulse);
         vr_add_multiple_f(&c1->speed, &info->surf_normal, impulse * (double)ivp_core_get_inv_mass_f(c1));
     }
+#endif
 }
 
-void ivp_frs_async_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse)
+static void frs_async_apply_impulse(const ivp_impact_solver_lt_t *info, double impulse)
 {
     ivp_core_t *c0 = info->contact_core[0];
     if (c0) {
-        ivp_vec3f_t hp, iri = ivp_core_inv_rot_inertia_f(c0);
+        const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(c0);
+#if IVP_X87_ARITHMETIC
+        ivp_x87_accumulate_friction_normal_impulse(&info->surf_normal, &info->contact_cross_nomal_cs[0],
+            ivp_core_get_inv_mass_f(c0), &iri, -impulse, false, &c0->speed_change, &c0->rot_speed_change);
+#else
+        ivp_vec3f_t hp;
         lvf_set_pairwise_mult(&hp, &info->contact_cross_nomal_cs[0], &iri);
-        vrr_add_multiple_f(&c0->rot_speed_change, &hp, -impulse);
+        vr_add_multiple_f(&c0->rot_speed_change, &hp, -impulse);
         vr_add_multiple_f(&c0->speed_change, &info->surf_normal, -impulse * (double)ivp_core_get_inv_mass_f(c0));
+#endif
     }
     ivp_core_t *c1 = info->contact_core[1];
     if (c1) {
-        ivp_vec3f_t hp, iri = ivp_core_inv_rot_inertia_f(c1);
+        const ivp_vec3f_t iri = ivp_core_inv_rot_inertia_f(c1);
+#if IVP_X87_ARITHMETIC
+        ivp_x87_accumulate_friction_normal_impulse(&info->surf_normal, &info->contact_cross_nomal_cs[1],
+            ivp_core_get_inv_mass_f(c1), &iri, impulse, true, &c1->speed_change, &c1->rot_speed_change);
+#else
+        ivp_vec3f_t hp;
         lvf_set_pairwise_mult(&hp, &info->contact_cross_nomal_cs[1], &iri);
         /* retail RVA 0x364C0 keeps the second core's X inertia product
          * wide; only Y/Z pass through the float hp */
@@ -151,6 +174,7 @@ void ivp_frs_async_apply_impulse(const ivp_impact_solver_lt_t *info, double impu
         c1->rot_speed_change.k[1] = (ivp_real_t)(float)((double)c1->rot_speed_change.k[1] + (double)hp.k[1] * impulse);
         c1->rot_speed_change.k[2] = (ivp_real_t)(float)((double)c1->rot_speed_change.k[2] + (double)hp.k[2] * impulse);
         vr_add_multiple_f(&c1->speed_change, &info->surf_normal, impulse * (double)ivp_core_get_inv_mass_f(c1));
+#endif
     }
 }
 
@@ -164,12 +188,14 @@ static void frs_test_push_core_i(const ivp_impact_solver_lt_t *info, int core_in
     lvf_set_multiple(speed_change, &info->surf_normal, (D)(ivp_core_get_inv_mass_f(c0) * factor));
 }
 
+#if !IVP_X87_ARITHMETIC
 static double frs_get_closing_speed_core_i(const ivp_impact_solver_lt_t *info, int core_index_i,
                                            const ivp_vec3f_t *rot_sped_cs, const ivp_vec3f_t *speed_ws)
 {
     return (double)(lvf_dot(speed_ws, &info->surf_normal) +
                     lvf_dot(rot_sped_cs, &info->contact_cross_nomal_cs[core_index_i]));
 }
+#endif
 
 double ivp_frs_calc_desired_gap_speed(double closing_speed, double gap_diff, float speedup_factor)
 {
@@ -259,6 +285,22 @@ static void cp_static_friction_single(ivp_contact_pt_t *cp, const ivp_sim_es_t *
                                       float speedup_factor)
 {
     ivp_impact_solver_lt_t *info = cp->tmp_contact_info;
+#if IVP_X87_ARITHMETIC
+    ivp_vec3f_t linear_speed[2];
+    const ivp_vec3f_t *angular_speed[2] = {NULL, NULL};
+    for (int body = 0; body < 2; ++body) {
+        const ivp_core_t *core = info->contact_core[body];
+        if (!core) continue;
+
+        linear_speed[body] = ivp_core_speed_f(core);
+        angular_speed[body] = &core->rot_speed;
+    }
+    const double impulse = ivp_x87_single_contact_impulse(&info->surf_normal, info->contact_cross_nomal_cs,
+        linear_speed, angular_speed, desired_gap, ivp_cp_get_gap_length(cp), speedup_factor,
+        IVP_FR_DESCENDING_SPEEDUP, info->virtual_mass, es->i_delta_time, &cp->now_friction_pressure);
+    if (impulse > 0.0)
+        ivp_frs_apply_impulse(info, impulse);
+#else
     double closing_speed = ivp_impact_lt_get_closing_speed(info);
     double gap_diff = (double)desired_gap - (double)ivp_cp_get_gap_length(cp); /* retail: double */
     double a = ivp_frs_calc_desired_gap_speed(closing_speed, gap_diff, speedup_factor);
@@ -270,6 +312,7 @@ static void cp_static_friction_single(ivp_contact_pt_t *cp, const ivp_sim_es_t *
     } else {
         cp->now_friction_pressure = 0.0f;
     }
+#endif
 }
 
 /* IVP_Contact_Point::friction_force_local_constraint_2d_wheel lives in the
@@ -292,6 +335,12 @@ static float cp_friction_force_local_constraint_2d(ivp_contact_pt_t *cp, const i
 
     ivp_scr_f_t tcb;   /* IVP_Solver_Core_Reaction (float-exact) */
     ivp_scr_f_init_translation_ws(&tcb, core_a, core_b, &info->contact_point_ws, &info->span_friction_v[0], &info->span_friction_v[1], NULL);
+    ivp_vec3f_t impulses;
+#if IVP_X87_ARITHMETIC
+    if (!ivp_x87_solve_tangent_impulses(tcb.m[0][0], tcb.m[0][1], tcb.m[1][1], cp->span_friction_s,
+                                        &tcb.delta_velocity_ds, es->i_delta_time, &impulses))
+        return 0.0f;
+#else
     double a = (double)cp->span_friction_s[0] * es->i_delta_time - (double)tcb.delta_velocity_ds.k[0];
     double b = (double)cp->span_friction_s[1] * es->i_delta_time - (double)tcb.delta_velocity_ds.k[1];
     /* the reaction solver fills the upper triangle; retail RVA 0x1B080
@@ -308,9 +357,9 @@ static float cp_friction_force_local_constraint_2d(ivp_contact_pt_t *cp, const i
     double inv1 = -tpm01 * DI;
     double inv2 = inv1;
     double inv3 = tpm00 * DI;
-    ivp_vec3f_t impulses;
     impulses.k[0] = (float)(inv0 * a + inv1 * b);
     impulses.k[1] = (float)(inv2 * a + inv3 * b);
+#endif
     impulses.k[2] = 0.0f;
     double square_impulse = (double)impulses.k[1] * (double)impulses.k[1] + (double)impulses.k[0] * (double)impulses.k[0];
     if (square_impulse > maximum_impulse_force * maximum_impulse_force) {
@@ -552,11 +601,16 @@ typedef struct mutual_energizer {
 /* IVP_Mutual_Energizer (retail: no zero-mass guard, no clamp) */
 static double me_calc_impulse_to_reduce_energy_level(double speed_pot, double inv_mass0, double inv_mass1, double delta_e)
 {
+#if IVP_X87_ARITHMETIC
+    return ivp_x87_mutual_energy_impulse(speed_pot, inv_mass0, inv_mass1, delta_e);
+#else
     double inv_mass_sum = inv_mass0 + inv_mass1;
     double root = sqrt(fabs(speed_pot * speed_pot - (delta_e + delta_e) * inv_mass_sum));
     return (speed_pot - root) * (1.0 / inv_mass_sum);
+#endif
 }
 
+#if !IVP_X87_ARITHMETIC
 static double me_calc_energy_potential(double speed_pot, double mass0, double mass1, double inv_mass0, double inv_mass1)
 {
     double x = speed_pot / (inv_mass0 + inv_mass1);
@@ -566,11 +620,16 @@ static double me_calc_energy_potential(double speed_pot, double mass0, double ma
     double E0 = speed0 * speed0 * mass0;
     return 0.5 * (speed_pot * speed_pot * mass1 - E0 - E1);
 }
+#endif
 
-static void me_get_rot_inertia(ivp_core_t *core, ivp_vec3f_t *rot_vec_obj, double *rot_inertia, double *inv_rot_inertia)
+static void me_get_rot_inertia(const ivp_core_t *core, const ivp_vec3f_t *rot_vec_obj,
+                               double *rot_inertia, double *inv_rot_inertia)
 {
     ivp_vec3f_t rot_vec_abs, ri = ivp_core_rot_inertia_f(core);
     lvf_set_pairwise_mult(&rot_vec_abs, rot_vec_obj, &ri);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_directional_inertia(rot_vec_abs.k, P_DOUBLE_EPS, rot_inertia, inv_rot_inertia);
+#else
     *rot_inertia = (double)lvf_real_length(&rot_vec_abs);
     if (*rot_inertia < P_DOUBLE_EPS) {
         *rot_inertia = 1.0;
@@ -578,6 +637,7 @@ static void me_get_rot_inertia(ivp_core_t *core, ivp_vec3f_t *rot_vec_obj, doubl
     } else {
         *inv_rot_inertia = 1.0f / (*rot_inertia);
     }
+#endif
 }
 
 static void me_init(mutual_energizer_t *me, ivp_core_t *core0, ivp_core_t *core1)
@@ -624,12 +684,19 @@ static void me_init(mutual_energizer_t *me, ivp_core_t *core0, ivp_core_t *core1
 
 static void me_calc_energy_potential_all(mutual_energizer_t *me)
 {
+#if IVP_X87_ARITHMETIC
+    me->whole_mutual_energy = ivp_x87_mutual_energy(
+        me->rot_speed_potential, me->rot_inertia, me->inv_rot_inertia,
+        me->trans_speed_potential, me->trans_inertia, me->inv_trans_inertia,
+        &me->rot_energy_potential, &me->trans_energy_potential);
+#else
     me->rot_energy_potential = me_calc_energy_potential(me->rot_speed_potential, me->rot_inertia[0], me->rot_inertia[1],
                                                         me->inv_rot_inertia[0], me->inv_rot_inertia[1]);
     me->trans_energy_potential = me_calc_energy_potential(me->trans_speed_potential, me->trans_inertia[0],
                                                           me->trans_inertia[1], me->inv_trans_inertia[0],
                                                           me->inv_trans_inertia[1]);
     me->whole_mutual_energy = me->trans_energy_potential + me->rot_energy_potential;
+#endif
 }
 
 static void me_destroy_percent_energy(mutual_energizer_t *me, double percent_energy_to_destroy)
@@ -697,8 +764,12 @@ int ivp_fr_core_pair_check_all_fr_mindists_to_be_valid(ivp_fr_core_pair_t *pair,
 static void cp_ease_the_friction_force(ivp_contact_pt_t *cp, const ivp_vec3f_t *ease_diff_vec)
 {
     ivp_impact_solver_lt_t *info = cp->tmp_contact_info;
+#if IVP_X87_ARITHMETIC
+    ivp_x87_accumulate_friction_easing(cp->span_friction_s, info->span_friction_v, ease_diff_vec);
+#else
     cp->span_friction_s[0] = (float)((double)cp->span_friction_s[0] + (double)lvf_dot(ease_diff_vec, &info->span_friction_v[0]));
     cp->span_friction_s[1] = (float)((double)cp->span_friction_s[1] + (double)lvf_dot(ease_diff_vec, &info->span_friction_v[1]));
+#endif
 }
 
 static void frs_ease_two_mindists(ivp_contact_pt_t *dist0, ivp_contact_pt_t *dist1, ivp_vec3f_t *ease_diff_vec0,
@@ -725,6 +796,11 @@ static void frs_ease_two_mindists(ivp_contact_pt_t *dist0, ivp_contact_pt_t *dis
         fr_add_draw_vector(ivp_core_env(rev_core), &info1->contact_point_ws, &world_connection, "ease", 3);
     }
     (void)lvf_fast_normize(&world_connection);
+    ivp_vec3f_t diff_vec0, diff_vec1;
+#if IVP_X87_ARITHMETIC
+    ivp_x87_friction_easing_delta(&world_connection, &world_vec0, &world_vec1, ease_factor,
+                                   reverse_factor, &diff_vec0, &diff_vec1);
+#else
     ivp_vec3f_t ease_part0, ease_part1;
     double part_val0 = (double)lvf_dot(&world_connection, &world_vec0);
     double part_val1 = (double)lvf_dot(&world_connection, &world_vec1);
@@ -733,9 +809,9 @@ static void frs_ease_two_mindists(ivp_contact_pt_t *dist0, ivp_contact_pt_t *dis
     ivp_vec3f_t optimal_vec;
     lvf_add2(&optimal_vec, &ease_part0, &ease_part1);
     lvf_mult(&optimal_vec, 0.5f);
-    ivp_vec3f_t diff_vec0, diff_vec1;
     lvf_subtract_and_mult(&diff_vec0, &optimal_vec, &ease_part0, (D)ease_factor);
     lvf_subtract_and_mult(&diff_vec1, &optimal_vec, &ease_part1, (D)(ease_factor * (double)reverse_factor));
+#endif
     lvf_add(ease_diff_vec0, &diff_vec0);
     lvf_add(ease_diff_vec1, &diff_vec1);
 }
@@ -906,8 +982,14 @@ static void fs_recalc_all_contact_points(ivp_fr_system_t *fs)
             ivp_contact_pt_t *fr_mindist = cp_at(&my_pair->fr_dists, j);
             float old_gap_len = ivp_cp_get_gap_length(fr_mindist);
             ivp_contact_pt_recalc_friction_s_vals(fr_mindist);
-            float gap_diff = old_gap_len - ivp_cp_get_gap_length(fr_mindist);
+            const float gap_len = ivp_cp_get_gap_length(fr_mindist);
+#if IVP_X87_ARITHMETIC
+            energy_diff_sum = ivp_x87_accumulate_contact_gap_energy(
+                energy_diff_sum, fr_mindist->now_friction_pressure, old_gap_len, gap_len);
+#else
+            const float gap_diff = old_gap_len - gap_len;
             energy_diff_sum += fr_mindist->now_friction_pressure * gap_diff;
+#endif
         }
         if (energy_diff_sum > 0.0f) my_pair->integrated_anti_energy += energy_diff_sum;
     }
@@ -1763,9 +1845,12 @@ static void frs_setup_coords_mindists(fr_solver_t *s, ivp_fr_system_t *fs)
 
 static void frs_calc_distance_matrix_column(fr_solver_t *s, int current_contact_point_index, ivp_core_t *core,
                                             ivp_fr_info_for_core_t *fr_info, const ivp_vec3f_t *rotation_vec,
-                                            const ivp_vec3f_t *translation_vec)
+                                            const ivp_vec3f_t *translation_vec, bool store_angular_response)
 {
     IVP_ASSERT(!core->physical_unmoveable);
+#if !IVP_X87_ARITHMETIC
+    IVP_USE(store_angular_response);
+#endif
     ivp_gmmz_t *m = &s->dist_change_mat;
     /* The loop does not resize either container.  Keep their bases and
      * dimensions out of the dependent contact-row load chain. */
@@ -1790,8 +1875,14 @@ static void frs_calc_distance_matrix_column(fr_solver_t *s, int current_contact_
             which_obj = 1;
         }
         if (info->contact_core[which_obj]) {
-            double speed_change_scalar = factor * frs_get_closing_speed_core_i(info, which_obj, rotation_vec, translation_vec);
-            matrix_values[line_num * aligned_row_len + current_contact_point_index] += speed_change_scalar;
+            double *element = &matrix_values[line_num * aligned_row_len + current_contact_point_index];
+#if IVP_X87_ARITHMETIC
+            *element = ivp_x87_accumulate_contact_response(*element, store_angular_response, factor,
+                                                           translation_vec, rotation_vec, &info->surf_normal,
+                                                           &info->contact_cross_nomal_cs[which_obj]);
+#else
+            *element += factor * frs_get_closing_speed_core_i(info, which_obj, rotation_vec, translation_vec);
+#endif
         }
     }
 }
@@ -1800,12 +1891,26 @@ static void frs_calc_solver_desired(fr_solver_t *s, int i,
                                     ivp_impact_solver_lt_t *info)
 {
     ivp_gmmz_t *m = &s->dist_change_mat;
+#if IVP_X87_ARITHMETIC
+    double dist_velocity = 0.0;
+    for (int body = 0; body < 2; ++body) {
+        const ivp_core_t *core = info->contact_core[body];
+        if (!core) continue;
+        const ivp_vec3f_t speed = ivp_core_speed_f(core);
+        dist_velocity = ivp_x87_contact_normal_velocity(dist_velocity, body == 0, &speed, &core->rot_speed,
+                                                        &info->surf_normal, &info->contact_cross_nomal_cs[body]);
+    }
+    m->desired_vector[i] = ivp_x87_contact_gap_velocity(
+        ivp_env_get_mindist_settings(s->l_environment)->friction_dist, info->friction.dist_len,
+        dist_velocity, IVP_FR_DESCENDING_SPEEDUP);
+#else
     double dist_velocity = ivp_impact_lt_get_closing_speed(info);
     double distance_off =
         (double)(ivp_env_get_mindist_settings(s->l_environment)->friction_dist -
                  info->friction.dist_len); /* IVP_FLOAT - IVP_FLOAT */
     m->desired_vector[i] =
         ivp_frs_calc_desired_gap_speed(dist_velocity, distance_off, 1.0f);
+#endif
 }
 
 static void frs_calc_solver_column_effect(fr_solver_t *s, int i,
@@ -1816,14 +1921,14 @@ static void frs_calc_solver_column_effect(fr_solver_t *s, int i,
         frs_test_push_core_i(info, 0, &rotation_vec, &translation_vec, -1.0f);
         frs_calc_distance_matrix_column(
             s, i, info->contact_core[0], info->friction.friction_infos[0],
-            &rotation_vec, &translation_vec);
+            &rotation_vec, &translation_vec, true);
     }
     if (info->contact_core[1]) {
         ivp_vec3f_t rotation_vec, translation_vec;
         frs_test_push_core_i(info, 1, &rotation_vec, &translation_vec, +1.0f);
         frs_calc_distance_matrix_column(
             s, i, info->contact_core[1], info->friction.friction_infos[1],
-            &rotation_vec, &translation_vec);
+            &rotation_vec, &translation_vec, false);
     }
 }
 
@@ -1960,13 +2065,20 @@ static void frs_normize_constraint_equ(fr_solver_t *s)
         double test_val = m->matrix_values[i * m->aligned_row_len + i];
         if (test_val > max_val) max_val = test_val;
     }
-    double a_norm = (max_val > P_DOUBLE_EPS) ? 1.0f / max_val : 1.0f;
-    s->correct_x_factor = a_norm;
+    const double max_diagonal = max_val;
     max_val = 0.0;
     for (int i = m->columns - 1; i >= 0; i--) {
         double test_val = fabs(m->desired_vector[i]);
         if (test_val > max_val) max_val = test_val;
     }
+#if IVP_X87_ARITHMETIC
+    s->correct_x_factor = ivp_x87_normalize_contact_equations(m->matrix_values, m->desired_vector,
+                                                             m->columns, m->aligned_row_len,
+                                                             max_diagonal > P_DOUBLE_EPS ? max_diagonal : 1.0,
+                                                             max_val > P_DOUBLE_EPS ? max_val : 1.0);
+#else
+    double a_norm = (max_diagonal > P_DOUBLE_EPS) ? 1.0f / max_diagonal : 1.0f;
+    s->correct_x_factor = a_norm;
     double b_norm;
     if (max_val > P_DOUBLE_EPS) {
         b_norm = 1.0f / max_val;
@@ -1980,6 +2092,7 @@ static void frs_normize_constraint_equ(fr_solver_t *s)
         for (int j = 0; j < m->aligned_row_len; j++) base[j] *= a_norm;
     }
     for (int i = m->columns - 1; i >= 0; i--) m->desired_vector[i] *= b_norm;
+#endif
 }
 
 static void frs_factor_result_vec(fr_solver_t *s)
@@ -2143,36 +2256,35 @@ static void frs_print_dist_velocity(fr_solver_t *s, ivp_fr_system_t *fs)
 static void frs_do_resulting_pushes(fr_solver_t *s, ivp_fr_system_t *fs)
 {
     int m_index = 0;
-    for (ivp_contact_pt_t *my_dist = fs->first_friction_dist; my_dist;
-         m_index++, my_dist = my_dist->next_dist_in_friction) {
-        double impulse_now;
+    for (ivp_contact_pt_t *contact = fs->first_friction_dist; contact;
+         ++m_index, contact = contact->next_dist_in_friction) {
         if (m_index < fs->complex_not_necessary_number) {
-            impulse_now = 0.0;
-            goto no_complex_done;
+            contact->now_friction_pressure = 0.0f;
+            continue;
         }
-        impulse_now = s->dist_change_mat.result_vector[m_index];
-        if (impulse_now > 0.0) {
-            if (my_dist->has_negative_pull_since >= 0) {
-                my_dist->has_negative_pull_since = -1;
-            } else {
-                my_dist->has_negative_pull_since--;
-            }
+
+        const double impulse = s->dist_change_mat.result_vector[m_index];
+        if (impulse == 0.0) {
+            contact->has_negative_pull_since = 0;
+            contact->now_friction_pressure = 0.0f;
+            continue;
+        }
+
+        if (impulse > 0.0) {
+            if (contact->has_negative_pull_since >= 0)
+                contact->has_negative_pull_since = -1;
+            else
+                --contact->has_negative_pull_since;
         } else {
-            if (impulse_now == 0.0) {
-                my_dist->has_negative_pull_since = 0;
-                impulse_now = 0.0;
-                goto cont_for_next;
-            } else {
-                if (my_dist->has_negative_pull_since < 0) my_dist->has_negative_pull_since = 0;
-                my_dist->has_negative_pull_since++;
-                if (my_dist->has_negative_pull_since > 9) my_dist->has_negative_pull_since = 0;
-            }
+            if (contact->has_negative_pull_since < 0)
+                contact->has_negative_pull_since = 1;
+            else if (++contact->has_negative_pull_since > 9)
+                contact->has_negative_pull_since = 0;
         }
-        ivp_frs_async_apply_impulse(my_dist->tmp_contact_info, impulse_now);
-    cont_for_next:
-        if (impulse_now < 0.0) impulse_now = 0.0;
-    no_complex_done:
-        my_dist->now_friction_pressure = (float)(impulse_now * s->es->i_delta_time);
+
+        const double pressure_impulse = impulse < 0.0 ? 0.0 : impulse;
+        contact->now_friction_pressure = (float)(pressure_impulse * s->es->i_delta_time);
+        frs_async_apply_impulse(contact->tmp_contact_info, impulse);
     }
     IVP_IF(fr_dm(s->l_environment)->debug_friction) /* ivp_friction_gaps.cxx:601 */
     {

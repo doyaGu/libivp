@@ -662,10 +662,42 @@ IVP_TEST(triangle_inverse_length_preserves_binary64_precision)
 }
 #endif
 
+#if IVP_X87_ARITHMETIC
+IVP_TEST(x87_friction_easing_retains_small_tangent_projection)
+{
+    float span[2] = {-0x1.1eac7ep-10f, 0x1.c21760p-8f};
+    const ivp_vec3f_t tangents[2] = {
+        {{-1.0f, 0.0f, 0x1p-51f}},
+        {{-0x1p-51f, 0x1.99999ap-22f, -1.0f}}
+    };
+    const ivp_vec3f_t easing_delta = {{0x1.f1a1p-18f, 0x1.747p-28f, 0x1.3db9p-20f}};
+
+    ivp_x87_accumulate_friction_easing(span, tangents, &easing_delta);
+
+    IVP_ASSERT_EQ(span[0], -0x1.209e1ep-10f);
+    IVP_ASSERT_EQ(span[1], 0x1.c20384p-8f);
+}
+#endif
+
 #if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+IVP_TEST(x87_contact_gap_velocity_retains_small_correction)
+{
+    IVP_ASSERT_EQ(ivp_x87_contact_gap_velocity(1.0f, 0x1p-25f, -1.0, 20.0), -0x1p-25);
+    IVP_ASSERT_EQ(ivp_x87_contact_gap_velocity(0x1p-25f, 1.0f, 20.0, 20.0), 0x1.4p-21);
+}
+
 IVP_TEST(x87_collision_speed_bound_retains_both_surface_speeds)
 {
     IVP_ASSERT_EQ(ivp_x87_collision_speed_bound(0.125f, 0.125f, 1.0f, 0x1p-24f), 0x1.400001p+0);
+}
+
+IVP_TEST(x87_tangent_reaction_matrix_preserves_small_angular_terms)
+{
+    const float diagonal[3] = {0x1p-27f, 0x1p-27f, 0x1p-27f};
+    const float coupling[3] = {1.0f, 0x1p-60f, -1.0f};
+    const float unit_weights[3] = {1.0f, 1.0f, 1.0f};
+    IVP_ASSERT_EQ(ivp_x87_reaction_tangent_diagonal(diagonal, diagonal, 1.0f, 0.0), 0x1.0000000000001p+0);
+    IVP_ASSERT_EQ(ivp_x87_reaction_tangent_coupling(coupling, unit_weights, 0x1p-59), 0x1.8p-59);
 }
 
 IVP_TEST(x87_vertex_walk_compares_before_storing_gradient)
@@ -841,6 +873,18 @@ IVP_TEST(x87_reduced_inverse_mass_rounds_directly_to_float)
     IVP_ASSERT_EQ(zero_mass, 0.0f);
 }
 
+IVP_TEST(x87_contact_gap_energy_rounds_after_accumulation)
+{
+    const uint16_t precision = ivp_x87_enter_step();
+    const float first = ivp_x87_accumulate_contact_gap_energy(
+        0.0f, 0x1.61a846p+4f, 0x1.9eaep-7f, 0x1.a254p-7f);
+    const float second = ivp_x87_accumulate_contact_gap_energy(
+        first, 0x1.6bfa36p+4f, 0x1.e238p-7f, 0x1.e4d6p-7f);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(first, -0x1.4292fcp-9f);
+    IVP_ASSERT_EQ(second, -0x1.185c9ap-8f);
+}
+
 IVP_TEST(x87_gyroscopic_update_retains_inertia_difference_precision)
 {
     const ivp_vec3f_t inertia = {{0x1.a7c4c4p-2f, 0x1.c6ba5cp-1f, 0x1.93e218p+0f}};
@@ -883,6 +927,71 @@ IVP_TEST(worst_case_inverse_mass_rounds_after_the_second_reciprocal)
     ivp_x87_leave_step(precision);
 
     IVP_ASSERT_EQ(inverse, 0x1.d99702p+1f);
+}
+
+IVP_TEST(single_contact_normal_impulse_retains_closing_velocity_precision)
+{
+    const ivp_vec3f_t normal = {{0.0f, -1.0f, 0.0f}};
+    const ivp_vec3f_t jacobian[2] = {{{0.0f, -0x1.b542f6p-27f, -0x1.f96fe6p-31f}}};
+    const ivp_vec3f_t linear[2] = {{{0x1.f51984p-18f, -0x1.364d92p-2f, -0x1.0c8db6p+2f}}};
+    const ivp_vec3f_t angular = {{0x1.476a9ep-1f, -0x1.ff5dfap+0f, -0x1.b605e6p-5f}};
+    const ivp_vec3f_t *angular_speed[2] = {&angular, NULL};
+    ivp_vec3r_t speed = {{linear[0].k[0], linear[0].k[1], linear[0].k[2]}};
+    ivp_vec3f_t rotation = angular;
+    const ivp_vec3f_t inverse_inertia = {{1.0f, 1.0f, 1.0f}};
+    float pressure;
+
+    const uint16_t precision = ivp_x87_enter_step();
+    const double impulse = ivp_x87_single_contact_impulse(&normal, jacobian, linear, angular_speed,
+        0x1.47ae14p-6f, 0x1.47aep-6f, 1.0f, 20.0f, 10.0f, 66.0, &pressure);
+    ivp_x87_apply_single_contact_impulse(&normal, jacobian, 0x1.99999ap-4f, &inverse_inertia, impulse,
+        true, &speed, &rotation);
+    ivp_x87_leave_step(precision);
+
+    IVP_ASSERT_EQ(impulse, 0x1.83e0fa32f4fdbp+1);
+    IVP_ASSERT_EQ(speed.k[1], 0x1.a19218p-25f);
+}
+
+IVP_TEST(x87_contact_impulses_preserve_cancelling_velocity)
+{
+    const ivp_vec3f_t left = {{-0x1.a2dfp-1f, -0x1.265ef6p-1f, -0x1.83f1dp-7f}};
+    const ivp_vec3f_t right = {{0x1.a2dfp-1f, -0x1.265ef8p-1f, -0x1.83ec92p-7f}};
+    const ivp_vec3f_t zero = {{0.0f, 0.0f, 0.0f}};
+    ivp_vec3r_t linear = {{0.0, 0.0, 0.0}}, angular = {{0.0, 0.0, 0.0}};
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_accumulate_friction_normal_impulse(&left, &zero, 0.5f, &zero,
+        -0x1.51bd9c4bee4p-2, false, &linear, &angular);
+    ivp_x87_accumulate_friction_normal_impulse(&right, &zero, 0.5f, &zero,
+        -0x1.51bd9b753031p-2, false, &linear, &angular);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(linear.k[0], 0x1.e1d81ap-39f);
+}
+
+IVP_TEST(x87_friction_preserves_directional_inertia)
+{
+    const float weighted_axis[3] = {0x1.7dfdb6p+1f, 0x1.025b72p-3f, 0x1.25e64cp+0f};
+    double inertia, inverse_inertia;
+    const uint16_t precision = ivp_x87_enter_step();
+    ivp_x87_directional_inertia(weighted_axis, 1e-19, &inertia, &inverse_inertia);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(inertia, 0x1.999998a590b2ap+1);
+    IVP_ASSERT_EQ(inverse_inertia, 0x1.400000bea6f4ep-2);
+}
+
+IVP_TEST(x87_mutual_energy_keeps_translational_energy_extended)
+{
+    const double inertia[2] = {0x1.f3ffffa455aadp+14, 0x1.9999994e81fafp+1};
+    const double inverse_inertia[2] = {0x1.0624dd5f29bdbp-15, 0x1.4000003aaa740p-2};
+    const double mass[2] = {0x1.388p+14, 0x1.0p+1};
+    const double inverse_mass[2] = {0x1.a36e2eb1c432dp-15, 0x1.0p-1};
+    double angular_energy, linear_energy;
+    const uint16_t precision = ivp_x87_enter_step();
+    const double energy = ivp_x87_mutual_energy(0x1.0f70466ec5661p-9, inertia, inverse_inertia,
+        0x1.b18e28978084ep-10, mass, inverse_mass, &angular_energy, &linear_energy);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(angular_energy, 0x1.cc727375f070ep-18);
+    IVP_ASSERT_EQ(linear_energy, 0x1.6f17b4599a54ap-19);
+    IVP_ASSERT_EQ(energy, 0x1.41ff26d15ecd9p-17);
 }
 
 IVP_TEST(x87_constraint_rotation_error_preserves_small_axes)
@@ -1022,7 +1131,9 @@ int main(void)
     IVP_REGISTER(x87_position_advance_retains_precision_to_writeback);
     IVP_REGISTER(x87_contact_jacobian_preserves_small_angular_component);
     IVP_REGISTER(x87_point_plane_separation_retains_small_gaps);
+    IVP_REGISTER(x87_contact_gap_velocity_retains_small_correction);
     IVP_REGISTER(x87_collision_speed_bound_retains_both_surface_speeds);
+    IVP_REGISTER(x87_tangent_reaction_matrix_preserves_small_angular_terms);
     IVP_REGISTER(x87_vertex_walk_compares_before_storing_gradient);
     IVP_REGISTER(x87_edge_face_projection_retains_near_parallel_component);
     IVP_REGISTER(x87_spring_impulse_preserves_elastic_residual_after_damping);
@@ -1034,9 +1145,15 @@ int main(void)
 #if IVP_X87_ARITHMETIC
     IVP_REGISTER(x87_contact_projection_rounds_directly_to_float);
     IVP_REGISTER(x87_reduced_inverse_mass_rounds_directly_to_float);
+    IVP_REGISTER(x87_friction_easing_retains_small_tangent_projection);
+    IVP_REGISTER(x87_contact_gap_energy_rounds_after_accumulation);
     IVP_REGISTER(x87_gyroscopic_update_retains_inertia_difference_precision);
     IVP_REGISTER(minimum_rotational_inertia_retains_squared_length_precision);
     IVP_REGISTER(worst_case_inverse_mass_rounds_after_the_second_reciprocal);
+    IVP_REGISTER(single_contact_normal_impulse_retains_closing_velocity_precision);
+    IVP_REGISTER(x87_contact_impulses_preserve_cancelling_velocity);
+    IVP_REGISTER(x87_friction_preserves_directional_inertia);
+    IVP_REGISTER(x87_mutual_energy_keeps_translational_energy_extended);
     IVP_REGISTER(x87_constraint_rotation_error_preserves_small_axes);
     IVP_REGISTER(x87_constraint_back_substitution_preserves_small_impulses);
     IVP_REGISTER(x87_hull_gauss_offset_rounds_after_each_subtraction);

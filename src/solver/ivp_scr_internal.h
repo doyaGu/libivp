@@ -86,6 +86,7 @@ static inline double ivp_scr_f_dot4(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o
            (double)a->k[1] * (double)o->k[1] + (double)a->k[0] * (double)o->k[0];
 }
 
+#if !IVP_X87_ARITHMETIC
 /* ivp_translation_cross (ivp_solver_core_reaction.cxx, retail RVA 0x33560):
  * cross_ws x/y stay double through the inverse rotation, z is a float
  * store; returns the transformed z before its float store */
@@ -101,6 +102,7 @@ static inline double ivp_scr_f_translation_cross(const ivp_transform_r_t *m, con
     out->k[2] = (float)zz;
     return zz;
 }
+#endif
 
 /* IVP_U_Float_Point::dot_product on the xyz part (double products, z y x) */
 static inline double ivp_scr_f_dot3(const ivp_scr_p4_t *a, const ivp_scr_p4_t *o)
@@ -134,10 +136,22 @@ static inline void ivp_scr_f_init_trans_ws(ivp_scr_f_t *s, const ivp_vec3r_t *po
 
     for (int i = 0; i < 3; i++) {
         if (i > 0 && !s->direction_ws[i]) return;
+        cdp[i].hesse_val = 1.0f;
+#if IVP_X87_ARITHMETIC
+        if (i == 0) {
+            s->m[0][0] = ivp_x87_reaction_normal_diagonal(&m_world_f_core->rot, &pos_rel_core,
+                                                         s->direction_ws[0], im.k, im.hesse_val,
+                                                         cdp[0].k, cmi[0].k, s->m[0][0]);
+            cmi[0].hesse_val = im.hesse_val;
+        } else if (i == 1) {
+            ivp_x87_reaction_lever_arm(&m_world_f_core->rot, &pos_rel_core, s->direction_ws[1], cdp[1].k);
+        } else {
+#else
         double raw_z = 0.0;
         if (i < 2) {
             raw_z = ivp_scr_f_translation_cross(m_world_f_core, &pos_rel_core, s->direction_ws[i], &cdp[i]);
         } else {
+#endif
             ivp_vec3f_t cross_ws, cs;
             lvf_cross(&cross_ws, &pos_rel_core, s->direction_ws[i]);
             lvm_vimult3_f(m_world_f_core, &cross_ws, &cs);
@@ -145,9 +159,8 @@ static inline void ivp_scr_f_init_trans_ws(ivp_scr_f_t *s, const ivp_vec3r_t *po
             cdp[i].k[1] = cs.k[1];
             cdp[i].k[2] = cs.k[2];
         }
-        cdp[i].hesse_val = 1.0f;
+#if !IVP_X87_ARITHMETIC
         ivp_scr_f_line_wise_mult4(&cmi[i], &cdp[i], &im);
-
         if (i == 0) {
             /* retail multiplies the retained transformed z by the inverse
              * inertia before narrowing, and sums the diagonal y, w, z, x */
@@ -155,11 +168,22 @@ static inline void ivp_scr_f_init_trans_ws(ivp_scr_f_t *s, const ivp_vec3r_t *po
             s->m[0][0] = (double)cdp[0].k[1] * (double)im.k[1] * (double)cdp[0].k[1] + (double)im.hesse_val +
                          raw_z * (double)im.k[2] * (double)cdp[0].k[2] + (double)cdp[0].k[0] * (double)cmi[0].k[0] +
                          s->m[0][0];
-        } else {
+        }
+#endif
+        if (i != 0) {
+#if IVP_X87_ARITHMETIC
+            ivp_scr_f_line_wise_mult4(&cmi[i], &cdp[i], &im);
+            s->m[i][i] = ivp_x87_reaction_tangent_diagonal(cdp[i].k, cmi[i].k, im.hesse_val, s->m[i][i]);
+#else
             s->m[i][i] = s->m[i][i] + ivp_scr_f_dot4(&cmi[i], &cdp[i]);
+#endif
         }
         for (int j = 0; j < i; j++) {
+#if IVP_X87_ARITHMETIC
+            s->m[j][i] = ivp_x87_reaction_tangent_coupling(cdp[j].k, cmi[i].k, s->m[j][i]);
+#else
             s->m[j][i] = s->m[j][i] + ivp_scr_f_dot3(&cmi[i], &cdp[j]);
+#endif
         }
         double a = ivp_scr_f_dot_vp(&core->rot_speed, &cdp[i]) + lvf_dot(&speed, s->direction_ws[i]);
         /* IVP_FLOAT += IVP_DOUBLE */
