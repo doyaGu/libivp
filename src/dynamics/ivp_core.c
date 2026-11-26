@@ -622,13 +622,13 @@ static void core_damp_object(ivp_core_t *core, double delta_time_, const ivp_vec
     lvf_set_multiple(&rot, rotation_factor, (D)delta_time_);
     double qlen = (double)lvf_quad_length(&rot);
     ivp_vec3f_t r_factor;
-    if (qlen < 0.5) {
+    if (!(qlen >= 0.5)) {
         lvf_set3(&r_factor, 1.0f - rot.k[0], 1.0f - rot.k[1], 1.0f - rot.k[2]);
     } else {
         lvf_setd3(&r_factor, (D)ivp_expd(-(double)rot.k[0]), (D)ivp_expd(-(double)rot.k[1]), (D)ivp_expd(-(double)rot.k[2]));
     }
     double sf = speed_factor * delta_time_;
-    if (sf < 0.25) {
+    if (!(sf >= 0.25)) {
         speed_factor = 1.0 - sf;
     } else {
         speed_factor = ivp_expd(-sf);
@@ -649,12 +649,7 @@ void ivp_core_global_damp_core(ivp_core_t *core, double d_time)
         ivp_vec3f_t add_on, rot_damp_factor;
         lvf_set3(&add_on, s_add_on, s_add_on, s_add_on);
         lvf_add2(&rot_damp_factor, &rdf, &add_on);
-#if IVP_X87_ARITHMETIC
-        /* The two binary32 coefficients are added before the binary64 call argument. */
         const double linear_damping = (double)(float)core->speed_damp_factor + (double)s_add_on;
-#else
-        const double linear_damping = (double)((float)core->speed_damp_factor + s_add_on);
-#endif
         core_damp_object(core, d_time, &rot_damp_factor, linear_damping);
     } else {
         core_damp_object(core, d_time, &rdf, (double)(float)core->speed_damp_factor);
