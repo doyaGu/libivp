@@ -82,7 +82,11 @@ static inline bool kk_is_outside_L(const kk_result_t *r) {
 
 /* cache object transforms (IVP_Cache_Object::transform_*) */
 static inline void co_pos_to_world_f(const ivp_cache_obj_t *co, const ivp_vec3f_t *p_os, ivp_vec3r_t *out) {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_transform_mesh_vertex(&co->m_world_f_object, p_os, out);
+#else
     lvm_vmult4_fp(&co->m_world_f_object, p_os, out);
+#endif
 }
 static inline void co_pos_to_object(const ivp_cache_obj_t *co, const ivp_vec3r_t *p_ws, ivp_vec3r_t *out) {
     lvm_vimult4(&co->m_world_f_object, p_ws, out);
@@ -104,10 +108,15 @@ static inline void cls_give_world_coords_AT(const ivp_compact_edge_t *edge, ivp_
 static inline void cls_calc_pos_other_space(const ivp_compact_edge_t *P, ivp_cache_ledge_point_t *c_P,
                                      ivp_cache_ledge_point_t *c_other, ivp_vec3r_t *res)
 {
-    ivp_vec3f_t p_os = clp_f(P, c_P);
+    const ivp_vec3f_t p_os = clp_f(P, c_P);
+#if IVP_X87_ARITHMETIC
+    ivp_x87_transform_collision_point(&p_os, &c_P->clp_cache_object->m_world_f_object,
+                                       &c_other->clp_cache_object->m_world_f_object, res);
+#else
     ivp_vec3r_t p_ws;
     lvm_vmult4_fp(&c_P->clp_cache_object->m_world_f_object, &p_os, &p_ws);
     lvm_vimult4(&c_other->clp_cache_object->m_world_f_object, &p_ws, res);
+#endif
 }
 
 static inline void cls_transform_vec_other_space(const ivp_vec3r_t *dir_os, ivp_cache_ledge_point_t *c_dir,
@@ -121,10 +130,15 @@ static inline void cls_transform_vec_other_space(const ivp_vec3r_t *dir_os, ivp_
 static inline void cls_transform_pos_other_space(const ivp_vec3f_t *pos_in_os, ivp_cache_ledge_point_t *c_dir,
                                           ivp_cache_ledge_point_t *c_other, ivp_vec3r_t *res)
 {
+#if IVP_X87_ARITHMETIC
+    ivp_x87_transform_collision_point(pos_in_os, &c_dir->clp_cache_object->m_world_f_object,
+                                       &c_other->clp_cache_object->m_world_f_object, res);
+#else
     ivp_vec3r_t dir_ws, pos_os;
     lvp_set_f(&pos_os, pos_in_os);
     lvm_vmult4(&c_dir->clp_cache_object->m_world_f_object, &pos_os, &dir_ws);
     lvm_vimult4(&c_other->clp_cache_object->m_world_f_object, &dir_ws, res);
+#endif
 }
 
 static inline void cls_calc_unscaled_s_val_K_space(const ivp_compact_ledge_t *c_ledge, const ivp_compact_edge_t *edge,

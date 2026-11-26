@@ -663,6 +663,38 @@ IVP_TEST(triangle_inverse_length_preserves_binary64_precision)
 #endif
 
 #if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+IVP_TEST(x87_collision_speed_bound_retains_both_surface_speeds)
+{
+    IVP_ASSERT_EQ(ivp_x87_collision_speed_bound(0.125f, 0.125f, 1.0f, 0x1p-24f), 0x1.400001p+0);
+}
+
+IVP_TEST(x87_vertex_walk_compares_before_storing_gradient)
+{
+    const ivp_vec3r_t offset = {{0.0, -0x1.7687b3p+3, 0.0}};
+    const ivp_vec3f_t vertex = {{0.0f, 2.5f, 0.0f}};
+    const ivp_vec3f_t neighbor = {{0.0f, -2.5f, 0.0f}};
+    const double projection = ivp_x87_vertex_walk_projection(&offset, &vertex);
+    double gradient;
+    IVP_ASSERT_TRUE(ivp_x87_better_vertex_walk_gradient(&offset, &vertex, &neighbor,
+                                                        projection, 0.0, &gradient));
+    IVP_ASSERT_EQ(gradient, 0x1.7687b2ffffffdp+3);
+    IVP_ASSERT_TRUE(ivp_x87_better_vertex_walk_gradient(&offset, &vertex, &neighbor,
+                                                        projection, gradient, &gradient));
+    IVP_ASSERT_EQ(gradient, 0x1.7687b2ffffffdp+3);
+}
+
+IVP_TEST(x87_edge_face_projection_retains_near_parallel_component)
+{
+    const ivp_mat3r_t edge_rotation = {{{{1.0, 0x1p-60, -1.0}},
+                                        {{0.0, 1.0, 0.0}},
+                                        {{0.0, 0.0, 1.0}}}};
+    const ivp_vec3r_t edge = {{1.0, 1.0, 1.0}};
+    const ivp_vec3r_t normal = {{1.0, 0.0, 0.0}};
+    ivp_transform_r_t face;
+    ivp_transform_identity(&face);
+    IVP_ASSERT_EQ(ivp_x87_edge_face_projection(&edge_rotation, &edge, &face.rot, &normal), 0x1p-60);
+}
+
 IVP_TEST(x87_world_impulse_preserves_torque_under_cancellation)
 {
     ivp_transform_r_t transform;
@@ -693,6 +725,32 @@ IVP_TEST(x87_inverse_point_transform_preserves_anchor_offset)
     IVP_ASSERT_EQ(local[2], -0x1.ff4700c829000p+2);
 }
 
+IVP_TEST(x87_edge_edge_separation_retains_small_gaps)
+{
+    ivp_transform_r_t transform;
+    ivp_transform_identity(&transform);
+    const ivp_vec3r_t first_edge[2] = {{{1.0, 0.0, 1.0}}, {{1.0, 0.0, -1.0}}};
+    const ivp_vec3r_t second_edge[2] = {{{0x1.0000000000001p+0, 0.0, 1.0}}, {{0.0, 1.0, 0.0}}};
+    const uint16_t precision = ivp_x87_enter_step();
+    const double gap = ivp_x87_edge_edge_separation(&transform, first_edge, &transform, second_edge, 1.0);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(gap, -0x1p-52 * ivp_isqrt_double(2.0, 2));
+}
+
+IVP_TEST(x87_point_plane_separation_retains_small_gaps)
+{
+    ivp_transform_r_t transform;
+    ivp_transform_identity(&transform);
+    transform.pos.k[2] = 1.0;
+    const ivp_vec3r_t origin = {{0.0, 0.0, 0.0}};
+    const ivp_vec3r_t plane_point = {{0.0, 0.0, 0x1p-54}};
+    const ivp_vec3r_t normal = {{0.0, 0.0, 1.0}};
+    const uint16_t precision = ivp_x87_enter_step();
+    const double gap = ivp_x87_point_plane_separation(&transform, &origin, &transform, &plane_point, &normal);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(gap, -0x1p-54);
+}
+
 IVP_TEST(x87_position_advance_retains_precision_to_writeback)
 {
     ivp_vec3r_t position = {{0.0, 0.0, -0x1.2fe2ea0000fd7p+5}};
@@ -704,6 +762,16 @@ IVP_TEST(x87_position_advance_retains_precision_to_writeback)
     IVP_ASSERT_EQ(position.k[2], -0x1.2fe3009b12c68p+5);
 }
 
+IVP_TEST(point_face_distance_preserves_projection_difference)
+{
+    const ivp_vec3r_t normal = {{0x1.0000002p0, 1.0, 0.0}};
+    const ivp_vec3r_t point = {{0x1.ffffffcp-1, 0x1p-27, 0.0}};
+    const ivp_vec3f_t face_point = {{1.0f, 0.0f, 0.0f}};
+    const uint16_t precision = ivp_x87_enter_step();
+    const float distance = ivp_x87_point_face_distance(&normal, &point, &face_point);
+    ivp_x87_leave_step(precision);
+    IVP_ASSERT_EQ(distance, -0x1p-54f);
+}
 #endif
 
 #if IVP_X87_ARITHMETIC
@@ -849,8 +917,14 @@ int main(void)
 #endif
 #if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
     IVP_REGISTER(x87_position_advance_retains_precision_to_writeback);
+    IVP_REGISTER(x87_point_plane_separation_retains_small_gaps);
+    IVP_REGISTER(x87_collision_speed_bound_retains_both_surface_speeds);
+    IVP_REGISTER(x87_vertex_walk_compares_before_storing_gradient);
+    IVP_REGISTER(x87_edge_face_projection_retains_near_parallel_component);
     IVP_REGISTER(x87_world_impulse_preserves_torque_under_cancellation);
     IVP_REGISTER(x87_inverse_point_transform_preserves_anchor_offset);
+    IVP_REGISTER(x87_edge_edge_separation_retains_small_gaps);
+    IVP_REGISTER(point_face_distance_preserves_projection_difference);
 #endif
 #if IVP_X87_ARITHMETIC
     IVP_REGISTER(x87_gyroscopic_update_retains_inertia_difference_precision);

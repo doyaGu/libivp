@@ -641,7 +641,11 @@ static ivp_mrc_type_t p_minimize_Leave_PF(mms_t *m, const ivp_compact_edge_t *P,
         co_vec_to_world(c_F->clp_cache_object, &wHesse_vecF_Fos, &hesse_vec_ws);
         co_vec_to_object(c_P->clp_cache_object, &hesse_vec_ws, &hesse_vec_Pos);
         ivp_vec3f_t F_O_Fos = clp_f(F, c_F);
+#if IVP_X87_ARITHMETIC
+        md->len_numerator = ivp_x87_point_face_distance(&wHesse_vecF_Fos, P_Fos, &F_O_Fos);
+#else
         md->len_numerator = (float)(lvp_dot(&wHesse_vecF_Fos, P_Fos) - lvp_dot_f(&wHesse_vecF_Fos, &F_O_Fos));
+#endif
         lvf_set_p(&md->contact_plane, &hesse_vec_ws);
         if ((D)md->len_numerator < back_side_check_distance) {
             lvp_mult(&hesse_vec_Pos, -1.0f);
@@ -843,19 +847,21 @@ static ivp_mrc_type_t p_minimize_Leave_KK(mms_t *m, const ivp_compact_edge_t *K,
     for (int i = 0; i <= 3; i++) {
         leave_kk_case_t *cF = &cases[i];
         leave_kk_case_t *ce = &cases[(i ^ side) ^ (int)reverse_side_check[i]];
-        D delta_h2;
         ivp_vec3r_t e_dir_Fos;
-        {
-            leave_kk_case_t *ce2 = &cases[i ^ side];
-            leave_kk_case_t *ce2_next = &cases[1 ^ (i ^ side)];
-            lvp_subtract2(&e_dir_Fos, ce2->P_Fos, ce2_next->P_Fos);
-            delta_h2 = lvp_dot(&e_dir_Fos, &cF->hesse_Fos);
-        }
+        const leave_kk_case_t *start = &cases[i ^ side];
+        const leave_kk_case_t *end = &cases[1 ^ (i ^ side)];
+        lvp_subtract2(&e_dir_Fos, start->P_Fos, end->P_Fos);
+#if IVP_X87_ARITHMETIC
+        D grad;
+        if (ivp_x87_better_edge_face_gradient(&e_dir_Fos, &cF->hesse_Fos, min_grad_pos, &grad)) {
+#else
+        const D delta_h2 = lvp_dot(&e_dir_Fos, &cF->hesse_Fos);
         if (delta_h2 >= 0.0f) continue;
-        D inv_hesse_real_length = (D)lv_isqrt_float((float)lvp_quad_length(&cF->hesse_Fos));
+        const D inv_hesse_real_length = (D)lv_isqrt_float((float)lvp_quad_length(&cF->hesse_Fos));
         D grad = delta_h2 * (D)lv_isqrt_float((float)lvp_quad_length(&e_dir_Fos));
         grad *= inv_hesse_real_length;
         if (grad < min_grad_pos) {
+#endif
             qr_result_t qr;
             cls_calc_unscaled_qr_vals_F_space(cF->m_cache_F->compact_ledge, cF->F, ce->P_Fos, &qr);
             if (qr.checks[0] > 0.0f) {
@@ -1042,23 +1048,33 @@ static ivp_mrc_type_t p_minimize_PP(mms_t *m, const ivp_compact_edge_t *A, const
         ivp_vec3f_t Pm_Pmos = clp_f(Pm, m_cache_Pm);
         ivp_vec3r_t Pm_P_Pmos;
         lvp_subtract2_pf(&Pm_P_Pmos, P_Pmos, &Pm_Pmos);
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+        D dist = ivp_x87_vertex_walk_projection(&Pm_P_Pmos, &Pm_Pmos);
+#else
         D dist = lvp_dot_f(&Pm_P_Pmos, &Pm_Pmos);
+#endif
         Pm = ivp_edge_get_prev(Pm);
         const ivp_compact_edge_t *e = ivp_edge_get_prev(ivp_edge_get_opposite(Pm));
         for (;; e = ivp_edge_get_prev(ivp_edge_get_opposite(e))) {
             ivp_vec3f_t tp_next_os = clp_f(e, m_cache_Pm);
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+            D grad;
+            if (ivp_x87_better_vertex_walk_gradient(&Pm_P_Pmos, &Pm_Pmos, &tp_next_os,
+                                                    dist, s_grad_max, &grad)) {
+#else
             D grad = lvp_dot_f(&Pm_P_Pmos, &tp_next_os) - dist;
             if (grad > 0) {
                 D i_len = (D)lv_isqrt_float((float)lvf_quad_distance(&tp_next_os, &Pm_Pmos));
                 grad *= i_len;
-                if (grad > s_grad_max) {
-                    P_Pmos_max = P_Pmos;
-                    s_grad_max = grad;
-                    Kmax = e;
-                    Pmax = Point[ip];
-                    m_cache_K_max = m_cache_Pm;
-                    m_cache_P_max = m_cache[ip];
-                }
+            }
+            if (grad > s_grad_max) {
+#endif
+                P_Pmos_max = P_Pmos;
+                s_grad_max = grad;
+                Kmax = e;
+                Pmax = Point[ip];
+                m_cache_K_max = m_cache_Pm;
+                m_cache_P_max = m_cache[ip];
             }
             if (e == Pm) break;
         }

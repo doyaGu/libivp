@@ -52,6 +52,11 @@ static ivp_time_t s3d_calc_nullstelle(solver3d_t *s, ivp_time_t t0, ivp_time_t t
     ivp_transform_r_t A, B;
     int counter = 0;
     for (;;) {
+#if IVP_X87_ARITHMETIC
+        const bool adjust_midpoint = (counter & 3) == 3;
+        if (adjust_midpoint && counter > 64) return t0;
+        ivp_time_t tt = ivp_x87_collision_time(t0, t1, value, v0, v1, adjust_midpoint);
+#else
         D dv = v1 - v0;
         ivp_time_t tt = t0;
         tt += (double)((value - v0) * (D)ivp_time_diff(t1, t0) / dv);
@@ -64,6 +69,7 @@ static ivp_time_t s3d_calc_nullstelle(solver3d_t *s, ivp_time_t t0, ivp_time_t t
             D mid2 = dt0 + dt1;
             tt += (double)(mid2 * (inv_ratio * 0.5f));
         }
+#endif
         ivp_object_calc_at_matrix(a, tt, &A);
         ivp_object_calc_at_matrix(b, tt, &B);
         D vv = s->get_value(s, &A, &B);
@@ -183,21 +189,29 @@ static bool s3d_find_first_t_for_value_coll(solver3d_t *s, D value, D value2, iv
 /* PF_COLL: v[0]=point_object, v[1]=hesse_of_area_object, v[2]=point_of_area_object */
 static D sv_pf_coll(solver3d_t *t, const ivp_transform_r_t *A, const ivp_transform_r_t *B)
 {
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    return ivp_x87_point_plane_separation(A, &t->v[0], B, &t->v[2], &t->v[1]);
+#else
     ivp_vec3r_t point_world, hesse_world, point_of_area_world, d;
     lvm_vmult4(A, &t->v[0], &point_world);
     lvm_vmult4(B, &t->v[2], &point_of_area_world);
     lvm_vmult3(B, &t->v[1], &hesse_world);
     lvp_subtract2(&d, &point_world, &point_of_area_world);
     return lvp_dot(&d, &hesse_world);
+#endif
 }
 
 /* VEC_PARALLEL_AREA: v[0]=vec_object, v[1]=hesse_of_area_object */
 static D sv_vec_parallel_area(solver3d_t *t, const ivp_transform_r_t *A, const ivp_transform_r_t *B)
 {
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    return ivp_x87_edge_face_projection(&A->rot, &t->v[0], &B->rot, &t->v[1]);
+#else
     ivp_vec3r_t vec_world, hesse_world;
     lvm_vmult3(A, &t->v[0], &vec_world);
     lvm_vmult3(B, &t->v[1], &hesse_world);
     return lvp_dot(&vec_world, &hesse_world);
+#endif
 }
 
 /* DISTANCE_OF_TWO_POINTS: v[0]=A_object, v[1]=B_object, v[2]=normized_direction_world_at_t0 */
@@ -269,6 +283,9 @@ static D sv_pf_npf(solver3d_t *t, const ivp_transform_r_t *A, const ivp_transfor
 /* KK_COLL: v[0]=k_point_object, v[1]=k_vec_object, v[2]=l_point_object, v[3]=l_vec_object, scalar=side */
 static D sv_kk_coll(solver3d_t *t, const ivp_transform_r_t *K, const ivp_transform_r_t *L)
 {
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    return ivp_x87_edge_edge_separation(K, t->v, L, t->v + 2, t->scalar);
+#else
     ivp_vec3r_t k_vec_world, l_vec_world, k_point_world, l_point_world, H;
     lvm_vmult3(K, &t->v[1], &k_vec_world);
     lvm_vmult4(K, &t->v[0], &k_point_world);
@@ -279,6 +296,7 @@ static D sv_kk_coll(solver3d_t *t, const ivp_transform_r_t *K, const ivp_transfo
     D iH_len = (D)lv_isqrt_float((float)lvp_quad_length(&H));
     res *= iH_len;
     return res * t->scalar;
+#endif
 }
 
 /* KK_PARALLEL: v[1]=k_vec_object, v[3]=l_vec_object */
@@ -319,6 +337,16 @@ static void hesse_vec_not_normized(const ivp_compact_edge_t *edge, const ivp_cac
 
 static inline D lvf_fast_real_length(const ivp_vec3f_t *a) { return LV_SQRT(lvf_quad_length(a)); }
 
+static inline D sector_change_projection_limit(float force_distance, float inverse_diameter)
+{
+#if IVP_X87_ARITHMETIC && defined(IVP_REAL_DOUBLE)
+    /* Two binary32 significands fit exactly in the solver's binary64 threshold. */
+    return -(double)force_distance * (double)inverse_diameter;
+#else
+    return (D)(-force_distance * inverse_diameter);
+#endif
+}
+
 /* ── PF ─────────────────────────────────────────────────────────────────── */
 
 static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compact_edge_t *P, const ivp_compact_edge_t *F,
@@ -341,8 +369,13 @@ static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compac
         s3d_set_max_deviation(&pf, mim->max_coll_speed);
         float radius = md->sum_extra_radius;
         D sec_dist = ivp_mindist_collision_distance(md) + (D)radius;
+#if IVP_X87_ARITHMETIC
+        D real_coll = (D)((double)ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5 * radius);
+        D now_len = (D)((double)md->len_numerator + radius);
+#else
         D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
         D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
+#endif
         if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->event_time_out, &cache_P,
                                             &cache_F, &now_len, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_PF_COLL;
@@ -355,9 +388,8 @@ static void calc_next_event_PF(ivp_mindist_event_solver_t *mim, const ivp_compac
     {
         D real_dist = P_MIND(ivp_mindist_collision_distance(md), (D)md->len_numerator);
         real_dist += (D)(md->sum_extra_radius * 0.1f);
-        /* IVP_FLOAT * IVP_FLOAT */
-        sec_dist = (D)(-ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist *
-                       c_F->clp_object->physical_core->inv_object_diameter);
+        sec_dist = sector_change_projection_limit(ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist,
+                                                  c_F->clp_object->physical_core->inv_object_diameter);
         sec_dist *= real_dist;
         sec_dist /= ivp_mindist_collision_distance(md);
     }
@@ -405,8 +437,13 @@ static void calc_next_event_BF(ivp_mindist_event_solver_t *mim, const ivp_compac
     s3d_set_max_deviation(&pf, mim->max_coll_speed);
     float radius = md->sum_extra_radius;
     D sec_dist = ivp_mindist_collision_distance(md) + (D)radius;
+#if IVP_X87_ARITHMETIC
+    D real_coll = (D)((double)ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5 * radius);
+    D now_len = (D)((double)md->len_numerator + radius);
+#else
     D real_coll = (D)(ivp_env_get_mindist_settings(md->env)->real_coll_dist + 0.5f * radius); /* IVP_FLOAT expression */
     D now_len = (D)(md->len_numerator + radius); /* IVP_FLOAT expression */
+#endif
     if (s3d_find_first_t_for_value_coll(&pf, sec_dist, real_coll, mim->t_now, mim->t_max, &cache_P, &cache_F,
                                         &now_len, &mim->event_time_out)) {
         mim->event_type_out = IVP_COLL_PF_COLL;
@@ -482,8 +519,8 @@ static void calc_next_event_KK(ivp_mindist_event_solver_t *mim, const ivp_compac
         IVP_ASSERT(m_cache_tab[3 - i]->compact_ledge == ivp_edge_get_compact_ledge(F[i]));   /* ivp_mindist_event.cxx:592 */
         matrix_cache_t *cache_e = cache_tab[i];
         matrix_cache_t *cache_Fc = cache_tab[3 - i];
-        D sec_dist = (D)(-ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist *
-                         cache_e->core->inv_object_diameter);
+        D sec_dist = sector_change_projection_limit(ivp_env_get_mindist_settings(md->env)->mindist_change_force_dist,
+                                                    cache_e->core->inv_object_diameter);
         if (s3d_find_first_t_for_value_max_dev(&kkpf, sec_dist, mim->t_now, mim->event_time_out, 0, cache_e, cache_Fc,
                                                NULL, &mim->event_time_out)) {
             mim->event_type_out = IVP_COLL_KK_PF;

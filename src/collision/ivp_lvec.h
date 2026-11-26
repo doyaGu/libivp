@@ -321,9 +321,15 @@ static inline void lvp_subtract2_pf(ivp_vec3r_t *r, const ivp_vec3r_t *a, const 
 static inline void lvp_subtract2_fp(ivp_vec3r_t *r, const ivp_vec3f_t *a, const ivp_vec3r_t *b) {
     r->k[0] = (D)a->k[0] - b->k[0]; r->k[1] = (D)a->k[1] - b->k[1]; r->k[2] = (D)a->k[2] - b->k[2];
 }
-/* IVP_U_Point::subtract(Float, Float): float subtraction promoted */
+/* IVP_U_Point::subtract(Float, Float) */
 static inline void lvp_subtract2_ff(ivp_vec3r_t *r, const ivp_vec3f_t *a, const ivp_vec3f_t *b) {
+#if IVP_X87_ARITHMETIC
+    r->k[0] = (D)a->k[0] - (D)b->k[0];
+    r->k[1] = (D)a->k[1] - (D)b->k[1];
+    r->k[2] = (D)a->k[2] - (D)b->k[2];
+#else
     r->k[0] = (D)(a->k[0] - b->k[0]); r->k[1] = (D)(a->k[1] - b->k[1]); r->k[2] = (D)(a->k[2] - b->k[2]);
+#endif
 }
 static inline void lvp_subtract_and_mult(ivp_vec3r_t *r, const ivp_vec3r_t *v1, const ivp_vec3r_t *v2, D f) {
     D a = (v1->k[0] - v2->k[0]) * f, b = (v1->k[1] - v2->k[1]) * f, c = (v1->k[2] - v2->k[2]) * f;

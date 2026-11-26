@@ -43,6 +43,20 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
                        const ivp_vec3f_t *world_impulse, float inverse_mass,
                        const ivp_vec3f_t *inverse_inertia, ivp_vec3f_t *linear_speed,
                        ivp_vec3f_t *angular_speed);
+double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
+                                     float first_surface, float second_surface);
+double ivp_x87_collision_time(double first, double last, double target,
+                              double first_distance, double last_distance, bool adjust_midpoint);
+bool ivp_x87_better_edge_face_gradient(const ivp_vec3r_t *edge, const ivp_vec3r_t *face_normal,
+                                       ivp_real_t minimum, ivp_real_t *gradient);
+#ifdef IVP_REAL_DOUBLE
+double ivp_x87_vertex_walk_projection(const ivp_vec3r_t *offset, const ivp_vec3f_t *vertex);
+bool ivp_x87_better_vertex_walk_gradient(const ivp_vec3r_t *offset, const ivp_vec3f_t *vertex,
+                                         const ivp_vec3f_t *neighbor, double projection,
+                                         double best_gradient, double *gradient);
+#endif
+float ivp_x87_point_face_distance(const ivp_vec3r_t *normal, const ivp_vec3r_t *point,
+                                  const ivp_vec3f_t *face_point);
 double ivp_x87_hull_determinant(double *const rows[], int dimension);
 int ivp_x87_hull_determinant_exceeds(double *const rows[], int dimension, double maximum);
 bool ivp_x87_set_hull_plane_offset(double *const vertices[3], const double origin[3],
@@ -87,6 +101,22 @@ void ivp_x87_interpolate_point(const ivp_vec3r_t *first, const ivp_vec3r_t *last
                                ivp_vec3r_t *out);
 void ivp_x87_transform_point3d(const double rotation[3][3], const double origin[3],
                                const double point[3], double out[3]);
+#ifdef IVP_REAL_DOUBLE
+double ivp_x87_point_plane_separation(const ivp_transform_r_t *point_transform,
+                                      const ivp_vec3r_t *point, const ivp_transform_r_t *plane_transform,
+                                      const ivp_vec3r_t *plane_point, const ivp_vec3r_t *plane_normal);
+double ivp_x87_edge_edge_separation(const ivp_transform_r_t *first_transform, const ivp_vec3r_t first_edge[2],
+                                    const ivp_transform_r_t *second_transform, const ivp_vec3r_t second_edge[2],
+                                    double orientation);
+double ivp_x87_edge_face_projection(const ivp_mat3r_t *edge_rotation, const ivp_vec3r_t *edge,
+                                    const ivp_mat3r_t *face_rotation, const ivp_vec3r_t *normal);
+#endif
+void ivp_x87_transform_mesh_vertex(const ivp_transform_r_t *transform, const ivp_vec3f_t *vertex,
+                                   ivp_vec3r_t *out);
+void ivp_x87_transform_collision_point(const ivp_vec3f_t *point,
+                                       const ivp_transform_r_t *source, const ivp_transform_r_t *target,
+                                       ivp_vec3r_t *out);
+
 bool ivp_x87_quat_normalize(double rotation[4]);
 void ivp_x87_quat_to_mat3(const double rotation[4], ivp_mat3r_t *matrix);
 void ivp_x87_quat_from_mat3(double rotation[4], const ivp_mat3r_t *matrix);

@@ -248,6 +248,102 @@ static bool ivp_x87_normalize_point(Scalar point[3], int steps, double epsilon, 
     return true;
 }
 
+double ivp_x87_collision_speed_bound(float first_linear, float second_linear,
+                                     float first_surface, float second_surface)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 surface_speed = fp.add(fp.load(first_surface), fp.load(second_surface));
+    const X87_Float80 linear_speed = fp.add(fp.load(second_linear), fp.load(first_linear));
+    return fp.store_double(fp.add(linear_speed, surface_speed));
+}
+
+double ivp_x87_collision_time(double first, double last, double target,
+                              double first_distance, double last_distance, bool adjust_midpoint)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 start = fp.load(first);
+    const X87_Float80 end = fp.load(last);
+    const X87_Float80 distance = fp.load(first_distance);
+    const X87_Float80 time_offset = fp.divide(
+        fp.multiply(fp.subtract(end, start), fp.subtract(fp.load(target), distance)),
+        fp.subtract(fp.load(last_distance), distance));
+    double selected = fp.store_double(fp.add(time_offset, start));
+    if (adjust_midpoint) {
+        const X87_Float80 estimate = fp.load(selected);
+        const X87_Float80 offset = fp.add(fp.subtract(start, estimate), fp.subtract(end, estimate));
+        selected = fp.store_double(fp.add(fp.multiply(offset, fp.load(0.375)), estimate));
+    }
+    return selected;
+}
+
+/* Compare each neighboring face's normalized slope before the gradient is
+ * stored. The edge and normal squared lengths enter the reciprocal square
+ * root as binary32 values. */
+bool ivp_x87_better_edge_face_gradient(const ivp_vec3r_t *edge, const ivp_vec3r_t *face_normal,
+                                       ivp_real_t minimum, ivp_real_t *gradient)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.load(edge->k[0]), y = fp.load(edge->k[1]), z = fp.load(edge->k[2]);
+    const X87_Float80 nx = fp.load(face_normal->k[0]);
+    const X87_Float80 ny = fp.load(face_normal->k[1]);
+    const X87_Float80 nz = fp.load(face_normal->k[2]);
+    const X87_Float80 delta = fp.add(fp.add(fp.multiply(y, ny), fp.multiply(z, nz)), fp.multiply(x, nx));
+    const X87_Arithmetic::Relation sign = fp.compare(delta, fp.load(0.0));
+    if (sign != X87_Arithmetic::LESS && sign != X87_Arithmetic::UNORDERED)
+        return false;
+
+    const float normal_square = fp.store_float(fp.add(fp.add(fp.multiply(nx, nx), fp.multiply(nz, nz)),
+                                                      fp.multiply(ny, ny)));
+    const float edge_square = fp.store_float(fp.add(fp.add(fp.multiply(z, z), fp.multiply(y, y)),
+                                                    fp.multiply(x, x)));
+    const double inverse_normal = fp.store_double(ivp_x87_isqrt(fp, fp.load(normal_square), 2));
+    const X87_Float80 inverse_edge = ivp_x87_isqrt(fp, fp.load(edge_square), 2);
+    const X87_Float80 value = fp.multiply(fp.multiply(inverse_edge, fp.load(fp.store_double(delta))),
+                                          fp.load(inverse_normal));
+    const X87_Arithmetic::Relation relation = fp.compare(value, fp.load(minimum));
+    if (relation != X87_Arithmetic::LESS && relation != X87_Arithmetic::UNORDERED)
+        return false;
+    ivp_x87_store(fp, *gradient, value);
+    return true;
+}
+
+#ifdef IVP_REAL_DOUBLE
+double ivp_x87_vertex_walk_projection(const ivp_vec3r_t *offset, const ivp_vec3f_t *vertex)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.multiply(fp.load(offset->k[0]), fp.load(vertex->k[0]));
+    const X87_Float80 y = fp.multiply(fp.load(offset->k[1]), fp.load(vertex->k[1]));
+    const X87_Float80 z = fp.multiply(fp.load(offset->k[2]), fp.load(vertex->k[2]));
+    return fp.store_double(fp.add(fp.add(z, y), x));
+}
+
+bool ivp_x87_better_vertex_walk_gradient(const ivp_vec3r_t *offset, const ivp_vec3f_t *vertex,
+                                         const ivp_vec3f_t *neighbor, double projection,
+                                         double best_gradient, double *gradient)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.multiply(fp.load(offset->k[0]), fp.load(neighbor->k[0]));
+    const X87_Float80 y = fp.multiply(fp.load(offset->k[1]), fp.load(neighbor->k[1]));
+    const X87_Float80 z = fp.multiply(fp.load(offset->k[2]), fp.load(neighbor->k[2]));
+    const X87_Float80 difference = fp.subtract(fp.add(fp.add(x, y), z), fp.load(projection));
+    if (fp.compare(difference, fp.load(0.0)) != X87_Arithmetic::GREATER)
+        return false;
+
+    const X87_Float80 dx = fp.subtract(fp.load(neighbor->k[0]), fp.load(vertex->k[0]));
+    const X87_Float80 dy = fp.subtract(fp.load(neighbor->k[1]), fp.load(vertex->k[1]));
+    const X87_Float80 dz = fp.subtract(fp.load(neighbor->k[2]), fp.load(vertex->k[2]));
+    const float edge_square = fp.store_float(fp.add(fp.add(fp.multiply(dz, dz), fp.multiply(dy, dy)),
+                                                    fp.multiply(dx, dx)));
+    const X87_Float80 inverse_length = ivp_x87_isqrt(fp, fp.load(edge_square), 2);
+    const X87_Float80 scaled = fp.multiply(inverse_length, fp.load(fp.store_double(difference)));
+    // The selected gradient is stored as a double. The candidate stays extended for the comparison.
+    if (fp.compare(scaled, fp.load(best_gradient)) != X87_Arithmetic::GREATER)
+        return false;
+    *gradient = fp.store_double(scaled);
+    return true;
+}
+#endif
+
 static X87_Float80 ivp_x87_determinant2(X87_Arithmetic &fp,
                                         double a, double b, double c, double d)
 {
@@ -613,6 +709,14 @@ static X87_Float80 ivp_x87_round_double(X87_Arithmetic &fp, const X87_Float80 &v
     return fp.load(fp.store_double(value));
 }
 
+template<class Vector>
+static X87_Float80 ivp_x87_point_dot(X87_Arithmetic &fp, const Vector *left, const Vector *right)
+{
+    return fp.add(fp.add(fp.multiply(fp.load(left->k[2]), fp.load(right->k[2])),
+                         fp.multiply(fp.load(left->k[1]), fp.load(right->k[1]))),
+                  fp.multiply(fp.load(left->k[0]), fp.load(right->k[0])));
+}
+
 void ivp_x87_surface_speed(const ivp_mat3r_t *rotation, const ivp_vec3f_t *point,
                            const ivp_vec3f_t *linear_speed, const ivp_vec3f_t *angular_speed,
                            ivp_vec3f_t *velocity)
@@ -663,6 +767,22 @@ void ivp_x87_test_push(const ivp_vec3f_t *point, const ivp_vec3f_t *local_impuls
     }
     for (int axis = 0; axis < 3; ++axis)
         linear_speed->k[axis] = fp.store_float(linear[axis]);
+}
+
+float ivp_x87_point_face_distance(const ivp_vec3r_t *normal, const ivp_vec3r_t *point,
+                                  const ivp_vec3f_t *face_point)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 x = fp.load(normal->k[0]);
+    const X87_Float80 y = fp.load(normal->k[1]);
+    const X87_Float80 z = fp.load(normal->k[2]);
+    const X87_Float80 point_projection = fp.add(
+        fp.add(fp.multiply(z, fp.load(point->k[2])), fp.multiply(x, fp.load(point->k[0]))),
+        fp.multiply(y, fp.load(point->k[1])));
+    const X87_Float80 face_projection = fp.add(
+        fp.add(fp.multiply(y, fp.load(face_point->k[1])), fp.multiply(z, fp.load(face_point->k[2]))),
+        fp.multiply(x, fp.load(face_point->k[0])));
+    return fp.store_float(fp.subtract(point_projection, face_projection));
 }
 
 static X87_Float80 ivp_x87_square(X87_Arithmetic &fp, const X87_Float80 &value)
@@ -850,6 +970,135 @@ void ivp_x87_transform_point3d(const double rotation[3][3], const double origin[
     const X87_Float80 local[3] = {fp.load(point[0]), fp.load(point[1]), fp.load(point[2])};
     for (int axis = 0; axis < 3; ++axis)
         out[axis] = fp.store_double(ivp_x87_position_component<true>(fp, rotation[axis], origin[axis], local, axis));
+}
+
+#ifdef IVP_REAL_DOUBLE
+static void ivp_x87_rotate_direction(X87_Arithmetic &fp, const ivp_mat3r_t *rotation,
+                                     const ivp_vec3r_t *direction, ivp_vec3r_t *world)
+{
+    const X87_Float80 local[3] = {fp.load(direction->k[0]), fp.load(direction->k[1]),
+                                 fp.load(direction->k[2])};
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double *row = rotation->rows[axis].k;
+        const X87_Float80 x = fp.multiply(local[0], fp.load(row[0]));
+        const X87_Float80 y = fp.multiply(local[1], fp.load(row[1]));
+        const X87_Float80 z = fp.multiply(local[2], fp.load(row[2]));
+        world->k[axis] = fp.store_double(axis == 0 ? fp.add(fp.add(z, y), x) :
+                                                    fp.add(fp.add(x, z), y));
+    }
+}
+
+double ivp_x87_edge_face_projection(const ivp_mat3r_t *edge_rotation, const ivp_vec3r_t *edge,
+                                    const ivp_mat3r_t *face_rotation, const ivp_vec3r_t *normal)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    ivp_vec3r_t world_edge, world_normal;
+    ivp_x87_rotate_direction(fp, edge_rotation, edge, &world_edge);
+    ivp_x87_rotate_direction(fp, face_rotation, normal, &world_normal);
+    return fp.store_double(ivp_x87_point_dot(fp, &world_edge, &world_normal));
+}
+
+static void ivp_x87_transform_edge(X87_Arithmetic &fp, const ivp_transform_r_t *transform,
+                                   const ivp_vec3r_t edge[2], ivp_vec3r_t *point, ivp_vec3r_t *direction)
+{
+    const X87_Float80 local[3] = {fp.load(edge[0].k[0]), fp.load(edge[0].k[1]), fp.load(edge[0].k[2])};
+    for (int axis = 0; axis < 3; ++axis)
+        point->k[axis] = fp.store_double(ivp_x87_position_component<true>(
+            fp, transform->rot.rows[axis].k, transform->pos.k[axis], local, axis));
+    ivp_x87_rotate_direction(fp, &transform->rot, &edge[1], direction);
+}
+
+double ivp_x87_edge_edge_separation(const ivp_transform_r_t *first_transform, const ivp_vec3r_t first_edge[2],
+                                    const ivp_transform_r_t *second_transform, const ivp_vec3r_t second_edge[2],
+                                    double orientation)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    ivp_vec3r_t first_point, first_direction, second_point, second_direction;
+    ivp_x87_transform_edge(fp, first_transform, first_edge, &first_point, &first_direction);
+    ivp_x87_transform_edge(fp, second_transform, second_edge, &second_point, &second_direction);
+    X87_Float80 cross[3];
+    ivp_x87_cross_extended<false>(fp, &first_direction, &second_direction, cross);
+    ivp_vec3r_t normal;
+    for (int axis = 0; axis < 3; ++axis)
+        normal.k[axis] = fp.store_double(cross[axis]);
+
+    const X87_Float80 first_projection = ivp_x87_point_dot(fp, &normal, &first_point);
+    const X87_Float80 second_projection = ivp_x87_point_dot(fp, &normal, &second_point);
+    const X87_Float80 gap = fp.subtract(first_projection, second_projection);
+    const float square = fp.store_float(ivp_x87_point_square(fp, normal.k));
+    const X87_Float80 inverse_length = ivp_x87_isqrt(fp, fp.load(square), 2);
+    return fp.store_double(fp.multiply(fp.multiply(gap, inverse_length), fp.load(orientation)));
+}
+
+double ivp_x87_point_plane_separation(const ivp_transform_r_t *point_transform,
+                                      const ivp_vec3r_t *point, const ivp_transform_r_t *plane_transform,
+                                      const ivp_vec3r_t *plane_point, const ivp_vec3r_t *plane_normal)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 local_point[3] = {fp.load(point->k[0]), fp.load(point->k[1]), fp.load(point->k[2])};
+    const X87_Float80 local_plane[3] = {fp.load(plane_point->k[0]), fp.load(plane_point->k[1]),
+                                      fp.load(plane_point->k[2])};
+    X87_Float80 projection[3];
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 world_point = ivp_x87_round_double(fp, ivp_x87_position_component<true>(
+            fp, point_transform->rot.rows[axis].k, point_transform->pos.k[axis], local_point, axis));
+        const double *row = plane_transform->rot.rows[axis].k;
+        X87_Float80 world_plane = ivp_x87_position_component<false>(
+            fp, row, plane_transform->pos.k[axis], local_plane, axis);
+        if (axis != 2)
+            world_plane = ivp_x87_round_double(fp, world_plane);
+        X87_Float80 difference = fp.subtract(world_point, world_plane);
+        // The Z projection uses the unrounded plane coordinate and displacement.
+        if (axis != 2)
+            difference = ivp_x87_round_double(fp, difference);
+        const X87_Float80 x = fp.multiply(fp.load(row[0]), fp.load(plane_normal->k[0]));
+        const X87_Float80 y = fp.multiply(fp.load(row[1]), fp.load(plane_normal->k[1]));
+        const X87_Float80 z = fp.multiply(fp.load(row[2]), fp.load(plane_normal->k[2]));
+        const X87_Float80 normal = ivp_x87_round_double(
+            fp, axis == 2 ? fp.add(fp.add(y, x), z) : fp.add(fp.add(x, z), y));
+        projection[axis] = fp.multiply(difference, normal);
+    }
+    return fp.store_double(fp.add(fp.add(projection[2], projection[1]), projection[0]));
+}
+#endif
+
+void ivp_x87_transform_mesh_vertex(const ivp_transform_r_t *transform, const ivp_vec3f_t *vertex,
+                                   ivp_vec3r_t *out)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 local[3] = {fp.load(vertex->k[0]), fp.load(vertex->k[1]), fp.load(vertex->k[2])};
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 value = ivp_x87_position_component<true>(
+            fp, transform->rot.rows[axis].k, transform->pos.k[axis], local, axis);
+        ivp_x87_store(fp, out->k[axis], value);
+    }
+}
+
+/* The world position is stored before subtracting the target origin. Keep the
+ * translated direction wide through the inverse rotation. */
+void ivp_x87_transform_collision_point(const ivp_vec3f_t *point,
+                                       const ivp_transform_r_t *source, const ivp_transform_r_t *target,
+                                       ivp_vec3r_t *out)
+{
+    ivp_x87_arithmetic<IVP_X87_ARITHMETIC> fp;
+    const X87_Float80 local[3] = {fp.load(point->k[0]), fp.load(point->k[1]), fp.load(point->k[2])};
+    X87_Float80 translated[3];
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 world = ivp_x87_position_component<false>(
+            fp, source->rot.rows[axis].k, source->pos.k[axis], local, axis);
+        translated[axis] = fp.subtract(ivp_x87_round_double(fp, world), fp.load(target->pos.k[axis]));
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const X87_Float80 x = fp.multiply(fp.load(target->rot.rows[0].k[axis]), translated[0]);
+        const X87_Float80 y = fp.multiply(fp.load(target->rot.rows[1].k[axis]), translated[1]);
+        const X87_Float80 z = fp.multiply(fp.load(target->rot.rows[2].k[axis]), translated[2]);
+        out->k[axis] = static_cast<ivp_real_t>(fp.store_double(fp.add(fp.add(z, y), x)));
+    }
 }
 
 float ivp_x87_quat_rotation_axis(const ivp_vec3r_t *rotation, const ivp_mat3r_t *to_world,

@@ -5,7 +5,6 @@
 #include <ivp/collision/ivp_collision_core.h>
 
 typedef struct ivp_mindist_event_solver {
-    ivp_real_t sum_max_surface_rot_speed;
     ivp_real_t projected_center_speed;
     ivp_real_t max_coll_speed;
     ivp_real_t worst_case_speed;
