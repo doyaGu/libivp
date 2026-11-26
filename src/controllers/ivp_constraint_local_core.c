@@ -153,7 +153,7 @@ static ivp_vec3f_t constraint_vec3f(const double v[3])
 static void constraint_store_vec3f(double out[3], const ivp_vec3f_t *v)
 {
     for (int i = 0; i < 3; ++i)
-        out[i] = v->k[i];
+        out[i] = (double)v->k[i];
 }
 
 /* IVP_U_Float_Point::inline_calc_cross_product with float inputs and output. */

@@ -880,7 +880,7 @@ void ivp_x87_apply_single_contact_impulse(const ivp_vec3f_t *normal, const ivp_v
         if (axis == 2 || (!first_body && axis == 1))
             translation = fp.load(fp.store_double(translation));
         angular_speed->k[axis] = fp.store_float(rotation);
-        linear_speed->k[axis] = fp.store_float(translation);
+        linear_speed->k[axis] = static_cast<ivp_real_t>(fp.store_float(translation));
     }
 }
 
@@ -897,11 +897,14 @@ void ivp_x87_accumulate_friction_normal_impulse(const ivp_vec3f_t *normal,
                                             fp.load(inverse_inertia->k[axis]));
         if (axis != 0 || !keep_first_inertia_extended)
             lever_arm = fp.load(fp.store_float(lever_arm));
-        angular->k[axis] = fp.store_float(fp.add(fp.load(angular->k[axis]),
-                                                fp.multiply(lever_arm, normal_impulse)));
+        const X87_Float80 rotation = fp.add(fp.load(angular->k[axis]),
+                                            fp.multiply(lever_arm, normal_impulse));
+        angular->k[axis] = static_cast<ivp_real_t>(fp.store_float(rotation));
+
         // Opposing contact impulses may cancel to a small residual.
-        linear->k[axis] = fp.store_float(fp.add(fp.load(linear->k[axis]),
-                                                fp.multiply(fp.load(normal->k[axis]), linear_impulse)));
+        const X87_Float80 translation = fp.add(fp.load(linear->k[axis]),
+                                               fp.multiply(fp.load(normal->k[axis]), linear_impulse));
+        linear->k[axis] = static_cast<ivp_real_t>(fp.store_float(translation));
     }
 }
 

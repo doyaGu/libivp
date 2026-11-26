@@ -69,7 +69,7 @@ static void qd_normize_correct_step(quatd_t *quat, int steps) {
 
 void ivp_quat_to_mat3(const ivp_quatr_t *q, ivp_mat3r_t *m) {
 #if IVP_X87_ARITHMETIC
-    const double rotation[4] = {q->x, q->y, q->z, q->w};
+    const double rotation[4] = {(double)q->x, (double)q->y, (double)q->z, (double)q->w};
     ivp_x87_quat_to_mat3(rotation, m);
 #else
     quatd_t quat = qd_load(q);
@@ -270,7 +270,7 @@ void ivp_quat_invert(ivp_quatr_t *q) {
 
 ivp_result_t ivp_quat_normalize(ivp_quatr_t *q) {
 #if IVP_X87_ARITHMETIC
-    double rotation[4] = {q->x, q->y, q->z, q->w};
+    double rotation[4] = {(double)q->x, (double)q->y, (double)q->z, (double)q->w};
     if (!ivp_x87_quat_normalize(rotation)) return IVP_ERR_NORMALIZATION_FAILED;
     const quatd_t quat = {rotation[0], rotation[1], rotation[2], rotation[3]};
 #else
