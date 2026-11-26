@@ -224,7 +224,10 @@ void ivp_core_inline_calc_at_position(const ivp_core_t *core, ivp_time_t t, ivp_
 #if IVP_X87_ARITHMETIC
     ivp_x87_advance_position(&core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, d_time, out);
 #else
-    lvp_add_multiple2(out, &core->pos_world_f_core_last_psi, &core->delta_world_f_core_psis, (D)d_time);
+    for (int axis = 0; axis < 3; ++axis) {
+        const double displacement = (double)core->delta_world_f_core_psis.k[axis] * d_time;
+        out->k[axis] = (ivp_real_t)((double)core->pos_world_f_core_last_psi.k[axis] + displacement);
+    }
 #endif
 }
 
