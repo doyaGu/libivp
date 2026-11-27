@@ -376,6 +376,10 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
     ivp_ov_tree_t *t, ivp_ov_element_t *element,
     double min_radius, double max_radius,
     ivp_pvec_t *colliding_balls, double *used_radius_out);
+/* Recheck an element's bounds. A failed update leaves the old registration in place. */
+ivp_result_t ivp_ov_tree_update_ov_element(
+    ivp_ov_tree_t *t, ivp_ov_element_t *element, const ivp_vec3f_t *center,
+    double radius, ivp_pvec_t *colliding_balls, double *used_radius_out);
 double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
                                      double min_radius, double max_radius,
                                      ivp_pvec_t *colliding_balls /* ivp_ov_element_t*, may be NULL */);
@@ -436,6 +440,8 @@ void ivp_mindist_mgr_insert_hull_mindist(ivp_mindist_t *md, float hull_time);
 void ivp_mindist_mgr_insert_lazy_hull_mindist2(ivp_mindist_t *md, float hull_time0, float hull_time1);
 void ivp_mindist_mgr_insert_lazy_hull_mindist(ivp_mindist_t *md, float hull_time);
 void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object *object);
+void ivp_mindist_mgr_recheck_ov_element_preserving_registration(
+    ivp_mindist_mgr_t *mm, struct ivp_object *object);
 void ivp_mindist_mgr_recalc_exact_mindist(ivp_mindist_mgr_t *mm, ivp_mindist_t *md);
 void ivp_mindist_mgr_recalc_all_exact_mindists(ivp_mindist_mgr_t *mm);
 void ivp_mindist_mgr_recalc_all_exact_wheel_mindist(ivp_mindist_mgr_t *mm);

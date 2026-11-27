@@ -331,7 +331,8 @@ static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object,
     if (!templat->dont_check_for_unmoveables) {
         if (object->object_movement_state == IVP_MT_STATIC) {
             ivp_object_set_movement_state(object, IVP_MT_STATIC_PHANTOM);
-            ivp_mindist_mgr_recheck_ov_element(&object->owner->pl->mindist_mgr, object);
+            ivp_mindist_mgr_recheck_ov_element_preserving_registration(
+                &object->owner->pl->mindist_mgr, object);
         }
     }
 

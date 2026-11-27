@@ -1829,7 +1829,8 @@ static ivp_object_t *recheck_collision_key(const ivp_collision_t *c, const ivp_o
     return a == owner ? b : b == owner ? a : NULL;
 }
 
-void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object *object)
+static void recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object *object,
+                              bool preserve_registration)
 {
     ivp_ov_element_t *elem = object->ov_element;
     if (!elem) return;
@@ -1854,9 +1855,13 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
     ivp_pvec_remove_all(new_objects);
     struct ivp_core *core = object->physical_core;
     ivp_ov_tree_t *ovt = ivp_env_get_ov_tree(env);
-    ivp_ov_tree_remove_ov_element(ovt, elem);
+    ivp_vec3f_t center;
+    lvf_set_p(&center, &core->m_world_f_core_last_psi.pos);   /* core->get_position_PSI() */
+    if (!preserve_registration) {
+        ivp_ov_tree_remove_ov_element(ovt, elem);
+        elem->center = center;
+    }
     ivp_env_get_statistic_manager(env)->range_world_exceeded++;   /* ivp_mindist.cxx:787 (every build) */
-    lvf_set_p(&elem->center, &core->m_world_f_core_last_psi.pos);   /* core->get_position_PSI() */
     ivp_hull_mgr_t *hm = object->hull_manager;
     if (!mm->scanning_universe) {
         double hull_time = ivp_env_get_coll_range_in_world(env, object);
@@ -1864,15 +1869,17 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
         if (ivp_env_has_universe_manager(env)) {
             if (IVP_MTIS_CAN_COLLIDE(object->object_movement_state)) {
                 mm->scanning_universe = true;
-                ivp_env_universe_ensure_objects(env, object, elem->center.k, real_check_sphere);
+                ivp_env_universe_ensure_objects(env, object, center.k, real_check_sphere);
                 mm->scanning_universe = false;
             }
         }
         ivp_pvec_t *saved_collision_partners = ovt->collision_partners;
         double radius = 0.0;
-        ivp_result_t insert_result = ivp_ov_tree_insert_ov_element_ex(
-            ovt, elem, real_check_sphere, real_check_sphere,
-            colliding_elements, &radius);
+        ivp_result_t insert_result = preserve_registration
+            ? ivp_ov_tree_update_ov_element(ovt, elem, &center, real_check_sphere,
+                                           colliding_elements, &radius)
+            : ivp_ov_tree_insert_ov_element_ex(ovt, elem, real_check_sphere,
+                                               real_check_sphere, colliding_elements, &radius);
         ovt->collision_partners = saved_collision_partners;
         if (insert_result != IVP_OK) goto cleanup;
         double real_hull_time = radius - (double)core->upper_limit_radius;
@@ -1880,8 +1887,10 @@ void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object
     } else {
         double real_check_sphere = (double)core->upper_limit_radius;
         ivp_pvec_t *saved_collision_partners = ovt->collision_partners;
-        ivp_result_t insert_result = ivp_ov_tree_insert_ov_element_ex(
-            ovt, elem, real_check_sphere, real_check_sphere, NULL, NULL);
+        ivp_result_t insert_result = preserve_registration
+            ? ivp_ov_tree_update_ov_element(ovt, elem, &center, real_check_sphere, NULL, NULL)
+            : ivp_ov_tree_insert_ov_element_ex(ovt, elem, real_check_sphere,
+                                               real_check_sphere, NULL, NULL);
         ovt->collision_partners = saved_collision_partners;
         if (insert_result != IVP_OK) goto cleanup;
         ivp_ov_element_add_to_hull_manager(elem, hm, (double)P_DOUBLE_EPS);
@@ -1963,6 +1972,17 @@ cleanup:
     }
     IVP_ASSERT(mm->recheck_depth > 0);
     mm->recheck_depth--;
+}
+
+void ivp_mindist_mgr_recheck_ov_element(ivp_mindist_mgr_t *mm, struct ivp_object *object)
+{
+    recheck_ov_element(mm, object, false);
+}
+
+void ivp_mindist_mgr_recheck_ov_element_preserving_registration(
+    ivp_mindist_mgr_t *mm, struct ivp_object *object)
+{
+    recheck_ov_element(mm, object, true);
 }
 
 void ivp_mindist_mgr_enable_collision_detection_for_object(ivp_mindist_mgr_t *mm, struct ivp_object *object)

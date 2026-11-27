@@ -987,10 +987,14 @@ static ivp_ov_parallel_result_t collect_collision_partners_parallel(
     return IVP_OV_PARALLEL_OK;
 }
 
-ivp_result_t ivp_ov_tree_insert_ov_element_ex(
+static void remove_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
+                              const ivp_ov_node_t *retained_node);
+
+static ivp_result_t insert_ov_element(
     ivp_ov_tree_t *t, ivp_ov_element_t *element,
     double min_radius, double max_radius,
-    ivp_pvec_t *colliding_balls, double *used_radius_out)
+    ivp_pvec_t *colliding_balls, double *used_radius_out,
+    const ivp_ov_node_t *retained_node)
 {
     if (used_radius_out) *used_radius_out = 0.0;
     if (!t || !element) return IVP_ERR_INVALID_ARG;
@@ -1075,7 +1079,7 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
         }
         if (!collected) {
             t->collision_partners->n = old_partner_count;
-            ivp_ov_tree_remove_ov_element(t, element);
+            remove_ov_element(t, element, retained_node);
             return IVP_ERR_OUT_OF_MEMORY;
         }
         if (element->real_object && element->real_object->owner &&
@@ -1085,6 +1089,15 @@ ivp_result_t ivp_ov_tree_insert_ov_element_ex(
         }
     }
     return IVP_OK;
+}
+
+ivp_result_t ivp_ov_tree_insert_ov_element_ex(
+    ivp_ov_tree_t *t, ivp_ov_element_t *element,
+    double min_radius, double max_radius,
+    ivp_pvec_t *colliding_balls, double *used_radius_out)
+{
+    return insert_ov_element(t, element, min_radius, max_radius,
+                             colliding_balls, used_radius_out, NULL);
 }
 
 double ivp_ov_tree_insert_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
@@ -1109,7 +1122,14 @@ static ivp_ov_node_t *cleanup_node(ivp_ov_tree_t *t, ivp_ov_node_t *node)
     return parent;
 }
 
-void ivp_ov_tree_remove_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element)
+static void prune_empty_nodes(ivp_ov_tree_t *t, ivp_ov_node_t *node,
+                              const ivp_ov_node_t *retained_node)
+{
+    while (node && node != retained_node) node = cleanup_node(t, node);
+}
+
+static void remove_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element,
+                              const ivp_ov_node_t *retained_node)
 {
     ivp_ov_node_t *node = element->node;
     if (!node) return;
@@ -1119,7 +1139,43 @@ void ivp_ov_tree_remove_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element)
 #endif
     element->node = NULL;
     ivp_pvec_remove(&node->elements, element);
-    while ((node = cleanup_node(t, node)) != NULL) { }
+    prune_empty_nodes(t, node, retained_node);
+}
+
+void ivp_ov_tree_remove_ov_element(ivp_ov_tree_t *t, ivp_ov_element_t *element)
+{
+    remove_ov_element(t, element, NULL);
+}
+
+ivp_result_t ivp_ov_tree_update_ov_element(
+    ivp_ov_tree_t *t, ivp_ov_element_t *element, const ivp_vec3f_t *center,
+    double radius, ivp_pvec_t *colliding_balls, double *used_radius_out)
+{
+    ivp_ov_node_t *old_node = element->node;
+    const ivp_vec3f_t old_center = element->center;
+    const float old_radius = element->radius;
+    const int old_index = old_node ? ivp_pvec_index_of(&old_node->elements, element) : -1;
+    remove_ov_element(t, element, old_node);
+    element->center = *center;
+    ivp_result_t result = insert_ov_element(t, element, radius, radius,
+                                           colliding_balls, used_radius_out, old_node);
+    if (result == IVP_OK) {
+        prune_empty_nodes(t, old_node, NULL);
+    } else {
+        element->center = old_center;
+        element->radius = old_radius;
+        if (old_node) {
+            /* Removing one element made space to put it back at its old index. */
+            ivp_pvec_t *elements = &old_node->elements;
+            for (int i = elements->n; i > old_index; i--) {
+                elements->elems[i] = elements->elems[i - 1];
+            }
+            elements->elems[old_index] = element;
+            elements->n++;
+            element->node = old_node;
+        }
+    }
+    return result;
 }
 
 /* IVP_OV_Tree_Manager::get_luf_coordinates_ws: (IVP_FLOAT)(power2(r) * x) */

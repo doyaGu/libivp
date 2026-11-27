@@ -733,6 +733,48 @@ IVP_TEST(ov_tree_insertion_failures_are_recoverable) {
     IVP_ASSERT_EQ(state.live_bytes, 0u);
 }
 
+IVP_TEST(ov_tree_failed_update_preserves_registration) {
+    ivp_test_fault_allocator_t state;
+    ivp_test_fault_allocator_init_tracked(&state, NULL);
+    ivp_ov_tree_t tree;
+    IVP_ASSERT_EQ(ivp_ov_tree_init_with_allocator(&tree, &state.allocator), IVP_OK);
+    ivp_ov_element_t base = {0}, entrant = {0};
+    IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                      &tree, &base, 1.0, 1.0, NULL, NULL), IVP_OK);
+    ivp_pvec_t partners;
+    ivp_pvec_init_with_allocator(&partners, &state.allocator);
+
+    /* Growing the partner list fails even when the bounds fit the old node. */
+    const ivp_vec3f_t center = ivp_vec3f(0.25f, 0.0f, 0.0f);
+    ivp_test_fault_allocator_reset(&state, 1);
+    IVP_ASSERT_EQ(ivp_ov_tree_update_ov_element(
+                      &tree, &base, &center, 1.05, &partners, NULL),
+                  IVP_ERR_OUT_OF_MEMORY);
+    IVP_ASSERT_EQ(ivp_pvec_len(&partners), 0);
+    IVP_ASSERT_NEAR(base.center.k[0], 0.0, TOL);
+    IVP_ASSERT_NEAR(base.radius, 1.0, TOL);
+
+    const ivp_vec3f_t distant = ivp_vec3f(4096.0f, 0.0f, 0.0f);
+    ivp_test_fault_allocator_reset(&state, 1);
+    IVP_ASSERT_EQ(ivp_ov_tree_update_ov_element(
+                      &tree, &base, &distant, 1.0, NULL, NULL),
+                  IVP_ERR_OUT_OF_MEMORY);
+
+    ivp_test_fault_allocator_reset(&state, INT_MAX);
+    IVP_ASSERT_EQ(ivp_ov_tree_insert_ov_element_ex(
+                      &tree, &entrant, 0.5, 0.5, &partners, NULL), IVP_OK);
+    IVP_ASSERT_TRUE(ivp_pvec_index_of(&partners, &base) >= 0);
+    IVP_ASSERT_EQ(ivp_ov_tree_update_ov_element(
+                      &tree, &base, &distant, 1.0, NULL, NULL), IVP_OK);
+    IVP_ASSERT_NEAR(base.center.k[0], 4096.0, TOL);
+
+    ivp_pvec_clear(&partners);
+    ivp_ov_tree_remove_ov_element(&tree, &entrant);
+    ivp_ov_tree_remove_ov_element(&tree, &base);
+    ivp_ov_tree_destroy(&tree);
+    IVP_ASSERT_EQ(state.live_bytes, 0u);
+}
+
 /* ========================================================================
  * Test Registration and Main
  * ======================================================================== */
@@ -878,6 +920,7 @@ int main(void) {
     IVP_REGISTER(surman_ledge_references_balanced);
     IVP_REGISTER(ov_tree_hash_grows_and_releases_allocator_storage);
     IVP_REGISTER(ov_tree_insertion_failures_are_recoverable);
+    IVP_REGISTER(ov_tree_failed_update_preserves_registration);
     IVP_REGISTER(exact_mindist_allocation_failures_leave_collision_set_unchanged);
     IVP_REGISTER(friction_creation_allocation_failures_are_atomic);
     IVP_REGISTER(friction_fusion_allocation_failures_are_atomic);
