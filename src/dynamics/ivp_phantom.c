@@ -300,9 +300,9 @@ static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object,
     if (templat->manage_intruding_objects) {
         c->set_of_objects = (ivp_set_active_t *)ivp_alloc(alloc, sizeof(ivp_set_active_t));
         c->mindist_object_counter = (ivp_vhash_store_t *)ivp_alloc(alloc, sizeof(ivp_vhash_store_t));
+        if (c->set_of_objects) memset(c->set_of_objects, 0, sizeof(*c->set_of_objects));
+        if (c->mindist_object_counter) memset(c->mindist_object_counter, 0, sizeof(*c->mindist_object_counter));
         if (!c->set_of_objects || !c->mindist_object_counter) goto fail;
-        memset(c->set_of_objects, 0, sizeof(*c->set_of_objects));
-        memset(c->mindist_object_counter, 0, sizeof(*c->mindist_object_counter));
         ivp_set_active_init(c->set_of_objects, alloc, 16);
         ivp_vhash_store_init(c->mindist_object_counter, alloc, 16);
         if (!c->set_of_objects->set.hash.elems || !c->mindist_object_counter->elems) goto fail;
@@ -310,9 +310,9 @@ static ivp_controller_phantom_t *controller_phantom_create(ivp_object_t *object,
     if (templat->manage_intruding_cores) {
         c->set_of_cores = (ivp_set_active_t *)ivp_alloc(alloc, sizeof(ivp_set_active_t));
         c->mindist_core_counter = (ivp_vhash_store_t *)ivp_alloc(alloc, sizeof(ivp_vhash_store_t));
+        if (c->set_of_cores) memset(c->set_of_cores, 0, sizeof(*c->set_of_cores));
+        if (c->mindist_core_counter) memset(c->mindist_core_counter, 0, sizeof(*c->mindist_core_counter));
         if (!c->set_of_cores || !c->mindist_core_counter) goto fail;
-        memset(c->set_of_cores, 0, sizeof(*c->set_of_cores));
-        memset(c->mindist_core_counter, 0, sizeof(*c->mindist_core_counter));
         ivp_set_active_init(c->set_of_cores, alloc, 16);
         ivp_vhash_store_init(c->mindist_core_counter, alloc, 16);
         if (!c->set_of_cores->set.hash.elems || !c->mindist_core_counter->elems) goto fail;
@@ -419,6 +419,45 @@ ivp_controller_phantom_t *ivp_object_convert_to_phantom(ivp_object_t *obj, const
     ivp_controller_phantom_t *c = controller_phantom_create(obj, tmpl);
     obj->controller_phantom = c;
     return c;
+}
+
+static void restore_mindist_after_phantom(ivp_controller_phantom_t *removed, ivp_mindist_t *md)
+{
+    if (md->mindist_function != IVP_MF_PHANTOM) return;
+    ivp_object_t *other = ivp_controller_phantom_get_other_object(removed, md);
+    ivp_controller_phantom_t *remaining = ivp_object_get_controller_phantom(other);
+    md->mindist_function = remaining ? IVP_MF_PHANTOM : IVP_MF_COLLISION;
+    md->is_in_phantom_set = remaining && ivp_set_find(&remaining->set_of_mindists.set, md);
+}
+
+void ivp_object_rollback_phantom_conversion(ivp_object_t *obj)
+{
+    ivp_controller_phantom_t *phantom = ivp_object_get_controller_phantom(obj);
+    if (!phantom) return;
+
+    for (ivp_md_synapse_t *syn = obj->invalid_synapses; syn; syn = syn->next) {
+        restore_mindist_after_phantom(phantom, syn->mindist);
+    }
+    for (ivp_md_synapse_t *syn = obj->exact_synapses; syn; syn = syn->next) {
+        restore_mindist_after_phantom(phantom, syn->mindist);
+    }
+    if (obj->hull_manager) {
+        ivp_minlist_enumerator_t en;
+        ivp_minlist_enum_init(&en, &obj->hull_manager->sorted_synapses);
+        ivp_listener_hull_t *listener;
+        while ((listener = (ivp_listener_hull_t *)ivp_minlist_enum_next(&en)) != NULL) {
+            if (listener->vt->type != IVP_HULL_ELEM_POLYGON) continue;
+            ivp_md_synapse_t *syn = (ivp_md_synapse_t *)listener;
+            restore_mindist_after_phantom(phantom, syn->mindist);
+        }
+    }
+
+    ivp_controller_phantom_destroy(phantom);
+    if (obj->object_movement_state == IVP_MT_STATIC_PHANTOM) {
+        ivp_object_set_movement_state(obj, IVP_MT_STATIC);
+        /* Retire pairs admitted only while this static object was a phantom. */
+        ivp_object_recheck_collision_filter(obj);
+    }
 }
 
 ivp_controller_phantom_t *ivp_object_get_controller_phantom(const ivp_object_t *obj)

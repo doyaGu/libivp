@@ -77,6 +77,10 @@ struct ivp_controller_phantom {
 
 /* IVP_Real_Object::convert_to_phantom (tmpl may be NULL = defaults) */
 ivp_controller_phantom_t *ivp_object_convert_to_phantom(struct ivp_object *obj, const ivp_template_phantom_t *tmpl);
+/* Undo a new phantom conversion on the same body before the next step.
+ * A counterpart that is still a phantom keeps its contact membership.
+ * No-op when no phantom has been installed. */
+void ivp_object_rollback_phantom_conversion(struct ivp_object *obj);
 /* IVP_Real_Object::get_controller_phantom */
 ivp_controller_phantom_t *ivp_object_get_controller_phantom(const struct ivp_object *obj);
 
