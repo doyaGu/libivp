@@ -455,8 +455,23 @@ void ivp_object_rollback_phantom_conversion(ivp_object_t *obj)
     ivp_controller_phantom_destroy(phantom);
     if (obj->object_movement_state == IVP_MT_STATIC_PHANTOM) {
         ivp_object_set_movement_state(obj, IVP_MT_STATIC);
-        /* Retire pairs admitted only while this static object was a phantom. */
-        ivp_object_recheck_collision_filter(obj);
+        /* Keep the broadphase registration: removing and reinserting it can
+         * fail under the same memory pressure that forced the rollback. */
+        if (!obj->ov_element) return;
+        ivp_coll_fvector_t *pairs = &obj->ov_element->collision_fvector;
+        for (int i = pairs->n - 1; i >= 0; i--) {
+            if (i >= pairs->n) continue;
+            ivp_collision_t *pair = pairs->elems[i];
+            ivp_object_t *objects[2];
+            pair->cvt->get_objects(pair, objects);
+            ivp_object_t *other = objects[0] == obj ? objects[1] : objects[0];
+            if (IVP_MTIS_CAN_COLLIDE(other->object_movement_state)) continue;
+            if ((void *)pair == (void *)ivp_env_get_current_mindist(obj->owner)) {
+                ivp_env_set_defer_delete_mindist(obj->owner, true);
+            } else {
+                ivp_collision_delete(pair);
+            }
+        }
     }
 }
 
