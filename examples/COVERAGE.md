@@ -30,7 +30,7 @@ Feature modules: 71 of 90 headers are used by at least one example; the 19 other
 
 | header | used/names | examples |
 |---|---|---|
-| `ivp_collision_core.h` | 0/142 | - (the core data of the collision detection) |
+| `ivp_collision_core.h` | 0/144 | - (the core data of the collision detection) |
 | `ivp_collision_filter.h` | 10/21 | `collision_filter`, `compound` |
 | `ivp_collision_tolerance.h` | 2/5 | `sensors` |
 | `ivp_compact_ledge_solver.h` | 0/5 | - (ledge against ledge queries behind the mindists) |
@@ -90,7 +90,7 @@ Feature modules: 71 of 90 headers are used by at least one example; the 19 other
 | `ivp_merge_core.h` | 0/3 | `compound` (behind ivp_object_attach_object) |
 | `ivp_object.h` | 11/49 | `3ds_import`, `active_value`, `actuators`, `airboat`, `black_hole`, `boat`, `bridge`, `buoyancy`, `callback`, `check_distance`, `collision_filter`, `compound`, `concave`, `constraints`, `contacts`, `cubes`, `cut`, `domino`, `factory`, `force_actuator`, `forcefield`, `freefall`, `friction`, `hinge`, `hover`, `jetski`, `maxforce`, `motion_controller`, `motor`, `offroad`, `onthefly`, `phantom`, `platform`, `psi_listener`, `push`, `raycasting`, `ring`, `rolling_ball`, `rope`, `sensors`, `shapes`, `snowflake`, `springs`, `stiff_spring`, `terrain`, `universe`, `vehicle`, `waves`, `wheelcar`, `workshop`, `zones` |
 | `ivp_object_attach.h` | 3/4 | `compound` |
-| `ivp_phantom.h` | 7/16 | `zones` |
+| `ivp_phantom.h` | 7/17 | `zones` |
 | `ivp_rewind.h` | 0/11 | - (rewinding, built only with IVP_ENABLE_CHECKPOINTS, which the examples leave off) |
 | `ivp_sim_unit.h` | 0/2 | - (simulation units, merged by the controllers' discovery) |
 | `ivp_time_manager.h` | 0/14 | - (the event queue behind the PSI loop) |
